@@ -753,6 +753,17 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           nostrService,
           recipientNametag
         );
+
+        // Record direct transfer in transaction history
+        const def = registryService.getCoinDefinition(params.coinId);
+        const iconUrl = def ? registryService.getIconUrl(def) || undefined : undefined;
+        addSentTransaction(
+          item.amount.toString(),
+          params.coinId,
+          def?.symbol || 'UNK',
+          iconUrl,
+          recipientNametag
+        );
       }
 
       if (plan.requiresSplit) {
