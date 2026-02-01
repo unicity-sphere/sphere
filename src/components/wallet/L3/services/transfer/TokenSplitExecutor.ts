@@ -463,7 +463,7 @@ export class TokenSplitExecutor {
         transferSaltHex: transferSaltHex,
         mintedTokenStateJson: JSON.stringify(mintedState.toJSON()),  // For recipient to reconstruct
         finalRecipientStateJson: '',  // Recipient creates their own using signingService + nametag token
-        recipientAddressJson: JSON.stringify((recipientAddress as any).toJSON ? (recipientAddress as any).toJSON() : recipientAddress),  // For nametag lookup
+        recipientAddressJson: recipientAddress.toString(),  // For nametag lookup - use string format "PROXY://..." or "DIRECT://..."
       };
 
       // Create outbox entry for V5 tracking with recovery metadata

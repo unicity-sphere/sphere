@@ -1130,32 +1130,30 @@ export class NostrService {
       let nametagTokens: Token<any>[] = [];
 
       if (bundleV5.recipientAddressJson) {
-        try {
-          const recipientAddressData = JSON.parse(bundleV5.recipientAddressJson);
-          const recipientAddressStr = recipientAddressData.address || recipientAddressData;
+        // recipientAddressJson is a plain string like "PROXY://..." or "DIRECT://..."
+        const recipientAddressStr = bundleV5.recipientAddressJson;
 
-          // Check if it's a PROXY address (starts with "PROXY://")
-          if (typeof recipientAddressStr === 'string' && recipientAddressStr.startsWith('PROXY://')) {
-            console.log("  📦 V5: Transfer is to PROXY address, looking for matching nametag...");
+        // Check if it's a PROXY address (starts with "PROXY://")
+        if (recipientAddressStr.startsWith('PROXY://')) {
+          console.log("  📦 V5: Transfer is to PROXY address, looking for matching nametag...");
 
-            // Get my nametag token and check if it matches
-            const nametagService = NametagService.getInstance(this.identityManager);
-            const myNametag = await nametagService.getNametagToken();
+          // Get my nametag token and check if it matches
+          const nametagService = NametagService.getInstance(this.identityManager);
+          const myNametag = await nametagService.getNametagToken();
 
-            if (myNametag) {
-              const proxy = await ProxyAddress.fromTokenId(myNametag.id);
-              if (proxy.address === recipientAddressStr) {
-                nametagTokens = [myNametag];
-                console.log(`  📦 V5: Found matching nametag token for PROXY address`);
-              } else {
-                console.warn("  ⚠️ V5: Nametag doesn't match PROXY address, verification may fail");
-              }
+          if (myNametag) {
+            const proxy = await ProxyAddress.fromTokenId(myNametag.id);
+            if (proxy.address === recipientAddressStr) {
+              nametagTokens = [myNametag];
+              console.log(`  📦 V5: Found matching nametag token for PROXY address`);
             } else {
-              console.warn("  ⚠️ V5: No nametag token found, verification may fail for PROXY address");
+              console.warn("  ⚠️ V5: Nametag doesn't match PROXY address, verification may fail");
+              console.warn("  ⚠️ V5: Expected:", recipientAddressStr);
+              console.warn("  ⚠️ V5: Got:", proxy.address);
             }
+          } else {
+            console.warn("  ⚠️ V5: No nametag token found, verification may fail for PROXY address");
           }
-        } catch (e) {
-          console.warn("  ⚠️ V5: Failed to parse recipientAddressJson:", e);
         }
       }
 
