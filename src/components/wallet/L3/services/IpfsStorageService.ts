@@ -3879,17 +3879,115 @@ export class IpfsStorageService implements IpfsTransport {
       const wallet = WalletRepository.getInstance().getWallet();
       if (!wallet) {
         // For new wallets, WalletRepository._wallet may not be set yet
-        // This is OK - inventorySync() handles the real storage
-        // Return success since there's nothing to sync via this legacy path
-        console.log(`📦 [SYNC] No WalletRepository wallet loaded (new wallet?) - skipping legacy sync`);
-        this.isSyncing = false;
-        this.emitSyncStateChange();
-        coordinator.releaseLock();
-        return {
-          success: true,
-          timestamp: Date.now(),
-          version: 0,
+        // But we may still have data in localStorage (e.g., nametag from mint)
+        // Read directly from localStorage and sync to IPFS
+        const identity = await this.identityManager.getCurrentIdentity();
+        if (!identity) {
+          console.log(`📦 [SYNC] No WalletRepository wallet and no identity - skipping sync`);
+          this.isSyncing = false;
+          this.emitSyncStateChange();
+          coordinator.releaseLock();
+          return {
+            success: true,
+            timestamp: Date.now(),
+            version: 0,
+          };
+        }
+
+        // Read from localStorage via InventorySyncService
+        const localNametag = getNametagForAddress(identity.address);
+        const localTokens = getTokensForAddress(identity.address);
+
+        if (!localNametag && localTokens.length === 0) {
+          console.log(`📦 [SYNC] No WalletRepository wallet and no localStorage data - skipping sync`);
+          this.isSyncing = false;
+          this.emitSyncStateChange();
+          coordinator.releaseLock();
+          return {
+            success: true,
+            timestamp: Date.now(),
+            version: 0,
+          };
+        }
+
+        console.log(`📦 [SYNC] No WalletRepository wallet but found localStorage data: ${localTokens.length} token(s), nametag=${localNametag?.name || 'none'}`);
+
+        // Build TxfStorageData from localStorage content
+        const newVersion = this.getVersionCounter() + 1;
+        const meta: Omit<TxfMeta, "formatVersion"> = {
+          version: newVersion,
+          address: identity.address,
+          ipnsName: this.cachedIpnsName || "",
+          lastCid: this.getLastCid() || undefined,
         };
+
+        const txfStorageData = await buildTxfStorageData(localTokens, meta, localNametag || undefined);
+
+        // Store to IPFS via Helia
+        try {
+          const j = json(this.helia);
+          const cid = await j.add(txfStorageData);
+          const cidString = cid.toString();
+
+          // Upload to backend nodes via HTTP
+          const gatewayUrls = getAllBackendGatewayUrls();
+          if (gatewayUrls.length > 0) {
+            console.log(`📦 [SYNC] Uploading to ${gatewayUrls.length} IPFS node(s)...`);
+            const jsonBlob = new Blob([JSON.stringify(txfStorageData)], { type: "application/json" });
+
+            const uploadPromises = gatewayUrls.map(async (gatewayUrl) => {
+              try {
+                const formData = new FormData();
+                formData.append("file", jsonBlob, "wallet.json");
+                const response = await fetch(`${gatewayUrl}/api/v0/add?pin=true&cid-version=1`, {
+                  method: "POST",
+                  body: formData,
+                });
+                if (response.ok) {
+                  const result = await response.json();
+                  const hostname = new URL(gatewayUrl).hostname;
+                  console.log(`📦 [SYNC] Uploaded to ${hostname}: ${result.Hash}`);
+                  return { success: true, host: gatewayUrl };
+                }
+                return { success: false, host: gatewayUrl };
+              } catch {
+                return { success: false, host: gatewayUrl };
+              }
+            });
+
+            const results = await Promise.allSettled(uploadPromises);
+            const successful = results.filter((r) => r.status === "fulfilled" && r.value.success).length;
+            console.log(`📦 [SYNC] Content uploaded to ${successful}/${gatewayUrls.length} nodes`);
+          }
+
+          // Publish to IPNS
+          const ipnsResult = await this.publishToIpns(cid);
+          if (ipnsResult) {
+            this.setVersionCounter(newVersion);
+            this.setLastCid(cidString);
+            console.log(`📦 [SYNC] localStorage data synced to IPFS: CID=${cidString.slice(0, 16)}...`);
+          }
+
+          this.isSyncing = false;
+          this.emitSyncStateChange();
+          coordinator.releaseLock();
+          return {
+            success: true,
+            timestamp: Date.now(),
+            cid: cidString,
+            version: newVersion,
+          };
+        } catch (err) {
+          console.warn(`📦 [SYNC] Failed to sync localStorage data to IPFS:`, err);
+          this.isSyncing = false;
+          this.emitSyncStateChange();
+          coordinator.releaseLock();
+          return {
+            success: false,
+            timestamp: Date.now(),
+            error: err instanceof Error ? err.message : 'Unknown error',
+          };
+        }
       }
 
       // Validate wallet belongs to current identity
