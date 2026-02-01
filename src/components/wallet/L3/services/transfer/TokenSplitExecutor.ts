@@ -444,6 +444,10 @@ export class TokenSplitExecutor {
       console.log(`✅ V5: Minted token state created for recipient`);
 
       // === Step 5: Package V5 bundle (burn TRANSACTION with proof) ===
+      // Note: For PROXY address transfers, the recipient will:
+      // 1. Create their own final state using their signingService
+      // 2. Provide their nametag token for verification
+      // We include the recipient address so they know which nametag is being targeted.
       const bundle: InstantSplitBundleV5 = {
         version: '5.0',
         type: 'INSTANT_SPLIT',
@@ -458,6 +462,8 @@ export class TokenSplitExecutor {
         recipientSaltHex: Buffer.from(recipientSalt).toString("hex"),
         transferSaltHex: transferSaltHex,
         mintedTokenStateJson: JSON.stringify(mintedState.toJSON()),  // For recipient to reconstruct
+        finalRecipientStateJson: '',  // Recipient creates their own using signingService + nametag token
+        recipientAddressJson: JSON.stringify((recipientAddress as any).toJSON ? (recipientAddress as any).toJSON() : recipientAddress),  // For nametag lookup
       };
 
       // Create outbox entry for V5 tracking with recovery metadata

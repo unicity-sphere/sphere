@@ -1109,7 +1109,10 @@ export class NostrService {
       const transferTransaction = transferCommitment.toTransaction(transferProof);
       console.log(`  📦 Transfer proof received`);
 
-      // === Step 8: Create recipient's final state (after transfer) ===
+      // === Step 8: Create recipient's final state ===
+      // The recipient creates the final state using their own signingService.
+      // For PROXY address transfers, they also need to provide their nametag token.
+      const bundleV5 = bundle as InstantSplitBundleV5;
       const transferSalt = Buffer.from(bundle.transferSaltHex, "hex");
       const finalRecipientPredicate = await UnmaskedPredicate.create(
         mintData.tokenId,
@@ -1119,6 +1122,42 @@ export class NostrService {
         transferSalt
       );
       const finalRecipientState = new TokenState(finalRecipientPredicate, null);
+      console.log("  📦 V5: Created final recipient state");
+
+      // === Step 8.5: Find matching nametag token for PROXY addresses ===
+      // For PROXY address transfers, we need to provide the nametag token
+      // so the SDK can verify we're authorized to receive at this address
+      let nametagTokens: Token<any>[] = [];
+
+      if (bundleV5.recipientAddressJson) {
+        try {
+          const recipientAddressData = JSON.parse(bundleV5.recipientAddressJson);
+          const recipientAddressStr = recipientAddressData.address || recipientAddressData;
+
+          // Check if it's a PROXY address (starts with "PROXY://")
+          if (typeof recipientAddressStr === 'string' && recipientAddressStr.startsWith('PROXY://')) {
+            console.log("  📦 V5: Transfer is to PROXY address, looking for matching nametag...");
+
+            // Get my nametag token and check if it matches
+            const nametagService = NametagService.getInstance(this.identityManager);
+            const myNametag = await nametagService.getNametagToken();
+
+            if (myNametag) {
+              const proxy = await ProxyAddress.fromTokenId(myNametag.id);
+              if (proxy.address === recipientAddressStr) {
+                nametagTokens = [myNametag];
+                console.log(`  📦 V5: Found matching nametag token for PROXY address`);
+              } else {
+                console.warn("  ⚠️ V5: Nametag doesn't match PROXY address, verification may fail");
+              }
+            } else {
+              console.warn("  ⚠️ V5: No nametag token found, verification may fail for PROXY address");
+            }
+          }
+        } catch (e) {
+          console.warn("  ⚠️ V5: Failed to parse recipientAddressJson:", e);
+        }
+      }
 
       // === Step 9: Finalize token with transfer transaction ===
       let finalToken: Token<any>;
@@ -1134,7 +1173,7 @@ export class NostrService {
           mintedToken,
           finalRecipientState,
           transferTransaction,
-          []
+          nametagTokens  // Pass nametag tokens for PROXY address verification
         );
       }
       console.log(`  📦 Token finalized with transfer`);

@@ -648,6 +648,25 @@ export interface InstantSplitBundleV5 {
    * Without this, the recipient can't create a matching predicate (they don't have sender's signing key).
    */
   mintedTokenStateJson: string;
+
+  /**
+   * Serialized TokenState JSON for the final recipient state (after transfer).
+   *
+   * The sender creates the transfer commitment targeting the recipient's PROXY address.
+   * The recipient can't recreate this state correctly because their signingService
+   * creates predicates for their DIRECT address, not the PROXY address.
+   * We include the expected final state so the recipient can use it directly.
+   */
+  finalRecipientStateJson: string;
+
+  /**
+   * Serialized recipient address JSON (PROXY or DIRECT).
+   *
+   * Used by the recipient to identify which nametag token is being targeted.
+   * For PROXY address transfers, the recipient needs to find the matching
+   * nametag token and pass it to finalizeTransaction() for verification.
+   */
+  recipientAddressJson: string;
 }
 
 /**
@@ -681,9 +700,11 @@ export function isInstantSplitBundle(obj: unknown): obj is InstantSplitBundle {
     // V4 has burnCommitment (no proof)
     return typeof bundle.burnCommitment === 'string';
   } else if (bundle.version === '5.0') {
-    // V5 has burnTransaction (with proof) and mintedTokenStateJson
+    // V5 has burnTransaction (with proof), mintedTokenStateJson, finalRecipientStateJson, and recipientAddressJson
     return typeof bundle.burnTransaction === 'string' &&
-           typeof bundle.mintedTokenStateJson === 'string';
+           typeof bundle.mintedTokenStateJson === 'string' &&
+           typeof bundle.finalRecipientStateJson === 'string' &&
+           typeof bundle.recipientAddressJson === 'string';
   }
 
   return false;
