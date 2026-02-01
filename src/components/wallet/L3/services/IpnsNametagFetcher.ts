@@ -261,7 +261,21 @@ async function tryRoutingApi(
     });
 
     if (!routingResponse.ok) {
-      return null;
+      // Check for "not found" specifically - expected for new wallets
+      if (routingResponse.status === 404) {
+        return null; // Not found - no nametag published
+      }
+      if (routingResponse.status === 500) {
+        try {
+          const body = await routingResponse.json() as { Message?: string };
+          if (body.Message?.toLowerCase().includes('routing') &&
+              body.Message?.toLowerCase().includes('not found')) {
+            return null; // Not found - no nametag published
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      // Actual error - throw for Promise.any to catch
+      throw new Error(`Routing API failed: HTTP ${routingResponse.status}`);
     }
 
     // Parse routing response to get IPNS record

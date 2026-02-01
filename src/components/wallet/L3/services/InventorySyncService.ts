@@ -1012,7 +1012,17 @@ async function step2_loadIpfs(ctx: SyncContext): Promise<void> {
       const resolution = await httpResolver.resolveIpnsName(ctx.ipnsName, useCacheOnly);
 
       if (!resolution.success) {
-        console.warn(`  IPNS resolution failed: ${resolution.error || 'unknown error'}`);
+        // Distinguish "not found" (new wallet) from actual errors
+        if (resolution.errorType === 'NOT_FOUND') {
+          // NOT_FOUND is expected for new wallets - NOT a failure
+          console.log(`  IPNS not found (new wallet or unpublished) - continuing with local-only data`);
+          // Do NOT record circuit breaker failure
+          // Do NOT set ipfsOperationFailed = true
+          return; // Continue with local-only data
+        }
+
+        // Actual failure (NETWORK_ERROR, TIMEOUT, PARSE_ERROR)
+        console.warn(`  IPNS resolution failed: ${resolution.error || 'unknown error'} (${resolution.errorType || 'unknown'})`);
         ipfsOperationFailed = true;
         // Record failure with circuit breaker
         circuitBreaker.recordIpfsFailure();

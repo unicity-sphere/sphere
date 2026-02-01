@@ -24,6 +24,15 @@ import {
   type IpnsUpdate,
 } from "./IpnsSubscriptionClient";
 
+/**
+ * IPNS resolution error classification
+ * - NOT_FOUND: IPNS record never published (new wallet) - NOT an error
+ * - NETWORK_ERROR: Connectivity/server issues - should trigger circuit breaker
+ * - TIMEOUT: Request timed out - should trigger circuit breaker
+ * - PARSE_ERROR: Response body parsing failed - should trigger circuit breaker
+ */
+export type IpnsResolutionErrorType = 'NOT_FOUND' | 'NETWORK_ERROR' | 'TIMEOUT' | 'PARSE_ERROR';
+
 export interface IpnsResolutionResult {
   success: boolean;
   cid?: string;
@@ -31,6 +40,7 @@ export interface IpnsResolutionResult {
   sequence?: bigint;
   source: "cache" | "http-gateway" | "http-routing" | "dht" | "none";
   error?: string;
+  errorType?: IpnsResolutionErrorType;
   latencyMs: number;
 }
 
@@ -57,19 +67,30 @@ async function fetchWithTimeout(
 }
 
 /**
+ * Result type for tryRoutingApi - discriminated union for success/failure
+ */
+type RoutingApiResult =
+  | { success: true; cid: string; sequence: bigint; recordData: Uint8Array }
+  | { success: false; errorType: IpnsResolutionErrorType; errorMessage: string };
+
+/**
  * Try resolving IPNS via routing API
  * Uses sidecar cache (5-20ms) with Kubo DHT fallback (1-5s)
- * Returns IPNS record with CID and sequence number
+ * Returns IPNS record with CID and sequence number, or structured error type
+ *
+ * Error classification:
+ * - HTTP 404: NOT_FOUND (IPNS record never published)
+ * - HTTP 500 with "routing: not found": NOT_FOUND (Kubo way of saying not published)
+ * - HTTP 500 with other message: NETWORK_ERROR
+ * - AbortError: TIMEOUT
+ * - Parse errors: PARSE_ERROR
+ * - Other errors: NETWORK_ERROR
  */
 async function tryRoutingApi(
   ipnsName: string,
   gatewayUrl: string,
   timeoutMs: number = 5000
-): Promise<{
-  cid: string;
-  sequence: bigint;
-  recordData: Uint8Array;
-} | null> {
+): Promise<RoutingApiResult> {
   const startTime = performance.now();
   const hostname = new URL(gatewayUrl).hostname;
 
@@ -84,15 +105,39 @@ async function tryRoutingApi(
     const cacheSource = response.headers.get('X-IPNS-Source') || 'unknown';
 
     if (!response.ok) {
-      console.log(`📦 [IPNS Routing] ${hostname}: source=${cacheSource}, latency=${latencyMs.toFixed(0)}ms, status=${response.status} (FAILED)`);
-      return null;
+      // Parse response body to distinguish "not found" from server errors
+      let errorType: IpnsResolutionErrorType = 'NETWORK_ERROR';
+      let errorMessage = `HTTP ${response.status}`;
+
+      // HTTP 404 from sidecar = not found
+      if (response.status === 404) {
+        errorType = 'NOT_FOUND';
+        errorMessage = 'IPNS record not found (never published)';
+      } else if (response.status === 500) {
+        // HTTP 500 may be Kubo's "routing: not found" or actual error
+        try {
+          const body = await response.json() as { Message?: string };
+          if (body.Message?.toLowerCase().includes('routing') &&
+              body.Message?.toLowerCase().includes('not found')) {
+            errorType = 'NOT_FOUND';
+            errorMessage = 'IPNS record not found (never published)';
+          } else {
+            errorMessage = body.Message || 'HTTP 500';
+          }
+        } catch {
+          // Could not parse JSON - treat as network error
+        }
+      }
+
+      console.log(`📦 [IPNS Routing] ${hostname}: source=${cacheSource}, latency=${latencyMs.toFixed(0)}ms, status=${response.status} (${errorType})`);
+      return { success: false, errorType, errorMessage };
     }
 
     console.log(`📦 [IPNS Routing] ${hostname}: source=${cacheSource}, latency=${latencyMs.toFixed(0)}ms`);
 
     const json = (await response.json()) as { Extra?: string };
     if (!json.Extra) {
-      return null;
+      return { success: false, errorType: 'PARSE_ERROR', errorMessage: 'No Extra field in response' };
     }
 
     // Decode base64 IPNS record
@@ -106,25 +151,28 @@ async function tryRoutingApi(
     const cidMatch = record.value.match(/^\/ipfs\/(.+)$/);
 
     if (!cidMatch) {
-      return null;
+      return { success: false, errorType: 'PARSE_ERROR', errorMessage: 'Invalid IPNS record format' };
     }
 
     const cid = cidMatch[1];
     console.log(`📦 [IPNS Routing] Resolved: CID=${cid.substring(0, 12)}..., seq=${record.sequence}`);
 
     return {
+      success: true,
       cid,
       sequence: record.sequence,
       recordData,
     };
   } catch (error) {
     const latencyMs = performance.now() - startTime;
+
     if (error instanceof Error && error.name === "AbortError") {
       console.log(`📦 [IPNS Routing] ${hostname}: TIMEOUT after ${latencyMs.toFixed(0)}ms`);
-    } else {
-      console.log(`📦 [IPNS Routing] ${hostname}: ERROR after ${latencyMs.toFixed(0)}ms - ${error instanceof Error ? error.message : 'unknown'}`);
+      return { success: false, errorType: 'TIMEOUT', errorMessage: `Timeout after ${latencyMs.toFixed(0)}ms` };
     }
-    return null;
+
+    console.log(`📦 [IPNS Routing] ${hostname}: ERROR after ${latencyMs.toFixed(0)}ms - ${error instanceof Error ? error.message : 'unknown'}`);
+    return { success: false, errorType: 'NETWORK_ERROR', errorMessage: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
@@ -314,12 +362,20 @@ export class IpfsHttpResolver {
       // This bypasses the slow /ipns/{name} gateway path which doesn't use sidecar
       const routingResult = await this.resolveViaRoutingApi(ipnsName, gateways);
 
-      if (!routingResult) {
+      // Check if routing failed (discriminated union: success result has 'cid', error has 'errorType')
+      if ('errorType' in routingResult) {
         const latencyMs = performance.now() - startTime;
-        this.cache.recordFailure(ipnsName);
+
+        // Only record cache failure for actual errors, NOT for "not found"
+        // NOT_FOUND is expected for new wallets and should not trigger backoff
+        if (routingResult.errorType !== 'NOT_FOUND') {
+          this.cache.recordFailure(ipnsName);
+        }
+
         return {
           success: false,
-          error: "IPNS routing resolution failed",
+          error: routingResult.errorMessage,
+          errorType: routingResult.errorType,
           source: "none",
           latencyMs,
         };
@@ -388,41 +444,44 @@ export class IpfsHttpResolver {
   }
 
   /**
-   * Query all gateways in parallel with routing API
-   * Returns detailed IPNS record with sequence number
+   * Result type for resolveViaRoutingApi - discriminated union for success/failure
+   * On failure, includes aggregated error type and message
    */
   private async resolveViaRoutingApi(
     ipnsName: string,
     gateways: string[]
-  ): Promise<{
-    cid: string;
-    sequence: bigint;
-    recordData: Uint8Array;
-  } | null> {
-    const promises = gateways.map((gateway) =>
-      tryRoutingApi(ipnsName, gateway)
-        .then((result) => ({
-          success: result !== null,
-          record: result,
-          gateway,
-        }))
-        .catch(() => ({ success: false, record: null, gateway }))
+  ): Promise<
+    | { cid: string; sequence: bigint; recordData: Uint8Array }
+    | { errorType: IpnsResolutionErrorType; errorMessage: string }
+  > {
+    const results = await Promise.all(
+      gateways.map((gateway) => tryRoutingApi(ipnsName, gateway))
     );
 
-    try {
-      const result = await Promise.any(
-        promises.map((p) =>
-          p.then((r) => {
-            if (!r.success) throw new Error("Failed");
-            return r;
-          })
-        )
-      );
-
-      return result.record!;
-    } catch {
-      return null;
+    // Find first success
+    const success = results.find((r): r is Extract<RoutingApiResult, { success: true }> => r.success);
+    if (success) {
+      return { cid: success.cid, sequence: success.sequence, recordData: success.recordData };
     }
+
+    // All failed - classify the overall error
+    // If ANY gateway returned NOT_FOUND, that's authoritative (IPNS record doesn't exist)
+    const notFound = results.find(
+      (r): r is Extract<RoutingApiResult, { success: false }> => !r.success && r.errorType === 'NOT_FOUND'
+    );
+    if (notFound) {
+      return { errorType: 'NOT_FOUND', errorMessage: notFound.errorMessage };
+    }
+
+    // Otherwise return first error (could be NETWORK_ERROR, TIMEOUT, or PARSE_ERROR)
+    const firstError = results.find(
+      (r): r is Extract<RoutingApiResult, { success: false }> => !r.success
+    );
+    if (firstError) {
+      return { errorType: firstError.errorType, errorMessage: firstError.errorMessage };
+    }
+
+    return { errorType: 'NETWORK_ERROR', errorMessage: 'All gateways failed' };
   }
 
   /**
@@ -523,7 +582,8 @@ export class IpfsHttpResolver {
       // Use routing API for authoritative sequence number (bypass gateway path cache)
       const routingResult = await this.resolveViaRoutingApi(ipnsName, gateways);
 
-      if (routingResult) {
+      // Check if routing succeeded (discriminated union: error result has 'errorType')
+      if (!('errorType' in routingResult)) {
         const actualSeq = routingResult.sequence;
         const actualCid = routingResult.cid;
 
