@@ -53,7 +53,7 @@ import { addReceivedTransaction } from "../../../../services/TransactionHistoryS
 import { MintTransactionData } from "@unicitylabs/state-transition-sdk/lib/transaction/MintTransactionData";
 import { MintCommitment } from "@unicitylabs/state-transition-sdk/lib/transaction/MintCommitment";
 import { TokenType } from "@unicitylabs/state-transition-sdk/lib/token/TokenType";
-import { isInstantSplitBundle, type InstantSplitBundle, type InstantSplitProcessResult } from "../types/InstantTransferTypes";
+import { isInstantSplitBundle, isInstantSplitBundleV5, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitProcessResult } from "../types/InstantTransferTypes";
 
 export class NostrService {
   private static instance: NostrService;
@@ -442,9 +442,10 @@ export class NostrService {
         // Not valid JSON - continue with other checks
       }
 
-      // Check for INSTANT_SPLIT V4 bundle (highest priority)
+      // Check for INSTANT_SPLIT bundle (V4 or V5)
       if (payloadObj && isInstantSplitBundle(payloadObj)) {
-        console.log("📦 [TokenTransfer] Detected INSTANT_SPLIT V4 bundle (True Nostr-First)");
+        const version = (payloadObj as InstantSplitBundle).version;
+        console.log(`📦 [TokenTransfer] Detected INSTANT_SPLIT ${version} bundle`);
         const result = await this.processInstantSplitBundle(payloadObj as InstantSplitBundle, event.pubkey);
         return result.success ? result.token || null : null;
       }
@@ -949,28 +950,38 @@ export class NostrService {
   }
 
   // ============================================
-  // INSTANT_SPLIT V4 Bundle Processing
+  // INSTANT_SPLIT Bundle Processing (V4 and V5)
   // ============================================
 
   /**
-   * Process an INSTANT_SPLIT V4 "True Nostr-First" bundle.
+   * Process an INSTANT_SPLIT bundle (V4 or V5).
    *
-   * V4 achieves near-zero sender latency (~0.3s) by sending ALL commitments
-   * via Nostr BEFORE any aggregator submission. The recipient handles all
-   * proof acquisition.
+   * V4 (Dev Mode): Near-zero sender latency (~0.3s) by sending ALL commitments
+   * via Nostr BEFORE any aggregator submission. Recipient handles all proofs.
    *
-   * Flow:
-   * 1. Submit burn commitment → wait for proof (idempotent - sender also submits in background)
+   * V5 (Production Mode): ~2.3s sender latency. Burn is proven before mints are created.
+   * Bundle includes burn TRANSACTION (with proof) instead of burn commitment.
+   *
+   * Flow (V4):
+   * 1. Submit burn commitment → wait for proof
    * 2. Submit mint commitment → wait for proof
-   * 3. Reconstruct minted token
-   * 4. Submit pre-created transfer commitment → wait for proof
-   * 5. Finalize token with transfer and save
+   * 3. Reconstruct minted token (fromJSON in dev mode)
+   * 4. Submit transfer commitment → wait for proof
+   * 5. Finalize token and save
+   *
+   * Flow (V5):
+   * 1. Burn transaction already has proof (just validate)
+   * 2. Submit mint commitment → wait for proof
+   * 3. Reconstruct minted token (Token.mint() in production)
+   * 4. Submit transfer commitment → wait for proof
+   * 5. Finalize token and save
    */
   private async processInstantSplitBundle(
     bundle: InstantSplitBundle,
     senderPubkey: string
   ): Promise<InstantSplitProcessResult> {
-    console.log("📦 Processing INSTANT_SPLIT V4 bundle (True Nostr-First)...");
+    const isV5 = isInstantSplitBundleV5(bundle);
+    console.log(`📦 Processing INSTANT_SPLIT ${bundle.version} bundle...`);
     const startTime = performance.now();
 
     try {
@@ -986,44 +997,55 @@ export class NostrService {
       const client = ServiceProvider.stateTransitionClient;
       const { waitInclusionProofWithDevBypass } = await import('../../../../utils/devTools');
 
-      // 1. Submit burn commitment (idempotent - sender also submits in background)
-      const burnCommitmentJson = JSON.parse(bundle.burnCommitment);
-      const burnCommitment = await TransferCommitment.fromJSON(burnCommitmentJson);
-      console.log(`  📦 Burn commitment: requestId=${burnCommitment.requestId.toString().slice(0, 16)}...`);
+      // === Step 1: Handle burn (differs between V4 and V5) ===
+      // The burn transaction/proof is validated but not directly used in subsequent steps
+      // since the mint data already contains the SplitMintReason referencing the burn
+      if (isV5) {
+        // V5: Burn transaction already has proof - just deserialize and validate
+        const bundleV5 = bundle as InstantSplitBundleV5;
+        const burnTxJson = JSON.parse(bundleV5.burnTransaction);
+        await TransferTransaction.fromJSON(burnTxJson); // Validate it's parseable
+        console.log(`  📦 V5: Burn transaction with proof received`);
+      } else {
+        // V4: Submit burn commitment and wait for proof
+        const bundleV4 = bundle as InstantSplitBundleV4;
+        const burnCommitmentJson = JSON.parse(bundleV4.burnCommitment);
+        const burnCommitment = await TransferCommitment.fromJSON(burnCommitmentJson);
+        console.log(`  📦 V4: Burn commitment: requestId=${burnCommitment.requestId.toString().slice(0, 16)}...`);
 
-      const burnResponse = await client.submitTransferCommitment(burnCommitment);
-      if (burnResponse.status !== 'SUCCESS' && burnResponse.status !== 'REQUEST_ID_EXISTS') {
-        throw new Error(`Burn submission failed: ${burnResponse.status}`);
+        const burnResponse = await client.submitTransferCommitment(burnCommitment);
+        if (burnResponse.status !== 'SUCCESS' && burnResponse.status !== 'REQUEST_ID_EXISTS') {
+          throw new Error(`Burn submission failed: ${burnResponse.status}`);
+        }
+        console.log(`  📦 V4: Burn submitted: ${burnResponse.status}`);
+
+        // Wait for burn proof
+        await waitInclusionProofWithDevBypass(burnCommitment, 60000);
+        console.log(`  📦 V4: Burn proof received`);
       }
-      console.log(`  📦 Burn submitted: ${burnResponse.status}`);
 
-      // Wait for burn proof (needed to ensure burn is on-chain before proceeding)
-      await waitInclusionProofWithDevBypass(burnCommitment, 60000);
-      console.log(`  📦 Burn proof received`);
-
-      // 2. Deserialize MintTransactionData
+      // === Step 2: Deserialize MintTransactionData ===
       const mintDataJson = JSON.parse(bundle.recipientMintData);
       const mintData = await MintTransactionData.fromJSON(mintDataJson);
       const tokenIdHex = Buffer.from(mintData.tokenId.bytes).toString("hex");
       console.log(`  📦 MintData deserialized: tokenId=${tokenIdHex.slice(0, 16)}...`);
 
-      // 3. Recreate MintCommitment from data
+      // === Step 3: Recreate and submit MintCommitment ===
       const mintCommitment = await MintCommitment.create(mintData);
       console.log(`  📦 MintCommitment recreated: requestId=${mintCommitment.requestId.toString().slice(0, 16)}...`);
 
-      // 4. Submit mint commitment (idempotent - sender also submits in background)
       const mintResponse = await client.submitMintCommitment(mintCommitment);
       if (mintResponse.status !== 'SUCCESS' && mintResponse.status !== 'REQUEST_ID_EXISTS') {
         throw new Error(`Mint submission failed: ${mintResponse.status}`);
       }
       console.log(`  📦 Mint submitted: ${mintResponse.status}`);
 
-      // 5. Wait for mint inclusion proof
+      // === Step 4: Wait for mint inclusion proof ===
       const mintProof = await waitInclusionProofWithDevBypass(mintCommitment, 60000);
       const mintTransaction = mintCommitment.toTransaction(mintProof);
       console.log(`  📦 Mint proof received`);
 
-      // 6. Reconstruct minted token
+      // === Step 5: Reconstruct minted token ===
       const tokenType = new TokenType(Buffer.from(bundle.tokenTypeHex, "hex"));
       const recipientSalt = Buffer.from(bundle.recipientSaltHex, "hex");
 
@@ -1038,6 +1060,7 @@ export class NostrService {
 
       let mintedToken: Token<any>;
       if (ServiceProvider.isTrustBaseVerificationSkipped()) {
+        // Dev mode: create token without verification
         console.log("  ⚠️ Dev mode: creating token without verification");
         const tokenJson = {
           version: "2.0",
@@ -1048,6 +1071,8 @@ export class NostrService {
         };
         mintedToken = await Token.fromJSON(tokenJson);
       } else {
+        // Production mode: use Token.mint() with trust base verification
+        console.log("  ✅ Production mode: creating token with verification");
         mintedToken = await Token.mint(
           ServiceProvider.getRootTrustBase(),
           recipientState,
@@ -1056,7 +1081,7 @@ export class NostrService {
       }
       console.log(`  📦 Minted token reconstructed`);
 
-      // 7. Submit pre-created transfer commitment (idempotent - sender also submits in background)
+      // === Step 6: Submit pre-created transfer commitment ===
       const transferCommitmentJson = JSON.parse(bundle.transferCommitment);
       const transferCommitment = await TransferCommitment.fromJSON(transferCommitmentJson);
       console.log(`  📦 Transfer commitment: requestId=${transferCommitment.requestId.toString().slice(0, 16)}...`);
@@ -1067,12 +1092,12 @@ export class NostrService {
       }
       console.log(`  📦 Transfer submitted: ${transferResponse.status}`);
 
-      // 8. Wait for transfer inclusion proof
+      // === Step 7: Wait for transfer inclusion proof ===
       const transferProof = await waitInclusionProofWithDevBypass(transferCommitment, 60000);
       const transferTransaction = transferCommitment.toTransaction(transferProof);
       console.log(`  📦 Transfer proof received`);
 
-      // 9. Create recipient's final state (after transfer)
+      // === Step 8: Create recipient's final state (after transfer) ===
       const transferSalt = Buffer.from(bundle.transferSaltHex, "hex");
       const finalRecipientPredicate = await UnmaskedPredicate.create(
         mintData.tokenId,
@@ -1083,7 +1108,7 @@ export class NostrService {
       );
       const finalRecipientState = new TokenState(finalRecipientPredicate, null);
 
-      // 10. Finalize token with transfer transaction
+      // === Step 9: Finalize token with transfer transaction ===
       let finalToken: Token<any>;
       if (ServiceProvider.isTrustBaseVerificationSkipped()) {
         console.log("  ⚠️ Dev mode: finalizing token without verification");
@@ -1102,7 +1127,7 @@ export class NostrService {
       }
       console.log(`  📦 Token finalized with transfer`);
 
-      // 11. Verify the final token (in production mode)
+      // === Step 10: Verify the final token (in production mode) ===
       if (!ServiceProvider.isTrustBaseVerificationSkipped()) {
         const verification = await finalToken.verify(ServiceProvider.getRootTrustBase());
         if (!verification.isSuccessful) {
@@ -1112,11 +1137,11 @@ export class NostrService {
         console.log(`  ✅ Token verified`);
       }
 
-      // 12. Save the finalized token
+      // === Step 11: Save the finalized token ===
       const uiToken = await this.saveReceivedToken(finalToken, senderPubkey);
 
       const duration = performance.now() - startTime;
-      console.log(`✅ INSTANT_SPLIT V4 bundle processed in ${duration.toFixed(0)}ms`);
+      console.log(`✅ INSTANT_SPLIT ${bundle.version} bundle processed in ${duration.toFixed(0)}ms`);
 
       return {
         success: true,
@@ -1126,7 +1151,7 @@ export class NostrService {
     } catch (error) {
       const duration = performance.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`❌ INSTANT_SPLIT V4 bundle processing failed:`, error);
+      console.error(`❌ INSTANT_SPLIT ${bundle.version} bundle processing failed:`, error);
 
       return {
         success: false,

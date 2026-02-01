@@ -505,11 +505,11 @@ export function createPaymentSessionError(
 }
 
 // ============================================
-// INSTANT_SPLIT V4 Types (True Nostr-First Split)
+// INSTANT_SPLIT V4 Types (True Nostr-First Split - Dev Mode Only)
 // ============================================
 
 /**
- * Bundle payload for INSTANT_SPLIT V4 (True Nostr-First Split)
+ * Bundle payload for INSTANT_SPLIT V4 (Dev Mode Only - True Nostr-First Split)
  *
  * V4 achieves near-zero sender latency (~0.3s) by:
  * 1. Creating ALL commitments locally BEFORE any aggregator submission
@@ -518,6 +518,8 @@ export function createPaymentSessionError(
  *
  * Key insight: The aggregator only sees HASHES - it doesn't validate SplitMintReason content.
  * In dev mode, we create mint commitments with reason=null, so the hash doesn't depend on burn proof.
+ *
+ * NOTE: V4 only works in dev mode. Production requires V5 with proper SplitMintReason.
  *
  * Flow:
  * 1. Sender: create burn commitment (don't submit)
@@ -528,8 +530,8 @@ export function createPaymentSessionError(
  * 6. Recipient: submit burn (idempotent) → wait proof → submit mint → wait proof →
  *              submit transfer → wait proof → finalize
  */
-export interface InstantSplitBundle {
-  /** Bundle version - V4 is true Nostr-first (all commitments before any submission) */
+export interface InstantSplitBundleV4 {
+  /** Bundle version - V4 is true Nostr-first (dev mode only) */
   version: '4.0';
 
   /** Bundle type identifier */
@@ -572,8 +574,80 @@ export interface InstantSplitBundle {
   transferSaltHex: string;
 }
 
+// ============================================
+// INSTANT_SPLIT V5 Types (Production Mode)
+// ============================================
+
 /**
- * Type guard to check if an object is an InstantSplitBundle
+ * Bundle payload for INSTANT_SPLIT V5 (Production Mode)
+ *
+ * V5 achieves ~2.3s sender latency while working with production aggregators:
+ * 1. Create burn commitment, submit to aggregator
+ * 2. Wait for burn inclusion proof (~2s - unavoidable)
+ * 3. Create mint commitments with proper SplitMintReason (requires burn proof)
+ * 4. Create transfer commitment from mint data (no mint proof needed)
+ * 5. Package bundle → send via Nostr → SUCCESS (~2.3s total!)
+ * 6. Background: submit mints, wait for proofs, save change token, sync IPFS
+ *
+ * Key difference from V4: V5 includes burn TRANSACTION (with proof) instead of burn commitment.
+ * This enables SDK to create proper SplitMintReason that production aggregators require.
+ *
+ * Security: Burn is proven on-chain before mints can be created, preventing double-spend.
+ */
+export interface InstantSplitBundleV5 {
+  /** Bundle version - V5 is production mode (proper SplitMintReason) */
+  version: '5.0';
+
+  /** Bundle type identifier */
+  type: 'INSTANT_SPLIT';
+
+  /**
+   * Burn TRANSACTION JSON (WITH inclusion proof!)
+   * V5 sends the proven burn transaction so recipient can verify burn completed.
+   */
+  burnTransaction: string;
+
+  /**
+   * Recipient's MintTransactionData JSON (contains proper SplitMintReason in V5)
+   * The SplitMintReason references the burn transaction.
+   */
+  recipientMintData: string;
+
+  /**
+   * Pre-created TransferCommitment JSON (recipient submits and waits for proof)
+   * Created from mint data WITHOUT any proofs.
+   */
+  transferCommitment: string;
+
+  /** Payment amount (display metadata) */
+  amount: string;
+
+  /** Coin ID hex */
+  coinId: string;
+
+  /** Token type hex */
+  tokenTypeHex: string;
+
+  /** Split group ID for recovery correlation */
+  splitGroupId: string;
+
+  /** Sender's pubkey for acknowledgment */
+  senderPubkey: string;
+
+  /** Salt for recipient predicate creation (hex) */
+  recipientSaltHex: string;
+
+  /** Salt for transfer commitment creation (hex) */
+  transferSaltHex: string;
+}
+
+/**
+ * Union type for all InstantSplit bundle versions
+ */
+export type InstantSplitBundle = InstantSplitBundleV4 | InstantSplitBundleV5;
+
+/**
+ * Type guard to check if an object is an InstantSplitBundle (V4 or V5)
  */
 export function isInstantSplitBundle(obj: unknown): obj is InstantSplitBundle {
   if (typeof obj !== 'object' || obj === null) {
@@ -581,19 +655,42 @@ export function isInstantSplitBundle(obj: unknown): obj is InstantSplitBundle {
   }
 
   const bundle = obj as Record<string, unknown>;
-  return (
-    bundle.type === 'INSTANT_SPLIT' &&
-    bundle.version === '4.0' &&
-    typeof bundle.burnCommitment === 'string' &&
-    typeof bundle.recipientMintData === 'string' &&
-    typeof bundle.transferCommitment === 'string' &&
-    typeof bundle.amount === 'string' &&
-    typeof bundle.coinId === 'string' &&
-    typeof bundle.splitGroupId === 'string' &&
-    typeof bundle.senderPubkey === 'string' &&
-    typeof bundle.recipientSaltHex === 'string' &&
-    typeof bundle.transferSaltHex === 'string'
-  );
+
+  // Check common fields
+  if (bundle.type !== 'INSTANT_SPLIT') return false;
+  if (typeof bundle.recipientMintData !== 'string') return false;
+  if (typeof bundle.transferCommitment !== 'string') return false;
+  if (typeof bundle.amount !== 'string') return false;
+  if (typeof bundle.coinId !== 'string') return false;
+  if (typeof bundle.splitGroupId !== 'string') return false;
+  if (typeof bundle.senderPubkey !== 'string') return false;
+  if (typeof bundle.recipientSaltHex !== 'string') return false;
+  if (typeof bundle.transferSaltHex !== 'string') return false;
+
+  // Version-specific checks
+  if (bundle.version === '4.0') {
+    // V4 has burnCommitment (no proof)
+    return typeof bundle.burnCommitment === 'string';
+  } else if (bundle.version === '5.0') {
+    // V5 has burnTransaction (with proof)
+    return typeof bundle.burnTransaction === 'string';
+  }
+
+  return false;
+}
+
+/**
+ * Type guard to check if bundle is V4 (dev mode)
+ */
+export function isInstantSplitBundleV4(obj: unknown): obj is InstantSplitBundleV4 {
+  return isInstantSplitBundle(obj) && obj.version === '4.0';
+}
+
+/**
+ * Type guard to check if bundle is V5 (production mode)
+ */
+export function isInstantSplitBundleV5(obj: unknown): obj is InstantSplitBundleV5 {
+  return isInstantSplitBundle(obj) && obj.version === '5.0';
 }
 
 /**

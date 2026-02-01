@@ -38,6 +38,7 @@ import type { NametagData } from "./types/TxfTypes";
 import { getTokensForAddress, setNametagForAddress } from "./InventorySyncService";
 import { ServiceProvider } from "./ServiceProvider";
 import { NostrService } from "./NostrService";
+import { RegistryService } from "./RegistryService";
 import { ProxyAddress } from "@unicitylabs/state-transition-sdk/lib/address/ProxyAddress";
 import type { IdentityManager } from "./IdentityManager";
 import type {
@@ -50,7 +51,11 @@ import type {
 import { IpfsStorageService, SyncPriority } from "./IpfsStorageService";
 import { TokenRecoveryService } from "./TokenRecoveryService";
 import { normalizeSdkTokenToStorage } from "./TxfSerializer";
-import { isInstantSplitBundle, type InstantSplitBundle } from "../types/InstantTransferTypes";
+import { isInstantSplitBundle, isInstantSplitBundleV5, type InstantSplitBundle } from "../types/InstantTransferTypes";
+import { CoinId } from "@unicitylabs/state-transition-sdk/lib/token/fungible/CoinId";
+import { TokenCoinData } from "@unicitylabs/state-transition-sdk/lib/token/fungible/TokenCoinData";
+import { Token as UiToken, TokenStatus } from "../data/model";
+import { v4 as uuidv4 } from "uuid";
 
 // ==========================================
 // Configuration Constants
@@ -389,7 +394,18 @@ export class OutboxRecoveryService {
           break;
 
         case "NOSTR_SENT":
-          // Just mark as completed - Nostr already sent
+          // Check if this is a V5 entry that needs change token recovery
+          const metadata = (entry as any).metadata;
+          if (metadata?.version === '5.0' && metadata?.senderTokenIdHex) {
+            console.log(`📤 OutboxRecovery: V5 entry ${entry.id.slice(0, 8)}... needs change token recovery`);
+            const changeRecovered = await this.recoverV5ChangeToken(entry, outboxRepo);
+            if (changeRecovered) {
+              console.log(`📤 OutboxRecovery: V5 change token recovered for ${entry.id.slice(0, 8)}...`);
+            } else {
+              console.warn(`📤 OutboxRecovery: V5 change token recovery failed for ${entry.id.slice(0, 8)}..., marking as completed anyway`);
+            }
+          }
+          // Mark as completed - Nostr already sent
           outboxRepo.updateStatus(entry.id, "COMPLETED");
           detail.status = "recovered";
           detail.newStatus = "COMPLETED";
@@ -1256,6 +1272,214 @@ export class OutboxRecoveryService {
     }
 
     console.log(`📤 OutboxRecovery: Mint entry ${entry.id.slice(0, 8)}... recovered and completed`);
+  }
+
+  // ==========================================
+  // V5-Specific Recovery Methods
+  // ==========================================
+
+  /**
+   * Recover the change token for a V5 INSTANT_SPLIT entry.
+   *
+   * V5 entries store recovery metadata in entry.metadata:
+   * - version: '5.0'
+   * - seedString: deterministic seed for token IDs
+   * - senderTokenIdHex: ID of the change token
+   * - senderSaltHex: salt for change token predicate
+   * - changeAmount: amount of the change token
+   * - burnRequestIdHex: burn commitment request ID
+   *
+   * Recovery flow:
+   * 1. Reconstruct MintTransactionData from stored parameters
+   * 2. Create and submit MintCommitment
+   * 3. Wait for inclusion proof
+   * 4. Reconstruct token using Token.mint() or Token.fromJSON()
+   * 5. Save to localStorage
+   */
+  private async recoverV5ChangeToken(
+    entry: OutboxEntry,
+    _outboxRepo: OutboxRepository
+  ): Promise<boolean> {
+    const metadata = (entry as any).metadata;
+    if (!metadata?.version || metadata.version !== '5.0') {
+      console.log(`📤 OutboxRecovery: Entry ${entry.id.slice(0, 8)}... is not V5, skipping change recovery`);
+      return false;
+    }
+
+    if (!this.identityManager) {
+      console.warn(`📤 OutboxRecovery: No identity manager for V5 recovery`);
+      return false;
+    }
+
+    try {
+      console.log(`📤 OutboxRecovery: Starting V5 change token recovery for ${entry.id.slice(0, 8)}...`);
+
+      // Get identity and signing service
+      const identity = await this.identityManager.getCurrentIdentity();
+      if (!identity) {
+        throw new Error("No wallet identity found");
+      }
+
+      const secret = Buffer.from(identity.privateKey, "hex");
+      const signingService = await SigningService.createFromSecret(secret);
+
+      // Parse stored metadata
+      // Note: seedString is stored for potential future use but not needed for recovery
+      const {
+        senderTokenIdHex,
+        senderSaltHex,
+        changeAmount,
+      } = metadata;
+
+      // Check if change token already exists in wallet
+      const existingTokens = getTokensForAddress(identity.address);
+      const existingChangeToken = existingTokens.find(t => {
+        if (!t.jsonData) return false;
+        try {
+          const tokenData = JSON.parse(t.jsonData);
+          const tokenIdBytes = tokenData?.genesis?.data?.tokenId?.bytes;
+          if (tokenIdBytes) {
+            const tokenIdHex = Buffer.from(tokenIdBytes).toString("hex");
+            return tokenIdHex === senderTokenIdHex;
+          }
+        } catch { /* ignore parse errors */ }
+        return false;
+      });
+
+      if (existingChangeToken) {
+        console.log(`📤 OutboxRecovery: V5 change token already exists, skipping recovery`);
+        return true;
+      }
+
+      // Reconstruct token parameters
+      const coinIdHex = entry.coinId;
+      const coinIdBuffer = Buffer.from(coinIdHex, "hex");
+      const coinId = new CoinId(coinIdBuffer);
+
+      // We need the token type from the original bundle
+      // Try to parse it from sourceTokenJson
+      let tokenType: TokenType | null = null;
+      if (entry.sourceTokenJson) {
+        try {
+          const bundleOrToken = JSON.parse(entry.sourceTokenJson);
+          if (isInstantSplitBundleV5(bundleOrToken)) {
+            tokenType = new TokenType(Buffer.from(bundleOrToken.tokenTypeHex, "hex"));
+          } else if (bundleOrToken.tokenTypeHex) {
+            tokenType = new TokenType(Buffer.from(bundleOrToken.tokenTypeHex, "hex"));
+          }
+        } catch { /* ignore parse errors */ }
+      }
+
+      if (!tokenType) {
+        console.warn(`📤 OutboxRecovery: Cannot determine token type for V5 recovery`);
+        return false;
+      }
+
+      // Reconstruct MintTransactionData for sender (change) token
+      const senderTokenId = new TokenId(Buffer.from(senderTokenIdHex, "hex"));
+      const senderSalt = Buffer.from(senderSaltHex, "hex");
+      const changeAmountBigInt = BigInt(changeAmount);
+
+      const coinData = TokenCoinData.create([[coinId, changeAmountBigInt]]);
+
+      // Create sender address reference
+      const { UnmaskedPredicateReference } = await import("@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicateReference");
+      const senderAddressRef = await UnmaskedPredicateReference.create(
+        tokenType,
+        signingService.algorithm,
+        signingService.publicKey,
+        HashAlgorithm.SHA256
+      );
+      const senderAddress = await senderAddressRef.toAddress();
+
+      // Create MintTransactionData
+      const mintData = await MintTransactionData.create(
+        senderTokenId,
+        tokenType,
+        null, // tokenData
+        coinData,
+        senderAddress,
+        senderSalt,
+        null, // recipientDataHash
+        null  // reason - will be null in both dev mode and for simple recovery
+      );
+
+      // Create and submit MintCommitment
+      const mintCommitment = await MintCommitment.create(mintData);
+      const client = ServiceProvider.stateTransitionClient;
+
+      console.log(`📤 OutboxRecovery: Submitting V5 change mint: ${mintCommitment.requestId.toString().slice(0, 16)}...`);
+      const response = await client.submitMintCommitment(mintCommitment);
+
+      if (response.status !== "SUCCESS" && response.status !== "REQUEST_ID_EXISTS") {
+        console.warn(`📤 OutboxRecovery: V5 change mint submission failed: ${response.status}`);
+        return false;
+      }
+
+      // Wait for inclusion proof
+      const mintProof = await waitInclusionProofWithDevBypass(mintCommitment, 60000);
+      const mintTransaction = mintCommitment.toTransaction(mintProof);
+      console.log(`📤 OutboxRecovery: V5 change mint proof received`);
+
+      // Create token predicate and state
+      const predicate = await UnmaskedPredicate.create(
+        senderTokenId,
+        tokenType,
+        signingService,
+        HashAlgorithm.SHA256,
+        senderSalt
+      );
+      const tokenState = new TokenState(predicate, null);
+
+      // Create the token
+      let changeToken: Token<any>;
+      if (ServiceProvider.isTrustBaseVerificationSkipped()) {
+        console.log(`📤 OutboxRecovery: Creating V5 change token (dev mode)`);
+        const tokenJson = {
+          version: "2.0",
+          state: tokenState.toJSON(),
+          genesis: mintTransaction.toJSON(),
+          transactions: [],
+          nametags: [],
+        };
+        changeToken = await Token.fromJSON(tokenJson);
+      } else {
+        console.log(`📤 OutboxRecovery: Creating V5 change token (production mode)`);
+        changeToken = await Token.mint(
+          ServiceProvider.getRootTrustBase(),
+          tokenState,
+          mintTransaction
+        );
+      }
+
+      // Save to localStorage
+      const registryService = RegistryService.getInstance();
+      const def = registryService.getCoinDefinition(coinIdHex);
+
+      const uiToken = new UiToken({
+        id: uuidv4(),
+        name: def?.symbol || "Token",
+        type: tokenType.toString(),
+        symbol: def?.symbol,
+        jsonData: JSON.stringify(normalizeSdkTokenToStorage(changeToken.toJSON())),
+        status: TokenStatus.CONFIRMED,
+        amount: changeAmount,
+        coinId: coinIdHex,
+        iconUrl: def ? registryService.getIconUrl(def) || undefined : undefined,
+        timestamp: Date.now(),
+      });
+
+      // Import save functions
+      const { saveTokenImmediately, dispatchWalletUpdated } = await import('./InventorySyncService');
+      saveTokenImmediately(identity.address, uiToken);
+      dispatchWalletUpdated();
+
+      console.log(`✅ OutboxRecovery: V5 change token recovered and saved`);
+      return true;
+    } catch (error) {
+      console.error(`❌ OutboxRecovery: V5 change token recovery failed:`, error);
+      return false;
+    }
   }
 }
 
