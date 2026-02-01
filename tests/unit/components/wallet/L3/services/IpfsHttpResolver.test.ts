@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  getIpfsHttpResolver,
-  type IpnsResolutionErrorType,
-} from "../../../../../../src/components/wallet/L3/services/IpfsHttpResolver";
+import { getIpfsHttpResolver } from "../../../../../../src/components/wallet/L3/services/IpfsHttpResolver";
 
 // ==========================================
 // Mock fetch globally

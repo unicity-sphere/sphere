@@ -393,12 +393,13 @@ export class OutboxRecoveryService {
           detail.newStatus = "COMPLETED";
           break;
 
-        case "NOSTR_SENT":
+        case "NOSTR_SENT": {
           // Check if this is a V5 entry that needs change token recovery
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const metadata = (entry as any).metadata;
           if (metadata?.version === '5.0' && metadata?.senderTokenIdHex) {
             console.log(`📤 OutboxRecovery: V5 entry ${entry.id.slice(0, 8)}... needs change token recovery`);
-            const changeRecovered = await this.recoverV5ChangeToken(entry, outboxRepo);
+            const changeRecovered = await this.recoverV5ChangeToken(entry);
             if (changeRecovered) {
               console.log(`📤 OutboxRecovery: V5 change token recovered for ${entry.id.slice(0, 8)}...`);
             } else {
@@ -410,6 +411,7 @@ export class OutboxRecoveryService {
           detail.status = "recovered";
           detail.newStatus = "COMPLETED";
           break;
+        }
 
         case "COMPLETED":
           // Already done, just clean up
@@ -1297,9 +1299,9 @@ export class OutboxRecoveryService {
    * 5. Save to localStorage
    */
   private async recoverV5ChangeToken(
-    entry: OutboxEntry,
-    _outboxRepo: OutboxRepository
+    entry: OutboxEntry
   ): Promise<boolean> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const metadata = (entry as any).metadata;
     if (!metadata?.version || metadata.version !== '5.0') {
       console.log(`📤 OutboxRecovery: Entry ${entry.id.slice(0, 8)}... is not V5, skipping change recovery`);
@@ -1432,6 +1434,7 @@ export class OutboxRecoveryService {
       const tokenState = new TokenState(predicate, null);
 
       // Create the token
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let changeToken: Token<any>;
       if (ServiceProvider.isTrustBaseVerificationSkipped()) {
         console.log(`📤 OutboxRecovery: Creating V5 change token (dev mode)`);

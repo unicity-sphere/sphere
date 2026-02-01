@@ -1472,7 +1472,7 @@ export class TokenSplitExecutor {
       const proofStartTime = performance.now();
 
       try {
-        const [burnProof, senderMintProof, _recipientMintProof, transferProof] = await Promise.all([
+        const [burnProof, senderMintProof, /* recipientMintProof - sent to recipient */, transferProof] = await Promise.all([
           waitInclusionProofWithDevBypass(burnCommitment, 60000),
           waitInclusionProofWithDevBypass(senderMintCommitment, 60000),
           waitInclusionProofWithDevBypass(recipientMintCommitment, 60000),
