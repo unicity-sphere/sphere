@@ -1049,19 +1049,36 @@ export class NostrService {
       const tokenType = new TokenType(Buffer.from(bundle.tokenTypeHex, "hex"));
       const recipientSalt = Buffer.from(bundle.recipientSaltHex, "hex");
 
-      const recipientPredicate = await UnmaskedPredicate.create(
-        mintData.tokenId,
-        tokenType,
-        signingService,
-        HashAlgorithm.SHA256,
-        recipientSalt
-      );
-      const recipientState = new TokenState(recipientPredicate, null);
-
       let mintedToken: Token<any>;
-      if (ServiceProvider.isTrustBaseVerificationSkipped()) {
-        // Dev mode: create token without verification
-        console.log("  ⚠️ Dev mode: creating token without verification");
+      if (isV5) {
+        // V5: Use the sender's minted state from the bundle
+        // The mint is to sender's address, so we MUST use their state (we don't have their signing key)
+        const bundleV5 = bundle as InstantSplitBundleV5;
+        const senderMintedStateJson = JSON.parse(bundleV5.mintedTokenStateJson);
+        console.log("  📦 V5: Using sender's minted token state from bundle");
+
+        const tokenJson = {
+          version: "2.0",
+          state: senderMintedStateJson,
+          genesis: mintTransaction.toJSON(),
+          transactions: [],
+          nametags: [],
+        };
+        mintedToken = await Token.fromJSON(tokenJson);
+        console.log(`  📦 V5: Minted token reconstructed from sender's state`);
+      } else if (ServiceProvider.isTrustBaseVerificationSkipped()) {
+        // V4 Dev mode: create token without verification using recipient's predicate
+        // (V4 only works in dev mode where predicate mismatch is tolerated)
+        const recipientPredicate = await UnmaskedPredicate.create(
+          mintData.tokenId,
+          tokenType,
+          signingService,
+          HashAlgorithm.SHA256,
+          recipientSalt
+        );
+        const recipientState = new TokenState(recipientPredicate, null);
+
+        console.log("  ⚠️ V4 Dev mode: creating token without verification");
         const tokenJson = {
           version: "2.0",
           state: recipientState.toJSON(),
@@ -1071,13 +1088,8 @@ export class NostrService {
         };
         mintedToken = await Token.fromJSON(tokenJson);
       } else {
-        // Production mode: use Token.mint() with trust base verification
-        console.log("  ✅ Production mode: creating token with verification");
-        mintedToken = await Token.mint(
-          ServiceProvider.getRootTrustBase(),
-          recipientState,
-          mintTransaction
-        );
+        // V4 in production - should not happen (V4 is dev-only)
+        throw new Error("INSTANT_SPLIT V4 is only supported in dev mode");
       }
       console.log(`  📦 Minted token reconstructed`);
 

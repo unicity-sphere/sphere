@@ -430,6 +430,19 @@ export class TokenSplitExecutor {
       );
       console.log(`✅ V5: Transfer commitment created (requestId: ${transferCommitment.requestId.toString().slice(0,16)}...)`);
 
+      // === Step 4.5: Create minted token state (for recipient to reconstruct) ===
+      // The recipient can't create this predicate because they don't have sender's signing key.
+      // We serialize and include it so they can use Token.fromJSON with the correct state.
+      const mintedPredicate = await UnmaskedPredicate.create(
+        recipientTokenId,
+        tokenToSplit.type,
+        signingService,  // Sender's signing service
+        HashAlgorithm.SHA256,
+        recipientSalt
+      );
+      const mintedState = new TokenState(mintedPredicate, null);
+      console.log(`✅ V5: Minted token state created for recipient`);
+
       // === Step 5: Package V5 bundle (burn TRANSACTION with proof) ===
       const bundle: InstantSplitBundleV5 = {
         version: '5.0',
@@ -444,6 +457,7 @@ export class TokenSplitExecutor {
         senderPubkey: outboxContext.ownerPublicKey,
         recipientSaltHex: Buffer.from(recipientSalt).toString("hex"),
         transferSaltHex: transferSaltHex,
+        mintedTokenStateJson: JSON.stringify(mintedState.toJSON()),  // For recipient to reconstruct
       };
 
       // Create outbox entry for V5 tracking with recovery metadata

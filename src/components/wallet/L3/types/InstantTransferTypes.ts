@@ -639,6 +639,15 @@ export interface InstantSplitBundleV5 {
 
   /** Salt for transfer commitment creation (hex) */
   transferSaltHex: string;
+
+  /**
+   * Serialized TokenState JSON for the intermediate minted token.
+   *
+   * In V5, the mint is to sender's address first, then transferred to recipient.
+   * The recipient needs this state to reconstruct the minted token before applying transfer.
+   * Without this, the recipient can't create a matching predicate (they don't have sender's signing key).
+   */
+  mintedTokenStateJson: string;
 }
 
 /**
@@ -672,8 +681,9 @@ export function isInstantSplitBundle(obj: unknown): obj is InstantSplitBundle {
     // V4 has burnCommitment (no proof)
     return typeof bundle.burnCommitment === 'string';
   } else if (bundle.version === '5.0') {
-    // V5 has burnTransaction (with proof)
-    return typeof bundle.burnTransaction === 'string';
+    // V5 has burnTransaction (with proof) and mintedTokenStateJson
+    return typeof bundle.burnTransaction === 'string' &&
+           typeof bundle.mintedTokenStateJson === 'string';
   }
 
   return false;
