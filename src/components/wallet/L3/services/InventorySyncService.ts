@@ -277,6 +277,10 @@ interface SyncContext {
   // Track token IDs loaded at Step 1 (for merge logic in Step 9)
   // Used to detect tokens added to localStorage DURING sync (not ones we removed)
   originalTokenIds: Set<string>;
+
+  // Track token IDs from incoming transfers (Step 0)
+  // Used to prevent removing boomerang tokens in Step 8
+  incomingTokenIds: Set<string>;
 }
 
 // ============================================
@@ -696,6 +700,8 @@ function initializeContext(params: SyncParams, mode: SyncMode, startTime: number
     skipExtendedVerification: params.skipExtendedVerification ?? false,
     // Track original token IDs for merge detection
     originalTokenIds: new Set(),
+    // Track incoming token IDs (for boomerang detection in Step 8)
+    incomingTokenIds: new Set(),
   };
 }
 
@@ -710,6 +716,7 @@ function step0_inputProcessing(ctx: SyncContext, params: SyncParams): void {
       if (txf) {
         const tokenId = txf.genesis.data.tokenId;
         ctx.tokens.set(tokenId, txf);
+        ctx.incomingTokenIds.add(tokenId);  // Track for boomerang detection in Step 8
         ctx.stats.tokensImported++;
       } else {
         console.warn(`  Failed to convert incoming token ${token.id} to TXF format`);
@@ -2131,6 +2138,9 @@ async function step8_mergeInventory(ctx: SyncContext): Promise<void> {
   // This is a safety net that handles cases where tokens were incorrectly recovered
   // from old IPFS versions before the sent folder check was added to version chain traversal.
   // It also handles edge cases where the same token ID appears in both active and sent folders.
+  //
+  // IMPORTANT: Skip tokens that arrived via incoming transfers (Step 0) - these are valid
+  // "boomerang" tokens that were previously sent and have now returned to us.
   const sentTokenIds = new Set(
     ctx.sent
       .map(s => s.token?.genesis?.data?.tokenId)
@@ -2138,8 +2148,15 @@ async function step8_mergeInventory(ctx: SyncContext): Promise<void> {
   );
 
   let removedAsSent = 0;
+  let skippedBoomerangs = 0;
   for (const tokenId of ctx.tokens.keys()) {
     if (sentTokenIds.has(tokenId)) {
+      // Skip if this is an incoming token (boomerang - token returned to us)
+      if (ctx.incomingTokenIds.has(tokenId)) {
+        skippedBoomerangs++;
+        console.log(`  🪃 Keeping boomerang token ${tokenId.slice(0, 8)}... (received via incoming transfer)`);
+        continue;
+      }
       ctx.tokens.delete(tokenId);
       removedAsSent++;
       console.log(`  🗑️ Removed ${tokenId.slice(0, 8)}... from active (already in sent folder)`);
@@ -2148,6 +2165,9 @@ async function step8_mergeInventory(ctx: SyncContext): Promise<void> {
 
   if (removedAsSent > 0) {
     console.log(`  ✓ Removed ${removedAsSent} active token(s) that were already in sent folder`);
+  }
+  if (skippedBoomerangs > 0) {
+    console.log(`  ✓ Kept ${skippedBoomerangs} boomerang token(s) that returned via incoming transfer`);
   }
 
   // Step 8.2: Detect boomerang tokens (outbox tokens that returned to us)
