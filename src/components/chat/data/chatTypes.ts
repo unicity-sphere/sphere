@@ -1,3 +1,5 @@
+import { WELCOME_TRIGGER } from '../../../sdk/SphereProvider';
+
 // SDK DirectMessage shape (local mirror — SDK DTS not always resolvable)
 interface SDKDirectMessage {
   id: string;
@@ -117,7 +119,8 @@ export function buildConversation(
   messages: SDKDirectMessage[],
   myPubkey: string,
 ): Conversation {
-  const sorted = [...messages].sort((a, b) => b.timestamp - a.timestamp);
+  const visible = messages.filter(m => !(m.senderPubkey === myPubkey && m.content === WELCOME_TRIGGER));
+  const sorted = [...visible].sort((a, b) => b.timestamp - a.timestamp);
   const lastMsg = sorted[0];
 
   const peerNametag =

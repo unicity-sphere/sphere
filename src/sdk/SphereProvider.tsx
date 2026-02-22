@@ -68,22 +68,22 @@ function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
   }
 }
 
-/** Notify kbbot of new/imported wallet (fire-and-forget) */
-function notifyKbbot(instance: Sphere): void {
-  const kbbotUrl = import.meta.env.VITE_KBBOT_URL as string | 'https://sphere.unicity.network/kbbot';
-  if (!kbbotUrl || !instance.identity) return;
-  fetch(`${kbbotUrl}/api/notify`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      pubkey: instance.identity.chainPubkey,
-      nametag: instance.identity.nametag,
-    }),
-  })
-    .then(res => {
-      if (!res.ok) console.error(`[kbbot] notify failed: ${res.status}`);
-    })
-    .catch(err => console.error('[kbbot] notify error:', err));
+/** Internal trigger content — hidden from chat UI, detected by bot */
+export const WELCOME_TRIGGER = '__sphere_welcome__';
+
+/** Send welcome trigger DM to configured agent after wallet creation/import (fire-and-forget) */
+function sendWelcomeDM(instance: Sphere): void {
+  const agentNametag = (import.meta.env.VITE_WELCOME_AGENT_NAMETAG as string | undefined) || 'kbbot';
+  const delayMs = parseInt((import.meta.env.VITE_WELCOME_DELAY_MS as string | undefined) || '4000', 10);
+
+  if (!instance.identity) return;
+
+  setTimeout(() => {
+    instance.communications
+      .sendDM(`@${agentNametag}`, WELCOME_TRIGGER)
+      .then(() => console.log(`[SphereProvider] Welcome trigger sent to @${agentNametag}`))
+      .catch((err) => console.warn(`[SphereProvider] Failed to send welcome trigger:`, err));
+  }, delayMs);
 }
 
 /** Clean up persisted wallet data on creation/import failure */
@@ -229,7 +229,6 @@ export function SphereProvider({
         });
         setInitProgress(null);
         setupIpfsSync(instance, providers);
-        notifyKbbot(instance);
 
         if (!generatedMnemonic) {
           throw new Error('Failed to generate mnemonic');
@@ -385,7 +384,7 @@ export function SphereProvider({
       if (providers) setupIpfsSync(importedSphere, providers);
       sphereRef.current = importedSphere;
       setSphere(importedSphere);
-      notifyKbbot(importedSphere);
+      sendWelcomeDM(importedSphere);
     }
     setWalletExists(true);
   }, [providers]);

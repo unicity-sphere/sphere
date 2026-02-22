@@ -13,6 +13,7 @@ import {
   getDisplayName,
   CHAT_KEYS,
 } from '../data/chatTypes';
+import { WELCOME_TRIGGER } from '../../../sdk/SphereProvider';
 import { STORAGE_KEYS } from '../../../config/storageKeys';
 
 // Local type mirroring SDK's DirectMessage (SDK DTS not always available)
@@ -200,7 +201,9 @@ export const useChat = (): UseChatReturn => {
       const page = sphere.communications.getConversationPage(selectedPeerPubkey, { limit: messageLimit });
       const myPubkey = sphere.identity!.chainPubkey;
       return {
-        messages: page.messages.map((dm: SDKDirectMessage) => toDisplayMessage(dm, myPubkey)),
+        messages: page.messages
+          .filter((dm: SDKDirectMessage) => !(dm.senderPubkey === myPubkey && dm.content === WELCOME_TRIGGER))
+          .map((dm: SDKDirectMessage) => toDisplayMessage(dm, myPubkey)),
         hasMore: page.hasMore,
       };
     },

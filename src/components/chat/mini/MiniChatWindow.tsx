@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSphereContext } from '../../../sdk/hooks/core/useSphere';
 import { useIdentity } from '../../../sdk/hooks/core/useIdentity';
 import { type Conversation, type DisplayMessage, type DmReceivedDetail, buildAddressId, toDisplayMessage, formatMessageTime, getDisplayName, getAvatar, CHAT_KEYS } from '../data/chatTypes';
+import { WELCOME_TRIGGER } from '../../../sdk/SphereProvider';
 import { useMiniChatStore } from './miniChatStore';
 import { MiniChatInput } from './MiniChatInput';
 import { MarkdownContent } from '../../../utils/markdown';
@@ -49,7 +50,9 @@ export function MiniChatWindow({ conversation, index }: MiniChatWindowProps) {
       if (!sphere) return [];
       const sdkMsgs: SDKDirectMessage[] = sphere.communications.getConversation(conversation.peerPubkey);
       const myPubkey = sphere.identity!.chainPubkey;
-      return sdkMsgs.map((dm) => toDisplayMessage(dm, myPubkey));
+      return sdkMsgs
+        .filter((dm) => !(dm.senderPubkey === myPubkey && dm.content === WELCOME_TRIGGER))
+        .map((dm) => toDisplayMessage(dm, myPubkey));
     },
     enabled: !!sphere,
     staleTime: 5000,
