@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Sphere Wallet",
+  "version": "0.0.0",
+  "description": "Sphere wallet for Unicity Protocol",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "48": "icons/icon48.png"
+    },
+    "default_title": "Open Sphere"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "alarms"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

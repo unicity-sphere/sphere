@@ -31,7 +31,7 @@ export const DMChatInput = forwardRef<HTMLTextAreaElement, DMChatInputProps>(
   ) {
     const internalRef = useRef<HTMLTextAreaElement>(null);
     const lastTypingSentRef = useRef(0);
-    const { sphere } = useSphereContext();
+    const { adapter } = useSphereContext();
 
     // Expose the internal ref to parent components
     useImperativeHandle(ref, () => internalRef.current!, []);
@@ -40,12 +40,12 @@ export const DMChatInput = forwardRef<HTMLTextAreaElement, DMChatInputProps>(
     useKeyboardScrollIntoView(internalRef);
 
     const sendComposingIndicator = useCallback(() => {
-      if (!sphere || !participantPubkey) return;
+      if (!adapter || !participantPubkey) return;
       const now = Date.now();
       if (now - lastTypingSentRef.current < TYPING_THROTTLE_MS) return;
       lastTypingSentRef.current = now;
-      sphere.communications.sendComposingIndicator(participantPubkey).catch(() => {});
-    }, [sphere, participantPubkey]);
+      adapter.sendComposingIndicator(participantPubkey).catch(() => {});
+    }, [adapter, participantPubkey]);
 
     const handleChange = useCallback(
       (e: React.ChangeEvent<HTMLTextAreaElement>) => {

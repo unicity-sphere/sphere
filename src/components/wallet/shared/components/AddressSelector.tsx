@@ -32,29 +32,35 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
   const [nametagAvailability, setNametagAvailability] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const nametagInputRef = useRef<HTMLInputElement>(null);
 
-  const { sphere, resolveNametag, isDiscoveringAddresses } = useSphereContext();
+  const { adapter, resolveNametag, isDiscoveringAddresses } = useSphereContext();
   const { l1Address, nametag, directAddress } = useIdentity();
   const queryClient = useQueryClient();
 
-  const currentAddressIndex = sphere?.getCurrentAddressIndex() ?? 0;
+  const [currentAddressIndex, setCurrentAddressIndex] = useState(0);
 
   // Get tracked addresses from SDK — no network calls needed
   const [addresses, setAddresses] = useState<TrackedAddress[]>([]);
 
   useEffect(() => {
-    if (!sphere) return;
-    const refresh = () => {
+    if (!adapter) return;
+    const refresh = async () => {
       try {
-        setAddresses(sphere.getActiveAddresses());
+        const idx = await adapter.getCurrentAddressIndex();
+        setCurrentAddressIndex(idx ?? 0);
+        const addrs = await adapter.getActiveAddresses();
+        setAddresses(addrs);
       } catch (e) {
         console.error('[AddressSelector] Failed to get addresses:', e);
       }
     };
     refresh();
-    const unsub1 = sphere.on('address:hidden', refresh);
-    const unsub2 = sphere.on('address:unhidden', refresh);
-    return () => { unsub1(); unsub2(); };
-  }, [sphere, currentAddressIndex, nametag, isDiscoveringAddresses]);
+    adapter.on('address:hidden', refresh);
+    adapter.on('address:unhidden', refresh);
+    return () => {
+      adapter.off('address:hidden', refresh);
+      adapter.off('address:unhidden', refresh);
+    };
+  }, [adapter, nametag, isDiscoveringAddresses]);
 
   // Focus nametag input when modal opens
   useEffect(() => {
@@ -89,8 +95,8 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
   const refreshAfterSwitch = useCallback(() => {
     // Write fresh identity directly — avoids race where resetQueries
     // refetches before sphere.identity has been updated by the SDK.
-    if (sphere?.identity) {
-      queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...sphere.identity });
+    if (adapter?.identity) {
+      queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...adapter.identity });
     }
     // Reset queries: clears cached data AND triggers a refetch for active observers.
     // Using resetQueries instead of removeQueries+invalidateQueries because
@@ -99,8 +105,10 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
     queryClient.resetQueries({ queryKey: SPHERE_KEYS.payments.all });
     queryClient.resetQueries({ queryKey: SPHERE_KEYS.l1.all });
     window.dispatchEvent(new Event('wallet-updated'));
-    if (sphere) setAddresses(sphere.getActiveAddresses());
-  }, [queryClient, sphere]);
+    if (adapter) {
+      adapter.getActiveAddresses().then(setAddresses).catch(() => {});
+    }
+  }, [queryClient, adapter]);
 
   const handleCopyNametag = useCallback(async () => {
     const tagToCopy = nametag;
@@ -126,7 +134,7 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
   }, [directAddress]);
 
   const handleSelectAddress = useCallback(async (index: number) => {
-    if (!sphere || isSwitching || index === currentAddressIndex) {
+    if (!adapter || isSwitching || index === currentAddressIndex) {
       setShowDropdown(false);
       return;
     }
@@ -137,7 +145,7 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
     try {
       // Timeout guards against SDK hanging on Nostr publish when relay is not connected
       await Promise.race([
-        sphere.switchToAddress(index),
+        adapter.switchToAddress(index),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
       ]);
     } catch (e) {
@@ -148,11 +156,11 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
       refreshAfterSwitch();
       setIsSwitching(false);
     }
-  }, [sphere, isSwitching, currentAddressIndex, refreshAfterSwitch]);
+  }, [adapter, isSwitching, currentAddressIndex, refreshAfterSwitch]);
 
   // Step 1: Create new address, then check if nametag already exists (local + network)
   const handleNewClick = useCallback(async () => {
-    if (!sphere || isSwitching) return;
+    if (!adapter || isSwitching) return;
 
     // Keep dropdown open to show "Switching..." indicator
     setIsSwitching(true);
@@ -166,7 +174,7 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
       // Timeout guards against SDK hanging on Nostr publish when relay is not connected
       try {
         await Promise.race([
-          sphere.switchToAddress(nextIndex),
+          adapter.switchToAddress(nextIndex),
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
         ]);
       } catch (e) {
@@ -183,11 +191,11 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
     } finally {
       setIsSwitching(false);
     }
-  }, [sphere, isSwitching, addresses, refreshAfterSwitch]);
+  }, [adapter, isSwitching, addresses, refreshAfterSwitch]);
 
   // Step 2a: Register nametag on the current address (already created in handleNewClick)
   const handleCreateWithNametag = useCallback(async () => {
-    if (!sphere || isSwitching) return;
+    if (!adapter || isSwitching) return;
     const cleanTag = newNametag.trim().replace(/^@/, '');
     if (!cleanTag) return;
 
@@ -204,7 +212,7 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
       }
 
       // Register nametag on the current address
-      await sphere.registerNametag(cleanTag);
+      await adapter.registerNametag(cleanTag);
       setShowNametagModal(false);
       refreshAfterSwitch();
     } catch (e) {
@@ -214,7 +222,7 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
     } finally {
       setIsSwitching(false);
     }
-  }, [sphere, isSwitching, newNametag, resolveNametag, refreshAfterSwitch]);
+  }, [adapter, isSwitching, newNametag, resolveNametag, refreshAfterSwitch]);
 
   // Step 2b: Skip nametag (address already created in handleNewClick)
   const handleCreateWithoutNametag = useCallback(() => {
@@ -346,8 +354,8 @@ export function AddressSelector({ compact = true, addressFormat = 'direct' }: Ad
     </AnimatePresence>
   );
 
-  // No sphere — show minimal nametag if available
-  if (!sphere) {
+  // No adapter — show minimal nametag if available
+  if (!adapter) {
     if ((displayNametag || directAddress) && compact) {
       return (
         <div className="flex items-center gap-1.5">

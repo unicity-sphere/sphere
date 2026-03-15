@@ -11,15 +11,15 @@ export interface UseTransactionHistoryReturn {
 }
 
 export function useTransactionHistory(): UseTransactionHistoryReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.transactions.history,
-    queryFn: (): TransactionHistoryEntry[] => {
-      if (!sphere) return [];
-      return sphere.payments.getHistory();
+    queryFn: async (): Promise<TransactionHistoryEntry[]> => {
+      if (!adapter) return [];
+      return adapter.getTransactionHistory();
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
   });
 

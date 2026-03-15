@@ -17,7 +17,7 @@ export interface UseTokensReturn {
 }
 
 export function useTokens(): UseTokensReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const [registryReady, setRegistryReady] = useState(
     () => TokenRegistry.getInstance().getAllDefinitions().length > 0,
   );
@@ -36,10 +36,10 @@ export function useTokens(): UseTokensReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.tokens.list,
     queryFn: async () => {
-      if (!sphere) return [];
-      return sphere.payments.getTokens();
+      if (!adapter) return [];
+      return adapter.getTokens();
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
     structuralSharing: false,
   });

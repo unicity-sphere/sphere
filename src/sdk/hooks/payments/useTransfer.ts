@@ -19,13 +19,13 @@ export interface UseTransferReturn {
 }
 
 export function useTransfer(): UseTransferReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      return sphere.payments.send({
+      if (!adapter) throw new Error('Wallet not initialized');
+      return adapter.send({
         coinId: params.coinId,
         amount: params.amount,
         recipient: params.recipient,

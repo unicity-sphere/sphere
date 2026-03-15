@@ -22,16 +22,14 @@ export interface UseL1BalanceReturn {
 }
 
 export function useL1Balance(): UseL1BalanceReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: SPHERE_KEYS.l1.balance,
     queryFn: async (): Promise<L1BalanceData | null> => {
-      if (!sphere) return null;
-      const l1 = sphere.payments.l1;
-      if (!l1) return null;
+      if (!adapter) return null;
       const bal = await Promise.race([
-        l1.getBalance(),
+        adapter.l1GetBalance(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('L1 balance timeout')), 15_000),
         ),
@@ -44,7 +42,7 @@ export function useL1Balance(): UseL1BalanceReturn {
         unvested: bal.unvested ?? '0',
       };
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
     retry: 1,
     retryDelay: 2_000,

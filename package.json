@@ -9,9 +9,14 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "build:extension": "node scripts/build-extension.js",
+    "build:android": "vite build && npx cap sync android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tanstack/react-query": "^5.90.10",
     "@types/katex": "^0.16.7",
@@ -32,6 +37,7 @@
     "@eslint/js": "^9.36.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.0",
+    "@types/chrome": "^0.1.37",
     "@types/crypto-js": "^4.2.2",
     "@types/elliptic": "^6.4.18",
     "@types/node": "^24.9.2",

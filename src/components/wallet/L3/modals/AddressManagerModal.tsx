@@ -11,55 +11,57 @@ interface AddressManagerModalProps {
 }
 
 export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProps) {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const [addresses, setAddresses] = useState<TrackedAddress[]>([]);
   const [togglingIndex, setTogglingIndex] = useState<number | null>(null);
   const [isDeriving, setIsDeriving] = useState(false);
 
-  const currentIndex = sphere?.getCurrentAddressIndex() ?? 0;
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-  const refreshAddresses = useCallback(() => {
-    if (!sphere) return;
+  const refreshAddresses = useCallback(async () => {
+    if (!adapter) return;
     try {
-      const all = sphere.getAllTrackedAddresses();
-      setAddresses(all.sort((a, b) => a.index - b.index));
+      const idx = await adapter.getCurrentAddressIndex();
+      setCurrentIndex(idx ?? 0);
+      const all = await adapter.getAllTrackedAddresses();
+      setAddresses([...all].sort((a, b) => a.index - b.index));
     } catch (e) {
       console.error('[AddressManager] Failed to get addresses:', e);
     }
-  }, [sphere]);
+  }, [adapter]);
 
   useEffect(() => {
     if (isOpen) refreshAddresses();
   }, [isOpen, refreshAddresses]);
 
   const handleToggleHidden = useCallback(async (index: number, currentlyHidden: boolean) => {
-    if (!sphere) return;
+    if (!adapter) return;
     setTogglingIndex(index);
     try {
-      await sphere.setAddressHidden(index, !currentlyHidden);
+      await adapter.setAddressHidden(index, !currentlyHidden);
       refreshAddresses();
     } catch (e) {
       console.error('[AddressManager] Failed to toggle address visibility:', e);
     } finally {
       setTogglingIndex(null);
     }
-  }, [sphere, refreshAddresses]);
+  }, [adapter, refreshAddresses]);
 
   const handleDeriveNew = useCallback(async () => {
-    if (!sphere || isDeriving) return;
+    if (!adapter || isDeriving) return;
     setIsDeriving(true);
     try {
       const nextIndex = addresses.length > 0
         ? Math.max(...addresses.map(a => a.index)) + 1
         : 1;
-      await sphere.switchToAddress(nextIndex);
+      await adapter.switchToAddress(nextIndex);
       refreshAddresses();
     } catch (e) {
       console.error('[AddressManager] Failed to derive new address:', e);
     } finally {
       setIsDeriving(false);
     }
-  }, [sphere, addresses, isDeriving, refreshAddresses]);
+  }, [adapter, addresses, isDeriving, refreshAddresses]);
 
   const truncateAddr = (addr: string): string => {
     if (addr.length <= 20) return addr;

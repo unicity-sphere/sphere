@@ -5,16 +5,16 @@ import { PINNED_GROUP_IDS } from '../components/chat/utils/groupChatHelpers';
 
 export const ServicesProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [isGroupChatConnected, setIsGroupChatConnected] = useState(false);
-  const { sphere } = useSphereContext();
+  const { adapter, groupChat: ctxGroupChat } = useSphereContext();
 
-  const groupChat = sphere?.groupChat ?? null;
+  const groupChat = ctxGroupChat;
 
   // Auto-connect group chat when available
   useEffect(() => {
-    if (!groupChat || !sphere) return;
+    if (!groupChat || !adapter) return;
 
-    groupChat.connect().then(() => {
-      setIsGroupChatConnected(groupChat.getConnectionStatus());
+    groupChat.connect().then(async () => {
+      setIsGroupChatConnected(await groupChat.getConnectionStatus());
     }).catch((err) => {
       console.error('[ServicesProvider] Group chat connect failed:', err);
     });
@@ -27,35 +27,36 @@ export const ServicesProvider: React.FC<{ children: ReactNode }> = ({ children }
       try {
         await groupChat.load();
         await groupChat.connect();
-        setIsGroupChatConnected(groupChat.getConnectionStatus());
+        setIsGroupChatConnected(await groupChat.getConnectionStatus());
       } catch (err) {
         console.error('[ServicesProvider] Group chat reconnect failed:', err);
       }
     };
 
     // Auto-join pinned groups when connected (if not already a member)
-    const handleConnection = (data: { connected: boolean }) => {
-      setIsGroupChatConnected(data.connected);
-      if (data.connected) {
-        const groups = groupChat.getGroups();
-        const joinedIds = new Set(groups.map(g => g.id));
-        for (const id of PINNED_GROUP_IDS) {
-          if (!joinedIds.has(id)) {
-            groupChat.joinGroup(id).catch(() => {});
+    const handleConnection = (data?: unknown) => {
+      const { connected } = data as { connected: boolean };
+      setIsGroupChatConnected(connected);
+      if (connected) {
+        groupChat.getGroups().then(groups => {
+          const joinedIds = new Set(groups.map(g => g.id));
+          for (const id of PINNED_GROUP_IDS) {
+            if (!joinedIds.has(id)) {
+              groupChat.joinGroup(id).catch(() => {});
+            }
           }
-        }
+        });
       }
     };
 
-    const unsubs = [
-      sphere.on('groupchat:connection', handleConnection),
-      sphere.on('identity:changed', handleIdentityChange),
-    ];
+    adapter.on('groupchat:connection', handleConnection);
+    adapter.on('identity:changed', handleIdentityChange);
 
     return () => {
-      unsubs.forEach(unsub => unsub());
+      adapter.off('groupchat:connection', handleConnection);
+      adapter.off('identity:changed', handleIdentityChange);
     };
-  }, [groupChat, sphere]);
+  }, [groupChat, adapter]);
 
   const value = useMemo(() => ({
     groupChat,

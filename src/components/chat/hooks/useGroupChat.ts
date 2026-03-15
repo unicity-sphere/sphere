@@ -95,7 +95,7 @@ export interface UseGroupChatReturn {
 export const useGroupChat = (): UseGroupChatReturn => {
   const queryClient = useQueryClient();
   const { groupChat, isGroupChatConnected } = useServices();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { directAddress } = useIdentity();
   const activeTabId = useActiveTabId();
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
@@ -126,7 +126,7 @@ export const useGroupChat = (): UseGroupChatReturn => {
 
   // Listen for SDK group chat events (stable — no selectedGroup dependency)
   useEffect(() => {
-    if (!sphere) return;
+    if (!adapter) return;
 
     const handleUpdate = () => {
       queryClient.invalidateQueries({ queryKey: KEYS.groups });
@@ -139,7 +139,8 @@ export const useGroupChat = (): UseGroupChatReturn => {
       queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
     };
 
-    const handleMessage = (message: GroupMessageData) => {
+    const handleMessage = (data?: unknown) => {
+      const message = data as GroupMessageData;
       const current = selectedGroupRef.current;
       // If we're viewing this group, refetch messages and members
       if (current && message.groupId === current.id) {
@@ -159,29 +160,32 @@ export const useGroupChat = (): UseGroupChatReturn => {
       queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
     };
 
-    const handleKicked = (data: { groupId: string }) => {
-      if (selectedGroupRef.current?.id === data.groupId) {
+    const handleKicked = (data?: unknown) => {
+      const { groupId } = data as { groupId: string };
+      if (selectedGroupRef.current?.id === groupId) {
         setSelectedGroup(null);
       }
     };
 
-    const handleGroupDeleted = (data: { groupId: string }) => {
-      if (selectedGroupRef.current?.id === data.groupId) {
+    const handleGroupDeleted = (data?: unknown) => {
+      const { groupId } = data as { groupId: string };
+      if (selectedGroupRef.current?.id === groupId) {
         setSelectedGroup(null);
       }
     };
 
-    const unsubs = [
-      sphere.on('groupchat:updated', handleUpdate),
-      sphere.on('groupchat:message', handleMessage),
-      sphere.on('groupchat:kicked', handleKicked),
-      sphere.on('groupchat:group_deleted', handleGroupDeleted),
-    ];
+    adapter.on('groupchat:updated', handleUpdate);
+    adapter.on('groupchat:message', handleMessage);
+    adapter.on('groupchat:kicked', handleKicked);
+    adapter.on('groupchat:group_deleted', handleGroupDeleted);
 
     return () => {
-      unsubs.forEach((unsub) => unsub());
+      adapter.off('groupchat:updated', handleUpdate);
+      adapter.off('groupchat:message', handleMessage);
+      adapter.off('groupchat:kicked', handleKicked);
+      adapter.off('groupchat:group_deleted', handleGroupDeleted);
     };
-  }, [sphere, queryClient, groupChat, KEYS]);
+  }, [adapter, queryClient, groupChat, KEYS]);
 
   // When the group-chat tab becomes active (or selected group changes while active), mark as read
   useEffect(() => {
@@ -195,9 +199,9 @@ export const useGroupChat = (): UseGroupChatReturn => {
   // Query joined groups
   const groupsQuery = useQuery({
     queryKey: KEYS.groups,
-    queryFn: () => {
+    queryFn: async () => {
       if (!groupChat) return [];
-      const groups = groupChat.getGroups();
+      const groups = await groupChat.getGroups();
       // Pinned groups first (alphabetically), then rest by last message time
       return [...groups].sort((a, b) => {
         const aPinned = isPinnedGroup(a.id);
@@ -234,16 +238,16 @@ export const useGroupChat = (): UseGroupChatReturn => {
     if (target) {
       setSelectedGroup(target);
       localStorage.setItem(selectedGroupKey, target.id);
-      // markGroupAsRead is handled by the "tab activate" effect
 
       // Fetch messages from relay if none exist locally (same as selectGroup)
-      const localMessages = groupChat.getMessages(target.id);
-      if (localMessages.length === 0) {
-        const groupId = target.id;
-        groupChat.fetchMessages(groupId).then(() => {
-          queryClient.invalidateQueries({ queryKey: KEYS.messages(groupId) });
-        });
-      }
+      const groupId = target.id;
+      Promise.resolve(groupChat.getMessages(groupId)).then((localMessages) => {
+        if (localMessages.length === 0) {
+          groupChat.fetchMessages(groupId).then(() => {
+            queryClient.invalidateQueries({ queryKey: KEYS.messages(groupId) });
+          });
+        }
+      });
     }
   }, [groupsQuery.data, selectedGroup, selectedGroupKey, groupChat, queryClient, KEYS]);
 
@@ -266,9 +270,9 @@ export const useGroupChat = (): UseGroupChatReturn => {
   // Query messages for selected group with lazy loading
   const messagesQuery = useQuery({
     queryKey: [...KEYS.messages(selectedGroup?.id || ''), messageLimit],
-    queryFn: () => {
+    queryFn: async () => {
       if (!selectedGroup || !groupChat) return { messages: [] as GroupMessageData[], hasMore: false };
-      const allMessages = groupChat.getMessages(selectedGroup.id);
+      const allMessages = await groupChat.getMessages(selectedGroup.id);
       const sorted = [...allMessages].sort((a, b) => a.timestamp - b.timestamp);
       const total = sorted.length;
       const sliced = total > messageLimit ? sorted.slice(total - messageLimit) : sorted;
@@ -287,9 +291,9 @@ export const useGroupChat = (): UseGroupChatReturn => {
   // Query members for selected group
   const membersQuery = useQuery({
     queryKey: KEYS.members(selectedGroup?.id || ''),
-    queryFn: () => {
+    queryFn: async () => {
       if (!selectedGroup || !groupChat) return [];
-      const members = groupChat.getMembers(selectedGroup.id);
+      const members = await groupChat.getMembers(selectedGroup.id);
       return [...members].sort((a, b) => a.joinedAt - b.joinedAt);
     },
     enabled: !!selectedGroup && !!groupChat,
@@ -299,7 +303,7 @@ export const useGroupChat = (): UseGroupChatReturn => {
   // Query total unread count
   const unreadCountQuery = useQuery({
     queryKey: KEYS.unreadCount,
-    queryFn: () => groupChat?.getTotalUnreadCount() ?? 0,
+    queryFn: async () => (await groupChat?.getTotalUnreadCount()) ?? 0,
     staleTime: 30000,
     enabled: !!groupChat && isGroupChatConnected,
   });
@@ -378,10 +382,12 @@ export const useGroupChat = (): UseGroupChatReturn => {
         queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
 
         // Fetch messages from relay if none exist locally
-        const localMessages = groupChat?.getMessages(group.id) ?? [];
-        if (localMessages.length === 0 && groupChat) {
-          await groupChat.fetchMessages(group.id);
-          queryClient.invalidateQueries({ queryKey: KEYS.messages(group.id) });
+        if (groupChat) {
+          const localMessages = await groupChat.getMessages(group.id);
+          if (localMessages.length === 0) {
+            await groupChat.fetchMessages(group.id);
+            queryClient.invalidateQueries({ queryKey: KEYS.messages(group.id) });
+          }
         }
       } else {
         localStorage.removeItem(selectedGroupKey);
@@ -394,12 +400,12 @@ export const useGroupChat = (): UseGroupChatReturn => {
   const joinGroup = useCallback(
     async (groupId: string, inviteCode?: string): Promise<boolean> => {
       const success = await joinGroupMutation.mutateAsync({ groupId, inviteCode });
-      if (success) {
-        const joinedGroup = groupChat?.getGroup(groupId);
+      if (success && groupChat) {
+        const joinedGroup = await groupChat.getGroup(groupId);
         if (joinedGroup) {
           setSelectedGroup(joinedGroup);
           localStorage.setItem(selectedGroupKey, joinedGroup.id);
-          groupChat?.markGroupAsRead(joinedGroup.id);
+          await groupChat.markGroupAsRead(joinedGroup.id);
           queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
         }
       }
@@ -457,31 +463,30 @@ export const useGroupChat = (): UseGroupChatReturn => {
     );
   }, [groupsQuery.data, searchQuery]);
 
-  // Moderation: Check if current user is admin/moderator
-  const isCurrentUserAdmin = useMemo(() => {
-    if (!selectedGroup || !groupChat) return false;
-    return groupChat.isCurrentUserAdmin(selectedGroup.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroup, groupChat, membersQuery.data]);
+  // Moderation: Check if current user is admin/moderator (async adapter calls)
+  const adminQuery = useQuery({
+    queryKey: [...KEYS.members(selectedGroup?.id || ''), 'isAdmin'],
+    queryFn: () => groupChat!.isCurrentUserAdmin(selectedGroup!.id),
+    enabled: !!selectedGroup && !!groupChat,
+    staleTime: 30000,
+  });
+  const isCurrentUserAdmin = adminQuery.data ?? false;
 
-  const isCurrentUserModerator = useMemo(() => {
-    if (!selectedGroup || !groupChat) return false;
-    return groupChat.isCurrentUserModerator(selectedGroup.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroup, groupChat, membersQuery.data]);
+  const moderatorQuery = useQuery({
+    queryKey: [...KEYS.members(selectedGroup?.id || ''), 'isModerator'],
+    queryFn: () => groupChat!.isCurrentUserModerator(selectedGroup!.id),
+    enabled: !!selectedGroup && !!groupChat,
+    staleTime: 30000,
+  });
+  const isCurrentUserModerator = moderatorQuery.data ?? false;
 
   // Combined moderation check: group admin/moderator OR relay admin on public groups
   const canModerateSelectedGroup = useMemo(() => {
-    if (!selectedGroup || !groupChat) return false;
-    if (groupChat.isCurrentUserAdmin(selectedGroup.id) || groupChat.isCurrentUserModerator(selectedGroup.id)) {
-      return true;
-    }
-    if (relayAdminQuery.data && selectedGroup.visibility === GroupVisibility.PUBLIC) {
-      return true;
-    }
+    if (!selectedGroup) return false;
+    if (isCurrentUserAdmin || isCurrentUserModerator) return true;
+    if (relayAdminQuery.data && selectedGroup.visibility === GroupVisibility.PUBLIC) return true;
     return false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroup, groupChat, membersQuery.data, relayAdminQuery.data]);
+  }, [selectedGroup, isCurrentUserAdmin, isCurrentUserModerator, relayAdminQuery.data]);
 
   // Delete message mutation
   const deleteMessageMutation = useMutation({
@@ -594,21 +599,30 @@ export const useGroupChat = (): UseGroupChatReturn => {
   );
 
   // Write permission for selected group (write-restricted groups only allow admins/moderators)
-  const canWriteToSelectedGroup = useMemo(() => {
-    if (!selectedGroup || !groupChat) return false;
-    return groupChat.canWriteToGroup(selectedGroup.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroup, groupChat, membersQuery.data]);
+  const canWriteQuery = useQuery({
+    queryKey: [...KEYS.members(selectedGroup?.id || ''), 'canWrite'],
+    queryFn: () => groupChat!.canWriteToGroup(selectedGroup!.id),
+    enabled: !!selectedGroup && !!groupChat,
+    staleTime: 30000,
+  });
+  const canWriteToSelectedGroup = canWriteQuery.data ?? false;
 
   // Identity helpers — addressId forces recomputation on address switch
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const myPubkey = useMemo(() => groupChat?.getMyPublicKey() ?? null, [groupChat, addressId]);
+  const myPubkeyQuery = useQuery({
+    queryKey: ['groupChat', 'myPubkey', addressId],
+    queryFn: () => groupChat!.getMyPublicKey(),
+    enabled: !!groupChat,
+    staleTime: 300000,
+  });
+  const myPubkey = myPubkeyQuery.data ?? null;
 
   const isAdminOfGroup = useCallback(
-    (groupId: string): boolean => {
-      return groupChat?.isCurrentUserAdmin(groupId) ?? false;
+    (_groupId: string): boolean => {
+      // Only reliable for the selected group via adminQuery
+      if (selectedGroup && _groupId === selectedGroup.id) return isCurrentUserAdmin;
+      return false;
     },
-    [groupChat]
+    [selectedGroup, isCurrentUserAdmin]
   );
 
   return {

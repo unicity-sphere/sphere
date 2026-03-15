@@ -9,12 +9,12 @@ export interface UseSendDMReturn {
 }
 
 export function useSendDM(): UseSendDMReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const mutation = useMutation({
     mutationFn: async ({ recipient, content }: { recipient: string; content: string }): Promise<DirectMessage> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      return sphere.communications.sendDM(recipient, content);
+      if (!adapter) throw new Error('Wallet not initialized');
+      return adapter.sendDM(recipient, content);
     },
     // onError inherited from global handler → auto-toast
   });

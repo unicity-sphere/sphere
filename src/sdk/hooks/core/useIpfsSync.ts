@@ -19,7 +19,7 @@ export interface UseIpfsSyncReturn extends IpfsSyncState {
 }
 
 export function useIpfsSync(): UseIpfsSyncReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const [state, setState] = useState<IpfsSyncState>({
     status: 'idle',
     lastSynced: null,
@@ -28,7 +28,7 @@ export function useIpfsSync(): UseIpfsSyncReturn {
   });
 
   useEffect(() => {
-    if (!sphere) return;
+    if (!adapter) return;
 
     const handleSyncStarted = () => {
       setState(prev => ({ ...prev, status: 'syncing', lastError: null }));
@@ -68,23 +68,23 @@ export function useIpfsSync(): UseIpfsSyncReturn {
       }));
     };
 
-    sphere.on('sync:started', handleSyncStarted);
-    sphere.on('sync:completed', handleSyncCompleted);
-    sphere.on('sync:error', handleSyncError);
-    sphere.on('sync:remote-update', handleRemoteUpdate);
+    adapter.on('sync:started', handleSyncStarted as (data?: unknown) => void);
+    adapter.on('sync:completed', handleSyncCompleted);
+    adapter.on('sync:error', handleSyncError as (data?: unknown) => void);
+    adapter.on('sync:remote-update', handleRemoteUpdate as (data?: unknown) => void);
 
     return () => {
-      sphere.off('sync:started', handleSyncStarted);
-      sphere.off('sync:completed', handleSyncCompleted);
-      sphere.off('sync:error', handleSyncError);
-      sphere.off('sync:remote-update', handleRemoteUpdate);
+      adapter.off('sync:started', handleSyncStarted as (data?: unknown) => void);
+      adapter.off('sync:completed', handleSyncCompleted);
+      adapter.off('sync:error', handleSyncError as (data?: unknown) => void);
+      adapter.off('sync:remote-update', handleRemoteUpdate as (data?: unknown) => void);
     };
-  }, [sphere]);
+  }, [adapter]);
 
   const triggerSync = useCallback(async () => {
-    if (!sphere) return;
-    await sphere.sync();
-  }, [sphere]);
+    if (!adapter) return;
+    await adapter.sync();
+  }, [adapter]);
 
   return { ...state, triggerSync };
 }

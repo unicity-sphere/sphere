@@ -13,21 +13,27 @@ export interface UsePaymentRequestsReturn {
 }
 
 export function usePaymentRequests(): UsePaymentRequestsReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const [requests, setRequests] = useState<SDKPaymentRequest[]>([]);
   const [isLoading] = useState(false);
 
   useEffect(() => {
-    if (!sphere) return;
-    const transport = sphere.getTransport();
-    if (!transport.onPaymentRequest) return;
+    if (!adapter) return;
 
-    const unsub = transport.onPaymentRequest((req) => {
-      setRequests((prev) => [...prev, req as unknown as SDKPaymentRequest]);
-    });
+    let cleanup: (() => void) | undefined;
 
-    return unsub;
-  }, [sphere]);
+    (async () => {
+      try {
+        cleanup = await adapter.onPaymentRequest((req) => {
+          setRequests((prev) => [...prev, req]);
+        });
+      } catch {
+        // Payment requests not available
+      }
+    })();
+
+    return () => { cleanup?.(); };
+  }, [adapter]);
 
   const respondToRequest = useCallback(
     async (
@@ -35,12 +41,8 @@ export function usePaymentRequests(): UsePaymentRequestsReturn {
       senderPubkey: string,
       responseType: 'accepted' | 'rejected' | 'paid',
     ) => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      const transport = sphere.getTransport();
-      if (!transport.sendPaymentRequestResponse) {
-        throw new Error('Payment request responses not supported');
-      }
-      await transport.sendPaymentRequestResponse(senderPubkey, {
+      if (!adapter) throw new Error('Wallet not initialized');
+      await adapter.sendPaymentRequestResponse(senderPubkey, {
         requestId,
         responseType,
       });
@@ -48,7 +50,7 @@ export function usePaymentRequests(): UsePaymentRequestsReturn {
         prev.filter((r) => r.id !== requestId),
       );
     },
-    [sphere],
+    [adapter],
   );
 
   return { requests, isLoading, respondToRequest };

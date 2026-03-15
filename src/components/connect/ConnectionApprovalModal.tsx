@@ -4,6 +4,9 @@ import { PERMISSION_SCOPES } from '@unicitylabs/sphere-sdk/connect';
 import type { PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { useConnectContext } from './ConnectContext';
+import { useSphereContext } from '../../sdk/hooks/core/useSphere';
+
+const isExtensionMode = import.meta.env.VITE_PLATFORM === 'extension';
 
 const PERMISSION_LABELS: Record<string, string> = {
   [PERMISSION_SCOPES.IDENTITY_READ]: 'View identity',
@@ -23,8 +26,11 @@ const PERMISSION_LABELS: Record<string, string> = {
 
 export function ConnectionApprovalModal() {
   const { pendingApproval, approveConnection, denyConnection } = useConnectContext();
+  const { isUnlocked } = useSphereContext();
   const [selected, setSelected] = useState<Set<PermissionScope>>(new Set());
 
+  // In extension mode, don't show until wallet is unlocked
+  if (isExtensionMode && !isUnlocked) return null;
   if (!pendingApproval) return null;
 
   const { dapp, permissions } = pendingApproval;

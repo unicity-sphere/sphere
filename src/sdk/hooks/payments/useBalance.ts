@@ -18,27 +18,27 @@ export interface UseBalanceReturn {
  * @param coinId - Coin ID to get balance for, or undefined for total portfolio value in USD
  */
 export function useBalance(coinId?: string): UseBalanceReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: coinId
       ? SPHERE_KEYS.payments.balance.byCoin(coinId)
       : SPHERE_KEYS.payments.balance.total,
     queryFn: async () => {
-      if (!sphere) return null;
+      if (!adapter) return null;
 
       if (coinId) {
         // Get specific asset with price data
-        const assets = await sphere.payments.getAssets(coinId);
+        const assets = await adapter.getAssets(coinId);
         return assets.length > 0 ? assets[0] : null;
       } else {
         // Get all assets and sum fiat values for total portfolio value
-        const assets = await sphere.payments.getAssets();
+        const assets = await adapter.getAssets();
         const totalUsd = assets.reduce((sum, a) => sum + (a.fiatValueUsd ?? 0), 0);
         return totalUsd;
       }
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
   });
 

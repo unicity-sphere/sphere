@@ -65,7 +65,7 @@ export interface UseChatReturn {
 
 export const useChat = (): UseChatReturn => {
   const queryClient = useQueryClient();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { directAddress } = useIdentity();
   const activeTabId = useActiveTabId();
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
@@ -104,8 +104,8 @@ export const useChat = (): UseChatReturn => {
 
       // If we're viewing this conversation AND the DM tab is active, auto-mark as read
       if (current && peerPubkey === current.peerPubkey) {
-        if (sphere && !isFromMe && activeTabIdRef.current === 'dm') {
-          sphere.communications.markAsRead([messageId]);
+        if (adapter && !isFromMe && activeTabIdRef.current === 'dm') {
+          adapter.markAsRead([messageId]);
         }
         // Clear typing indicator — they sent their message
         if (!isFromMe) {
@@ -133,37 +133,38 @@ export const useChat = (): UseChatReturn => {
       window.removeEventListener('dm-typing', handleTyping as EventListener);
       clearTimeout(typingTimeoutRef.current);
     };
-  }, [sphere]);
+  }, [adapter]);
 
   // When the DM tab becomes active (or selected conversation changes while active), mark as read
   useEffect(() => {
-    if (activeTabId === 'dm' && selectedConversation && sphere) {
-      const msgs: SDKDirectMessage[] = sphere.communications.getConversation(selectedConversation.peerPubkey);
-      const unreadIds = msgs
-        .filter(m => !m.isRead && m.senderPubkey === selectedConversation.peerPubkey)
-        .map(m => m.id);
-      if (unreadIds.length > 0) {
-        sphere.communications.markAsRead(unreadIds);
-      }
+    if (activeTabId === 'dm' && selectedConversation && adapter) {
+      adapter.getConversation(selectedConversation.peerPubkey).then((msgs: SDKDirectMessage[]) => {
+        const unreadIds = msgs
+          .filter(m => !m.isRead && m.senderPubkey === selectedConversation.peerPubkey)
+          .map(m => m.id);
+        if (unreadIds.length > 0) {
+          adapter.markAsRead(unreadIds);
+        }
+      });
       // Always invalidate to sync query cache with SDK state
       queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
     }
-  }, [activeTabId, selectedConversation, sphere, queryClient]);
+  }, [activeTabId, selectedConversation, adapter, queryClient]);
 
   // Query conversations from SDK, with fallback nametag resolution
   const conversationsQuery = useQuery({
     queryKey: CHAT_KEYS.conversations(addressId),
     queryFn: async () => {
-      if (!sphere) return [];
-      const sdkConvs = sphere.communications.getConversations();
-      const convos = buildConversations(sdkConvs, sphere.identity!.chainPubkey);
+      if (!adapter) return [];
+      const sdkConvs = await adapter.getConversations();
+      const convos = buildConversations(sdkConvs, adapter.identity!.chainPubkey);
 
       // Resolve missing nametags via transport (parallel, best-effort)
       const needsResolve = convos.filter(c => !c.peerNametag);
       if (needsResolve.length > 0) {
         const resolved = await Promise.all(
           needsResolve.map(c =>
-            sphere.communications.resolvePeerNametag(c.peerPubkey).catch(() => undefined),
+            adapter.resolvePeerNametag(c.peerPubkey).catch(() => undefined),
           ),
         );
         for (let i = 0; i < needsResolve.length; i++) {
@@ -175,7 +176,7 @@ export const useChat = (): UseChatReturn => {
 
       return convos;
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30000,
   });
 
@@ -196,10 +197,10 @@ export const useChat = (): UseChatReturn => {
   const selectedPeerPubkey = selectedConversation?.peerPubkey;
   const messagesQuery = useQuery({
     queryKey: [...CHAT_KEYS.messages(addressId, selectedPeerPubkey || ''), messageLimit],
-    queryFn: () => {
-      if (!selectedPeerPubkey || !sphere) return { messages: [] as DisplayMessage[], hasMore: false };
-      const page = sphere.communications.getConversationPage(selectedPeerPubkey, { limit: messageLimit });
-      const myPubkey = sphere.identity!.chainPubkey;
+    queryFn: async () => {
+      if (!selectedPeerPubkey || !adapter) return { messages: [] as DisplayMessage[], hasMore: false };
+      const page = await adapter.getConversationPage(selectedPeerPubkey, { limit: messageLimit });
+      const myPubkey = adapter.identity!.chainPubkey;
       return {
         messages: page.messages
           .filter((dm: SDKDirectMessage) => !(dm.senderPubkey === myPubkey && dm.content === WELCOME_TRIGGER))
@@ -207,7 +208,7 @@ export const useChat = (): UseChatReturn => {
         hasMore: page.hasMore,
       };
     },
-    enabled: !!selectedPeerPubkey && !!sphere,
+    enabled: !!selectedPeerPubkey && !!adapter,
     staleTime: 10000,
     placeholderData: keepPreviousData,
   });
@@ -225,16 +226,16 @@ export const useChat = (): UseChatReturn => {
   // Query total unread count from SDK
   const unreadCountQuery = useQuery({
     queryKey: CHAT_KEYS.unreadCount(addressId),
-    queryFn: () => sphere?.communications.getUnreadCount() ?? 0,
-    enabled: !!sphere,
+    queryFn: async () => (await adapter?.getUnreadCount()) ?? 0,
+    enabled: !!adapter,
     staleTime: 30000,
   });
 
   // Send message mutation — SDK auto-saves
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!selectedPeerPubkey || !sphere) throw new Error('No conversation selected');
-      await sphere.communications.sendDM(selectedPeerPubkey, content);
+      if (!selectedPeerPubkey || !adapter) throw new Error('No conversation selected');
+      await adapter.sendDM(selectedPeerPubkey, content);
       return true;
     },
     onSuccess: () => {
@@ -247,7 +248,7 @@ export const useChat = (): UseChatReturn => {
   const startNewConversation = useCallback(
     async (identifier: string): Promise<Conversation | null> => {
       try {
-        if (!sphere) return null;
+        if (!adapter) return null;
 
         // Normalize: add @ for bare nametags (not an address or pubkey)
         const input = identifier.startsWith('@') || identifier.startsWith('DIRECT:') || identifier.startsWith('PROXY:')
@@ -255,7 +256,7 @@ export const useChat = (): UseChatReturn => {
           ? identifier
           : `@${identifier}`;
 
-        const peerInfo = await sphere.resolve(input);
+        const peerInfo = await adapter.resolve(input);
         if (!peerInfo?.transportPubkey) {
           console.error(`Could not resolve: ${identifier}`);
           return null;
@@ -278,7 +279,7 @@ export const useChat = (): UseChatReturn => {
         return null;
       }
     },
-    [sphere, queryClient, addressId, selectedDmKey],
+    [adapter, queryClient, addressId, selectedDmKey],
   );
 
   // Select conversation
@@ -289,38 +290,40 @@ export const useChat = (): UseChatReturn => {
       if (conversation) {
         localStorage.setItem(selectedDmKey, conversation.peerPubkey);
         // Send SDK read receipts for unread incoming messages
-        if (sphere) {
-          const msgs: SDKDirectMessage[] = sphere.communications.getConversation(conversation.peerPubkey);
-          const unreadIncomingIds = msgs
-            .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
-            .map(m => m.id);
-          if (unreadIncomingIds.length > 0) {
-            sphere.communications.markAsRead(unreadIncomingIds);
-            queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
-          }
+        if (adapter) {
+          adapter.getConversation(conversation.peerPubkey).then((msgs: SDKDirectMessage[]) => {
+            const unreadIncomingIds = msgs
+              .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
+              .map(m => m.id);
+            if (unreadIncomingIds.length > 0) {
+              adapter.markAsRead(unreadIncomingIds);
+              queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
+            }
+          });
         }
       } else {
         localStorage.removeItem(selectedDmKey);
       }
     },
-    [queryClient, sphere, selectedDmKey],
+    [queryClient, adapter, selectedDmKey],
   );
 
   // Mark as read
   const markAsRead = useCallback(
     (peerPubkey: string) => {
-      if (sphere) {
-        const msgs: SDKDirectMessage[] = sphere.communications.getConversation(peerPubkey);
-        const unreadIncomingIds = msgs
-          .filter(m => !m.isRead && m.senderPubkey === peerPubkey)
-          .map(m => m.id);
-        if (unreadIncomingIds.length > 0) {
-          sphere.communications.markAsRead(unreadIncomingIds);
-          queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
-        }
+      if (adapter) {
+        adapter.getConversation(peerPubkey).then((msgs: SDKDirectMessage[]) => {
+          const unreadIncomingIds = msgs
+            .filter(m => !m.isRead && m.senderPubkey === peerPubkey)
+            .map(m => m.id);
+          if (unreadIncomingIds.length > 0) {
+            adapter.markAsRead(unreadIncomingIds);
+            queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
+          }
+        });
       }
     },
-    [queryClient, sphere],
+    [queryClient, adapter],
   );
 
   // Send message

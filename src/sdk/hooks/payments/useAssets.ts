@@ -22,7 +22,7 @@ export interface UseAssetsReturn {
 }
 
 export function useAssets(): UseAssetsReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const [registryReady, setRegistryReady] = useState(
     () => TokenRegistry.getInstance().getAllDefinitions().length > 0,
   );
@@ -41,10 +41,10 @@ export function useAssets(): UseAssetsReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.assets.list,
     queryFn: async (): Promise<Asset[]> => {
-      if (!sphere) return [];
-      return await sphere.payments.getAssets();
+      if (!adapter) return [];
+      return await adapter.getAssets();
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
   });
 

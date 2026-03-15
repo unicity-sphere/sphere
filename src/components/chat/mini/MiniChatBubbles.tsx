@@ -15,7 +15,7 @@ const MAX_VISIBLE_BUBBLES = 5;
 
 export function MiniChatBubbles() {
   const queryClient = useQueryClient();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { directAddress } = useIdentity();
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
 
@@ -31,19 +31,19 @@ export function MiniChatBubbles() {
 
   const { data: conversations = [] } = useQuery({
     queryKey: CHAT_KEYS.conversations(addressId),
-    queryFn: () => {
-      if (!sphere) return [];
-      const sdkConvs = sphere.communications.getConversations();
-      return buildConversations(sdkConvs, sphere.identity!.chainPubkey);
+    queryFn: async () => {
+      if (!adapter) return [];
+      const sdkConvs = await adapter.getConversations();
+      return buildConversations(sdkConvs, adapter.identity!.chainPubkey);
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 5000,
   });
 
   const { data: totalUnreadCount = 0 } = useQuery({
     queryKey: CHAT_KEYS.unreadCount(addressId),
-    queryFn: () => sphere?.communications.getUnreadCount() ?? 0,
-    enabled: !!sphere,
+    queryFn: async () => (await adapter?.getUnreadCount()) ?? 0,
+    enabled: !!adapter,
     staleTime: 5000,
   });
 

@@ -16,6 +16,8 @@ import {
   AddressSelectionScreen,
   NametagScreen,
   ProcessingScreen,
+  PasswordSetupScreen,
+  MnemonicBackupScreen,
 } from "./components";
 
 export type { OnboardingStep } from "./hooks/useOnboardingFlow";
@@ -81,9 +83,20 @@ export function CreateWalletFlow() {
     handleDragLeave,
     handleDrop,
 
+    // Extension-only: password setup
+    password,
+    setPassword,
+    confirmPassword,
+    setConfirmPassword,
+    handlePasswordConfirm,
+
+    // Extension-only: mnemonic backup
+    handleMnemonicBackupConfirm,
+
     // Wallet context
     identity,
     nametag,
+    generatedMnemonic,
   } = useOnboardingFlow();
 
   return (
@@ -180,6 +193,19 @@ export function CreateWalletFlow() {
           />
         )}
 
+        {step === "passwordSetup" && (
+          <PasswordSetupScreen
+            password={password}
+            confirmPassword={confirmPassword}
+            isBusy={isBusy}
+            error={error}
+            onPasswordChange={setPassword}
+            onConfirmPasswordChange={setConfirmPassword}
+            onConfirm={handlePasswordConfirm}
+            onBack={() => setStep("nametag")}
+          />
+        )}
+
         {step === "processing" && (
           <ProcessingScreen
             status={processingStatus}
@@ -189,6 +215,12 @@ export function CreateWalletFlow() {
             completeTitle={processingCompleteTitle}
             isComplete={isProcessingComplete}
             onComplete={handleCompleteOnboarding}
+          />
+        )}
+        {step === "mnemonicBackup" && generatedMnemonic && (
+          <MnemonicBackupScreen
+            mnemonic={generatedMnemonic}
+            onConfirm={handleMnemonicBackupConfirm}
           />
         )}
       </AnimatePresence>

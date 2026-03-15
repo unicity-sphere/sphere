@@ -3,6 +3,7 @@ import {
   useEffect,
   useCallback,
   useRef,
+  useMemo,
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -15,6 +16,8 @@ import {
   type BrowserProviders,
 } from '@unicitylabs/sphere-sdk/impl/browser';
 import { SphereContext } from './SphereContext';
+import { DirectAdapter } from './adapter/DirectAdapter';
+import { DirectGroupChatAdapter } from './adapter/DirectGroupChatAdapter';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -415,7 +418,24 @@ export function SphereProvider({
     initialize();
   }, [initialize]);
 
+  // Create adapters when sphere is available
+  const adapter = useMemo(
+    () => sphere ? new DirectAdapter(sphere) : null,
+    [sphere],
+  );
+  const groupChatAdapter = useMemo(
+    () => sphere?.groupChat ? new DirectGroupChatAdapter(sphere.groupChat) : null,
+    [sphere],
+  );
+
+  // Cleanup adapter on unmount or sphere change
+  useEffect(() => {
+    return () => { adapter?.destroy(); };
+  }, [adapter]);
+
   const value: SphereContextValue = {
+    adapter,
+    groupChat: groupChatAdapter,
     sphere,
     providers,
     isLoading,
@@ -424,6 +444,7 @@ export function SphereProvider({
     error,
     isDiscoveringAddresses,
     initProgress,
+    isUnlocked: !!sphere,
     resolveNametag,
     createWallet,
     importWallet,

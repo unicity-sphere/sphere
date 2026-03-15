@@ -1,8 +1,8 @@
 import { createContext } from 'react';
-import type { GroupChatModule } from '@unicitylabs/sphere-sdk';
+import type { IGroupChatAdapter } from '../sdk/adapter/group-chat-types';
 
 export interface ServicesContextType {
-  groupChat: GroupChatModule | null;
+  groupChat: IGroupChatAdapter | null;
   isGroupChatConnected: boolean;
 }
 

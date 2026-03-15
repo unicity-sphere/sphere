@@ -15,12 +15,14 @@ export interface UseIdentityReturn {
 }
 
 export function useIdentity(): UseIdentityReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: SPHERE_KEYS.identity.current,
-    queryFn: () => sphere?.identity ? { ...sphere.identity } : null,
-    enabled: !!sphere,
+    queryFn: async (): Promise<Identity | null> => {
+      return adapter?.identity ? { ...adapter.identity } : null;
+    },
+    enabled: !!adapter,
     staleTime: Infinity,
   });
 

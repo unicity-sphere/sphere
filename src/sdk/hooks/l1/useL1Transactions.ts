@@ -20,15 +20,13 @@ export interface UseL1TransactionsReturn {
 }
 
 export function useL1Transactions(): UseL1TransactionsReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: SPHERE_KEYS.l1.transactions,
     queryFn: async (): Promise<L1Transaction[]> => {
-      if (!sphere) return [];
-      const l1 = sphere.payments.l1;
-      if (!l1) return [];
-      const txs = await l1.getHistory();
+      if (!adapter) return [];
+      const txs = await adapter.l1GetTransactions();
       return txs.map((tx) => ({
         txid: tx.txid,
         type: (tx.type === 'receive' ? 'incoming' : 'outgoing') as
@@ -41,7 +39,7 @@ export function useL1Transactions(): UseL1TransactionsReturn {
         address: tx.address ?? '',
       }));
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
   });
 

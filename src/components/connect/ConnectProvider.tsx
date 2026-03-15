@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
@@ -10,6 +10,7 @@ import {
 } from './ConnectContext';
 import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
+import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -103,6 +104,64 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     },
     [pendingIntent],
   );
+
+  // Extension mode: poll background for pending Connect approvals/intents.
+  // Polling starts immediately (even while locked) so the approval is already
+  // in state by the time the user unlocks — the modal appears instantly.
+  const { isUnlocked } = useSphereContext();
+
+  useEffect(() => {
+    if (import.meta.env.VITE_PLATFORM !== 'extension') return;
+
+    const poll = async () => {
+      try {
+        // Poll for pending approval
+        if (!pendingApproval) {
+          const resp = await chrome.runtime.sendMessage({ type: 'POPUP_GET_CONNECT_APPROVAL' });
+          if (resp?.success && resp.approval) {
+            const { id, dapp, requestedPermissions: permissions } = resp.approval;
+            setPendingApproval({
+              dapp,
+              permissions,
+              resolve: (result) => {
+                chrome.runtime.sendMessage({
+                  type: 'POPUP_RESOLVE_CONNECT_APPROVAL',
+                  id,
+                  approved: result.approved,
+                  grantedPermissions: result.grantedPermissions,
+                }).catch(() => {});
+              },
+            });
+          }
+        }
+
+        // Poll for pending intent
+        if (!pendingIntent) {
+          const resp = await chrome.runtime.sendMessage({ type: 'POPUP_GET_CONNECT_INTENT' });
+          if (resp?.success && resp.intent) {
+            const { id, action, params } = resp.intent;
+            setPendingIntent({
+              action,
+              params,
+              resolve: (result) => {
+                chrome.runtime.sendMessage({
+                  type: 'POPUP_RESOLVE_CONNECT_INTENT',
+                  id,
+                  result,
+                }).catch(() => {});
+              },
+            });
+          }
+        }
+      } catch {
+        // Background not ready or extension context invalidated
+      }
+    };
+
+    const interval = setInterval(poll, 500);
+    poll(); // Initial poll
+    return () => clearInterval(interval);
+  }, [pendingApproval, pendingIntent]);
 
   const value: ConnectContextValue = {
     requestApproval,

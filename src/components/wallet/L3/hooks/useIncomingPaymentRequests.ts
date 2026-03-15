@@ -42,40 +42,37 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
 }
 
 export const useIncomingPaymentRequests = () => {
-    const { sphere } = useSphereContext();
+    const { adapter } = useSphereContext();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
     useEffect(() => {
-        if (!sphere) return;
+        if (!adapter) return;
 
         const handler = (sdkReq: SDKPaymentRequest) => {
             setRequests(prev => [...prev, bridgeRequest(sdkReq)]);
         };
 
-        sphere.on('payment_request:incoming', handler);
+        adapter.on('payment_request:incoming', handler as (data?: unknown) => void);
 
         return () => {
-            sphere.off('payment_request:incoming', handler);
+            adapter.off('payment_request:incoming', handler as (data?: unknown) => void);
         };
-    }, [sphere]);
+    }, [adapter]);
 
     const updateStatus = useCallback(async (
         request: IncomingPaymentRequest,
         status: typeof PaymentRequestStatus[keyof typeof PaymentRequestStatus],
         responseType: 'accepted' | 'rejected' | 'paid',
     ) => {
-        if (!sphere) return;
-        const transport = sphere.getTransport();
-        if (transport.sendPaymentRequestResponse) {
-            await transport.sendPaymentRequestResponse(request.senderPubkey, {
-                requestId: request.requestId,
-                responseType,
-            });
-        }
+        if (!adapter) return;
+        await adapter.sendPaymentRequestResponse(request.senderPubkey, {
+            requestId: request.requestId,
+            responseType,
+        });
         setRequests(prev =>
             prev.map(r => r.id === request.id ? { ...r, status } : r)
         );
-    }, [sphere]);
+    }, [adapter]);
 
     const pendingCount = useMemo(
         () => requests.filter(r => r.status === PaymentRequestStatus.PENDING).length,

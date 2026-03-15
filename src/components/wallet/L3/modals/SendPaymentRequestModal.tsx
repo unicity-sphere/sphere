@@ -31,7 +31,7 @@ interface SendPaymentRequestModalProps {
 }
 
 export function SendPaymentRequestModal({ isOpen, onClose, prefill }: SendPaymentRequestModalProps) {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const [step, setStep] = useState<Step>('coin');
   const [recipientMode, setRecipientMode] = useState<'nametag' | 'direct'>('nametag');
@@ -157,19 +157,12 @@ export function SendPaymentRequestModal({ isOpen, onClose, prefill }: SendPaymen
         setStep('confirm');
       } else {
         const cleanTag = recipient.replace('@', '').replace('@unicity', '').trim();
-        const transport = sphere?.getTransport();
-
-        if (transport?.resolveNametag) {
-          const pubkey = await transport.resolveNametag(cleanTag);
-          if (pubkey) {
-            setRecipient(cleanTag);
-            setStep('confirm');
-          } else {
-            setRecipientError(`User @${cleanTag} not found`);
-          }
-        } else {
+        const peerInfo = await adapter?.resolve('@' + cleanTag);
+        if (peerInfo) {
           setRecipient(cleanTag);
           setStep('confirm');
+        } else {
+          setRecipientError('User @' + cleanTag + ' not found');
         }
       }
     } catch (err) {
@@ -189,7 +182,7 @@ export function SendPaymentRequestModal({ isOpen, onClose, prefill }: SendPaymen
       const amount = toSmallestUnit(amountInput, selectedCoin.decimals).toString();
       const recipientStr = recipientMode === 'nametag' ? `@${recipient}` : recipient;
 
-      const result = await sphere!.payments.sendPaymentRequest(recipientStr, {
+      const result = await adapter!.sendPaymentRequest(recipientStr, {
         amount,
         coinId: selectedCoin.coinId,
         ...(messageInput ? { message: messageInput } : {}),

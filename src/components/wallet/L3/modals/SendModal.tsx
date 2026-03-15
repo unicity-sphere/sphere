@@ -27,7 +27,7 @@ interface SendModalProps {
 export function SendModal({ isOpen, onClose, prefill }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const assets = sdkAssets;
 
@@ -149,8 +149,8 @@ export function SendModal({ isOpen, onClose, prefill }: SendModalProps) {
       } else {
         const cleanTag = recipient.replace('@', '').replace('@unicity', '').trim();
 
-        if (sphere?.resolve) {
-          const peerInfo = await sphere.resolve(`@${cleanTag}`);
+        if (adapter?.resolve) {
+          const peerInfo = await adapter.resolve(`@${cleanTag}`);
           if (peerInfo) {
             setRecipient(cleanTag);
             setResolvedAddress(peerInfo.directAddress || null);

@@ -154,7 +154,7 @@ export function L3WalletView({
   const { assets: sdkAssets, isLoading: isLoadingAssets } = useAssets();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
   const { balance: l1BalanceData, isLoading: isLoadingL1 } = useL1Balance();
-  const { sphere, deleteWallet } = useSphereContext();
+  const { adapter, deleteWallet } = useSphereContext();
 
   const assets = sdkAssets;
 
@@ -268,9 +268,9 @@ export function L3WalletView({
     return l3Value + l1Value;
   }, [sdkAssets, l1AlphaAsset]);
 
-  const handleShowSeedPhrase = () => {
-    if (!sphere) return;
-    const mnemonic = sphere.getMnemonic();
+  const handleShowSeedPhrase = async () => {
+    if (!adapter) return;
+    const mnemonic = await adapter.getMnemonic();
     if (mnemonic) {
       setSeedPhrase(mnemonic.split(' '));
       setIsSeedPhraseOpen(true);
@@ -280,10 +280,17 @@ export function L3WalletView({
   };
 
   // Check if wallet was created from mnemonic (not legacy file import)
-  const hasMnemonic = useMemo(() => {
-    const source = sphere?.getWalletInfo()?.source;
-    return source !== 'file' && source !== 'unknown';
-  }, [sphere]);
+  const [hasMnemonic, setHasMnemonic] = useState(true);
+  useEffect(() => {
+    if (!adapter) return;
+    (async () => {
+      try {
+        const info = await adapter.getWalletInfo();
+        const source = info?.source;
+        setHasMnemonic(source !== 'file' && source !== 'unknown');
+      } catch { setHasMnemonic(true); }
+    })();
+  }, [adapter]);
 
   // Handle export wallet file (using SDK's exportToJSON)
   const handleExportWalletFile = () => {
@@ -292,9 +299,9 @@ export function L3WalletView({
 
   // Handle save wallet
   const handleSaveWallet = async (filename: string, password?: string) => {
-    if (!sphere) return;
+    if (!adapter) return;
     try {
-      const jsonData = await sphere.exportToJSON({ password, includeMnemonic: true });
+      const jsonData = await adapter.exportToJSON({ password, includeMnemonic: true });
       const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

@@ -1,8 +1,16 @@
 import { createContext } from 'react';
 import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import type { ISphereAdapter } from './adapter/types';
+import type { IGroupChatAdapter } from './adapter/group-chat-types';
 
 export interface SphereContextValue {
+  /** Platform-independent adapter (preferred way to access SDK) */
+  adapter: ISphereAdapter | null;
+  /** Group chat adapter (null if group chat not available) */
+  groupChat: IGroupChatAdapter | null;
+
+  /** SDK instance (real on web, null on extension — use adapter instead) */
   sphere: Sphere | null;
   providers: BrowserProviders | null;
 
@@ -16,6 +24,9 @@ export interface SphereContextValue {
 
   /** Current SDK initialization progress (null when idle or complete) */
   initProgress: InitProgress | null;
+
+  /** Extension-only: whether wallet is unlocked */
+  isUnlocked: boolean;
 
   /** Resolve a nametag via Nostr transport — works without a wallet */
   resolveNametag: (nametag: string) => Promise<PeerInfo | null>;
@@ -32,6 +43,10 @@ export interface SphereContextValue {
   deleteWallet: () => Promise<void>;
   reinitialize: () => Promise<void>;
 
+  /** Extension-only wallet lifecycle */
+  unlockWallet?: (password: string) => Promise<void>;
+  lockWallet?: () => Promise<void>;
+
   /** Whether IPFS token sync is currently enabled */
   ipfsEnabled: boolean;
   /** Toggle IPFS sync on/off (persists to localStorage, triggers reinitialize) */
@@ -40,10 +55,14 @@ export interface SphereContextValue {
 
 export interface CreateWalletOptions {
   nametag?: string;
+  /** Extension-only: password for mnemonic encryption */
+  password?: string;
 }
 
 export interface ImportWalletOptions {
   nametag?: string;
+  /** Extension-only: password for mnemonic encryption */
+  password?: string;
 }
 
 export interface ImportFromFileOptions {

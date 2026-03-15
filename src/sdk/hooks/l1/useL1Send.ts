@@ -35,17 +35,14 @@ export interface UseL1SendReturn {
 }
 
 export function useL1Send(): UseL1SendReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: async (params: L1SendParams): Promise<L1SendResult> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      const l1 = sphere.payments.l1;
-      if (!l1) throw new Error('L1 not available');
+      if (!adapter) throw new Error('Wallet not initialized');
 
-      // SDK L1SendRequest uses `to` not `toAddress`
-      const result = await l1.send({
+      const result = await adapter.l1Send({
         to: params.toAddress,
         amount: params.amount,
         feeRate: params.feeRate,
@@ -69,30 +66,26 @@ export function useL1Send(): UseL1SendReturn {
 
   const estimateFee = useCallback(
     async (to: string, amountSats: string): Promise<L1FeeEstimate> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      const l1 = sphere.payments.l1;
-      if (!l1) throw new Error('L1 not available');
-      return l1.estimateFee(to, amountSats);
+      if (!adapter) throw new Error('Wallet not initialized');
+      return adapter.l1EstimateFee(to, amountSats);
     },
-    [sphere],
+    [adapter],
   );
 
   const resolveAddress = useCallback(
     async (destination: string): Promise<L1ResolvedAddress> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      const l1 = sphere.payments.l1;
-      if (!l1) throw new Error('L1 not available');
+      if (!adapter) throw new Error('Wallet not initialized');
 
       const isNametag = destination.startsWith('@') ||
         (!destination.startsWith('alpha1') && !destination.startsWith('alphat1'));
 
-      const address = await l1.resolveL1Address(destination);
+      const address = await adapter.l1ResolveAddress(destination);
       return {
         address,
         nametag: isNametag ? destination.replace(/^@/, '') : undefined,
       };
     },
-    [sphere],
+    [adapter],
   );
 
   return {

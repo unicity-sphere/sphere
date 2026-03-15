@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-extension
+android
+ios
 *.local
 agentic-chatbot-main
 

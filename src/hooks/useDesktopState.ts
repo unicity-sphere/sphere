@@ -19,10 +19,13 @@ interface DesktopState {
   walletOpen: boolean;
 }
 
+const isExtension = import.meta.env.VITE_PLATFORM === 'extension';
+
 const defaultState: DesktopState = {
   openTabs: [],
   activeTabId: null,
-  walletOpen: window.matchMedia('(min-width: 1024px)').matches,
+  // In extension mode, always show wallet first; otherwise only on desktop
+  walletOpen: isExtension || window.matchMedia('(min-width: 1024px)').matches,
 };
 
 function loadState(): DesktopState {

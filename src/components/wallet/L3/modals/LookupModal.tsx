@@ -43,7 +43,7 @@ function CopyableField({ label, value, prefix, copied, onCopy }: {
 }
 
 export function LookupModal({ isOpen, onClose }: LookupModalProps) {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { nametag, directAddress, l1Address } = useIdentity();
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<ResolvedInfo | null>(null);
@@ -54,26 +54,26 @@ export function LookupModal({ isOpen, onClose }: LookupModalProps) {
 
   // Auto-resolve own keys when modal opens
   useEffect(() => {
-    if (isOpen && sphere && directAddress) {
-      sphere.resolve(directAddress).then((info: ResolvedInfo | null) => {
+    if (isOpen && adapter && directAddress) {
+      adapter.resolve(directAddress).then((info: ResolvedInfo | null) => {
         if (info) setMyInfo(info);
       }).catch(() => { /* ignore */ });
       setQuery('');
       setResult(null);
       setError(null);
     }
-  }, [isOpen, sphere, directAddress]);
+  }, [isOpen, adapter, directAddress]);
 
   const handleLookup = useCallback(async () => {
     const input = query.trim();
-    if (!input || !sphere) return;
+    if (!input || !adapter) return;
 
     setIsLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      const info = await sphere.resolve(input);
+      const info = await adapter.resolve(input);
       if (!info) {
         setError(`Not found: "${input}"`);
       } else {
@@ -84,7 +84,7 @@ export function LookupModal({ isOpen, onClose }: LookupModalProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [query, sphere]);
+  }, [query, adapter]);
 
   const handleCopy = useCallback(async (value: string, field: string) => {
     try {
@@ -162,7 +162,7 @@ export function LookupModal({ isOpen, onClose }: LookupModalProps) {
             </div>
             <button
               onClick={handleLookup}
-              disabled={!query.trim() || isLoading || !sphere}
+              disabled={!query.trim() || isLoading || !adapter}
               className="px-4 py-2.5 rounded-xl bg-orange-500 text-white text-sm font-medium disabled:opacity-50 hover:bg-orange-600 transition-colors flex items-center"
             >
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}

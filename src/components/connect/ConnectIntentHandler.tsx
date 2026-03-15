@@ -12,7 +12,7 @@ import { useIdentity, useL1Balance, useL1Send, useSphereContext } from '../../sd
 
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent } = useConnectContext();
-  const { sphere } = useSphereContext();
+  const { adapter, isUnlocked } = useSphereContext();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
   const [dmError, setDmError] = useState<string | null>(null);
   const [autoApproveDM, setAutoApproveDM] = useState(false);
@@ -35,6 +35,8 @@ export function ConnectIntentHandler() {
     await l1Send({ toAddress: destination, amount: amountSatoshis });
   }, [l1Send]);
 
+  // In extension mode, don't show until wallet is unlocked
+  if (import.meta.env.VITE_PLATFORM === 'extension' && !isUnlocked) return null;
   if (!pendingIntent) return null;
 
   const { action, params } = pendingIntent;
@@ -128,26 +130,30 @@ export function ConnectIntentHandler() {
         const dm = await sendDM({ recipient: to, content: message });
 
         // Register auto-approve if user checked the checkbox.
-        // Uses ConnectProvider-level auto-handler (bypasses ConnectHost entirely)
-        // so it's immune to ConnectHost lifecycle issues.
-        if (autoApproveDM && sphere) {
-          const sphereRef = sphere;
-          registerAutoIntent('dm', async (_action, intentParams) => {
-            try {
-              const result = await sphereRef.communications.sendDM(
-                intentParams.to as string,
-                intentParams.message as string,
-              );
-              return { result: { sent: true, messageId: result.id, timestamp: result.timestamp } };
-            } catch (err) {
-              return {
-                error: {
-                  code: ERROR_CODES.INTERNAL_ERROR,
-                  message: err instanceof Error ? err.message : 'DM failed',
-                },
-              };
-            }
-          });
+        if (autoApproveDM && adapter) {
+          if (import.meta.env.VITE_PLATFORM === 'extension') {
+            // Extension mode: tell background ConnectHost to auto-approve DMs
+            chrome.runtime.sendMessage({ type: 'POPUP_SET_DM_AUTO_APPROVE' }).catch(() => {});
+          } else {
+            // Web mode: register in ConnectProvider memory
+            const adapterRef = adapter;
+            registerAutoIntent('dm', async (_action, intentParams) => {
+              try {
+                const result = await adapterRef.sendDM(
+                  intentParams.to as string,
+                  intentParams.message as string,
+                );
+                return { result: { sent: true, messageId: result.id, timestamp: result.timestamp } };
+              } catch (err) {
+                return {
+                  error: {
+                    code: ERROR_CODES.INTERNAL_ERROR,
+                    message: err instanceof Error ? err.message : 'DM failed',
+                  },
+                };
+              }
+            });
+          }
         }
 
         resolveIntent({ sent: true, messageId: dm.id, timestamp: dm.timestamp });
@@ -213,15 +219,15 @@ export function ConnectIntentHandler() {
     const domainMatch = message.match(/^Domain:\s*(.+)$/m);
     const displayDomain = domainMatch ? domainMatch[1].trim() : null;
 
-    const handleSign = () => {
+    const handleSign = async () => {
       setSignError(null);
-      if (!sphere) {
+      if (!adapter) {
         setSignError('Wallet not available');
         return;
       }
       try {
-        const signature = sphere.signMessage(message);
-        const identity = sphere.identity;
+        const signature = await adapter.signMessage(message);
+        const identity = adapter.identity;
         resolveIntent({ signature, publicKey: identity?.chainPubkey });
       } catch (err) {
         setSignError(getErrorMessage(err));

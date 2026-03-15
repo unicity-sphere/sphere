@@ -20,7 +20,7 @@ export function RegisterNametagModal({ isOpen, onClose }: RegisterNametagModalPr
   const [success, setSuccess] = useState(false);
   const [availability, setAvailability] = useState<NametagAvailability>('idle');
 
-  const { sphere, resolveNametag } = useSphereContext();
+  const { adapter, resolveNametag } = useSphereContext();
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -70,7 +70,7 @@ export function RegisterNametagModal({ isOpen, onClose }: RegisterNametagModalPr
   const canSubmit = nametagInput.trim().length >= 2 && !isBusy && availability !== 'taken' && availability !== 'checking';
 
   const handleSubmit = useCallback(async () => {
-    if (!nametagInput.trim() || !sphere || isBusy) return;
+    if (!nametagInput.trim() || !adapter || isBusy) return;
 
     setIsBusy(true);
     setError(null);
@@ -87,13 +87,13 @@ export function RegisterNametagModal({ isOpen, onClose }: RegisterNametagModalPr
         return;
       }
 
-      await sphere.registerNametag(cleanTag);
+      await adapter.registerNametag(cleanTag);
 
-      // Write fresh identity into cache — sphere.identity should be
+      // Write fresh identity into cache — adapter.identity should be
       // updated after registerNametag resolves.  Fall back to patching
       // the nametag onto existing cached data if identity is unavailable.
-      if (sphere.identity) {
-        const fresh = { ...sphere.identity };
+      if (adapter.identity) {
+        const fresh = { ...adapter.identity };
         if (!fresh.nametag) fresh.nametag = cleanTag;
         queryClient.setQueryData(SPHERE_KEYS.identity.current, fresh);
       } else {
@@ -117,7 +117,7 @@ export function RegisterNametagModal({ isOpen, onClose }: RegisterNametagModalPr
     } finally {
       setIsBusy(false);
     }
-  }, [nametagInput, sphere, isBusy, resolveNametag, queryClient, onClose]);
+  }, [nametagInput, adapter, isBusy, resolveNametag, queryClient, onClose]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && canSubmit) {

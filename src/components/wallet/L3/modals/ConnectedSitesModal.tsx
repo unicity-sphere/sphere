@@ -39,22 +39,34 @@ function getFaviconUrl(origin: string): string {
 export function ConnectedSitesModal({ isOpen, onClose }: ConnectedSitesModalProps) {
   const [sites, setSites] = useState<SiteEntry[]>([]);
 
-  const loadSites = useCallback(() => {
-    const origins = getApprovedOrigins();
+  const isExtension = import.meta.env.VITE_PLATFORM === 'extension';
+
+  const loadSites = useCallback(async () => {
+    let origins: Record<string, ApprovedOriginEntry>;
+    if (isExtension) {
+      const resp = await chrome.runtime.sendMessage({ type: 'POPUP_GET_CONNECTED_SITES' });
+      origins = (resp?.success && resp.sites) ? resp.sites : {};
+    } else {
+      origins = getApprovedOrigins();
+    }
     const entries = Object.entries(origins)
       .map(([origin, data]) => ({ origin, data }))
       .sort((a, b) => b.data.lastSeenAt - a.data.lastSeenAt);
     setSites(entries);
-  }, []);
+  }, [isExtension]);
 
   useEffect(() => {
     if (isOpen) loadSites();
   }, [isOpen, loadSites]);
 
   const handleRevoke = useCallback((origin: string) => {
-    revokeApprovedOrigin(origin);
+    if (isExtension) {
+      chrome.runtime.sendMessage({ type: 'POPUP_REVOKE_CONNECTED_SITE', origin }).catch(() => {});
+    } else {
+      revokeApprovedOrigin(origin);
+    }
     setSites((prev) => prev.filter((s) => s.origin !== origin));
-  }, []);
+  }, [isExtension]);
 
   return (
     <WalletScreen isOpen={isOpen} onClose={onClose}>

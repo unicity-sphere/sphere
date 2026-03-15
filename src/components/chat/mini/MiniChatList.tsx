@@ -24,7 +24,7 @@ interface MiniChatListProps {
 export function MiniChatList({ onClose }: MiniChatListProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { directAddress } = useIdentity();
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
   const { openWindow } = useMiniChatStore();
@@ -33,12 +33,12 @@ export function MiniChatList({ onClose }: MiniChatListProps) {
 
   const { data: conversations = [] } = useQuery({
     queryKey: CHAT_KEYS.conversations(addressId),
-    queryFn: () => {
-      if (!sphere) return [];
-      const sdkConvs = sphere.communications.getConversations();
-      return buildConversations(sdkConvs, sphere.identity!.chainPubkey);
+    queryFn: async () => {
+      if (!adapter) return [];
+      const sdkConvs = await adapter.getConversations();
+      return buildConversations(sdkConvs, adapter.identity!.chainPubkey);
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30000,
   });
 
@@ -74,15 +74,16 @@ export function MiniChatList({ onClose }: MiniChatListProps) {
 
   const handleConversationClick = (conversation: Conversation) => {
     // Mark as read via SDK
-    if (sphere) {
-      const msgs: SDKDirectMessage[] = sphere.communications.getConversation(conversation.peerPubkey);
-      const unreadIncomingIds = msgs
-        .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
-        .map(m => m.id);
-      if (unreadIncomingIds.length > 0) {
-        sphere.communications.markAsRead(unreadIncomingIds);
-        queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
-      }
+    if (adapter) {
+      adapter.getConversation(conversation.peerPubkey).then((msgs: SDKDirectMessage[]) => {
+        const unreadIncomingIds = msgs
+          .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
+          .map(m => m.id);
+        if (unreadIncomingIds.length > 0) {
+          adapter.markAsRead(unreadIncomingIds);
+          queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
+        }
+      });
     }
     openWindow(conversation);
   };

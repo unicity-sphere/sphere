@@ -58,7 +58,7 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
     txids?: string[];
   }>({ show: false, type: "info", title: "", message: "" });
 
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { l1Address, nametag } = useIdentity();
   const { balance: l1BalanceData, isLoading: isLoadingBalance } = useL1Balance();
   const { send: l1Send, estimateFee, resolveAddress } = useL1Send();
@@ -66,7 +66,11 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
   const queryClient = useQueryClient();
 
   const selectedAddress = l1Address ?? "";
-  const currentAddressIndex = sphere?.getCurrentAddressIndex() ?? 0;
+  const [currentAddressIndex, setCurrentAddressIndex] = useState(0);
+  useEffect(() => {
+    if (!adapter) return;
+    adapter.getCurrentAddressIndex().then(idx => setCurrentAddressIndex(idx ?? 0)).catch(() => {});
+  }, [adapter]);
 
   // Balance values
   const balance = l1BalanceData ? Number(l1BalanceData.total) / 1e8 : 0;
@@ -79,19 +83,21 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
 
   // Load tracked addresses from SDK (these are the addresses selected during import/scan)
   useEffect(() => {
-    if (!sphere) return;
+    if (!adapter) return;
 
-    try {
-      const tracked = sphere.getActiveAddresses();
-      setAddresses(tracked.map((addr) => ({
-        index: addr.index,
-        l1Address: addr.l1Address,
-        nametag: addr.nametag,
-      })));
-    } catch (e) {
-      console.error("[L1WalletModal] Failed to load addresses:", e);
-    }
-  }, [sphere, currentAddressIndex]);
+    (async () => {
+      try {
+        const tracked = await adapter.getActiveAddresses();
+        setAddresses(tracked.map((addr) => ({
+          index: addr.index,
+          l1Address: addr.l1Address,
+          nametag: addr.nametag,
+        })));
+      } catch (e) {
+        console.error("[L1WalletModal] Failed to load addresses:", e);
+      }
+    })();
+  }, [adapter, currentAddressIndex]);
 
   // Reset view when modal opens
   useEffect(() => {
@@ -107,14 +113,14 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
   }, []);
 
   const handleSelectAddress = useCallback(async (index: number) => {
-    if (!sphere || isSwitching || index === currentAddressIndex) {
+    if (!adapter || isSwitching || index === currentAddressIndex) {
       setShowDropdown(false);
       return;
     }
     setShowDropdown(false);
     setIsSwitching(true);
     try {
-      await sphere.switchToAddress(index);
+      await adapter.switchToAddress(index);
       // Remove cached data so stale values from the previous address aren't shown
       queryClient.removeQueries({ queryKey: SPHERE_KEYS.identity.all });
       queryClient.removeQueries({ queryKey: SPHERE_KEYS.l1.all });
@@ -129,21 +135,21 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
     } finally {
       setIsSwitching(false);
     }
-  }, [sphere, isSwitching, currentAddressIndex, queryClient]);
+  }, [adapter, isSwitching, currentAddressIndex, queryClient]);
 
   const handleDeriveNew = useCallback(async () => {
-    if (!sphere) return;
+    if (!adapter) return;
     setShowDropdown(false);
     try {
       // Find the next untracked index
       const maxIndex = addresses.reduce((max, a) => Math.max(max, a.index), -1);
       const nextIndex = maxIndex + 1;
 
-      // Track the new address via SDK (persists it)
-      await sphere.trackScannedAddresses([{ index: nextIndex, hidden: false }]);
+      // Derive and switch to the new address
+      await adapter.switchToAddress(nextIndex);
 
       // Reload tracked addresses from SDK
-      const tracked = sphere.getActiveAddresses();
+      const tracked = await adapter.getActiveAddresses();
       setAddresses(tracked.map((addr) => ({
         index: addr.index,
         l1Address: addr.l1Address,
@@ -152,7 +158,7 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
     } catch (e) {
       console.error("[L1WalletModal] Failed to derive new address:", e);
     }
-  }, [sphere, addresses]);
+  }, [adapter, addresses]);
 
   const handleSend = useCallback(async (destination: string, amount: string) => {
     const amountAlpha = Number(amount);
@@ -187,7 +193,7 @@ export function L1WalletModal({ isOpen, onClose, showBalances }: L1WalletModalPr
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {!sphere ? (
+        {!adapter ? (
           <div className="flex items-center justify-center h-64">
             <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
           </div>

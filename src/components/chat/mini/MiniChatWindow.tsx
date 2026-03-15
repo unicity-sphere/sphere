@@ -37,7 +37,7 @@ interface MiniChatWindowProps {
 export function MiniChatWindow({ conversation, index }: MiniChatWindowProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const { directAddress } = useIdentity();
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
   const { closeWindow, minimizeWindow } = useMiniChatStore();
@@ -46,30 +46,31 @@ export function MiniChatWindow({ conversation, index }: MiniChatWindowProps) {
 
   const { data: messages = [], isLoading } = useQuery({
     queryKey: CHAT_KEYS.messages(addressId, conversation.peerPubkey),
-    queryFn: (): DisplayMessage[] => {
-      if (!sphere) return [];
-      const sdkMsgs: SDKDirectMessage[] = sphere.communications.getConversation(conversation.peerPubkey);
-      const myPubkey = sphere.identity!.chainPubkey;
+    queryFn: async (): Promise<DisplayMessage[]> => {
+      if (!adapter) return [];
+      const sdkMsgs: SDKDirectMessage[] = await adapter.getConversation(conversation.peerPubkey);
+      const myPubkey = adapter.identity!.chainPubkey;
       return sdkMsgs
         .filter((dm) => !(dm.senderPubkey === myPubkey && dm.content === WELCOME_TRIGGER))
         .map((dm) => toDisplayMessage(dm, myPubkey));
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 5000,
   });
 
   // Listen for real-time messages and mark as read
   useEffect(() => {
     // Mark conversation as read when window is open
-    if (sphere) {
-      const msgs: SDKDirectMessage[] = sphere.communications.getConversation(conversation.peerPubkey);
-      const unreadIncomingIds = msgs
-        .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
-        .map(m => m.id);
-      if (unreadIncomingIds.length > 0) {
-        sphere.communications.markAsRead(unreadIncomingIds);
-        queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
-      }
+    if (adapter) {
+      adapter.getConversation(conversation.peerPubkey).then((msgs: SDKDirectMessage[]) => {
+        const unreadIncomingIds = msgs
+          .filter(m => !m.isRead && m.senderPubkey === conversation.peerPubkey)
+          .map(m => m.id);
+        if (unreadIncomingIds.length > 0) {
+          adapter.markAsRead(unreadIncomingIds);
+          queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
+        }
+      });
     }
 
     const handleDMReceived = (event: CustomEvent<DmReceivedDetail>) => {
@@ -78,8 +79,8 @@ export function MiniChatWindow({ conversation, index }: MiniChatWindowProps) {
         // Refetch messages for this conversation
         queryClient.invalidateQueries({ queryKey: CHAT_KEYS.messages(addressId, conversation.peerPubkey) });
         // Auto-mark as read since window is open
-        if (sphere && !detail.isFromMe) {
-          sphere.communications.markAsRead([detail.messageId]);
+        if (adapter && !detail.isFromMe) {
+          adapter.markAsRead([detail.messageId]);
           queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
         }
       }
@@ -89,12 +90,12 @@ export function MiniChatWindow({ conversation, index }: MiniChatWindowProps) {
     return () => {
       window.removeEventListener('dm-received', handleDMReceived as EventListener);
     };
-  }, [conversation.peerPubkey, queryClient, sphere, addressId]);
+  }, [conversation.peerPubkey, queryClient, adapter, addressId]);
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      await sphere.communications.sendDM(conversation.peerPubkey, content);
+      if (!adapter) throw new Error('Wallet not initialized');
+      await adapter.sendDM(conversation.peerPubkey, content);
       return true;
     },
     onSuccess: () => {

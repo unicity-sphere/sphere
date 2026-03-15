@@ -13,15 +13,15 @@ export interface UseNametagReturn {
 }
 
 export function useNametag(): UseNametagReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const queryClient = useQueryClient();
 
-  const nametag = sphere?.identity?.nametag ?? null;
+  const nametag = adapter?.identity?.nametag ?? null;
 
   const registerMutation = useMutation({
     mutationFn: async (name: string): Promise<void> => {
-      if (!sphere) throw new Error('Wallet not initialized');
-      await sphere.registerNametag(name);
+      if (!adapter) throw new Error('Wallet not initialized');
+      await adapter.registerNametag(name);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
@@ -31,14 +31,11 @@ export function useNametag(): UseNametagReturn {
 
   const resolve = useCallback(
     async (name: string): Promise<string | null> => {
-      if (!sphere) return null;
-      const transport = sphere.getTransport();
-      if (transport.resolveNametag) {
-        return transport.resolveNametag(name);
-      }
-      return null;
+      if (!adapter) return null;
+      const result = await adapter.resolve(`@${name}`);
+      return result?.chainPubkey ?? null;
     },
-    [sphere],
+    [adapter],
   );
 
   return {

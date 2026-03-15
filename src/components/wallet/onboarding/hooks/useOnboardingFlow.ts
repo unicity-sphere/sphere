@@ -12,6 +12,8 @@ import { addrKey } from "../components/addrKey";
 import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
 
+const isExtension = import.meta.env.VITE_PLATFORM === 'extension';
+
 export type OnboardingStep =
   | "start"
   | "restoreMethod"
@@ -20,7 +22,9 @@ export type OnboardingStep =
   | "passwordPrompt"
   | "addressSelection"
   | "nametag"
-  | "processing";
+  | "passwordSetup"
+  | "processing"
+  | "mnemonicBackup";
 
 export interface UseOnboardingFlowReturn {
   // Step management
@@ -80,6 +84,16 @@ export interface UseOnboardingFlowReturn {
   handleDragOver: (e: React.DragEvent) => void;
   handleDragLeave: (e: React.DragEvent) => void;
   handleDrop: (e: React.DragEvent) => void;
+
+  // Extension-only: password setup
+  password: string;
+  setPassword: (value: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (value: string) => void;
+  handlePasswordConfirm: () => Promise<void>;
+
+  // Extension-only: mnemonic backup
+  handleMnemonicBackupConfirm: () => Promise<void>;
 
   // Wallet context (kept for component compatibility)
   identity: { address: string; privateKey: string } | null | undefined;
@@ -193,6 +207,12 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
 
   // Generated mnemonic (from create flow)
   const [generatedMnemonic, setGeneratedMnemonic] = useState<string | null>(null);
+
+  // Extension-only: password for mnemonic encryption
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  // Stores the nametag chosen before password step (extension flow only)
+  const pendingNametagRef = useRef<string | null>(null);
 
   // Go back to start screen
   const goToStart = useCallback(() => {
@@ -420,6 +440,14 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
       return;
     }
 
+    // Extension restore: validate mnemonic, then route to password step
+    if (isExtension) {
+      setError(null);
+      pendingNametagRef.current = null;
+      setStep("passwordSetup");
+      return;
+    }
+
     setIsBusy(true);
     setError(null);
 
@@ -477,10 +505,30 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const handleMintNametag = useCallback(async () => {
     if (!nametagInput.trim()) return;
 
+    const cleanTag = nametagInput.trim().replace("@", "");
+
+    // Extension create flow: save nametag, route to password step
+    if (isExtension && !(importedSphereRef.current ?? sphere)) {
+      setIsBusy(true);
+      setError(null);
+      try {
+        const existing = await resolveNametag(cleanTag);
+        if (existing) {
+          setError(`@${cleanTag} is already taken`);
+          return;
+        }
+        pendingNametagRef.current = cleanTag;
+        setStep("passwordSetup");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to check nametag");
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
     setIsBusy(true);
     setError(null);
-
-    const cleanTag = nametagInput.trim().replace("@", "");
 
     setStep("processing");
     setProcessingTitle("Setting up Profile...");
@@ -533,6 +581,13 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
 
   // Action: Skip nametag — create wallet without nametag (or finalize imported wallet)
   const handleSkipNametag = useCallback(async () => {
+    // Extension create flow: route to password step (no nametag)
+    if (isExtension && !(importedSphereRef.current ?? sphere)) {
+      pendingNametagRef.current = null;
+      setStep("passwordSetup");
+      return;
+    }
+
     setIsBusy(true);
     setError(null);
 
@@ -570,8 +625,107 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     }
   }, [createWallet, sphere]);
 
+  // Extension-only: Confirm password and create/import wallet
+  const handlePasswordConfirm = useCallback(async () => {
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+
+    setIsBusy(true);
+    setError(null);
+
+    setStep("processing");
+    setProcessingStep(0);
+    setIsProcessingComplete(false);
+
+    const mnemonic = seedWords.map((w) => w.trim().toLowerCase()).join(" ");
+    const isRestore = mnemonic.split(" ").filter(Boolean).length === 12;
+
+    try {
+      if (isRestore) {
+        // Restore flow — import with password
+        setProcessingTitle("Importing Wallet...");
+        setProcessingCompleteTitle("Import Complete!");
+        setProcessingTotalSteps(3);
+        setProcessingStatus("Importing wallet...");
+
+        await importWallet(mnemonic, { password });
+
+        setProcessingStep(2);
+        setProcessingStatus("Setup complete!");
+        setIsProcessingComplete(true);
+      } else {
+        // Create flow — create with password + optional nametag
+        setProcessingTitle("Setting up Profile...");
+        setProcessingCompleteTitle("Profile Ready!");
+        setProcessingTotalSteps(3);
+        setProcessingStatus("Creating wallet...");
+
+        const result = await createWallet({
+          nametag: pendingNametagRef.current ?? undefined,
+          password,
+        });
+        setGeneratedMnemonic(result.mnemonic);
+        isCreateFlowRef.current = true;
+
+        // Register nametag if pending (background has SDK ready, call directly)
+        if (pendingNametagRef.current) {
+          setProcessingStep(1);
+          setProcessingStatus("Registering Unicity ID...");
+          if (isExtension) {
+            await chrome.runtime.sendMessage({
+              type: 'POPUP_REGISTER_NAMETAG',
+              nametag: pendingNametagRef.current,
+            });
+          }
+        }
+
+        setProcessingStep(2);
+        setProcessingStatus("Setup complete!");
+        setIsProcessingComplete(true);
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Wallet setup failed";
+      console.error("Password confirm failed:", e);
+      setError(message);
+      setStep("passwordSetup");
+    } finally {
+      setIsBusy(false);
+    }
+  }, [password, confirmPassword, seedWords, createWallet, importWallet]);
+
+  // Extension-only: Confirm mnemonic backup and complete onboarding
+  const handleMnemonicBackupConfirm = useCallback(async () => {
+    // Finalize and complete
+    finalizeWallet(importedSphereRef.current ?? undefined);
+    importedSphereRef.current = null;
+    isCreateFlowRef.current = false;
+
+    queryClient.removeQueries({ queryKey: SPHERE_KEYS.all });
+    window.dispatchEvent(new Event("wallet-loaded"));
+    window.dispatchEvent(new Event("wallet-updated"));
+
+    // Force identity refresh after React re-renders with the new adapter
+    setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
+    }, 100);
+
+    setStep("start");
+  }, [queryClient, finalizeWallet]);
+
   // Action: Complete onboarding (called when user clicks "Let's Go")
   const handleCompleteOnboarding = useCallback(async () => {
+    // Extension create flow: show mnemonic backup before completing
+    if (isExtension && isCreateFlowRef.current && generatedMnemonic) {
+      setStep("mnemonicBackup");
+      return;
+    }
+
     // Mark wallet as existing so WalletPanel switches from onboarding to wallet UI.
     // For create flows walletExists is already true — this is a no-op for sphere.
     // For import flows this sets the sphere in context + walletExists = true.
@@ -587,8 +741,15 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     window.dispatchEvent(new Event("wallet-loaded"));
     window.dispatchEvent(new Event("wallet-updated"));
 
+    // Force identity refresh after React re-renders with the new adapter.
+    // Without this, useIdentity may cache stale data (missing nametag)
+    // because the adapter isn't available yet during the current render cycle.
+    setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
+    }, 100);
+
     setStep("start");
-  }, [queryClient, finalizeWallet]);
+  }, [queryClient, finalizeWallet, generatedMnemonic]);
 
   // Action: Derive new address (for address selection screen)
   const handleDeriveNewAddress = useCallback(async () => {
@@ -597,7 +758,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     setIsBusy(true);
     try {
       const nextIndex = derivedAddresses.length;
-      const addr = activeSphere.deriveAddress(nextIndex);
+      const addr = await activeSphere.deriveAddress(nextIndex);
       setDerivedAddresses((prev) => [
         ...prev,
         {
@@ -626,7 +787,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
       setIsBusy(true);
       setError(null);
       try {
-        const addresses = activeSphere.deriveAddresses(3);
+        const addresses = await activeSphere.deriveAddresses(3);
         const results: DerivedAddressInfo[] = addresses.map((addr, i) => ({
           index: i,
           l1Address: addr.address,
@@ -781,6 +942,16 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     handleDragOver,
     handleDragLeave,
     handleDrop,
+
+    // Extension-only: password setup
+    password,
+    setPassword,
+    confirmPassword,
+    setConfirmPassword,
+    handlePasswordConfirm,
+
+    // Extension-only: mnemonic backup
+    handleMnemonicBackupConfirm,
 
     // Wallet context
     identity: sphere?.identity ? {

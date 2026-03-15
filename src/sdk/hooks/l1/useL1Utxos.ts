@@ -20,15 +20,13 @@ export interface UseL1UtxosReturn {
 }
 
 export function useL1Utxos(): UseL1UtxosReturn {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
 
   const query = useQuery({
     queryKey: SPHERE_KEYS.l1.utxos,
     queryFn: async (): Promise<Utxo[]> => {
-      if (!sphere) return [];
-      const l1 = sphere.payments.l1;
-      if (!l1) return [];
-      const utxos = await l1.getUtxos();
+      if (!adapter) return [];
+      const utxos = await adapter.l1GetUtxos();
       return utxos.map((u) => ({
         txid: u.txid,
         vout: u.vout,
@@ -37,7 +35,7 @@ export function useL1Utxos(): UseL1UtxosReturn {
         isVested: u.isVested ?? false,
       }));
     },
-    enabled: !!sphere,
+    enabled: !!adapter,
     staleTime: 30_000,
   });
 

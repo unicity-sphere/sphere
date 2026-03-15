@@ -5,7 +5,6 @@ import { SPHERE_KEYS } from '../../queryKeys';
 import { formatAmount } from '../../index';
 import { showTransferToast } from '../../../components/ui/toast-utils';
 import { CHAT_KEYS, GROUP_CHAT_KEYS, type DmReceivedDetail } from '../../../components/chat/data/chatTypes';
-import { sendWelcomeDM } from '../../welcomeDM';
 import type { IncomingTransfer } from '@unicitylabs/sphere-sdk';
 
 // SDK DM shape (local mirror — SDK DTS not always available)
@@ -16,25 +15,26 @@ interface SDKDirectMessage {
 }
 
 export function useSphereEvents(): void {
-  const { sphere } = useSphereContext();
+  const { adapter } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
 
-  // When sphere instance changes (new wallet, delete, import) —
+  // When adapter instance changes (new wallet, delete, import) —
   // immediately sync identity cache so the UI never shows stale data
   // from the previous wallet.
   useEffect(() => {
-    if (sphere?.identity) {
-      queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...sphere.identity });
+    if (!adapter) return;
+    if (adapter.identity) {
+      queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...adapter.identity });
     } else {
       queryClient.removeQueries({ queryKey: SPHERE_KEYS.identity.all });
     }
-  }, [sphere, queryClient]);
+  }, [adapter, queryClient]);
 
   useEffect(() => {
-    if (!sphere) return;
+    if (!adapter) return;
 
     // Debounced payment invalidation — SDK fires bursts of events during
     // init / sync, so we coalesce them into a single invalidation pass.
@@ -83,12 +83,12 @@ export function useSphereEvents(): void {
     };
     const handleTransferConfirmed = invalidatePayments;
 
-    // Write sphere.identity directly into the query cache — by the time SDK
+    // Write adapter.identity directly into the query cache — by the time SDK
     // fires these events, its internal state is already updated.  Plain
     // invalidation can race with the SDK update, returning stale data.
     const refreshIdentityCache = () => {
-      if (sphere.identity) {
-        queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...sphere.identity });
+      if (adapter.identity) {
+        queryClient.setQueryData(SPHERE_KEYS.identity.current, { ...adapter.identity });
       }
     };
 
@@ -107,9 +107,6 @@ export function useSphereEvents(): void {
       // address switch and display stale data from the previous address.
       queryClient.removeQueries({ queryKey: CHAT_KEYS.all });
       queryClient.removeQueries({ queryKey: GROUP_CHAT_KEYS.all });
-
-      // Send welcome DMs for the new address (fire-and-forget, idempotent)
-      sendWelcomeDM(sphere);
     };
 
     const handleSyncCompleted = invalidatePayments;
@@ -118,7 +115,7 @@ export function useSphereEvents(): void {
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
     const handleDmReceived = (dm: SDKDirectMessage) => {
-      const myPubkey = sphere.identity?.chainPubkey;
+      const myPubkey = adapter.identity?.chainPubkey;
 
       // Only process DMs belonging to the current address — the mux delivers
       // events for ALL addresses, and processing other addresses' DMs would
@@ -163,36 +160,36 @@ export function useSphereEvents(): void {
       });
     };
 
-    sphere.on('transfer:incoming', handleIncomingTransfer);
-    sphere.on('transfer:confirmed', handleTransferConfirmed);
-    sphere.on('history:updated', handleHistoryUpdated);
-    sphere.on('nametag:registered', handleNametagChange);
-    sphere.on('nametag:recovered', handleNametagChange);
-    sphere.on('identity:changed', handleIdentityChange);
-    sphere.on('sync:completed', handleSyncCompleted);
-    sphere.on('sync:remote-update', handleSyncRemoteUpdate);
-    sphere.on('message:dm', handleDmReceived);
-    sphere.on('message:read', handleMessageRead);
-    sphere.on('composing:started', handleComposingStarted);
-    sphere.on('payment_request:incoming', handlePaymentRequestIncoming);
+    adapter.on('transfer:incoming', handleIncomingTransfer as (data?: unknown) => void);
+    adapter.on('transfer:confirmed', handleTransferConfirmed);
+    adapter.on('history:updated', handleHistoryUpdated);
+    adapter.on('nametag:registered', handleNametagChange);
+    adapter.on('nametag:recovered', handleNametagChange);
+    adapter.on('identity:changed', handleIdentityChange);
+    adapter.on('sync:completed', handleSyncCompleted);
+    adapter.on('sync:remote-update', handleSyncRemoteUpdate);
+    adapter.on('message:dm', handleDmReceived as (data?: unknown) => void);
+    adapter.on('message:read', handleMessageRead);
+    adapter.on('composing:started', handleComposingStarted as (data?: unknown) => void);
+    adapter.on('payment_request:incoming', handlePaymentRequestIncoming);
 
     return () => {
       if (invalidateTimerRef.current) {
         clearTimeout(invalidateTimerRef.current);
         invalidateTimerRef.current = null;
       }
-      sphere.off('transfer:incoming', handleIncomingTransfer);
-      sphere.off('transfer:confirmed', handleTransferConfirmed);
-      sphere.off('history:updated', handleHistoryUpdated);
-      sphere.off('nametag:registered', handleNametagChange);
-      sphere.off('nametag:recovered', handleNametagChange);
-      sphere.off('identity:changed', handleIdentityChange);
-      sphere.off('sync:completed', handleSyncCompleted);
-      sphere.off('sync:remote-update', handleSyncRemoteUpdate);
-      sphere.off('message:dm', handleDmReceived);
-      sphere.off('message:read', handleMessageRead);
-      sphere.off('composing:started', handleComposingStarted);
-      sphere.off('payment_request:incoming', handlePaymentRequestIncoming);
+      adapter.off('transfer:incoming', handleIncomingTransfer as (data?: unknown) => void);
+      adapter.off('transfer:confirmed', handleTransferConfirmed);
+      adapter.off('history:updated', handleHistoryUpdated);
+      adapter.off('nametag:registered', handleNametagChange);
+      adapter.off('nametag:recovered', handleNametagChange);
+      adapter.off('identity:changed', handleIdentityChange);
+      adapter.off('sync:completed', handleSyncCompleted);
+      adapter.off('sync:remote-update', handleSyncRemoteUpdate);
+      adapter.off('message:dm', handleDmReceived as (data?: unknown) => void);
+      adapter.off('message:read', handleMessageRead);
+      adapter.off('composing:started', handleComposingStarted as (data?: unknown) => void);
+      adapter.off('payment_request:incoming', handlePaymentRequestIncoming);
     };
-  }, [sphere, queryClient]);
+  }, [adapter, queryClient]);
 }
