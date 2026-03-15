@@ -61,7 +61,7 @@ chrome.runtime.onMessage.addListener(
 
     // Legacy SPHERE_* API: content script → message-handler (direct handling, no relay)
     if (isSphereRequest(type as string)) {
-      handleContentMessage(message, sender).then(sendResponse).catch((error: Error) => {
+      handleContentMessage(message).then(sendResponse).catch((error: Error) => {
         sendResponse({ success: false, error: error.message });
       });
       return true;

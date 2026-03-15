@@ -519,7 +519,6 @@ export async function handlePopupMessage(
  */
 export async function handleContentMessage(
   message: Record<string, unknown>,
-  _sender: chrome.runtime.MessageSender,
 ): Promise<unknown> {
   const type = message.type as string;
 
