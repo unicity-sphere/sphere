@@ -50,6 +50,7 @@ export function ExtensionSphereProvider({ children }: ExtensionSphereProviderPro
   const [adapter, setAdapter] = useState<ISphereAdapter | null>(null);
   const [groupChat, setGroupChat] = useState<IGroupChatAdapter | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [ipfsEnabled, setIpfsEnabled] = useState(true); // enabled by default
   const adapterRef = useRef<ExtensionAdapter | null>(null);
 
   // ---- Configure TokenRegistry for popup context ----
@@ -73,6 +74,13 @@ export function ExtensionSphereProvider({ children }: ExtensionSphereProviderPro
       if (result.success && result.state) {
         setWalletExists(result.state.hasWallet);
         setIsUnlocked(result.state.isUnlocked);
+      }
+      // Fetch IPFS preference from background
+      const ipfsResult = await sendBg<{ success: boolean; enabled: boolean }>({
+        type: 'POPUP_GET_IPFS_STATUS',
+      });
+      if (ipfsResult.success) {
+        setIpfsEnabled(ipfsResult.enabled);
       }
     } catch (err) {
       console.error('[ExtensionSphereProvider] refreshState error:', err);
@@ -188,6 +196,17 @@ export function ExtensionSphereProvider({ children }: ExtensionSphereProviderPro
     queryClient.clear();
   }, [queryClient]);
 
+  const toggleIpfs = useCallback(async () => {
+    const next = !ipfsEnabled;
+    setIpfsEnabled(next);
+    try {
+      await sendBg({ type: 'POPUP_TOGGLE_IPFS', enabled: next });
+    } catch (err) {
+      console.error('[ExtensionSphereProvider] toggleIpfs error:', err);
+      setIpfsEnabled(!next); // revert on failure
+    }
+  }, [ipfsEnabled]);
+
   // resolveNametag works without wallet (onboarding nametag check)
   const resolveNametag = useCallback(async (nametag: string) => {
     const r = await sendBg<{ success: boolean; result: unknown }>({
@@ -220,8 +239,8 @@ export function ExtensionSphereProvider({ children }: ExtensionSphereProviderPro
     reinitialize: refreshState,
     unlockWallet,
     lockWallet,
-    ipfsEnabled: false,
-    toggleIpfs: () => {},
+    ipfsEnabled,
+    toggleIpfs,
   };
 
   return (

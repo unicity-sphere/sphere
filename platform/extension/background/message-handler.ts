@@ -237,6 +237,17 @@ export async function handlePopupMessage(
         return { success: true, ...syncResult };
       }
 
+      case 'POPUP_GET_IPFS_STATUS':
+        return { success: true, enabled: walletManager.getIpfsEnabledState() };
+
+      case 'POPUP_TOGGLE_IPFS': {
+        const enabled = message.enabled as boolean;
+        await walletManager.setIpfsEnabled(enabled);
+        // Reinitializing requires re-creating Sphere with new providers —
+        // for now, the change takes effect on next unlock/restart.
+        return { success: true, enabled };
+      }
+
       // --- L1 (Extended) ---
 
       case 'POPUP_L1_RESOLVE_ADDRESS': {

@@ -14,7 +14,7 @@
  */
 
 import { Sphere, logger } from '@unicitylabs/sphere-sdk';
-import type { Asset, Token, TransactionHistoryEntry, InitProgress } from '@unicitylabs/sphere-sdk';
+import type { Asset, Token, TransactionHistoryEntry } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 
 // Expose SDK logger on globalThis for runtime debugging in service worker console
@@ -24,6 +24,9 @@ type BrowserProviders = ReturnType<typeof createBrowserProviders>;
 
 // Storage key for the encrypted mnemonic
 const ENCRYPTED_MNEMONIC_KEY = 'encryptedMnemonic';
+
+// Storage key for IPFS enabled state (mirrors web's sphere_ipfs_enabled)
+const IPFS_ENABLED_KEY = 'sphere_ipfs_enabled';
 
 // SDK events to forward to popup
 const FORWARDED_EVENTS = [
@@ -643,11 +646,34 @@ export class WalletManager {
 
   // ============ Internal ============
 
+  private _ipfsEnabled = true;
+
+  async loadIpfsPreference(): Promise<void> {
+    const result = await chrome.storage.local.get([IPFS_ENABLED_KEY]);
+    this._ipfsEnabled = result[IPFS_ENABLED_KEY] !== 'false'; // enabled by default
+  }
+
+  getIpfsEnabledState(): boolean {
+    return this._ipfsEnabled;
+  }
+
+  async setIpfsEnabled(enabled: boolean): Promise<void> {
+    this._ipfsEnabled = enabled;
+    await chrome.storage.local.set({ [IPFS_ENABLED_KEY]: String(enabled) });
+  }
+
   private async createSphereFromMnemonic(mnemonic: string): Promise<Sphere> {
+    await this.loadIpfsPreference();
+
+    const ipfsConfig = this._ipfsEnabled
+      ? { tokenSync: { ipfs: { enabled: true } } }
+      : {};
+
     const browserProviders = createBrowserProviders({
       network: 'testnet',
       groupChat: true,
       market: true,
+      ...ipfsConfig,
     });
     this.providers = browserProviders;
 
@@ -657,6 +683,13 @@ export class WalletManager {
       l1: {},
       discoverAddresses: false,
     });
+
+    // Add IPFS storage provider and trigger initial sync
+    if (browserProviders.ipfsTokenStorage) {
+      sphere.addTokenStorageProvider(browserProviders.ipfsTokenStorage)
+        .then(() => sphere.sync())
+        .catch(err => logger.warn('WalletManager', 'IPFS sync failed', err));
+    }
 
     return sphere;
   }
