@@ -127,7 +127,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     setStep('processing'); setError(null);
     try {
       const fromAmountSmallestUnit = toSmallestUnit(fromAmount, fromAsset.decimals);
-      await transfer({ recipient: 'swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
+      await transfer({ recipient: 'unicity_swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
       await FaucetService.requestTokens(nametag, toAsset.name!.toLowerCase(), exchangeInfo.toAmount);
       setStep('success');
     } catch (e: unknown) {
@@ -170,7 +170,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     <WalletScreen isOpen={isOpen} onClose={handleClose}>
       <ModalHeader variant="screen" title={getTitle()} onClose={handleClose} />
 
-      <div className="px-6 py-8 flex-1 overflow-y-auto">
+      <div className="px-6 pt-4 pb-6 flex-1 min-h-0 overflow-y-auto">
         <AnimatePresence>
 
           {step === 'swap' && (
@@ -257,7 +257,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
               </div>
 
               {/* FLIP BUTTON — separated */}
-              <div className="flex justify-center my-3">
+              <div className="flex justify-center my-2">
                 <button
                   onClick={handleFlipAssets}
                   disabled={!fromAsset || !toAsset}
@@ -268,7 +268,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
               </div>
 
               {/* YOU RECEIVE */}
-              <div className="bg-neutral-50 dark:bg-white/4 border border-neutral-100 dark:border-white/5 rounded-2xl p-4 mb-5">
+              <div className="bg-neutral-50 dark:bg-white/4 border border-neutral-100 dark:border-white/5 rounded-2xl p-4 mb-4">
                 <div className="text-xs font-sans text-neutral-400 dark:text-white/35 mb-3">You Receive</div>
                 <div className="flex items-center gap-3">
                   <div className="flex-1 text-3xl font-semibold font-sans text-neutral-900 dark:text-white min-w-0 truncate">
@@ -330,7 +330,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
 
               {/* Exchange rate */}
               {exchangeInfo && fromAsset && toAsset && (
-                <div className="flex items-center gap-3 px-4 py-4 bg-orange-50 dark:bg-orange-500/8 border border-orange-200 dark:border-orange-500/20 rounded-2xl mb-5">
+                <div className="flex items-center gap-3 px-4 py-3 bg-orange-50 dark:bg-orange-500/8 border border-orange-200 dark:border-orange-500/20 rounded-2xl mb-4">
                   <ArrowDownUp className="w-4 h-4 text-orange-500 dark:text-orange-400 shrink-0" />
                   <span className="text-sm font-sans text-orange-600/70 dark:text-orange-300/60">
                     1{' '}
@@ -354,7 +354,6 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
                 className="relative w-full h-14 rounded-full overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: '#FF6F00' }}
               >
-                {/* White fill layer — animates from bottom, no border-radius (parent clips) */}
                 <motion.div
                   className="absolute inset-0 bg-white"
                   initial={{ y: '100%' }}
