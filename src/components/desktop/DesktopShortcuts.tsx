@@ -110,6 +110,7 @@ export function DesktopShortcuts() {
                     key={app.url}
                     agent={remoteAppToAgent(app)}
                     iconUrl={app.icon}
+                    tooltip={app.description}
                     isOpen={openTabs.some((t) => t.url === app.url)}
                     onClick={() => handleRemoteAppClick(app)}
                   />

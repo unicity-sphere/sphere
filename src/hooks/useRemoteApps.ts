@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 export interface RemoteApp {
   category: string;
   name: string;
+  description?: string;
   url: string;
   icon?: string;
 }

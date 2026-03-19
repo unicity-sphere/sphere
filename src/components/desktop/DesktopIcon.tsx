@@ -7,10 +7,11 @@ interface DesktopIconProps {
   isOpen?: boolean;
   badge?: number;
   iconUrl?: string;
+  tooltip?: string;
   onClick: () => void;
 }
 
-export function DesktopIcon({ agent, isOpen, badge, iconUrl, onClick }: DesktopIconProps) {
+export function DesktopIcon({ agent, isOpen, badge, iconUrl, tooltip, onClick }: DesktopIconProps) {
   const { Icon, name, color } = agent;
   const [imgError, setImgError] = useState(false);
   const showImage = iconUrl && !imgError;
@@ -21,6 +22,7 @@ export function DesktopIcon({ agent, isOpen, badge, iconUrl, onClick }: DesktopI
       whileHover={{ scale: 1.08, y: -4 }}
       whileTap={{ scale: 0.92 }}
       transition={{ duration: 0.05 }}
+      title={tooltip}
       className="flex flex-col items-center gap-2 p-3 rounded-2xl group cursor-pointer relative"
     >
       {/* Icon container with gradient */}
