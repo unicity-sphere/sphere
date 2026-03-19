@@ -6,6 +6,7 @@ export interface RemoteApp {
   description?: string;
   url: string;
   icon?: string;
+  hidden?: boolean;
 }
 
 interface RemoteAppsResponse {
@@ -19,7 +20,7 @@ async function fetchRemoteApps(): Promise<RemoteApp[]> {
   const res = await fetch(REMOTE_APPS_URL);
   if (!res.ok) throw new Error(`Failed to fetch apps: ${res.status}`);
   const data: RemoteAppsResponse = await res.json();
-  return data.apps ?? [];
+  return (data.apps ?? []).filter((app) => !app.hidden);
 }
 
 export function useRemoteApps() {
