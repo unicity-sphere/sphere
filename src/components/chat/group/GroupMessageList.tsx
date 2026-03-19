@@ -118,7 +118,7 @@ export function GroupMessageList({
           </button>
         </div>
       )}
-      {groupedMessages.map((group, groupIndex) => (
+      {groupedMessages.map((group) => (
         <div key={group.date} className="space-y-4">
           {/* Date separator */}
           <div className="flex items-center justify-center">
@@ -128,12 +128,11 @@ export function GroupMessageList({
           </div>
 
           {/* Messages */}
-          {group.messages.map((message, messageIndex) => (
+          {group.messages.map((message) => (
             <GroupMessageBubble
               key={message.id ?? `${message.timestamp}-${message.senderPubkey}`}
               message={message}
               isOwnMessage={message.senderPubkey === myPubkey}
-              delay={groupIndex === groupedMessages.length - 1 ? (group.messages.length - 1 - messageIndex) * 0.05 : 0}
               canDelete={canDeleteMessages}
               onDelete={onDeleteMessage}
               isDeleting={isDeletingMessage}

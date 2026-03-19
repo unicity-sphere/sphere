@@ -128,35 +128,42 @@ export const useGroupChat = (): UseGroupChatReturn => {
   useEffect(() => {
     if (!sphere) return;
 
+    // Debounce groups/unread invalidation — rapid messages would otherwise
+    // re-sort and re-render the entire group list on every event.
+    let groupsInvalidationTimer: ReturnType<typeof setTimeout> | null = null;
+    const debouncedInvalidateGroupsAndUnread = () => {
+      if (groupsInvalidationTimer) return;
+      groupsInvalidationTimer = setTimeout(() => {
+        groupsInvalidationTimer = null;
+        queryClient.invalidateQueries({ queryKey: KEYS.groups });
+        queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
+      }, 300);
+    };
+
     const handleUpdate = () => {
-      queryClient.invalidateQueries({ queryKey: KEYS.groups });
+      debouncedInvalidateGroupsAndUnread();
       const current = selectedGroupRef.current;
       if (current) {
         queryClient.invalidateQueries({
           queryKey: KEYS.messages(current.id),
         });
       }
-      queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
     };
 
     const handleMessage = (message: GroupMessageData) => {
       const current = selectedGroupRef.current;
-      // If we're viewing this group, refetch messages and members
+      // If we're viewing this group, refetch messages
       if (current && message.groupId === current.id) {
         queryClient.invalidateQueries({
           queryKey: KEYS.messages(current.id),
-        });
-        queryClient.invalidateQueries({
-          queryKey: KEYS.members(current.id),
         });
         // Auto-mark as read only if the group-chat tab is in focus
         if (activeTabIdRef.current === 'group-chat') {
           groupChat?.markGroupAsRead(current.id);
         }
       }
-      // Always refetch groups for updated last message
-      queryClient.invalidateQueries({ queryKey: KEYS.groups });
-      queryClient.invalidateQueries({ queryKey: KEYS.unreadCount });
+      // Debounced refetch of groups list and unread count
+      debouncedInvalidateGroupsAndUnread();
     };
 
     const handleKicked = (data: { groupId: string }) => {
@@ -180,6 +187,7 @@ export const useGroupChat = (): UseGroupChatReturn => {
 
     return () => {
       unsubs.forEach((unsub) => unsub());
+      if (groupsInvalidationTimer) clearTimeout(groupsInvalidationTimer);
     };
   }, [sphere, queryClient, groupChat, KEYS]);
 

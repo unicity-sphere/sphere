@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { motion } from 'framer-motion';
 import { Hash, Lock, Pin, MoreVertical, LogOut, Trash2, Link, Loader2 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
@@ -19,7 +20,7 @@ interface GroupItemProps {
   isCreatingInvite?: boolean;
 }
 
-export function GroupItem({
+export const GroupItem = memo(function GroupItem({
   group,
   isSelected,
   onClick,
@@ -40,6 +41,7 @@ export function GroupItem({
   const hasMenuItems = canInvite || canDelete || canLeave;
 
   useEffect(() => {
+    if (!showMenu) return;
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setShowMenu(false);
@@ -47,18 +49,16 @@ export function GroupItem({
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [showMenu]);
 
   return (
-    <motion.div
+    <div
       onClick={onClick}
       className={`p-3 rounded-xl cursor-pointer transition-all relative group ${
         isSelected
           ? 'bg-linear-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/30'
           : 'hover:bg-neutral-100 dark:hover:bg-neutral-800/50 border border-transparent'
       } ${showMenu ? 'z-50' : ''}`}
-      whileHover={{ scale: 1.01 }}
-      whileTap={{ scale: 0.99 }}
     >
       <div className="flex items-center gap-3">
         {/* Group Avatar */}
@@ -190,6 +190,6 @@ export function GroupItem({
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
-}
+});

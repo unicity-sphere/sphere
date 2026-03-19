@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Search, X, PanelLeftClose, Hash } from 'lucide-react';
 import type { GroupData } from '@unicitylabs/sphere-sdk';
@@ -25,7 +26,7 @@ interface GroupListProps {
   isCreatingInvite: boolean;
 }
 
-export function GroupList({
+export const GroupList = memo(function GroupList({
   groups,
   selectedGroup,
   onSelect,
@@ -146,32 +147,24 @@ export function GroupList({
               </p>
             </div>
           ) : (
-            <AnimatePresence mode="popLayout">
-              {groups.map((group) => (
-                <motion.div
-                  key={group.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -100 }}
-                >
-                  <GroupItem
-                    group={group}
-                    isSelected={selectedGroup?.id === group.id}
-                    onClick={() => onSelect(group)}
-                    onLeave={() => onLeave(group.id)}
-                    isAdmin={isAdminOfGroup(group.id)}
-                    isRelayAdmin={isRelayAdmin}
-                    onDeleteGroup={() => onDeleteGroup(group.id)}
-                    onCreateInvite={() => onCreateInvite(group.id)}
-                    isDeletingGroup={isDeletingGroup}
-                    isCreatingInvite={isCreatingInvite}
-                  />
-                </motion.div>
-              ))}
-            </AnimatePresence>
+            groups.map((group) => (
+              <GroupItem
+                key={group.id}
+                group={group}
+                isSelected={selectedGroup?.id === group.id}
+                onClick={() => onSelect(group)}
+                onLeave={() => onLeave(group.id)}
+                isAdmin={isAdminOfGroup(group.id)}
+                isRelayAdmin={isRelayAdmin}
+                onDeleteGroup={() => onDeleteGroup(group.id)}
+                onCreateInvite={() => onCreateInvite(group.id)}
+                isDeletingGroup={isDeletingGroup}
+                isCreatingInvite={isCreatingInvite}
+              />
+            ))
           )}
         </div>
       </div>
     </>
   );
-}
+});

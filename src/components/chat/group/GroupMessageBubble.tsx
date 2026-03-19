@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trash2, Loader2, Reply, CornerDownRight } from 'lucide-react';
 import type { GroupMessageData } from '@unicitylabs/sphere-sdk';
@@ -10,7 +10,6 @@ import { getMessageSenderDisplayName, getMessageSenderAvatar, getMessageFormatte
 interface GroupMessageBubbleProps {
   message: GroupMessageData;
   isOwnMessage: boolean;
-  delay?: number;
   canDelete?: boolean;
   onDelete?: (messageId: string) => Promise<boolean>;
   isDeleting?: boolean;
@@ -18,10 +17,9 @@ interface GroupMessageBubbleProps {
   replyToMessage?: GroupMessageData | null;
 }
 
-export function GroupMessageBubble({
+export const GroupMessageBubble = memo(function GroupMessageBubble({
   message,
   isOwnMessage,
-  delay = 0,
   canDelete = false,
   onDelete,
   isDeleting = false,
@@ -55,10 +53,7 @@ export function GroupMessageBubble({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay }}
+    <div
       className={`flex gap-3 ${isOwnMessage ? 'flex-row-reverse' : ''} group`}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
@@ -181,6 +176,6 @@ export function GroupMessageBubble({
           {getMessageFormattedTime(message)}
         </span>
       </div>
-    </motion.div>
+    </div>
   );
-}
+});

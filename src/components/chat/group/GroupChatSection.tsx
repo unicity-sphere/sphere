@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Hash, PanelLeft, Users, X, Reply, Loader2 } from 'lucide-react';
-import type { GroupMessageData } from '@unicitylabs/sphere-sdk';
+import type { GroupData, GroupMessageData } from '@unicitylabs/sphere-sdk';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGroupChat } from '../hooks/useGroupChat';
 import { GroupList } from './GroupList';
@@ -122,22 +122,32 @@ export function GroupChatSection({ onModeChange }: GroupChatSectionProps) {
     setReplyingTo(null);
   }, [selectedGroup?.id]);
 
-  const handleSend = async () => {
+  const handleSend = useCallback(async () => {
     if (messageInput.trim()) {
       const replyToId = replyingTo?.id;
       await sendMessage(messageInput, replyToId);
       setReplyingTo(null);
     }
-  };
+  }, [messageInput, replyingTo, sendMessage]);
 
-  const handleReplyToMessage = (message: GroupMessageData) => {
+  const handleReplyToMessage = useCallback((message: GroupMessageData) => {
     setReplyingTo(message);
     inputRef.current?.focus();
-  };
+  }, []);
 
-  const cancelReply = () => {
+  const cancelReply = useCallback(() => {
     setReplyingTo(null);
-  };
+  }, []);
+
+  const handleSelectGroup = useCallback((group: GroupData) => {
+    selectGroup(group);
+    setSidebarOpen(false);
+  }, [selectGroup]);
+
+  const handleOpenJoinGroup = useCallback(() => setShowJoinGroup(true), []);
+  const handleOpenCreateGroup = useCallback(() => setShowCreateGroup(true), []);
+  const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
+  const handleCollapseSidebar = useCallback(() => setSidebarCollapsed(true), []);
 
   // Chat content (shared between normal and fullscreen modes)
   const chatContent = (
@@ -146,19 +156,16 @@ export function GroupChatSection({ onModeChange }: GroupChatSectionProps) {
       <GroupList
         groups={filteredGroups}
         selectedGroup={selectedGroup}
-        onSelect={(group) => {
-          selectGroup(group);
-          setSidebarOpen(false);
-        }}
+        onSelect={handleSelectGroup}
         onLeave={leaveGroup}
-        onJoinGroup={() => setShowJoinGroup(true)}
-        onCreateGroup={() => setShowCreateGroup(true)}
+        onJoinGroup={handleOpenJoinGroup}
+        onCreateGroup={handleOpenCreateGroup}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        onClose={handleCloseSidebar}
         isCollapsed={sidebarCollapsed}
-        onCollapse={() => setSidebarCollapsed(true)}
+        onCollapse={handleCollapseSidebar}
         isRelayAdmin={isRelayAdmin}
         isAdminOfGroup={isAdminOfGroup}
         onDeleteGroup={deleteGroup}
