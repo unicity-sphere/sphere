@@ -10,12 +10,12 @@ import { getGroupDisplayName, getGroupFormattedLastMessageTime, isPinnedGroup } 
 interface GroupItemProps {
   group: GroupData;
   isSelected: boolean;
-  onClick: () => void;
-  onLeave: () => void;
+  onSelect: (group: GroupData) => void;
+  onLeave: (groupId: string) => void;
   isAdmin?: boolean;
   isRelayAdmin?: boolean;
-  onDeleteGroup?: () => Promise<boolean>;
-  onCreateInvite?: () => Promise<string | null>;
+  onDeleteGroup?: (groupId: string) => Promise<boolean>;
+  onCreateInvite?: (groupId: string) => Promise<string | null>;
   isDeletingGroup?: boolean;
   isCreatingInvite?: boolean;
 }
@@ -23,7 +23,7 @@ interface GroupItemProps {
 export const GroupItem = memo(function GroupItem({
   group,
   isSelected,
-  onClick,
+  onSelect,
   onLeave,
   isAdmin = false,
   isRelayAdmin = false,
@@ -53,7 +53,7 @@ export const GroupItem = memo(function GroupItem({
 
   return (
     <div
-      onClick={onClick}
+      onClick={() => onSelect(group)}
       className={`p-3 rounded-xl cursor-pointer transition-all relative group ${
         isSelected
           ? 'bg-linear-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/30'
@@ -130,7 +130,7 @@ export const GroupItem = memo(function GroupItem({
                   <button
                     onClick={async (e) => {
                       e.stopPropagation();
-                      const code = await onCreateInvite();
+                      const code = await onCreateInvite(group.id);
                       if (code) {
                         // Copy to clipboard - format: #/agents/group-chat?join=groupId/inviteCode
                         const inviteUrl = `${window.location.origin}${window.location.pathname}#/agents/group-chat?join=${group.id}/${code}`;
@@ -156,7 +156,7 @@ export const GroupItem = memo(function GroupItem({
                     onClick={async (e) => {
                       e.stopPropagation();
                       if (confirm(`Are you sure you want to delete "${getGroupDisplayName(group)}"? This cannot be undone.`)) {
-                        await onDeleteGroup();
+                        await onDeleteGroup(group.id);
                       }
                       setShowMenu(false);
                     }}
@@ -176,7 +176,7 @@ export const GroupItem = memo(function GroupItem({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onLeave();
+                      onLeave(group.id);
                       setShowMenu(false);
                     }}
                     className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"

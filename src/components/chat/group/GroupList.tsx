@@ -152,12 +152,12 @@ export const GroupList = memo(function GroupList({
                 key={group.id}
                 group={group}
                 isSelected={selectedGroup?.id === group.id}
-                onClick={() => onSelect(group)}
-                onLeave={() => onLeave(group.id)}
+                onSelect={onSelect}
+                onLeave={onLeave}
                 isAdmin={isAdminOfGroup(group.id)}
                 isRelayAdmin={isRelayAdmin}
-                onDeleteGroup={() => onDeleteGroup(group.id)}
-                onCreateInvite={() => onCreateInvite(group.id)}
+                onDeleteGroup={onDeleteGroup}
+                onCreateInvite={onCreateInvite}
                 isDeletingGroup={isDeletingGroup}
                 isCreatingInvite={isCreatingInvite}
               />
