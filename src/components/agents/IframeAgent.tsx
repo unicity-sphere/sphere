@@ -20,6 +20,7 @@ interface IframeAgentProps {
 export function IframeAgent({ agent }: IframeAgentProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [activeUrl, setActiveUrl] = useState(() => agent.iframeUrl ?? '');
+  const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
@@ -128,7 +129,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       cleanup();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUrl, sphereReady]);
+  }, [activeUrl, sphereReady, reloadKey]);
 
   const handleUrlSwitch = (url: string) => {
     if (url === activeUrl) return;
@@ -177,6 +178,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
               cleanup();
               setIsLoading(true);
               iframe.src = activeUrl;
+              setReloadKey((k) => k + 1);
             }
           }}
           className="flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-neutral-500 dark:text-neutral-400 hover:text-orange-500 dark:hover:text-orange-400 rounded-md hover:bg-neutral-200/60 dark:hover:bg-neutral-700/40 transition-colors shrink-0"
