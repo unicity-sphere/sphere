@@ -10,6 +10,9 @@ import { NewConversationModal } from './NewConversationModal';
 import { setMentionClickHandler } from '../../../utils/mentionHandler';
 import { getColorFromPubkey } from '../utils/avatarColors';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
+import { usePeerCapability } from '../telco/usePeerCapability';
+import { CallButtons } from '../telco/CallButtons';
+import { useCall } from '../telco/useCall';
 
 interface DMChatSectionProps {
   pendingRecipient?: string | null;
@@ -37,6 +40,9 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
     hasMore,
     loadMore,
   } = useChat();
+
+  const peerCapability = usePeerCapability(selectedConversation?.peerPubkey);
+  const { startCall } = useCall();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -205,6 +211,15 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
               )}
             </div>
           </div>
+          {/* Call buttons — right side of header */}
+          {selectedConversation && peerCapability && (
+            <CallButtons
+              peerPubkey={selectedConversation.peerPubkey}
+              peerNametag={selectedConversation.peerNametag}
+              capability={peerCapability}
+              onStartCall={startCall}
+            />
+          )}
         </div>
 
         {/* Messages */}

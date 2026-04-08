@@ -1,4 +1,5 @@
 import { WELCOME_TRIGGER } from '../../../sdk/welcomeDM';
+import { isTelcoMessage, getTelcoDisplayText } from '../telco/signaling';
 
 // SDK DirectMessage shape (local mirror — SDK DTS not always resolvable)
 interface SDKDirectMessage {
@@ -140,9 +141,12 @@ export function buildConversation(
   messages: SDKDirectMessage[],
   myPubkey: string,
 ): Conversation {
-  const visible = messages.filter(m => !(m.senderPubkey === myPubkey && m.content === WELCOME_TRIGGER));
+  const visible = messages.filter(m =>
+    !(m.senderPubkey === myPubkey && m.content === WELCOME_TRIGGER),
+  );
   const sorted = [...visible].sort((a, b) => b.timestamp - a.timestamp);
-  const lastMsg = sorted[0];
+  // For conversation preview, skip invisible telco messages (capability, answer, ice-restart)
+  const lastMsg = sorted.find(m => !isTelcoMessage(m.content) || getTelcoDisplayText(m.content) !== null) ?? sorted[0];
 
   const peerNametag =
     messages.find(m => m.senderPubkey === peerPubkey && m.senderNametag)?.senderNametag
@@ -155,7 +159,11 @@ export function buildConversation(
   return {
     peerPubkey,
     peerNametag: peerNametag ?? undefined,
-    lastMessageText: lastMsg ? stripMarkdown(lastMsg.content).slice(0, 100) : '',
+    lastMessageText: lastMsg
+      ? (isTelcoMessage(lastMsg.content)
+        ? (getTelcoDisplayText(lastMsg.content) ?? '')
+        : stripMarkdown(lastMsg.content).slice(0, 100))
+      : '',
     lastMessageTime: lastMsg?.timestamp ?? 0,
     unreadCount,
   };

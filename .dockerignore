@@ -1,8 +1,13 @@
-node_modules
-dist
-.git
-.github
-.env
-.env.*
-*.md
-tests
+# Whitelist approach: exclude everything, then allow only what's needed for build
+*
+
+# Node build inputs
+!package.json
+!package-lock.json
+!src/
+!public/
+!tsconfig*.json
+!vite.config.ts
+
+# Entrypoint for ssl-manager stage
+!deploy/entrypoint.sh

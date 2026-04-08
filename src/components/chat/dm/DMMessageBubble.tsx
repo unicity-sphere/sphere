@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion';
-import { Check, CheckCheck } from 'lucide-react';
+import { Check, CheckCheck, Phone, PhoneOff, PhoneMissed } from 'lucide-react';
 import { type DisplayMessage, formatMessageTime } from '../data/chatTypes';
 import { MarkdownContent } from '../../../utils/markdown';
+import { isTelcoMessage, decodeTelcoMessage, getTelcoDisplayText } from '../telco/signaling';
 
 interface DMMessageBubbleProps {
   message: DisplayMessage;
@@ -9,6 +10,33 @@ interface DMMessageBubbleProps {
 }
 
 export function DMMessageBubble({ message, delay = 0 }: DMMessageBubbleProps) {
+  // Render telco signaling messages as system pills or hide them
+  if (isTelcoMessage(message.content)) {
+    const displayText = getTelcoDisplayText(message.content);
+    if (!displayText) return null; // Hide capability, answer, ice-restart
+
+    const signal = decodeTelcoMessage(message.content);
+    const isMissed = signal?.type === 'timeout' || signal?.type === 'decline';
+    const Icon = isMissed ? PhoneMissed : signal?.type === 'hangup' ? PhoneOff : Phone;
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay }}
+        className="flex justify-center my-2"
+      >
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-neutral-500 dark:text-[rgba(255,255,255,0.4)] text-xs">
+          <Icon className="w-3 h-3" />
+          <span>{displayText}</span>
+          <span className="text-neutral-400 dark:text-[rgba(255,255,255,0.25)]">
+            {formatMessageTime(message.timestamp)}
+          </span>
+        </div>
+      </motion.div>
+    );
+  }
+
   const isOwn = message.isFromMe;
 
   const StatusIcon = () => {

@@ -9,6 +9,8 @@ import { sendWelcomeDM } from '../../welcomeDM';
 import type { IncomingTransfer } from '@unicitylabs/sphere-sdk';
 
 // SDK DM shape (local mirror — SDK DTS not always available)
+// Note: message:dm event delivers metadata only, not content.
+// Use sphere.communications.getConversation() to read content.
 interface SDKDirectMessage {
   id: string;
   senderPubkey: string;
@@ -134,6 +136,24 @@ export function useSphereEvents(): void {
       // Dispatch lightweight event for UI components (useChat, MiniChatWindow)
       const detail: DmReceivedDetail = { peerPubkey, messageId: dm.id, isFromMe };
       window.dispatchEvent(new CustomEvent('dm-received', { detail }));
+
+      // Bridge telco signaling messages to dedicated event for CallProvider.
+      // The SDK's message:dm event may not include content, so read the latest
+      // message from the conversation to check for __telco: prefix.
+      try {
+        const msgs = sphere.communications.getConversation(peerPubkey);
+        if (msgs && msgs.length > 0) {
+          const msg = msgs.find((m: { id: string }) => m.id === dm.id) ?? msgs[msgs.length - 1];
+          const content = (msg as { content?: string }).content;
+          if (typeof content === 'string' && content.startsWith('__telco:')) {
+            window.dispatchEvent(new CustomEvent('dm-telco-signal', {
+              detail: { peerPubkey, content, messageId: dm.id, isFromMe },
+            }));
+          }
+        }
+      } catch {
+        // SDK getConversation may fail if not ready
+      }
 
       // Invalidate SDK communication queries
       queryClient.invalidateQueries({

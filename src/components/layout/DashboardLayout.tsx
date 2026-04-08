@@ -2,6 +2,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { Header } from './Header';
 import { MiniChatBubbles } from '../chat/mini';
+import { CallProvider, CallOverlay } from '../chat/telco';
 import { useUIState } from '../../hooks/useUIState';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { TutorialOverlay } from '../tutorial/TutorialOverlay';
@@ -57,6 +58,7 @@ export function DashboardLayout() {
 
       {/* Content — above background layers */}
       <div className="relative z-10 flex flex-col h-full">
+        <CallProvider>
         {!isFullscreen && <Header />}
         <div className={`flex-1 min-h-0 flex ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
           <div className={`flex-1 w-full ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-0 md:pt-8 lg:pb-8'} ${
@@ -81,6 +83,8 @@ export function DashboardLayout() {
             onDismiss={tutorial.dismiss}
           />
         )}
+        <CallOverlay />
+        </CallProvider>
       </div>
     </div>
   );

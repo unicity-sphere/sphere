@@ -15,6 +15,7 @@ import {
 } from '../data/chatTypes';
 import { WELCOME_TRIGGER } from '../../../sdk/welcomeDM';
 import { STORAGE_KEYS } from '../../../config/storageKeys';
+import { isTelcoMessage, decodeTelcoMessage } from '../telco/signaling';
 
 // Local type mirroring SDK's DirectMessage (SDK DTS not always available)
 interface SDKDirectMessage {
@@ -203,6 +204,14 @@ export const useChat = (): UseChatReturn => {
       return {
         messages: page.messages
           .filter((dm: SDKDirectMessage) => !(dm.senderPubkey === myPubkey && dm.content === WELCOME_TRIGGER))
+          .filter((dm: SDKDirectMessage) => {
+            // Hide invisible telco messages (capability, answer, ice-restart) from chat
+            if (!isTelcoMessage(dm.content)) return true;
+            const signal = decodeTelcoMessage(dm.content);
+            if (!signal) return false;
+            // Keep user-visible call events: offer, decline, hangup, busy, timeout
+            return ['offer', 'decline', 'hangup', 'busy', 'timeout'].includes(signal.type);
+          })
           .map((dm: SDKDirectMessage) => toDisplayMessage(dm, myPubkey)),
         hasMore: page.hasMore,
       };

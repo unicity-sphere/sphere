@@ -1,0 +1,29 @@
+# Stage 1: Build React app
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+
+ARG VITE_AGGREGATOR_URL=https://goggregator-test.unicity.network
+ARG VITE_KBBOT_URL=https://sphere.unicity.network
+
+RUN npm run build
+
+# Stage 2: ssl-manager base + nginx
+# Pin digest for reproducible builds. Update with:
+#   docker pull ghcr.io/unicitynetwork/ssl-manager:latest
+#   docker inspect ghcr.io/unicitynetwork/ssl-manager:latest --format '{{index .RepoDigests 0}}'
+FROM ghcr.io/unicitynetwork/ssl-manager@sha256:d73f7df00a38fa3feae88ed2d5d21db68a5d748573441b23d86f30381d6719ae
+
+RUN apt-get update && apt-get install -y --no-install-recommends nginx && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+COPY deploy/entrypoint.sh /usr/local/bin/sphere-entrypoint
+RUN chmod +x /usr/local/bin/sphere-entrypoint
+
+EXPOSE 80 443
+
+ENTRYPOINT ["/usr/local/bin/sphere-entrypoint"]
