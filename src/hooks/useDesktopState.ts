@@ -19,16 +19,25 @@ interface DesktopState {
   walletOpen: boolean;
 }
 
-const defaultState: DesktopState = {
-  openTabs: [],
-  activeTabId: null,
-  walletOpen: window.matchMedia('(min-width: 1024px)').matches,
-};
+// Evaluated at runtime (not module load) so SSR, HMR, and viewport changes
+// between import and first read all see the correct matchMedia result.
+function getDefaultState(): DesktopState {
+  return {
+    openTabs: [],
+    activeTabId: null,
+    walletOpen:
+      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(min-width: 1024px)').matches
+        : false,
+    previousActiveTabId: null,
+  };
+}
 
 function loadState(): DesktopState {
+  const base = getDefaultState();
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DESKTOP_STATE);
-    if (!raw) return defaultState;
+    if (!raw) return base;
     const parsed = JSON.parse(raw) as DesktopState;
     // Validate tabs against current agent configs — remove stale entries
     const validTabs = parsed.openTabs.filter(
@@ -38,10 +47,10 @@ function loadState(): DesktopState {
     return {
       openTabs: validTabs,
       activeTabId: activeStillOpen ? parsed.activeTabId : null,
-      walletOpen: defaultState.walletOpen,
+      walletOpen: base.walletOpen,
     };
   } catch {
-    return defaultState;
+    return base;
   }
 }
 
@@ -55,7 +64,7 @@ function saveState(state: DesktopState) {
 export function useDesktopState() {
   const queryClient = useQueryClient();
 
-  const { data: state = defaultState } = useQuery({
+  const { data: state = getDefaultState() } = useQuery({
     queryKey: DESKTOP_STATE_KEY,
     queryFn: loadState,
     initialData: loadState,
@@ -66,7 +75,11 @@ export function useDesktopState() {
   const update = useCallback(
     (updater: (prev: DesktopState) => DesktopState) => {
       queryClient.setQueryData<DesktopState>(DESKTOP_STATE_KEY, (prev) => {
-        const next = updater(prev ?? defaultState);
+        const current = prev ?? getDefaultState();
+        const next = updater(current);
+        // Reference-equal means updater returned `prev` unchanged — skip the
+        // localStorage write to avoid pointless disk I/O and storage events.
+        if (next === current) return current;
         saveState(next);
         return next;
       });

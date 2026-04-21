@@ -1,10 +1,12 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Header } from './Header';
 import { MiniChatBubbles } from '../chat/mini';
 import { CallProvider, CallOverlay } from '../chat/telco';
+import { MobileBottomNav } from '../mobile';
 import { useUIState } from '../../hooks/useUIState';
 import { useDesktopState } from '../../hooks/useDesktopState';
+import { useMobileNav } from '../../hooks/useMobileNav';
 import { TutorialOverlay } from '../tutorial/TutorialOverlay';
 import { useTutorial } from '../../hooks/useTutorial';
 import { useDeepLinkNavigation } from '../../hooks/useDeepLinkNavigation';
@@ -14,11 +16,27 @@ import bgPosterUrl from '/bg-poster.webp';
 export function DashboardLayout() {
   const location = useLocation();
   const isMinePage = location.pathname === '/mine';
-  const { isFullscreen } = useUIState();
+  const { isFullscreen, setFullscreen } = useUIState();
   const { activeTabId } = useDesktopState();
   const tutorial = useTutorial();
+  const { isMobile } = useMobileNav();
   useDeepLinkNavigation();
   const [videoReady, setVideoReady] = useState(false);
+
+  // Mobile fullscreen escape: only fires on the desktop→mobile viewport transition.
+  // A reactive `if (isMobile && isFullscreen) setFullscreen(false)` would run on
+  // every mobile render, permanently locking out any future mobile fullscreen
+  // use case. By gating on the prev-value transition, we preserve the escape
+  // hatch (user shrinks browser mid-session) without blocking the state entirely.
+  const prevIsMobileRef = useRef(isMobile);
+  useEffect(() => {
+    const wasDesktop = !prevIsMobileRef.current;
+    const becameMobile = isMobile;
+    prevIsMobileRef.current = isMobile;
+    if (wasDesktop && becameMobile && isFullscreen) {
+      setFullscreen(false);
+    }
+  }, [isMobile, isFullscreen, setFullscreen]);
 
   // Hide mini chat when the DM tab is actively open (to avoid duplicate UI)
   const isAgentPage = location.pathname === '/home' || location.pathname.startsWith('/agents/');
@@ -60,16 +78,23 @@ export function DashboardLayout() {
       <div className="relative z-10 flex flex-col h-full">
         <CallProvider>
         {!isFullscreen && <Header />}
-        <div className={`flex-1 min-h-0 flex ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
-          <div className={`flex-1 w-full ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-0 md:pt-8 lg:pb-8'} ${
-            isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''
-          }`}>
+        <div className={`flex-1 min-h-0 flex relative ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
+          <div className={`flex-1 w-full ${
+            isFullscreen
+              ? 'p-0'
+              : isAgentPage
+                ? 'px-0 sm:px-12 lg:px-28 pb-mobile-nav lg:pb-0'
+                : 'px-0 sm:px-12 lg:px-28 pt-4 md:pt-8 pb-mobile-nav lg:pb-8'
+          } ${isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''}`}>
             <Outlet />
           </div>
         </div>
 
         {/* Mini chat bubbles - hidden when DM tab is active */}
         {showMiniChat && <MiniChatBubbles />}
+
+        {/* Mobile bottom navigation */}
+        <MobileBottomNav />
 
         {/* Onboarding tutorial overlay */}
         {isAgentPage && tutorial.isActive && (

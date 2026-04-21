@@ -67,10 +67,12 @@ export const DMChatInput = forwardRef<HTMLTextAreaElement, DMChatInputProps>(
     };
 
     return (
-      <div
-        className="p-4 border-t border-neutral-100 dark:border-[rgba(255,255,255,0.06)]"
-        style={{ paddingBottom: 'calc(1rem + var(--safe-area-bottom, 0px))' }}
-      >
+      // Safe-area padding is intentionally NOT applied here. The outer
+      // DashboardLayout wrapper uses `pb-mobile-nav` which already accounts
+      // for the fixed bottom nav height + device safe-area, and the nav
+      // itself carries its own safe-area padding. Duplicating it here caused
+      // extra whitespace below the input on iOS.
+      <div className="p-4 border-t border-neutral-100 dark:border-[rgba(255,255,255,0.06)]">
         <div className="flex gap-3">
           <textarea
             ref={internalRef}

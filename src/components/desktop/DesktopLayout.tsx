@@ -159,8 +159,8 @@ export function DesktopLayout() {
         </div>
       )}
 
-      {/* Horizontal tab bar */}
-      <div className="shrink-0">
+      {/* Horizontal tab bar — hidden on mobile where MobileBottomNav is used */}
+      <div className="shrink-0 hidden lg:block">
         <TabBar
           isFullscreen={isFullscreen}
           onToggleFullscreen={toggleFullscreen}
@@ -169,8 +169,10 @@ export function DesktopLayout() {
 
       {/* Content + wallet row — single render to preserve state across breakpoints */}
       <div className="flex-1 min-h-0 flex mx-1">
-          {/* Content + mobile wallet container */}
-          <div className="flex-1 min-w-0 relative overflow-hidden rounded-2xl lg:overflow-visible">
+          {/* Content + mobile wallet container.
+              `rounded-2xl` is scoped to lg+ so the mobile wallet slide-over
+              goes full-bleed rather than rendering as a floating pill. */}
+          <div className="flex-1 min-w-0 relative overflow-hidden lg:rounded-2xl lg:overflow-visible">
             {/* Content area — mobile: absolute + slide, desktop: normal flow */}
             <div className={`absolute inset-0 lg:relative lg:h-full lg:rounded-2xl lg:overflow-hidden bg-white dark:bg-[#0a0a0a]/60 dark:backdrop-blur-sm transition-transform duration-300 ease-in-out lg:transition-none ${
               walletOpen ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'

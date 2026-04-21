@@ -13,6 +13,9 @@ import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { usePeerCapability } from '../telco/usePeerCapability';
 import { CallButtons } from '../telco/CallButtons';
 import { useCall } from '../telco/useCall';
+import { useMobileNav } from '../../../hooks/useMobileNav';
+import { useDesktopState } from '../../../hooks/useDesktopState';
+import { MOBILE_NAV_MESSAGES_TAP } from '../../../config/customEvents';
 
 interface DMChatSectionProps {
   pendingRecipient?: string | null;
@@ -49,6 +52,52 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
   const [showNewConversation, setShowNewConversation] = useState(false);
   const [modalInitialValue, setModalInitialValue] = useState<string | undefined>();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const { isMobile } = useMobileNav();
+  const { activeTabId } = useDesktopState();
+  const didInitSidebarRef = useRef(false);
+
+  // One-shot "sidebar auto-open" effect for mobile DM tab entry.
+  //
+  // DMChatSection stays mounted (via display:none) when the DM tab is not active,
+  // so we can't rely on component mount to re-trigger the open. Instead, we reset
+  // the one-shot whenever the DM tab leaves active state; next time it becomes
+  // active on mobile, the sidebar reopens to show the conversation list.
+  //
+  // We intentionally do NOT react to `selectedConversation` changes — `useChat`
+  // asynchronously restores the last-selected conversation from localStorage
+  // after mount, and a reactive effect would close the sidebar right after
+  // opening it (user lands in previous chat instead of the list).
+  //
+  // Selecting a conversation closes the sidebar via the DMConversationList
+  // `onSelect` handler below; tapping the PanelLeft button reopens it.
+  useEffect(() => {
+    if (activeTabId !== 'dm') {
+      // DM tab is not active — reset the one-shot so re-entry opens the list.
+      didInitSidebarRef.current = false;
+      return;
+    }
+    if (isMobile && !didInitSidebarRef.current) {
+      didInitSidebarRef.current = true;
+      setSidebarOpen(true);
+    }
+  }, [isMobile, activeTabId]);
+
+  // Reopen sidebar when user taps the Messages bottom-nav tab while already on DM.
+  // The `didInitSidebarRef` one-shot above only fires on first entry; tapping
+  // Messages again is idempotent in `useDesktopState` (activeTabId stays 'dm'),
+  // so we need an explicit signal from the bottom nav to reopen the list.
+  //
+  // We deliberately do NOT gate on `isMobile` here — gating would cause the
+  // listener to churn on every viewport crossing 1024px, and the closure would
+  // capture a stale `isMobile` until the effect re-runs. The `setSidebarOpen(true)`
+  // is inert on desktop anyway (sidebar uses `lg:relative lg:translate-x-0`, so
+  // it is visually always visible regardless of `isOpen`). Register once for
+  // the component lifetime.
+  useEffect(() => {
+    const handler = () => setSidebarOpen(true);
+    window.addEventListener(MOBILE_NAV_MESSAGES_TAP, handler);
+    return () => window.removeEventListener(MOBILE_NAV_MESSAGES_TAP, handler);
+  }, []);
 
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {
