@@ -77,9 +77,13 @@ export function DashboardLayout() {
       <div className="relative z-10 flex flex-col h-full">
         {!isFullscreen && <Header />}
         <div className={`flex-1 min-h-0 flex relative ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
-          <div className={`flex-1 w-full pb-mobile-nav lg:pb-0 ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-mobile-nav lg:pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-mobile-nav lg:pb-8 md:pt-8'} ${
-            isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''
-          }`}>
+          <div className={`flex-1 w-full ${
+            isFullscreen
+              ? 'p-0'
+              : isAgentPage
+                ? 'px-0 sm:px-12 lg:px-28 pb-mobile-nav lg:pb-0'
+                : 'px-0 sm:px-12 lg:px-28 pt-4 md:pt-8 pb-mobile-nav lg:pb-8'
+          } ${isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''}`}>
             <Outlet />
           </div>
         </div>

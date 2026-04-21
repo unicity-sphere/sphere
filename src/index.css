@@ -14,8 +14,11 @@
 /* Padding utility that clears the fixed mobile bottom nav (h-16 = 4rem) plus
    the device safe-area. Kept in sync with `--mobile-nav-height` below so the
    content wrapper in DashboardLayout never under-pads. Desktop (lg+) overrides
-   via `lg:pb-0` at the call site. */
-@media (max-width: 1023px) {
+   via `lg:pb-0` at the call site.
+   The 1023.98px upper bound aligns with Tailwind's `lg` breakpoint
+   (min-width: 1024px) without leaving a fractional-pixel gap at zoom levels
+   that report, e.g., 1023.5px (Retina/high-DPI displays at certain zooms). */
+@media (max-width: 1023.98px) {
   .pb-mobile-nav {
     padding-bottom: var(--mobile-nav-height);
   }
@@ -26,10 +29,11 @@
   --visual-viewport-height: 100dvh;
   --viewport-offset-top: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-  /* Mobile bottom nav total height: h-16 (4rem/64px) + safe-area (>=16px).
+  /* Mobile bottom nav total height: h-16 (4rem/64px) + safe-area (>=16px)
+     + 1px for the nav's `border-t` (rendered height, not box-sizing).
      Mirrors the 16px fallback used by `.safe-area-bottom` so content clears
      the nav on both iOS (notch/gesture bar) and Android (gesture handle). */
-  --mobile-nav-height: calc(4rem + max(env(safe-area-inset-bottom, 0px), 16px));
+  --mobile-nav-height: calc(4rem + max(env(safe-area-inset-bottom, 0px), 16px) + 1px);
 
   /* Theme colors - Light mode (default) */
   --color-bg-primary: #f5f5f5;

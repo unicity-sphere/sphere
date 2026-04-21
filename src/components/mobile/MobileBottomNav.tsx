@@ -27,8 +27,7 @@ export function MobileBottomNav() {
   const unreadCount = useDmUnreadCount();
 
   // Derive active tab from existing state. Wallet wins, then DM tab, then desktop (home).
-  const onDesktop = pathname === '/home' && activeTabId === null && !walletOpen;
-  const isHomeActive = onDesktop;
+  const isHomeActive = pathname === '/home' && activeTabId === null && !walletOpen;
   const isMessagesActive = activeTabId === 'dm' && !walletOpen;
   const isWalletActive = walletOpen;
 
@@ -37,7 +36,11 @@ export function MobileBottomNav() {
       case 'home':
         if (pathname !== '/home') navigate('/home', { replace: true });
         if (walletOpen) setWalletOpen(false);
-        if (!onDesktop) showDesktop();
+        // Only call showDesktop() when some tab is actually active.
+        // Gating on `!onDesktop` (composite with walletOpen) would fire showDesktop
+        // when wallet is open + activeTabId is already null, toggling the desktop
+        // into the previous tab instead of leaving it on home.
+        if (activeTabId !== null) showDesktop();
         break;
       case 'messages':
         if (pathname !== '/agents/dm') navigate('/agents/dm', { replace: true });

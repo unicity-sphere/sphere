@@ -11,6 +11,7 @@ import { setMentionClickHandler } from '../../../utils/mentionHandler';
 import { getColorFromPubkey } from '../utils/avatarColors';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { useMobileNav } from '../../../hooks/useMobileNav';
+import { useDesktopState } from '../../../hooks/useDesktopState';
 
 interface DMChatSectionProps {
   pendingRecipient?: string | null;
@@ -45,22 +46,34 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
   const [modalInitialValue, setModalInitialValue] = useState<string | undefined>();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { isMobile } = useMobileNav();
+  const { activeTabId } = useDesktopState();
   const didInitSidebarRef = useRef(false);
 
-  // One-shot mount effect: on mobile entry, open the sidebar so the user sees the
-  // conversation list. We intentionally do NOT react to `selectedConversation`
-  // changes here — `useChat` asynchronously restores the last-selected conversation
-  // from localStorage after mount, and a reactive effect would close the sidebar
-  // right after opening it (user lands in previous chat instead of the list).
+  // One-shot "sidebar auto-open" effect for mobile DM tab entry.
+  //
+  // DMChatSection stays mounted (via display:none) when the DM tab is not active,
+  // so we can't rely on component mount to re-trigger the open. Instead, we reset
+  // the one-shot whenever the DM tab leaves active state; next time it becomes
+  // active on mobile, the sidebar reopens to show the conversation list.
+  //
+  // We intentionally do NOT react to `selectedConversation` changes — `useChat`
+  // asynchronously restores the last-selected conversation from localStorage
+  // after mount, and a reactive effect would close the sidebar right after
+  // opening it (user lands in previous chat instead of the list).
   //
   // Selecting a conversation closes the sidebar via the DMConversationList
   // `onSelect` handler below; tapping the PanelLeft button reopens it.
   useEffect(() => {
+    if (activeTabId !== 'dm') {
+      // DM tab is not active — reset the one-shot so re-entry opens the list.
+      didInitSidebarRef.current = false;
+      return;
+    }
     if (isMobile && !didInitSidebarRef.current) {
       didInitSidebarRef.current = true;
       setSidebarOpen(true);
     }
-  }, [isMobile]);
+  }, [isMobile, activeTabId]);
 
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {
