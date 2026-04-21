@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useCallStore } from './callStore';
 import { useCall } from './useCall';
 import { VideoFeed } from './VideoFeed';
@@ -19,13 +20,33 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
   const audioMuted = useCallStore(s => s.audioMuted);
   const videoMuted = useCallStore(s => s.videoMuted);
   const quality = useCallStore(s => s.connectionQuality);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const isVideo = call.mediaType === 'video';
   const hasRemoteVideo = remoteStream?.getVideoTracks().some(t => t.enabled) ?? false;
 
+  // Bind the remote stream to a dedicated audio element. The element is in
+  // the DOM from the moment ActiveCallScreen mounts (right after accept/start),
+  // so play() happens within the user-gesture window — critical for mobile
+  // browsers that reject autoplay on elements created lazily later.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.srcObject === remoteStream) return;
+    audio.srcObject = remoteStream;
+    if (remoteStream) {
+      audio.play().catch((err) => {
+        console.warn('[telco] Remote audio play failed:', err);
+      });
+    }
+  }, [remoteStream]);
+
   return (
     <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Remote video / avatar (audio is played by WebRTCSession's dedicated audio element) */}
+      {/* Hidden audio element — plays remote audio reliably on mobile */}
+      <audio ref={audioRef} autoPlay playsInline className="hidden" />
+
+      {/* Remote video / avatar */}
       <div className="flex-1 flex items-center justify-center">
         {isVideo && hasRemoteVideo ? (
           <VideoFeed stream={remoteStream} muted className="w-full h-full" />
