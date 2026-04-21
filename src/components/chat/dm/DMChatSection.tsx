@@ -10,6 +10,7 @@ import { NewConversationModal } from './NewConversationModal';
 import { setMentionClickHandler } from '../../../utils/mentionHandler';
 import { getColorFromPubkey } from '../utils/avatarColors';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
+import { useMobileNav } from '../../../hooks/useMobileNav';
 
 interface DMChatSectionProps {
   pendingRecipient?: string | null;
@@ -43,6 +44,16 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
   const [showNewConversation, setShowNewConversation] = useState(false);
   const [modalInitialValue, setModalInitialValue] = useState<string | undefined>();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const { isMobile } = useMobileNav();
+
+  // On mobile, auto-open the sidebar when there's no conversation selected, so the
+  // user sees the conversation list instead of an empty chat pane. Selecting a
+  // conversation closes the sidebar (see onSelect below).
+  useEffect(() => {
+    if (isMobile) {
+      setSidebarOpen(!selectedConversation);
+    }
+  }, [isMobile, selectedConversation]);
 
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {

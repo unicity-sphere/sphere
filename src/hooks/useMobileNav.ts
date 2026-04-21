@@ -1,88 +1,36 @@
-import { useCallback, useSyncExternalStore } from 'react';
-
-// ── Types ───────────────────────────────────────────────────────────────────
-
-export type MobileView = 'home' | 'messages' | 'wallet' | 'apps';
-export type MessagesSubView = 'list' | 'conversation';
-
-interface MobileNavState {
-  activeView: MobileView;
-  messagesSubView: MessagesSubView;
-}
-
-// ── State store (module-level, no persistence) ──────────────────────────────
-
-const defaultState: MobileNavState = {
-  activeView: 'home',
-  messagesSubView: 'list',
-};
-
-let state: MobileNavState = { ...defaultState };
-const listeners = new Set<() => void>();
-
-function emitChange() {
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function getSnapshot() {
-  return state;
-}
-
-function update(partial: Partial<MobileNavState>) {
-  state = { ...state, ...partial };
-  emitChange();
-}
-
-// ── isMobile media query ────────────────────────────────────────────────────
+import { useSyncExternalStore } from 'react';
 
 const MQ = '(max-width: 1023px)';
 let isMobileValue = typeof window !== 'undefined' ? window.matchMedia(MQ).matches : false;
-const mobileListeners = new Set<() => void>();
+const listeners = new Set<() => void>();
+let mqlBound = false;
 
-if (typeof window !== 'undefined') {
+function ensureBound() {
+  if (mqlBound || typeof window === 'undefined') return;
+  mqlBound = true;
   window.matchMedia(MQ).addEventListener('change', (e) => {
     isMobileValue = e.matches;
-    for (const l of mobileListeners) l();
+    for (const l of listeners) l();
   });
 }
 
-function subscribeMobile(listener: () => void) {
-  mobileListeners.add(listener);
-  return () => mobileListeners.delete(listener);
+function subscribe(listener: () => void) {
+  ensureBound();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
-function getMobileSnapshot() {
+function getSnapshot() {
   return isMobileValue;
 }
 
-// ── Hook ────────────────────────────────────────────────────────────────────
+function getServerSnapshot() {
+  return false;
+}
 
 export function useMobileNav() {
-  const nav = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const isMobile = useSyncExternalStore(subscribeMobile, getMobileSnapshot, () => false);
-
-  const setActiveView = useCallback((view: MobileView) => {
-    update({ activeView: view });
-    // Reset messages sub-view when switching away
-    if (view !== 'messages') {
-      update({ activeView: view, messagesSubView: 'list' });
-    }
-  }, []);
-
-  const setMessagesSubView = useCallback((sub: MessagesSubView) => {
-    update({ messagesSubView: sub });
-  }, []);
-
-  return {
-    activeView: nav.activeView,
-    messagesSubView: nav.messagesSubView,
-    setActiveView,
-    setMessagesSubView,
-    isMobile,
-  };
+  const isMobile = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return { isMobile };
 }

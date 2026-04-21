@@ -1,12 +1,14 @@
 import { motion } from 'framer-motion';
 import { Home, MessageCircle, Wallet, LayoutGrid } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { useMobileNav, type MobileView } from '../../hooks/useMobileNav';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useDesktopState } from '../../hooks/useDesktopState';
+import { useVisualViewport } from '../../hooks/useVisualViewport';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
 
+type TabId = 'home' | 'messages' | 'wallet' | 'apps';
+
 interface NavTab {
-  id: MobileView;
+  id: TabId;
   label: string;
   icon: typeof Home;
 }
@@ -19,31 +21,67 @@ const tabs: NavTab[] = [
 ];
 
 export function MobileBottomNav() {
-  const { activeView, setActiveView } = useMobileNav();
-  const { showDesktop } = useDesktopState();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const { activeTabId, walletOpen, openTab, showDesktop, setWalletOpen } = useDesktopState();
+  const { isKeyboardOpen } = useVisualViewport();
   const unreadCount = useDmUnreadCount();
 
-  const handleTap = (id: MobileView) => {
-    setActiveView(id);
-    if (id === 'home' || id === 'apps') {
-      navigate('/home');
-      showDesktop();
+  // Derive active tab from existing state. Wallet wins, then DM tab, then desktop (home/apps).
+  const onDesktop = pathname === '/home' && activeTabId === null && !walletOpen;
+  const isHomeActive = onDesktop;
+  const isMessagesActive = activeTabId === 'dm' && !walletOpen;
+  const isWalletActive = walletOpen;
+  const isAppsActive = onDesktop;
+
+  const handleTap = (id: TabId) => {
+    switch (id) {
+      case 'home':
+      case 'apps':
+        navigate('/home', { replace: true });
+        setWalletOpen(false);
+        showDesktop();
+        break;
+      case 'messages':
+        navigate('/agents/dm');
+        setWalletOpen(false);
+        openTab('dm');
+        break;
+      case 'wallet':
+        setWalletOpen(true);
+        break;
+    }
+  };
+
+  const isActive = (id: TabId): boolean => {
+    switch (id) {
+      case 'home':
+        return isHomeActive;
+      case 'messages':
+        return isMessagesActive;
+      case 'wallet':
+        return isWalletActive;
+      case 'apps':
+        return isAppsActive;
     }
   };
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-[200] lg:hidden safe-area-bottom bg-white/90 dark:bg-[#060606]/90 backdrop-blur-xl border-t border-neutral-200 dark:border-[rgba(255,255,255,0.07)]">
+    <nav
+      className={`fixed bottom-0 left-0 right-0 z-[150] lg:hidden safe-area-bottom bg-white/90 dark:bg-[#060606]/90 backdrop-blur-xl border-t border-neutral-200 dark:border-[rgba(255,255,255,0.07)] transition-transform ${
+        isKeyboardOpen ? 'translate-y-full' : 'translate-y-0'
+      }`}
+    >
       <div className="flex items-stretch h-16">
         {tabs.map((tab) => {
-          const isActive = activeView === tab.id;
+          const active = isActive(tab.id);
           const Icon = tab.icon;
           return (
             <motion.button
               key={tab.id}
               onClick={() => handleTap(tab.id)}
               className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
-                isActive
+                active
                   ? 'text-orange-500 dark:text-orange-400'
                   : 'text-neutral-400 dark:text-[rgba(255,255,255,0.35)]'
               }`}

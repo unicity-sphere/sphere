@@ -1,8 +1,8 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Header } from './Header';
 import { MiniChatBubbles } from '../chat/mini';
-import { MobileBottomNav, MobileMessagesView, MobileWalletView, MobileAppsView } from '../mobile';
+import { MobileBottomNav } from '../mobile';
 import { useUIState } from '../../hooks/useUIState';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useMobileNav } from '../../hooks/useMobileNav';
@@ -15,12 +15,20 @@ import bgPosterUrl from '/bg-poster.webp';
 export function DashboardLayout() {
   const location = useLocation();
   const isMinePage = location.pathname === '/mine';
-  const { isFullscreen } = useUIState();
+  const { isFullscreen, setFullscreen } = useUIState();
   const { activeTabId } = useDesktopState();
   const tutorial = useTutorial();
-  const { activeView, isMobile } = useMobileNav();
+  const { isMobile } = useMobileNav();
   useDeepLinkNavigation();
   const [videoReady, setVideoReady] = useState(false);
+
+  // Mobile fullscreen escape: when switching to mobile viewport, exit fullscreen
+  // to prevent being trapped in a fullscreen state that only desktop can toggle out of.
+  useEffect(() => {
+    if (isMobile && isFullscreen) {
+      setFullscreen(false);
+    }
+  }, [isMobile, isFullscreen, setFullscreen]);
 
   // Hide mini chat when the DM tab is actively open (to avoid duplicate UI)
   const isAgentPage = location.pathname === '/home' || location.pathname.startsWith('/agents/');
@@ -67,11 +75,6 @@ export function DashboardLayout() {
           }`}>
             <Outlet />
           </div>
-
-          {/* Mobile overlay views — full-screen, above outlet content */}
-          {isMobile && activeView === 'messages' && <MobileMessagesView />}
-          {isMobile && activeView === 'wallet' && <MobileWalletView />}
-          {isMobile && activeView === 'apps' && <MobileAppsView />}
         </div>
 
         {/* Mini chat bubbles - hidden when DM tab is active */}
