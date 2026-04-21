@@ -59,3 +59,18 @@ export function useMobileNav() {
   const isMobile = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   return { isMobile };
 }
+
+// Dev-only: detach the listener on HMR module disposal so we don't leak
+// listeners on the stale MediaQueryList across reloads. On HMR the module
+// re-evaluates and `mql` resets to null, but the OLD module's MQL would still
+// have `handler` attached without this cleanup.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (mql && handler) {
+      mql.removeEventListener('change', handler);
+    }
+    mql = null;
+    handler = null;
+    listeners.clear();
+  });
+}

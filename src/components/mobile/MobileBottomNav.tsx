@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useVisualViewport } from '../../hooks/useVisualViewport';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
+import { MOBILE_NAV_MESSAGES_TAP } from '../../config/customEvents';
 
 type TabId = 'home' | 'messages' | 'wallet';
 
@@ -46,8 +47,11 @@ export function MobileBottomNav() {
         if (pathname !== '/agents/dm') navigate('/agents/dm', { replace: true });
         if (walletOpen) setWalletOpen(false);
         openTab('dm');
-        // Always dispatch — if user is already on DM, this reopens the sidebar
-        window.dispatchEvent(new CustomEvent('mobile-nav-messages-tap'));
+        // Defer via microtask so DMChatSection has a chance to mount and attach
+        // its listener when navigating from a non-DM route for the first time.
+        // queueMicrotask runs after React commits the state changes above but
+        // before the browser paints — the right layer for "deliver after mount."
+        queueMicrotask(() => window.dispatchEvent(new CustomEvent(MOBILE_NAV_MESSAGES_TAP)));
         break;
       case 'wallet':
         setWalletOpen(true);

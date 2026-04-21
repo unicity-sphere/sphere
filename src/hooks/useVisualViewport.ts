@@ -26,17 +26,21 @@ interface ViewportState {
  * innerHeight. Using it would make every page load appear to have a ~100px
  * "keyboard open" at mount — which falsely hides the bottom nav. The real
  * tradeoff: if the keyboard is ALREADY OPEN when the hook first runs (rare;
- * autofocus fires after mount), our baseline captures the shrunk height and
- * detection is off until the user closes the keyboard once. The self-heal
- * branch (delta < 50) then grows the baseline on the first no-keyboard frame.
+ * it requires an autofocus race during initial mount, since hook refs survive
+ * BFCache restores), our baseline captures the shrunk height and detection is
+ * off until the user closes the keyboard once. The self-heal branch then grows
+ * the baseline on the first no-keyboard frame.
  *
  * To recover from a poisoned baseline WHILE the keyboard is still open
- * (BFCache restore, autofocus race), we use `window.screen.height` as a
- * secondary signal: if the current visualViewport.height is >= 60% of the
- * screen height, the keyboard is almost certainly not up (keyboards typically
- * consume 30-50% of screen height). In that case we grow the baseline to the
- * current height even when the delta would normally be interpreted as
- * "keyboard open".
+ * (autofocus race during mount), we use the long axis of the current viewport
+ * (`Math.max(innerWidth, innerHeight)`) as a secondary signal. Unlike
+ * `screen.height`, which Chrome Android keeps rotation-invariant and therefore
+ * reports the portrait value even in landscape, the long axis of the live
+ * viewport reflects the actual orientation. If the current visualViewport
+ * height is >= 70% of that long axis, the keyboard is almost certainly not up
+ * (keyboards typically consume 30-50% of screen height). In that case we grow
+ * the baseline to the current height even when the delta would normally be
+ * interpreted as "keyboard open".
  *
  * To avoid false positives on orientation changes (which shrink height AND
  * change width), we track the previous width in a ref: a width change means
@@ -55,6 +59,7 @@ export function useVisualViewport() {
   const baseHeight = useRef<number>(initialBaseHeight());
   const prevWidthRef = useRef<number>(typeof window !== 'undefined' ? window.innerWidth : 0);
   const orientationInProgressRef = useRef<boolean>(false);
+  const orientationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [viewport, setViewport] = useState<ViewportState>(() => ({
     height: typeof window !== 'undefined' ? window.innerHeight : 0,
@@ -71,8 +76,13 @@ export function useVisualViewport() {
       const offsetTop = visualViewport.offsetTop;
 
       // During orientation change settle, force no-keyboard to avoid a
-      // false-positive flash while innerWidth hasn't caught up yet.
+      // false-positive flash while innerWidth hasn't caught up yet. Still
+      // update prevWidthRef and opportunistically grow the baseline so that if
+      // the user begins typing immediately after rotation completes (no
+      // intervening resize), we don't work from stale state.
       if (orientationInProgressRef.current) {
+        prevWidthRef.current = window.innerWidth;
+        baseHeight.current = Math.max(baseHeight.current, height);
         setViewport({ height, offsetTop, isKeyboardOpen: false });
         return;
       }
@@ -90,28 +100,24 @@ export function useVisualViewport() {
         return;
       }
 
-      // Screen-height-based baseline correction. If the current visualViewport
-      // height is close to the full screen height, the keyboard is almost
-      // certainly NOT up — grow the baseline regardless of the computed delta
-      // so a poisoned baseline (BFCache/autofocus race) self-heals on the
-      // first no-keyboard frame rather than after one full open/close cycle.
-      const screenH = window.screen?.height ?? 0;
-      if (screenH > 0 && height >= screenH * 0.6) {
-        baseHeight.current = Math.max(baseHeight.current, height);
-      }
+      // Reference axis = long axis of the CURRENT viewport. Unlike screen.height
+      // this reflects actual orientation on Chrome Android.
+      const referenceAxis = Math.max(window.innerWidth, window.innerHeight);
+      const likelyNoKeyboard = referenceAxis > 0 && height >= referenceAxis * 0.7;
 
       const delta = baseHeight.current - height;
 
-      // If the shrink is small (< 50px) it's almost certainly not a keyboard —
-      // could be a browser chrome resize, orientation change settling, etc.
-      // Track the current unbolstered viewport so baseline doesn't ratchet
-      // monotonically upward across many small desktop resizes.
-      if (delta < 50) {
+      // Conditions to update the baseline:
+      // 1. Current height is close to the long axis → definitely no keyboard, grow baseline.
+      // 2. Shrink is small (< 50px) → browser chrome noise, recalibrate to current.
+      // In both cases the new baseline is max(window.innerHeight, height). This
+      // prevents monotonic ratcheting on desktop resize while still self-healing a
+      // poisoned baseline when a keyboard-less frame appears.
+      if (likelyNoKeyboard || delta < 50) {
         baseHeight.current = Math.max(window.innerHeight, height);
       }
 
       const isKeyboardOpen = baseHeight.current - height > 150;
-
       setViewport({ height, offsetTop, isKeyboardOpen });
     } else {
       // No Visual Viewport API — fall back to innerHeight and assume no keyboard.
@@ -151,11 +157,15 @@ export function useVisualViewport() {
 
     const onOrientationChange = () => {
       orientationInProgressRef.current = true;
-      setTimeout(() => {
+      if (orientationTimerRef.current) {
+        clearTimeout(orientationTimerRef.current);
+      }
+      orientationTimerRef.current = setTimeout(() => {
         const vvHeight = window.visualViewport?.height ?? 0;
         baseHeight.current = Math.max(window.innerHeight, vvHeight);
         prevWidthRef.current = window.innerWidth;
         orientationInProgressRef.current = false;
+        orientationTimerRef.current = null;
         // Force a re-render with the corrected baseline so consumers don't see
         // stale isKeyboardOpen until the next unrelated resize event.
         updateViewport();
@@ -165,6 +175,10 @@ export function useVisualViewport() {
     orientation.addEventListener('change', onOrientationChange);
     return () => {
       orientation.removeEventListener('change', onOrientationChange);
+      if (orientationTimerRef.current) {
+        clearTimeout(orientationTimerRef.current);
+        orientationTimerRef.current = null;
+      }
     };
   }, [updateViewport]);
 

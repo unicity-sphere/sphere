@@ -12,6 +12,7 @@ import { getColorFromPubkey } from '../utils/avatarColors';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { useMobileNav } from '../../../hooks/useMobileNav';
 import { useDesktopState } from '../../../hooks/useDesktopState';
+import { MOBILE_NAV_MESSAGES_TAP } from '../../../config/customEvents';
 
 interface DMChatSectionProps {
   pendingRecipient?: string | null;
@@ -79,12 +80,18 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
   // The `didInitSidebarRef` one-shot above only fires on first entry; tapping
   // Messages again is idempotent in `useDesktopState` (activeTabId stays 'dm'),
   // so we need an explicit signal from the bottom nav to reopen the list.
+  //
+  // We deliberately do NOT gate on `isMobile` here — gating would cause the
+  // listener to churn on every viewport crossing 1024px, and the closure would
+  // capture a stale `isMobile` until the effect re-runs. The `setSidebarOpen(true)`
+  // is inert on desktop anyway (sidebar uses `lg:relative lg:translate-x-0`, so
+  // it is visually always visible regardless of `isOpen`). Register once for
+  // the component lifetime.
   useEffect(() => {
-    if (!isMobile) return;
     const handler = () => setSidebarOpen(true);
-    window.addEventListener('mobile-nav-messages-tap', handler);
-    return () => window.removeEventListener('mobile-nav-messages-tap', handler);
-  }, [isMobile]);
+    window.addEventListener(MOBILE_NAV_MESSAGES_TAP, handler);
+    return () => window.removeEventListener(MOBILE_NAV_MESSAGES_TAP, handler);
+  }, []);
 
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {
