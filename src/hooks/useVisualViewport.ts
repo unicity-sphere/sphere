@@ -17,9 +17,18 @@ interface ViewportState {
  * visualViewport.height to window.innerHeight. On Android Chrome with
  * interactive-widget=resizes-content, both shrink together when the keyboard
  * opens, so the delta is ~0 and the old approach never fired. We instead
- * snapshot a stable baseline (max of innerHeight and screen.availHeight — the
- * latter doesn't shrink for keyboard on iOS/Android) at mount and compare
- * the current visualViewport height to that baseline.
+ * snapshot a stable baseline at mount and compare the current visualViewport
+ * height to that baseline.
+ *
+ * NOTE: We intentionally use `window.innerHeight` (NOT `screen.availHeight`)
+ * as the baseline. screen.availHeight is the full device screen height, which
+ * on Android with the browser URL bar visible is 100+px larger than
+ * innerHeight. Using it would make every page load appear to have a ~100px
+ * "keyboard open" at mount — which falsely hides the bottom nav. The real
+ * tradeoff: if the keyboard is ALREADY OPEN when the hook first runs (rare;
+ * autofocus fires after mount), our baseline captures the shrunk height and
+ * detection is off until the user closes the keyboard once. The self-heal
+ * branch (delta < 50) then grows the baseline on the first no-keyboard frame.
  *
  * To avoid false positives on orientation changes (which shrink height AND
  * change width), we track the previous width in a ref: a width change means
@@ -28,9 +37,7 @@ interface ViewportState {
  */
 function initialBaseHeight(): number {
   if (typeof window === 'undefined') return 0;
-  const inner = window.innerHeight || 0;
-  const avail = window.screen?.availHeight || 0;
-  return Math.max(inner, avail);
+  return window.innerHeight || 0;
 }
 
 export function useVisualViewport() {
