@@ -159,8 +159,8 @@ export function DesktopLayout() {
         </div>
       )}
 
-      {/* Horizontal tab bar */}
-      <div className="shrink-0">
+      {/* Horizontal tab bar — hidden on mobile where MobileBottomNav is used */}
+      <div className="shrink-0 hidden lg:block">
         <TabBar
           isFullscreen={isFullscreen}
           onToggleFullscreen={toggleFullscreen}

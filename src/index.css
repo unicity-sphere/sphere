@@ -4,6 +4,11 @@
 /* Dark mode variant for Tailwind v4 */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Safe area padding for mobile bottom navigation (iOS notch/gesture bar) */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 /* Mobile viewport fix - prevents content jump when keyboard opens */
 :root {
   --visual-viewport-height: 100dvh;
