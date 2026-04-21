@@ -1,11 +1,11 @@
 import { motion } from 'framer-motion';
-import { Home, MessageCircle, Wallet, LayoutGrid } from 'lucide-react';
+import { Home, MessageCircle, Wallet } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useVisualViewport } from '../../hooks/useVisualViewport';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
 
-type TabId = 'home' | 'messages' | 'wallet' | 'apps';
+type TabId = 'home' | 'messages' | 'wallet';
 
 interface NavTab {
   id: TabId;
@@ -17,7 +17,6 @@ const tabs: NavTab[] = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'messages', label: 'Messages', icon: MessageCircle },
   { id: 'wallet', label: 'Wallet', icon: Wallet },
-  { id: 'apps', label: 'Apps', icon: LayoutGrid },
 ];
 
 export function MobileBottomNav() {
@@ -27,24 +26,22 @@ export function MobileBottomNav() {
   const { isKeyboardOpen } = useVisualViewport();
   const unreadCount = useDmUnreadCount();
 
-  // Derive active tab from existing state. Wallet wins, then DM tab, then desktop (home/apps).
+  // Derive active tab from existing state. Wallet wins, then DM tab, then desktop (home).
   const onDesktop = pathname === '/home' && activeTabId === null && !walletOpen;
   const isHomeActive = onDesktop;
   const isMessagesActive = activeTabId === 'dm' && !walletOpen;
   const isWalletActive = walletOpen;
-  const isAppsActive = onDesktop;
 
   const handleTap = (id: TabId) => {
     switch (id) {
       case 'home':
-      case 'apps':
-        navigate('/home', { replace: true });
-        setWalletOpen(false);
-        showDesktop();
+        if (pathname !== '/home') navigate('/home', { replace: true });
+        if (walletOpen) setWalletOpen(false);
+        if (!onDesktop) showDesktop();
         break;
       case 'messages':
-        navigate('/agents/dm');
-        setWalletOpen(false);
+        if (pathname !== '/agents/dm') navigate('/agents/dm', { replace: true });
+        if (walletOpen) setWalletOpen(false);
         openTab('dm');
         break;
       case 'wallet':
@@ -61,8 +58,6 @@ export function MobileBottomNav() {
         return isMessagesActive;
       case 'wallet':
         return isWalletActive;
-      case 'apps':
-        return isAppsActive;
     }
   };
 

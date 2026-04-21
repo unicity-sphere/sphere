@@ -45,15 +45,22 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
   const [modalInitialValue, setModalInitialValue] = useState<string | undefined>();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { isMobile } = useMobileNav();
+  const didInitSidebarRef = useRef(false);
 
-  // On mobile, auto-open the sidebar when there's no conversation selected, so the
-  // user sees the conversation list instead of an empty chat pane. Selecting a
-  // conversation closes the sidebar (see onSelect below).
+  // One-shot mount effect: on mobile entry, open the sidebar so the user sees the
+  // conversation list. We intentionally do NOT react to `selectedConversation`
+  // changes here — `useChat` asynchronously restores the last-selected conversation
+  // from localStorage after mount, and a reactive effect would close the sidebar
+  // right after opening it (user lands in previous chat instead of the list).
+  //
+  // Selecting a conversation closes the sidebar via the DMConversationList
+  // `onSelect` handler below; tapping the PanelLeft button reopens it.
   useEffect(() => {
-    if (isMobile) {
-      setSidebarOpen(!selectedConversation);
+    if (isMobile && !didInitSidebarRef.current) {
+      didInitSidebarRef.current = true;
+      setSidebarOpen(true);
     }
-  }, [isMobile, selectedConversation]);
+  }, [isMobile]);
 
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {

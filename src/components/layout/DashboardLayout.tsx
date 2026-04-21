@@ -1,5 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Header } from './Header';
 import { MiniChatBubbles } from '../chat/mini';
 import { MobileBottomNav } from '../mobile';
@@ -22,10 +22,17 @@ export function DashboardLayout() {
   useDeepLinkNavigation();
   const [videoReady, setVideoReady] = useState(false);
 
-  // Mobile fullscreen escape: when switching to mobile viewport, exit fullscreen
-  // to prevent being trapped in a fullscreen state that only desktop can toggle out of.
+  // Mobile fullscreen escape: only fires on the desktop→mobile viewport transition.
+  // A reactive `if (isMobile && isFullscreen) setFullscreen(false)` would run on
+  // every mobile render, permanently locking out any future mobile fullscreen
+  // use case. By gating on the prev-value transition, we preserve the escape
+  // hatch (user shrinks browser mid-session) without blocking the state entirely.
+  const prevIsMobileRef = useRef(isMobile);
   useEffect(() => {
-    if (isMobile && isFullscreen) {
+    const wasDesktop = !prevIsMobileRef.current;
+    const becameMobile = isMobile;
+    prevIsMobileRef.current = isMobile;
+    if (wasDesktop && becameMobile && isFullscreen) {
       setFullscreen(false);
     }
   }, [isMobile, isFullscreen, setFullscreen]);
@@ -70,7 +77,7 @@ export function DashboardLayout() {
       <div className="relative z-10 flex flex-col h-full">
         {!isFullscreen && <Header />}
         <div className={`flex-1 min-h-0 flex relative ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
-          <div className={`flex-1 w-full pb-16 lg:pb-0 ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-16 lg:pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-16 lg:pb-8 md:pt-8'} ${
+          <div className={`flex-1 w-full pb-mobile-nav lg:pb-0 ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-mobile-nav lg:pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-mobile-nav lg:pb-8 md:pt-8'} ${
             isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''
           }`}>
             <Outlet />

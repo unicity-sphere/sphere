@@ -4,9 +4,21 @@
 /* Dark mode variant for Tailwind v4 */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Safe area padding for mobile bottom navigation (iOS notch/gesture bar) */
+/* Safe area padding for mobile bottom navigation (iOS notch/gesture bar).
+   The 16px fallback keeps content clear of the Android gesture area on devices
+   that don't report `env(safe-area-inset-bottom)`. */
 .safe-area-bottom {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+}
+
+/* Padding utility that clears the fixed mobile bottom nav (h-16 = 4rem) plus
+   the device safe-area. Kept in sync with `--mobile-nav-height` below so the
+   content wrapper in DashboardLayout never under-pads. Desktop (lg+) overrides
+   via `lg:pb-0` at the call site. */
+@media (max-width: 1023px) {
+  .pb-mobile-nav {
+    padding-bottom: var(--mobile-nav-height);
+  }
 }
 
 /* Mobile viewport fix - prevents content jump when keyboard opens */
@@ -14,6 +26,10 @@
   --visual-viewport-height: 100dvh;
   --viewport-offset-top: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  /* Mobile bottom nav total height: h-16 (4rem/64px) + safe-area (>=16px).
+     Mirrors the 16px fallback used by `.safe-area-bottom` so content clears
+     the nav on both iOS (notch/gesture bar) and Android (gesture handle). */
+  --mobile-nav-height: calc(4rem + max(env(safe-area-inset-bottom, 0px), 16px));
 
   /* Theme colors - Light mode (default) */
   --color-bg-primary: #f5f5f5;
