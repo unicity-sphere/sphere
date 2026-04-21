@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCallStore } from './callStore';
 import { useCall } from './useCall';
 import { VideoFeed } from './VideoFeed';
@@ -23,22 +23,52 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const isVideo = call.mediaType === 'video';
-  const hasRemoteVideo = remoteStream?.getVideoTracks().some(t => t.enabled) ?? false;
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+
+  // Reactive remote-video detection. Tracks can arrive in separate ontrack
+  // events for the same stream (audio first, video later), so we listen for
+  // addtrack/removetrack on the stream to stay in sync.
+  useEffect(() => {
+    if (!remoteStream) { setHasRemoteVideo(false); return; }
+    const update = () => {
+      setHasRemoteVideo(remoteStream.getVideoTracks().some(t => t.enabled));
+    };
+    update();
+    remoteStream.addEventListener('addtrack', update);
+    remoteStream.addEventListener('removetrack', update);
+    return () => {
+      remoteStream.removeEventListener('addtrack', update);
+      remoteStream.removeEventListener('removetrack', update);
+    };
+  }, [remoteStream]);
 
   // Bind the remote stream to a dedicated audio element. The element is in
   // the DOM from the moment ActiveCallScreen mounts (right after accept/start),
   // so play() happens within the user-gesture window — critical for mobile
   // browsers that reject autoplay on elements created lazily later.
+  //
+  // We also listen for 'addtrack' on the MediaStream: WebRTC ontrack events
+  // can deliver audio and video in separate callbacks for the same stream.
+  // If audio arrives AFTER the srcObject binding, some browsers don't
+  // auto-pick it up. Re-binding srcObject forces the browser to re-evaluate
+  // the track set and play the newly-added audio.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
-    if (audio.srcObject === remoteStream) return;
-    audio.srcObject = remoteStream;
-    if (remoteStream) {
+    if (!audio || !remoteStream) return;
+
+    const bindAndPlay = () => {
+      audio.srcObject = null;
+      audio.srcObject = remoteStream;
       audio.play().catch((err) => {
         console.warn('[telco] Remote audio play failed:', err);
       });
-    }
+    };
+
+    bindAndPlay();
+    remoteStream.addEventListener('addtrack', bindAndPlay);
+    return () => {
+      remoteStream.removeEventListener('addtrack', bindAndPlay);
+    };
   }, [remoteStream]);
 
   return (

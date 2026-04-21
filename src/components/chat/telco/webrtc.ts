@@ -52,8 +52,13 @@ export class WebRTCSession {
       // <audio> element in ActiveCallScreen to ensure the element is in the
       // DOM from the start of the call (mobile browsers can reject play()
       // on elements created lazily after the user gesture window has expired).
+      //
+      // Always notify onTrack, even if the stream reference is unchanged:
+      // WebRTC delivers audio and video in SEPARATE ontrack events for the
+      // same stream. The second event has the same stream, but consumers
+      // need to re-evaluate derived state (hasRemoteVideo, hasRemoteAudio).
       const [stream] = event.streams;
-      if (stream && stream !== this._remoteStream) {
+      if (stream) {
         this._remoteStream = stream;
         this.onTrack(stream);
       }
