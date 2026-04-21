@@ -127,7 +127,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     setStep('processing'); setError(null);
     try {
       const fromAmountSmallestUnit = toSmallestUnit(fromAmount, fromAsset.decimals);
-      await transfer({ recipient: 'swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
+      await transfer({ recipient: 'sphere-swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
       await FaucetService.requestTokens(nametag, toAsset.name!.toLowerCase(), exchangeInfo.toAmount);
       setStep('success');
     } catch (e: unknown) {

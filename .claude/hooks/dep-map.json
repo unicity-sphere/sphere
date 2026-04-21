@@ -1,0 +1,56 @@
+{
+  "_comment": "Maps repos to upstream dependencies. Key = basename of CLAUDE_PROJECT_DIR. Package names are placeholders — update with actual npm package names from each repo's package.json.",
+  "repos": {
+    "sphere-sdk": {
+      "deps": [
+        {
+          "name": "state-transition-sdk",
+          "check": "npm",
+          "npm_package": "@unicity/state-transition-sdk",
+          "source_repo": "unicitynetwork/state-transition-sdk",
+          "version_path": "dependencies"
+        }
+      ]
+    },
+    "sphere": {
+      "deps": [
+        {
+          "name": "sphere-sdk",
+          "check": "npm",
+          "npm_package": "@unicitylabs/sphere-sdk",
+          "source_repo": "unicitynetwork/sphere-sdk",
+          "version_path": "dependencies"
+        }
+      ]
+    },
+    "openclaw-unicity": {
+      "deps": [
+        {
+          "name": "sphere-sdk",
+          "check": "npm",
+          "npm_package": "@unicitylabs/sphere-sdk",
+          "source_repo": "unicitynetwork/sphere-sdk",
+          "version_path": "dependencies"
+        }
+      ]
+    },
+    "unicity-orchestrator": {
+      "deps": [
+        {
+          "name": "sphere-sdk",
+          "check": "npm",
+          "npm_package": "@unicitylabs/sphere-sdk",
+          "source_repo": "unicitynetwork/sphere-sdk",
+          "version_path": "dependencies"
+        },
+        {
+          "name": "openclaw-unicity",
+          "check": "git",
+          "git_url": "https://github.com/unicitynetwork/openclaw-unicity.git",
+          "source_repo": "unicitynetwork/openclaw-unicity",
+          "version_path": "dependencies"
+        }
+      ]
+    }
+  }
+}

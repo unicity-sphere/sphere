@@ -1,12 +1,8 @@
-FROM node:20-alpine AS builder
+FROM node:20-alpine@sha256:f598378b5240225e6beab68fa9f356db1fb8efe55173e6d4d8153113bb8f333c AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY . .
-
-ARG VITE_AGGREGATOR_URL=https://goggregator-test.unicity.network
-ARG VITE_KBBOT_URL=https://sphere.unicity.network
-
 RUN npm run build
 
 FROM nginx:alpine

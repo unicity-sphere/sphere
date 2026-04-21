@@ -25,10 +25,10 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
   return (
     <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Remote video / avatar */}
+      {/* Remote video / avatar (audio is played by WebRTCSession's dedicated audio element) */}
       <div className="flex-1 flex items-center justify-center">
         {isVideo && hasRemoteVideo ? (
-          <VideoFeed stream={remoteStream} className="w-full h-full" />
+          <VideoFeed stream={remoteStream} muted className="w-full h-full" />
         ) : (
           <div className="flex flex-col items-center gap-4">
             <div

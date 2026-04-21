@@ -1,0 +1,89 @@
+name: Validate Docker Images
+
+# Build-validate both Dockerfiles on PRs and main pushes so image-
+# definition regressions fail CI, not deploy. No push — validation only.
+#
+# Dockerfile.ssl pulls `ghcr.io/unicitynetwork/ssl-manager` as its base.
+# That package is published publicly on GHCR, so no registry auth is
+# needed. If it ever goes private again, either grant this repo read
+# access via the package's "Manage Actions access" settings, or add a
+# docker/login-action step below (using GITHUB_TOKEN within-org or a
+# cross-org PAT secret for external-org packages).
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.ssl'
+      - 'deploy/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'public/**'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - '.dockerignore'
+      - '.github/workflows/docker-validate.yml'
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile, Dockerfile.ssl]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # load: true hands the built image to the runner's docker daemon so
+      # the smoke step below can actually run it. Without this, a Dockerfile
+      # that compiles but produces a broken image (bad entrypoint path,
+      # missing runtime binary, nginx config syntax error deferred until
+      # runtime) would pass validation and fail only at deploy.
+      - name: Build ${{ matrix.dockerfile }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: sphere-validate:${{ matrix.dockerfile }}
+          cache-from: type=gha,scope=${{ matrix.dockerfile }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
+
+      # Smoke test: verify nginx's runtime config is parseable. Catches
+      # heredoc-interpolation bugs in deploy/entrypoint.sh (Dockerfile.ssl)
+      # and default-config regressions (Dockerfile).
+      - name: Smoke — nginx config parses
+        if: matrix.dockerfile == 'Dockerfile'
+        run: |
+          docker run --rm --entrypoint nginx \
+            sphere-validate:${{ matrix.dockerfile }} -t
+
+      # Smoke for the SSL image: entrypoint is tini → sphere-entrypoint.
+      # We can't run the real entrypoint in CI (ssl-setup would need
+      # SSL_DOMAIN / network), but we can verify tini, the entrypoint
+      # script, curl, and nginx are all present and executable, and that
+      # the script itself is syntactically valid bash.
+      - name: Smoke — image contents present and entrypoint syntactic
+        if: matrix.dockerfile == 'Dockerfile.ssl'
+        run: |
+          docker run --rm --entrypoint /bin/bash \
+            sphere-validate:${{ matrix.dockerfile }} -c '
+              set -e
+              test -x /usr/bin/tini
+              test -x /usr/local/bin/sphere-entrypoint
+              command -v curl >/dev/null
+              command -v nginx >/dev/null
+              bash -n /usr/local/bin/sphere-entrypoint
+              echo "smoke ok"
+            '

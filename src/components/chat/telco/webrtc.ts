@@ -11,6 +11,7 @@ export class WebRTCSession {
   private pc: RTCPeerConnection;
   private _localStream: MediaStream | null = null;
   private _remoteStream: MediaStream | null = null;
+  private _remoteAudioEl: HTMLAudioElement | null = null;
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -48,8 +49,29 @@ export class WebRTCSession {
 
     this.pc.ontrack = (event) => {
       if (this.disposed) return;
+
+      // Play remote audio immediately via a dedicated audio element.
+      // This bypasses React lifecycle and autoplay timing issues.
+      if (event.track.kind === 'audio') {
+        if (this._remoteAudioEl) {
+          this._remoteAudioEl.pause();
+          this._remoteAudioEl.remove();
+        }
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        audio.srcObject = new MediaStream([event.track]);
+        document.body.appendChild(audio);
+        audio.play().then(() => {
+          console.log('[telco] Remote audio playing');
+        }).catch((err) => {
+          console.warn('[telco] Remote audio play failed:', err);
+        });
+        this._remoteAudioEl = audio;
+      }
+
+      // Use the browser-provided stream for video
       const [stream] = event.streams;
-      if (stream) {
+      if (stream && stream !== this._remoteStream) {
         this._remoteStream = stream;
         this.onTrack(stream);
       }
@@ -173,6 +195,14 @@ export class WebRTCSession {
     this._localStream?.getTracks().forEach(t => t.stop());
     this._localStream = null;
     this._remoteStream = null;
+
+    // Remove the dedicated audio element
+    if (this._remoteAudioEl) {
+      this._remoteAudioEl.pause();
+      this._remoteAudioEl.srcObject = null;
+      this._remoteAudioEl.remove();
+      this._remoteAudioEl = null;
+    }
 
     this.pc.onconnectionstatechange = null;
     this.pc.oniceconnectionstatechange = null;

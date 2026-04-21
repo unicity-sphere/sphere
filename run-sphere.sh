@@ -87,10 +87,9 @@ Sphere Build:
   Build the image first:
     docker build -f Dockerfile.ssl -t sphere-app:latest .
 
-  With custom env:
-    docker build -f Dockerfile.ssl -t sphere-app:latest \
-      --build-arg VITE_AGGREGATOR_URL=https://... \
-      --build-arg VITE_KBBOT_URL=https://... .
+  Prerequisites:
+    - ssl-manager repo checked out at ../ssl-manager (or set SSL_MANAGER_DIR)
+    - HAProxy container running on the haproxy-net network (default)
 HELP
 }
 

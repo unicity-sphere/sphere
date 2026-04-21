@@ -1,0 +1,20 @@
+{
+  "relays": [
+    "wss://nostr-relay.testnet.unicity.network"
+  ],
+  "subscriptions": {
+    "groups": [
+      {
+        "id": "unicity-dev-agents-testnet",
+        "name": "UNICITY_DEV_AGENTS"
+      }
+    ],
+    "dm_contacts": [
+      ""
+    ]
+  },
+  "hooks": {
+    "on_dm": ".claude/hooks/on-dm.sh",
+    "on_group_message": ".claude/hooks/on-group-message.sh"
+  }
+}

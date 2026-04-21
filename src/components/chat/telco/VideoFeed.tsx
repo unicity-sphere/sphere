@@ -14,7 +14,15 @@ export function VideoFeed({ stream, muted = false, mirror = false, className = '
     const video = videoRef.current;
     if (!video) return;
     video.srcObject = stream;
-    return () => { video.srcObject = null; };
+    // Explicitly play to ensure audio is not blocked by autoplay policy.
+    // The user has already interacted (clicked call/accept) so this should succeed.
+    if (stream) {
+      video.play().catch(() => {});
+    }
+    return () => {
+      video.pause();
+      video.srcObject = null;
+    };
   }, [stream]);
 
   return (

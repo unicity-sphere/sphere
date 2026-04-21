@@ -1,22 +1,29 @@
 # Stage 1: Build React app
-FROM node:20-alpine AS builder
+# Pin node:20-alpine by digest for reproducible builds. Update with:
+#   docker pull node:20-alpine
+#   docker inspect node:20-alpine --format '{{index .RepoDigests 0}}'
+FROM node:20-alpine@sha256:f598378b5240225e6beab68fa9f356db1fb8efe55173e6d4d8153113bb8f333c AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# --ignore-scripts: refuse to run (possibly malicious) postinstall from deps.
+# sphere's direct deps don't need postinstall; if a future dep does, wire it
+# explicitly rather than relaxing this.
+RUN npm ci --ignore-scripts
 COPY . .
-
-ARG VITE_AGGREGATOR_URL=https://goggregator-test.unicity.network
-ARG VITE_KBBOT_URL=https://sphere.unicity.network
-
 RUN npm run build
 
-# Stage 2: ssl-manager base + nginx
+# Stage 2: ssl-manager base + nginx + tini
 # Pin digest for reproducible builds. Update with:
 #   docker pull ghcr.io/unicitynetwork/ssl-manager:latest
 #   docker inspect ghcr.io/unicitynetwork/ssl-manager:latest --format '{{index .RepoDigests 0}}'
 FROM ghcr.io/unicitynetwork/ssl-manager@sha256:d73f7df00a38fa3feae88ed2d5d21db68a5d748573441b23d86f30381d6719ae
 
-RUN apt-get update && apt-get install -y --no-install-recommends nginx && \
+# - tini:  PID-1 reaps zombie children spawned by ssl-setup (ssl-http-proxy,
+#          ssl-renew, certbot forks). Bash alone doesn't reap them reliably.
+# - nginx: static-file server.
+# - curl:  used by run-sphere.sh's app_health_check; without it the probe
+#          silently reports "fail" even when the service is healthy.
+RUN apt-get update && apt-get install -y --no-install-recommends tini nginx curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/dist /usr/share/nginx/html
@@ -24,6 +31,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 COPY deploy/entrypoint.sh /usr/local/bin/sphere-entrypoint
 RUN chmod +x /usr/local/bin/sphere-entrypoint
 
-EXPOSE 80 443
+EXPOSE 8080 443
 
-ENTRYPOINT ["/usr/local/bin/sphere-entrypoint"]
+# tini as PID 1 forwards signals to the entrypoint and reaps orphaned children.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/sphere-entrypoint"]
