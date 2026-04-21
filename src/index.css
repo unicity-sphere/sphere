@@ -29,11 +29,13 @@
   --visual-viewport-height: 100dvh;
   --viewport-offset-top: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-  /* Mobile bottom nav total height: h-16 (4rem/64px) + safe-area (>=16px)
-     + 1px for the nav's `border-t` (rendered height, not box-sizing).
-     Mirrors the 16px fallback used by `.safe-area-bottom` so content clears
-     the nav on both iOS (notch/gesture bar) and Android (gesture handle). */
-  --mobile-nav-height: calc(4rem + max(env(safe-area-inset-bottom, 0px), 16px) + 1px);
+  /* Mobile bottom nav total height: h-16 (4rem/64px) + safe-area (>=16px).
+     Tailwind Preflight sets `box-sizing: border-box` globally, so the nav's
+     `border-t` is rendered INSIDE the 64px box rather than added on top —
+     no extra pixel needed. Mirrors the 16px fallback used by
+     `.safe-area-bottom` so content clears the nav on both iOS (notch/gesture
+     bar) and Android (gesture handle). */
+  --mobile-nav-height: calc(4rem + max(env(safe-area-inset-bottom, 0px), 16px));
 
   /* Theme colors - Light mode (default) */
   --color-bg-primary: #f5f5f5;

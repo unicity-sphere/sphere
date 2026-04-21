@@ -7,29 +7,47 @@ const MQ = '(max-width: 1023.98px)';
 let isMobileValue = typeof window !== 'undefined' ? window.matchMedia(MQ).matches : false;
 const listeners = new Set<() => void>();
 let handler: ((e: MediaQueryListEvent) => void) | null = null;
+// Cache the MediaQueryList at module scope. Some browsers return a NEW MQL
+// instance on each window.matchMedia() call, which would leak listeners if
+// subscribe added to MQL-1 but unsubscribe removed from MQL-2.
+let mql: MediaQueryList | null = null;
+
+function getMql(): MediaQueryList | null {
+  if (typeof window === 'undefined') return null;
+  if (!mql) mql = window.matchMedia(MQ);
+  return mql;
+}
 
 function subscribe(listener: () => void) {
-  if (listeners.size === 0 && typeof window !== 'undefined') {
-    const mql = window.matchMedia(MQ);
+  const m = getMql();
+  if (listeners.size === 0 && m) {
     // Refresh on first bind — handles HMR reloads and late-loaded test env.
-    isMobileValue = mql.matches;
+    isMobileValue = m.matches;
     handler = (e: MediaQueryListEvent) => {
       isMobileValue = e.matches;
       for (const l of listeners) l();
     };
-    mql.addEventListener('change', handler);
+    m.addEventListener('change', handler);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && typeof window !== 'undefined' && handler) {
-      window.matchMedia(MQ).removeEventListener('change', handler);
+    if (listeners.size === 0 && handler) {
+      const m2 = getMql();
+      m2?.removeEventListener('change', handler);
       handler = null;
     }
   };
 }
 
 function getSnapshot() {
+  // When no active subscriber is attached, refresh from matchMedia to avoid
+  // returning a stale module-load value on first render (viewport may have
+  // changed between module load and first component mount).
+  if (listeners.size === 0 && typeof window !== 'undefined') {
+    const m = getMql();
+    if (m) isMobileValue = m.matches;
+  }
   return isMobileValue;
 }
 

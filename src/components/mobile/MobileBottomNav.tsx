@@ -28,7 +28,7 @@ export function MobileBottomNav() {
 
   // Derive active tab from existing state. Wallet wins, then DM tab, then desktop (home).
   const isHomeActive = pathname === '/home' && activeTabId === null && !walletOpen;
-  const isMessagesActive = activeTabId === 'dm' && !walletOpen;
+  const isMessagesActive = pathname === '/agents/dm' && activeTabId === 'dm' && !walletOpen;
   const isWalletActive = walletOpen;
 
   const handleTap = (id: TabId) => {
@@ -46,6 +46,8 @@ export function MobileBottomNav() {
         if (pathname !== '/agents/dm') navigate('/agents/dm', { replace: true });
         if (walletOpen) setWalletOpen(false);
         openTab('dm');
+        // Always dispatch — if user is already on DM, this reopens the sidebar
+        window.dispatchEvent(new CustomEvent('mobile-nav-messages-tap'));
         break;
       case 'wallet':
         setWalletOpen(true);

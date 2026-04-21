@@ -75,6 +75,17 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
     }
   }, [isMobile, activeTabId]);
 
+  // Reopen sidebar when user taps the Messages bottom-nav tab while already on DM.
+  // The `didInitSidebarRef` one-shot above only fires on first entry; tapping
+  // Messages again is idempotent in `useDesktopState` (activeTabId stays 'dm'),
+  // so we need an explicit signal from the bottom nav to reopen the list.
+  useEffect(() => {
+    if (!isMobile) return;
+    const handler = () => setSidebarOpen(true);
+    window.addEventListener('mobile-nav-messages-tap', handler);
+    return () => window.removeEventListener('mobile-nav-messages-tap', handler);
+  }, [isMobile]);
+
   // Handle ?nametag= URL param for DM navigation
   useEffect(() => {
     const nametag = searchParams.get('nametag');
