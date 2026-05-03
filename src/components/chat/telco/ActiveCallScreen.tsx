@@ -47,27 +47,29 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
   // so play() happens within the user-gesture window — critical for mobile
   // browsers that reject autoplay on elements created lazily later.
   //
-  // We also listen for 'addtrack' on the MediaStream: WebRTC ontrack events
-  // can deliver audio and video in separate callbacks for the same stream.
-  // If audio arrives AFTER the srcObject binding, some browsers don't
-  // auto-pick it up. Re-binding srcObject forces the browser to re-evaluate
-  // the track set and play the newly-added audio.
+  // MediaStream is live: when audio/video tracks are added later via
+  // separate ontrack events, the browser picks them up automatically as
+  // long as srcObject stays bound to the same stream. We do NOT re-bind
+  // srcObject (that would interrupt playback and lose the autoplay permit).
+  // We re-trigger play() on addtrack as a precaution in case the element
+  // was paused.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !remoteStream) return;
 
-    const bindAndPlay = () => {
-      audio.srcObject = null;
-      audio.srcObject = remoteStream;
+    audio.srcObject = remoteStream;
+    audio.play().catch((err) => {
+      console.warn('[telco] Remote audio play failed:', err);
+    });
+
+    const ensurePlaying = () => {
       audio.play().catch((err) => {
-        console.warn('[telco] Remote audio play failed:', err);
+        console.warn('[telco] Remote audio play failed (after addtrack):', err);
       });
     };
-
-    bindAndPlay();
-    remoteStream.addEventListener('addtrack', bindAndPlay);
+    remoteStream.addEventListener('addtrack', ensurePlaying);
     return () => {
-      remoteStream.removeEventListener('addtrack', bindAndPlay);
+      remoteStream.removeEventListener('addtrack', ensurePlaying);
     };
   }, [remoteStream]);
 
