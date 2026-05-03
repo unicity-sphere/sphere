@@ -42,15 +42,17 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
   return (
     <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Remote audio is played by a detached <audio> element appended to
-          document.body in WebRTCSession.ontrack — that approach reliably
-          produces audible playback regardless of React lifecycle. */}
+      {/* Remote video — always rendered (unmuted) so it plays audio reliably.
+          On Chrome, <video> elements with autoplay/playsinline are the most
+          permissive media surface and route audio output predictably. When
+          there's no remote video track, the avatar overlays this element. */}
+      <VideoFeed
+        stream={remoteStream}
+        className={`absolute inset-0 w-full h-full ${(isVideo && hasRemoteVideo) ? '' : 'opacity-0 pointer-events-none'}`}
+      />
 
-      {/* Remote video / avatar */}
-      <div className="flex-1 flex items-center justify-center">
-        {isVideo && hasRemoteVideo ? (
-          <VideoFeed stream={remoteStream} muted className="w-full h-full" />
-        ) : (
+      <div className="flex-1 flex items-center justify-center relative z-10">
+        {(!isVideo || !hasRemoteVideo) && (
           <div className="flex flex-col items-center gap-4">
             <div
               className={`w-28 h-28 rounded-full bg-linear-to-br ${getColorFromPubkey(call.peerPubkey).gradient} flex items-center justify-center text-white text-3xl font-semibold`}

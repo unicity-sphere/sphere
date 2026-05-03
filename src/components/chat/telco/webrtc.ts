@@ -11,7 +11,6 @@ export class WebRTCSession {
   private pc: RTCPeerConnection;
   private _localStream: MediaStream | null = null;
   private _remoteStream: MediaStream | null = null;
-  private _remoteAudioEl: HTMLAudioElement | null = null;
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -50,38 +49,9 @@ export class WebRTCSession {
     this.pc.ontrack = (event) => {
       if (this.disposed) return;
 
-      // Always-attached audio element for remote playback. Created lazily
-      // here (in the ontrack handler, not via React) and appended directly
-      // to document.body so it isn't subject to call-overlay re-mounting
-      // or `display:none` audio-routing quirks. This is the approach that
-      // empirically produces audible playback on the laptop side.
-      if (event.track.kind === 'audio') {
-        if (!this._remoteAudioEl) {
-          const audio = document.createElement('audio');
-          audio.autoplay = true;
-          audio.setAttribute('playsinline', '');
-          audio.style.position = 'absolute';
-          audio.style.width = '1px';
-          audio.style.height = '1px';
-          audio.style.opacity = '0';
-          audio.style.pointerEvents = 'none';
-          document.body.appendChild(audio);
-          this._remoteAudioEl = audio;
-        }
-        this._remoteAudioEl.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-        const p = this._remoteAudioEl.play();
-        if (p && typeof p.then === 'function') {
-          p.then(() => {
-            console.log('[telco] Remote audio playing (detached)', {
-              paused: this._remoteAudioEl?.paused,
-              muted: this._remoteAudioEl?.muted,
-              volume: this._remoteAudioEl?.volume,
-            });
-          }).catch((err: Error) => {
-            console.warn('[telco] Detached audio play failed:', err.name, err.message);
-          });
-        }
-      }
+      // Audio playback handled by an unmuted <video> element in
+      // ActiveCallScreen — that's the most reliable path on Chrome. No
+      // detached audio element here.
 
       // Notify onTrack so React UI can render video, etc.
       const [stream] = event.streams;
@@ -216,13 +186,6 @@ export class WebRTCSession {
     this._localStream?.getTracks().forEach(t => t.stop());
     this._localStream = null;
     this._remoteStream = null;
-
-    if (this._remoteAudioEl) {
-      this._remoteAudioEl.pause();
-      this._remoteAudioEl.srcObject = null;
-      this._remoteAudioEl.remove();
-      this._remoteAudioEl = null;
-    }
 
     this.pc.onconnectionstatechange = null;
     this.pc.oniceconnectionstatechange = null;

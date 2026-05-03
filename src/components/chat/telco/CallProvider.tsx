@@ -130,21 +130,25 @@ export function CallProvider({ children }: { children: ReactNode }) {
             const audioStatsInterval = setInterval(async () => {
               try {
                 const stats = await pc.getStats();
-                const audioOut: Record<string, unknown> = {};
-                const audioIn: Record<string, unknown> = {};
+                let outPackets = 0, outBytes = 0, inPackets = 0, inBytes = 0, inLevel = 0;
                 stats.forEach((report) => {
                   if (report.type === 'outbound-rtp' && (report as { kind?: string }).kind === 'audio') {
                     const r = report as { packetsSent?: number; bytesSent?: number };
-                    audioOut.packetsSent = r.packetsSent;
-                    audioOut.bytesSent = r.bytesSent;
+                    outPackets = r.packetsSent ?? 0;
+                    outBytes = r.bytesSent ?? 0;
                   }
                   if (report.type === 'inbound-rtp' && (report as { kind?: string }).kind === 'audio') {
                     const r = report as { packetsReceived?: number; bytesReceived?: number };
-                    audioIn.packetsReceived = r.packetsReceived;
-                    audioIn.bytesReceived = r.bytesReceived;
+                    inPackets = r.packetsReceived ?? 0;
+                    inBytes = r.bytesReceived ?? 0;
+                  }
+                  if (report.type === 'media-source' && (report as { kind?: string }).kind === 'audio') {
+                    const r = report as { audioLevel?: number };
+                    inLevel = r.audioLevel ?? 0;
                   }
                 });
-                console.log('[telco] audio stats', { out: audioOut, in: audioIn });
+                // Print as a single string so values are readable in the console without expanding
+                console.log(`[telco] audio stats — sent: ${outPackets} pkts / ${outBytes} bytes — received: ${inPackets} pkts / ${inBytes} bytes — local-level: ${inLevel.toFixed(3)}`);
               } catch {
                 // ignore
               }
