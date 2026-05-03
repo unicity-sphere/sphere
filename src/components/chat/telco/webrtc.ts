@@ -179,6 +179,13 @@ export class WebRTCSession {
       this.gatherTimeoutId = null;
     }
 
+    // Cancel any audio-stats poll attached by CallProvider
+    const audioStatsInterval = (this as unknown as { _audioStatsInterval?: ReturnType<typeof setInterval> })._audioStatsInterval;
+    if (audioStatsInterval) {
+      clearInterval(audioStatsInterval);
+      (this as unknown as { _audioStatsInterval?: ReturnType<typeof setInterval> })._audioStatsInterval = undefined;
+    }
+
     this._localStream?.getTracks().forEach(t => t.stop());
     this._localStream = null;
     this._remoteStream = null;

@@ -125,6 +125,32 @@ export function CallProvider({ children }: { children: ReactNode }) {
             monitor.onQualityUpdate = (q) => setConnectionQuality(q);
             monitor.onTierChange = (tier) => session.applyQualityTier(tier);
             monitor.start();
+            // Diagnostic: log audio packet flow every 3s after connect
+            const pc = session.getPeerConnection();
+            const audioStatsInterval = setInterval(async () => {
+              try {
+                const stats = await pc.getStats();
+                const audioOut: Record<string, unknown> = {};
+                const audioIn: Record<string, unknown> = {};
+                stats.forEach((report) => {
+                  if (report.type === 'outbound-rtp' && (report as { kind?: string }).kind === 'audio') {
+                    const r = report as { packetsSent?: number; bytesSent?: number };
+                    audioOut.packetsSent = r.packetsSent;
+                    audioOut.bytesSent = r.bytesSent;
+                  }
+                  if (report.type === 'inbound-rtp' && (report as { kind?: string }).kind === 'audio') {
+                    const r = report as { packetsReceived?: number; bytesReceived?: number };
+                    audioIn.packetsReceived = r.packetsReceived;
+                    audioIn.bytesReceived = r.bytesReceived;
+                  }
+                });
+                console.log('[telco] audio stats', { out: audioOut, in: audioIn });
+              } catch {
+                // ignore
+              }
+            }, 3000);
+            // Store on session for cleanup in dispose()
+            (session as unknown as { _audioStatsInterval?: ReturnType<typeof setInterval> })._audioStatsInterval = audioStatsInterval;
           }
           break;
 
