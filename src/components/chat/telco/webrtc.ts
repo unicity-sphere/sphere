@@ -18,6 +18,13 @@ export class WebRTCSession {
   private _audioCtx: AudioContext | null = null;
   private _audioSourceNode: MediaStreamAudioSourceNode | null = null;
   private _audioGainNode: GainNode | null = null;
+  // Real-time audio level meters via AnalyserNode (RMS measurement)
+  private _localAnalyser: AnalyserNode | null = null;
+  private _remoteAnalyser: AnalyserNode | null = null;
+  private _localAnalyserSource: MediaStreamAudioSourceNode | null = null;
+  private _levelRafId: number | null = null;
+  // Callback set by CallProvider to push levels into the store
+  onAudioLevels: (local: number, remote: number) => void = () => {};
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -130,6 +137,9 @@ export class WebRTCSession {
     for (const track of stream.getTracks()) {
       this.pc.addTrack(track, stream);
     }
+
+    // Set up the local mic analyser for real-time level metering
+    this.setupLocalAnalyser(stream);
 
     return stream;
   }
@@ -266,6 +276,19 @@ export class WebRTCSession {
       }
       this._audioSourceNode = this._audioCtx.createMediaStreamSource(audioStream);
       if (this._audioGainNode) this._audioSourceNode.connect(this._audioGainNode);
+
+      // Set up remote analyser branched off the same source for level metering
+      if (this._remoteAnalyser) {
+        try { this._remoteAnalyser.disconnect(); } catch { /* noop */ }
+      }
+      this._remoteAnalyser = this._audioCtx.createAnalyser();
+      this._remoteAnalyser.fftSize = 512;
+      this._remoteAnalyser.smoothingTimeConstant = 0.5;
+      this._audioSourceNode.connect(this._remoteAnalyser);
+
+      // Start the level loop if not already running
+      this.startLevelLoop();
+
       console.log('[telco] Web Audio route set up', {
         contextState: this._audioCtx.state,
         sampleRate: this._audioCtx.sampleRate,
@@ -273,6 +296,84 @@ export class WebRTCSession {
     } catch (err) {
       console.warn('[telco] Web Audio setup failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /**
+   * Set up an AnalyserNode on the local microphone stream for real-time
+   * level metering. Independent of the Web Audio playback route.
+   */
+  private setupLocalAnalyser(localStream: MediaStream): void {
+    try {
+      if (!this._audioCtx) {
+        const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this._audioCtx = new Ctor();
+      }
+      // Disconnect previous analyser if any
+      if (this._localAnalyserSource) {
+        try { this._localAnalyserSource.disconnect(); } catch { /* noop */ }
+        this._localAnalyserSource = null;
+      }
+      if (this._localAnalyser) {
+        try { this._localAnalyser.disconnect(); } catch { /* noop */ }
+        this._localAnalyser = null;
+      }
+
+      const audioOnly = new MediaStream(localStream.getAudioTracks());
+      if (audioOnly.getAudioTracks().length === 0) return;
+
+      this._localAnalyserSource = this._audioCtx.createMediaStreamSource(audioOnly);
+      this._localAnalyser = this._audioCtx.createAnalyser();
+      this._localAnalyser.fftSize = 512;
+      this._localAnalyser.smoothingTimeConstant = 0.5;
+      this._localAnalyserSource.connect(this._localAnalyser);
+      // NOTE: we deliberately do NOT connect to destination — that would echo
+      // the local mic to the speakers. AnalyserNodes don't need destination
+      // connection to function.
+
+      this.startLevelLoop();
+    } catch (err) {
+      console.warn('[telco] Local analyser setup failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * RMS-amplitude loop. Reads time-domain data from analysers ~30Hz and
+   * pushes normalized levels (0-1) to the consumer via onAudioLevels.
+   */
+  private startLevelLoop(): void {
+    if (this._levelRafId !== null) return; // already running
+
+    const localBuf = new Float32Array(256);
+    const remoteBuf = new Float32Array(256);
+
+    const tick = () => {
+      if (this.disposed) return;
+      let local = 0;
+      let remote = 0;
+
+      if (this._localAnalyser) {
+        this._localAnalyser.getFloatTimeDomainData(localBuf);
+        let sum = 0;
+        for (let i = 0; i < localBuf.length; i++) sum += localBuf[i] * localBuf[i];
+        local = Math.sqrt(sum / localBuf.length);
+      }
+
+      if (this._remoteAnalyser) {
+        this._remoteAnalyser.getFloatTimeDomainData(remoteBuf);
+        let sum = 0;
+        for (let i = 0; i < remoteBuf.length; i++) sum += remoteBuf[i] * remoteBuf[i];
+        remote = Math.sqrt(sum / remoteBuf.length);
+      }
+
+      // Apply a gentle perceptual scale (sqrt) so the meter is more readable
+      // for typical voice levels which are usually 0.01-0.1 RMS.
+      this.onAudioLevels(Math.min(1, Math.sqrt(local) * 2.5), Math.min(1, Math.sqrt(remote) * 2.5));
+
+      this._levelRafId = requestAnimationFrame(tick);
+    };
+
+    this._levelRafId = requestAnimationFrame(tick);
   }
 
   /**
@@ -345,6 +446,22 @@ export class WebRTCSession {
     }
 
     // Tear down Web Audio pipeline
+    if (this._levelRafId !== null) {
+      cancelAnimationFrame(this._levelRafId);
+      this._levelRafId = null;
+    }
+    if (this._localAnalyser) {
+      try { this._localAnalyser.disconnect(); } catch { /* noop */ }
+      this._localAnalyser = null;
+    }
+    if (this._localAnalyserSource) {
+      try { this._localAnalyserSource.disconnect(); } catch { /* noop */ }
+      this._localAnalyserSource = null;
+    }
+    if (this._remoteAnalyser) {
+      try { this._remoteAnalyser.disconnect(); } catch { /* noop */ }
+      this._remoteAnalyser = null;
+    }
     if (this._audioSourceNode) {
       try { this._audioSourceNode.disconnect(); } catch { /* noop */ }
       this._audioSourceNode = null;

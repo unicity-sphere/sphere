@@ -5,6 +5,7 @@ import { VideoFeed } from './VideoFeed';
 import { CallControls } from './CallControls';
 import { CallTimer } from './CallTimer';
 import { QualityIndicator } from './QualityIndicator';
+import { AudioLevelMeter } from './AudioLevelMeter';
 import type { CallInfo } from './types';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { getColorFromPubkey } from '../utils/avatarColors';
@@ -80,7 +81,7 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </div>
       )}
 
-      {/* Audio-unlock prompt + test tone button (always visible — diagnostic) */}
+      {/* Audio-unlock prompt + test tone button */}
       <div className="absolute top-20 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-20">
         {!audioUnlocked && (
           <div className="px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg pointer-events-none">
@@ -93,6 +94,13 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         >
           🔊 Test 440Hz tone
         </button>
+      </div>
+
+      {/* Real-time audio level meters — diagnostic. Shows local mic input
+          amplitude and incoming remote audio amplitude. Lets the user see
+          immediately if their mic is silent or peer's audio isn't arriving. */}
+      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+        <AudioLevelMeter />
       </div>
 
       {/* Top bar: timer + quality */}

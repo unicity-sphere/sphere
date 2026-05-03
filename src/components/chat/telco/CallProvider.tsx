@@ -9,7 +9,7 @@ import {
   setLocalStream, setRemoteStream,
   setAudioMuted, setVideoMuted,
   setConnectionQuality, resetCallState,
-  setPeerCapability,
+  setPeerCapability, setAudioLevels,
 } from './callStore';
 import { CALL_TIMEOUT, RECONNECT_TIMEOUT, CALL_ENDED_DISMISS_DELAY, CALL_FAILED_DISMISS_DELAY } from './constants';
 import { CallContext, type CallContextValue } from './CallContext';
@@ -110,6 +110,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // ── WebRTC connection state handler ─────────────────────────────────
 
   const setupConnectionHandlers = useCallback((session: WebRTCSession) => {
+    session.onAudioLevels = (local: number, remote: number) => {
+      setAudioLevels(local, remote);
+    };
     session.onConnectionStateChange = (state: RTCPeerConnectionState) => {
       const call = currentCallRef.current;
       if (!call) return;
@@ -158,7 +161,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
                   }
                 });
                 console.log(
-                  `[telco] audio — sent: ${outPackets}p/${outBytes}b — recv: ${inPackets}p/${inBytes}b — mic-level: ${micLevel.toFixed(3)} — INBOUND-LEVEL: ${speakerLevel.toFixed(3)} — ${trackInfo}`
+                  `[telco] audio — sent: ${outPackets}p/${outBytes}b (rtcMicLvl: ${micLevel.toFixed(3)}) — recv: ${inPackets}p/${inBytes}b (rtcInLvl: ${speakerLevel.toFixed(3)}) — ${trackInfo}`
                 );
               } catch {
                 // ignore

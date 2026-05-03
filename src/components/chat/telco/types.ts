@@ -111,6 +111,9 @@ export interface CallStoreState {
   videoMuted: boolean;
   connectionQuality: ConnectionQuality | null;
   peerCapabilities: Map<string, PeerCapability>;
+  // Real-time audio level meters (0.0 - 1.0)
+  localAudioLevel: number;
+  remoteAudioLevel: number;
 }
 
 // ── Event detail types ──────────────────────────────────────────────────────

@@ -12,6 +12,8 @@ const initialState: CallStoreState = {
   videoMuted: false,
   connectionQuality: null,
   peerCapabilities: new Map(),
+  localAudioLevel: 0,
+  remoteAudioLevel: 0,
 };
 
 // ── Store internals ─────────────────────────────────────────────────────────
@@ -72,6 +74,16 @@ export function setConnectionQuality(quality: ConnectionQuality | null) {
   emitChange();
 }
 
+export function setAudioLevels(localLevel: number, remoteLevel: number) {
+  // Skip emit if both unchanged (within rounding tolerance) — saves renders
+  if (Math.abs(state.localAudioLevel - localLevel) < 0.005
+      && Math.abs(state.remoteAudioLevel - remoteLevel) < 0.005) {
+    return;
+  }
+  state = { ...state, localAudioLevel: localLevel, remoteAudioLevel: remoteLevel };
+  emitChange();
+}
+
 export function setPeerCapability(peerPubkey: string, capability: PeerCapability) {
   const caps = new Map(state.peerCapabilities);
   caps.set(peerPubkey, capability);
@@ -106,6 +118,8 @@ export function resetCallState() {
     audioMuted: false,
     videoMuted: false,
     connectionQuality: null,
+    localAudioLevel: 0,
+    remoteAudioLevel: 0,
   };
   emitChange();
 }
