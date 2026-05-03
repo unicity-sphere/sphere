@@ -16,7 +16,7 @@ interface ActiveCallScreenProps {
 }
 
 export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
-  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay, playTestTone } = useCall();
+  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay } = useCall();
   const localStream = useCallStore(s => s.localStream);
   const remoteStream = useCallStore(s => s.remoteStream);
   const audioMuted = useCallStore(s => s.audioMuted);
@@ -57,10 +57,12 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
       onClickCapture={handleAnyInteraction}
       onTouchStartCapture={handleAnyInteraction}
     >
-      {/* Remote video / avatar (audio plays via detached element from webrtc.ts) */}
+      {/* Remote video / avatar (audio plays via detached element from webrtc.ts).
+          fit="contain" so the whole remote frame fits inside the call window —
+          no cropping. Black letterbox bars appear if aspect ratios differ. */}
       <div className="flex-1 flex items-center justify-center">
         {isVideo && hasRemoteVideo ? (
-          <VideoFeed stream={remoteStream} muted className="w-full h-full" />
+          <VideoFeed stream={remoteStream} muted fit="contain" className="w-full h-full" />
         ) : (
           <div className="flex flex-col items-center gap-4">
             <div
@@ -82,20 +84,12 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </div>
       )}
 
-      {/* Audio-unlock prompt + test tone button */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-20">
-        {!audioUnlocked && (
-          <div className="px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg pointer-events-none">
-            Tap anywhere to enable audio
-          </div>
-        )}
-        <button
-          onClick={(e) => { e.stopPropagation(); playTestTone(); }}
-          className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium shadow"
-        >
-          🔊 Test 440Hz tone
-        </button>
-      </div>
+      {/* Audio-unlock prompt — shown until first user tap on the call screen */}
+      {!audioUnlocked && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg z-20 pointer-events-none">
+          Tap anywhere to enable audio
+        </div>
+      )}
 
       {/* Real-time audio level meters + device selectors — diagnostic.
           Levels show if mic/peer-audio are actually producing amplitude.

@@ -228,6 +228,166 @@ export class WebRTCSession {
     console.log('[telco] Switched audio output', { deviceId });
   }
 
+  /**
+   * Get current microphone RMS level via the local analyser.
+   * Returns 0 if no analyser is set up.
+   */
+  private currentMicLevel(): number {
+    if (!this._localAnalyser) return 0;
+    const buf = new Float32Array(256);
+    this._localAnalyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.sqrt(sum / buf.length);
+  }
+
+  /**
+   * Sample the local mic peak level over `durationMs`. Returns the max RMS
+   * observed. Used by autoSelectMic to detect whether a device produces sound.
+   */
+  private async sampleMicPeak(durationMs: number): Promise<number> {
+    let max = 0;
+    const start = Date.now();
+    while (Date.now() - start < durationMs) {
+      const lvl = this.currentMicLevel();
+      if (lvl > max) max = lvl;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    return max;
+  }
+
+  /**
+   * If the system-default mic is silent (background noise should produce
+   * SOMETHING above the threshold), scan other audio inputs and switch to
+   * the first one that produces audible amplitude.
+   *
+   * Threshold of 0.005 RMS is well above floating-point noise but below
+   * meaningful speech (typical voice is 0.05-0.3).
+   */
+  async autoSelectMic(): Promise<void> {
+    const SILENCE_THRESHOLD = 0.005;
+    const probeDuration = 2500; // 2.5s of ambient capture per device
+
+    const peak = await this.sampleMicPeak(probeDuration);
+    if (peak >= SILENCE_THRESHOLD) {
+      console.log(`[telco] Default mic is producing audio (peak ${peak.toFixed(3)}) — keeping it`);
+      return;
+    }
+
+    console.log(`[telco] Default mic appears silent (peak ${peak.toFixed(3)}), scanning other audio inputs...`);
+    const all = await navigator.mediaDevices.enumerateDevices();
+    // Get current device id to skip
+    const currentTrack = this._localStream?.getAudioTracks()[0];
+    const currentSettings = currentTrack?.getSettings();
+    const currentDeviceId = currentSettings?.deviceId;
+
+    const candidates = all.filter(d =>
+      d.kind === 'audioinput'
+      && d.deviceId !== currentDeviceId
+      && d.deviceId !== 'default'
+      && d.deviceId !== 'communications'
+    );
+
+    for (const dev of candidates) {
+      try {
+        await this.switchAudioInput(dev.deviceId);
+        await new Promise(r => setTimeout(r, 300)); // let new device stabilize
+        const p = await this.sampleMicPeak(probeDuration);
+        if (p >= SILENCE_THRESHOLD) {
+          console.log(`[telco] Auto-selected working mic: "${dev.label}" (peak ${p.toFixed(3)})`);
+          return;
+        }
+        console.log(`[telco] "${dev.label}" silent (peak ${p.toFixed(3)})`);
+      } catch (err) {
+        console.warn(`[telco] Failed to test "${dev.label}":`, err instanceof Error ? err.message : err);
+      }
+    }
+    console.warn('[telco] No working mic found — all devices appear silent');
+  }
+
+  /**
+   * Sample the current camera frame and compute brightness variance.
+   * Low variance ≈ uniform image (covered lens, dead camera, all-black, etc).
+   */
+  private async cameraVariance(track: MediaStreamTrack): Promise<number> {
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = new MediaStream([track]);
+    await video.play().catch(() => {});
+    // Wait for first real frame (camera initialization can take 500-1500ms)
+    await new Promise(r => setTimeout(r, 800));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      video.pause();
+      video.srcObject = null;
+      return 0;
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    const brightnesses: number[] = [];
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      brightnesses.push(0.299 * r + 0.587 * g + 0.114 * b);
+    }
+    const mean = brightnesses.reduce((a, b) => a + b, 0) / brightnesses.length;
+    const variance = brightnesses.reduce((s, x) => s + (x - mean) ** 2, 0) / brightnesses.length;
+
+    video.pause();
+    video.srcObject = null;
+    return variance;
+  }
+
+  /**
+   * If the current camera shows a uniform image (covered, dead, lens cap on),
+   * scan other video inputs and switch to one with a detailed image.
+   */
+  async autoSelectCamera(): Promise<void> {
+    const VARIANCE_THRESHOLD = 200; // empirical: real scenes >> 1000, blank ~ 0-50
+    const track = this._localStream?.getVideoTracks()[0];
+    if (!track) return;
+
+    const v = await this.cameraVariance(track);
+    if (v >= VARIANCE_THRESHOLD) {
+      console.log(`[telco] Default camera shows detailed image (variance ${v.toFixed(0)}) — keeping it`);
+      return;
+    }
+
+    console.log(`[telco] Default camera shows uniform image (variance ${v.toFixed(0)}), scanning other cameras...`);
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const currentSettings = track.getSettings();
+    const currentDeviceId = currentSettings?.deviceId;
+
+    const candidates = all.filter(d =>
+      d.kind === 'videoinput'
+      && d.deviceId !== currentDeviceId
+      && d.deviceId !== 'default'
+    );
+
+    for (const dev of candidates) {
+      try {
+        await this.switchVideoInput(dev.deviceId);
+        const newTrack = this._localStream?.getVideoTracks()[0];
+        if (!newTrack) continue;
+        const variance = await this.cameraVariance(newTrack);
+        if (variance >= VARIANCE_THRESHOLD) {
+          console.log(`[telco] Auto-selected working camera: "${dev.label}" (variance ${variance.toFixed(0)})`);
+          return;
+        }
+        console.log(`[telco] "${dev.label}" uniform (variance ${variance.toFixed(0)})`);
+      } catch (err) {
+        console.warn(`[telco] Failed to test "${dev.label}":`, err instanceof Error ? err.message : err);
+      }
+    }
+    console.warn('[telco] No camera with detailed image found');
+  }
+
   async createOffer(): Promise<string> {
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);

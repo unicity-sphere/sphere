@@ -3,13 +3,14 @@ import { useSphereContext } from '../../../sdk/hooks/core/useSphere';
 import { WebRTCSession } from './webrtc';
 import { QualityMonitor } from './qualityMonitor';
 import { encodeTelcoMessage, decodeTelcoMessage } from './signaling';
-import { playRingtone, stopRingtone } from './ringtone';
+import { playCue, stopCue } from './audioCues';
 import {
   setCurrentCall, updateCallState,
   setLocalStream, setRemoteStream,
   setAudioMuted, setVideoMuted,
   setConnectionQuality, resetCallState,
   setPeerCapability, setAudioLevels,
+  useCallStore,
 } from './callStore';
 import {
   CALL_TIMEOUT, RECONNECT_TIMEOUT,
@@ -84,7 +85,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const cleanup = useCallback(() => {
     clearCallTimeout();
-    stopRingtone();
+    stopCue();
     monitorRef.current?.stop();
     monitorRef.current = null;
     sessionRef.current?.dispose();
@@ -208,6 +209,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
             monitor.onTierChange = (tier) => session.applyQualityTier(tier);
             monitor.start();
             session.startStallWatchdog();
+            // Run auto-select in the background — if defaults are silent/blank,
+            // it will switch to a working device. Doesn't block call setup.
+            session.autoSelectMic().catch((err) => console.warn('[telco] autoSelectMic:', err));
+            const isVideoCall = currentCallRef.current?.mediaType === 'video';
+            if (isVideoCall) {
+              session.autoSelectCamera().catch((err) => console.warn('[telco] autoSelectCamera:', err));
+            }
             // Diagnostic: log audio packet flow every 3s after connect
             const pc = session.getPeerConnection();
             const audioStatsInterval = setInterval(async () => {
@@ -340,7 +348,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const acceptCall = useCallback(() => {
     const call = currentCallRef.current;
     if (!call || call.state !== 'ringing' || !call.remoteSdp) return;
-    stopRingtone();
+    stopCue();
     clearCallTimeout(); // Cancel ringing timeout
     clearDismissTimer(); // Cancel any pending reset from previous call
 
@@ -374,7 +382,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const declineCall = useCallback(() => {
     const call = currentCallRef.current;
     if (!call || call.state !== 'ringing') return;
-    stopRingtone();
+    stopCue();
     sendSignal(call.peerPubkey, 'decline', {}, call.callId);
     endCall('Declined');
   }, [sendSignal, endCall]);
@@ -488,10 +496,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
           };
           syncSetCall(currentCallRef, newCall);
           startingRef.current = true;
-          playRingtone();
 
           timeoutRef.current = setTimeout(() => {
-            stopRingtone();
+            stopCue();
             sendSignal(peerPubkey, 'timeout', {}, signal.callId);
             endCall('Missed call');
           }, CALL_TIMEOUT);
@@ -544,7 +551,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
         case 'timeout': {
           if (!call || call.callId !== signal.callId) return;
-          stopRingtone();
+          stopCue();
           endCall('Missed call');
           break;
         }
@@ -616,6 +623,30 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setCurrentCall(null);
     };
   }, [cleanup, clearDismissTimer]);
+
+  // ── Audio cue driver — translates call state into the right sound ──
+  // 'calling'      → ringback (caller hears the dial tone while waiting)
+  // 'ringing'      → ring (callee hears the bell)
+  // 'reconnecting' → low pulse (signals "trying to reconnect")
+  // 'connected'    → silence (or stop reconnect cue)
+  // 'ended/failed' → drop sound (single descending sweep)
+  const callState = useCallStore(s => s.currentCall?.state);
+  useEffect(() => {
+    if (callState === 'calling') {
+      playCue('ringback');
+    } else if (callState === 'ringing') {
+      playCue('ring');
+    } else if (callState === 'reconnecting') {
+      playCue('reconnecting');
+    } else if (callState === 'connected') {
+      stopCue();
+    } else if (callState === 'ended' || callState === 'failed') {
+      playCue('ended');
+    } else {
+      // requesting-media, gathering-ice, connecting, idle, undefined
+      stopCue();
+    }
+  }, [callState]);
 
   const value: CallContextValue = {
     startCall,
