@@ -11,6 +11,7 @@ export class WebRTCSession {
   private pc: RTCPeerConnection;
   private _localStream: MediaStream | null = null;
   private _remoteStream: MediaStream | null = null;
+  private _remoteAudioEl: HTMLAudioElement | null = null;
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -49,9 +50,31 @@ export class WebRTCSession {
     this.pc.ontrack = (event) => {
       if (this.disposed) return;
 
-      // Audio playback handled by an unmuted <video> element in
-      // ActiveCallScreen — that's the most reliable path on Chrome. No
-      // detached audio element here.
+      // Detached <audio> element for reliable audio playback. Lives in
+      // document.body (not inside the call overlay portal) so it isn't
+      // affected by stacking-context quirks or React lifecycle.
+      if (event.track.kind === 'audio') {
+        if (!this._remoteAudioEl) {
+          const audio = document.createElement('audio');
+          audio.autoplay = true;
+          audio.setAttribute('playsinline', '');
+          audio.style.position = 'absolute';
+          audio.style.width = '1px';
+          audio.style.height = '1px';
+          audio.style.opacity = '0';
+          audio.style.pointerEvents = 'none';
+          document.body.appendChild(audio);
+          this._remoteAudioEl = audio;
+        }
+        // Audio-only stream so the element doesn't hold a video sink
+        this._remoteAudioEl.srcObject = new MediaStream([event.track]);
+        const p = this._remoteAudioEl.play();
+        if (p && typeof p.then === 'function') {
+          p.catch((err: Error) => {
+            console.warn('[telco] Detached audio play failed:', err.name, err.message);
+          });
+        }
+      }
 
       // Notify onTrack so React UI can render video, etc.
       const [stream] = event.streams;
@@ -166,6 +189,24 @@ export class WebRTCSession {
     return this.pc;
   }
 
+  /**
+   * Force-play the detached audio element. Call within a fresh user gesture
+   * to unlock autoplay when the browser silently blocked it.
+   */
+  retryRemoteAudioPlay(): Promise<void> {
+    const a = this._remoteAudioEl;
+    if (!a) return Promise.resolve();
+    a.muted = false;
+    a.volume = 1.0;
+    return a.play().then(() => {
+      console.log('[telco] Remote audio play retry succeeded', {
+        paused: a.paused, muted: a.muted, volume: a.volume,
+      });
+    }).catch((err: Error) => {
+      console.warn('[telco] Remote audio play retry failed:', err.name, err.message);
+    });
+  }
+
   dispose(): void {
     if (this.disposed) return; // Guard against double dispose
     this.disposed = true;
@@ -186,6 +227,13 @@ export class WebRTCSession {
     this._localStream?.getTracks().forEach(t => t.stop());
     this._localStream = null;
     this._remoteStream = null;
+
+    if (this._remoteAudioEl) {
+      this._remoteAudioEl.pause();
+      this._remoteAudioEl.srcObject = null;
+      this._remoteAudioEl.remove();
+      this._remoteAudioEl = null;
+    }
 
     this.pc.onconnectionstatechange = null;
     this.pc.oniceconnectionstatechange = null;

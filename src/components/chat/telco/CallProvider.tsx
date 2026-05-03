@@ -319,6 +319,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setVideoMuted(session.toggleMuteVideo());
   }, []);
 
+  const retryRemoteAudioPlay = useCallback(() => {
+    sessionRef.current?.retryRemoteAudioPlay();
+  }, []);
+
   // ── Incoming signaling handler ──────────────────────────────────────
 
   useEffect(() => {
@@ -470,6 +474,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     hangUp,
     toggleMuteAudio,
     toggleMuteVideo,
+    retryRemoteAudioPlay,
   };
 
   return <CallContext value={value}>{children}</CallContext>;

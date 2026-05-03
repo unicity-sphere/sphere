@@ -14,7 +14,7 @@ interface ActiveCallScreenProps {
 }
 
 export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
-  const { hangUp, toggleMuteAudio, toggleMuteVideo } = useCall();
+  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay } = useCall();
   const localStream = useCallStore(s => s.localStream);
   const remoteStream = useCallStore(s => s.remoteStream);
   const audioMuted = useCallStore(s => s.audioMuted);
@@ -23,9 +23,9 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
   const isVideo = call.mediaType === 'video';
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
-  // Reactive remote-video detection. Tracks can arrive in separate ontrack
-  // events for the same stream, so listen for addtrack/removetrack.
+  // Reactive remote-video detection.
   useEffect(() => {
     if (!remoteStream) { setHasRemoteVideo(false); return; }
     const update = () => {
@@ -40,19 +40,26 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
     };
   }, [remoteStream]);
 
-  return (
-    <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Remote video — always rendered (unmuted) so it plays audio reliably.
-          On Chrome, <video> elements with autoplay/playsinline are the most
-          permissive media surface and route audio output predictably. When
-          there's no remote video track, the avatar overlays this element. */}
-      <VideoFeed
-        stream={remoteStream}
-        className={`absolute inset-0 w-full h-full ${(isVideo && hasRemoteVideo) ? '' : 'opacity-0 pointer-events-none'}`}
-      />
+  // Whenever ANY click/touch happens on the call screen, retry audio play().
+  // Browsers can silently block autoplay — a fresh user gesture unlocks it.
+  // We do this on every interaction (cheap to call when already playing) until
+  // the user explicitly dismisses the unlock prompt by interacting once.
+  const handleAnyInteraction = () => {
+    retryRemoteAudioPlay();
+    setAudioUnlocked(true);
+  };
 
-      <div className="flex-1 flex items-center justify-center relative z-10">
-        {(!isVideo || !hasRemoteVideo) && (
+  return (
+    <div
+      className="relative w-full h-full bg-neutral-900 flex flex-col"
+      onClickCapture={handleAnyInteraction}
+      onTouchStartCapture={handleAnyInteraction}
+    >
+      {/* Remote video / avatar (audio plays via detached element from webrtc.ts) */}
+      <div className="flex-1 flex items-center justify-center">
+        {isVideo && hasRemoteVideo ? (
+          <VideoFeed stream={remoteStream} muted className="w-full h-full" />
+        ) : (
           <div className="flex flex-col items-center gap-4">
             <div
               className={`w-28 h-28 rounded-full bg-linear-to-br ${getColorFromPubkey(call.peerPubkey).gradient} flex items-center justify-center text-white text-3xl font-semibold`}
@@ -68,13 +75,22 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
       {/* Local video PiP (top-right corner) */}
       {isVideo && localStream && (
-        <div className="absolute top-16 right-4 w-32 h-44 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg">
+        <div className="absolute top-16 right-4 w-32 h-44 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg pointer-events-none">
           <VideoFeed stream={localStream} muted mirror className="w-full h-full" />
         </div>
       )}
 
+      {/* Audio-unlock prompt: shown until the user interacts once. The whole
+          screen is clickable (above) — tapping ANYWHERE retries audio play
+          and dismisses this prompt. */}
+      {!audioUnlocked && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg pointer-events-none">
+          Tap anywhere to enable audio
+        </div>
+      )}
+
       {/* Top bar: timer + quality */}
-      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent">
+      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent pointer-events-none">
         <div className="flex items-center gap-2">
           {call.connectedAt && <CallTimer connectedAt={call.connectedAt} />}
           {call.state === 'reconnecting' && (
@@ -84,7 +100,7 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         <QualityIndicator quality={quality} />
       </div>
 
-      {/* Bottom controls */}
+      {/* Bottom controls — pointer-events allowed */}
       <div className="absolute bottom-0 left-0 right-0 pb-8 pt-4 bg-gradient-to-t from-black/60 to-transparent">
         <CallControls
           audioMuted={audioMuted}
