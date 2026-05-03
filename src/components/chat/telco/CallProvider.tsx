@@ -120,6 +120,40 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }, CALL_FAILED_DISMISS_DELAY);
   }, [cleanup, clearDismissTimer]);
 
+  // ── Reconnection helpers ────────────────────────────────────────────
+
+  /**
+   * Mark the call as reconnected if the underlying connection is already
+   * healthy. Used after an ICE-restart completes — Chrome doesn't always
+   * fire connectionState='connected' again if the state was never actually
+   * lost (e.g., a brief packet stall recovered without a hard disconnect),
+   * so the state machine can get stuck in 'reconnecting' forever even
+   * though packets are flowing fine. This helper detects that and forces
+   * the transition.
+   */
+  const markReconnectedIfHealthy = useCallback(() => {
+    const session = sessionRef.current;
+    const call = currentCallRef.current;
+    if (!session || !call) return;
+    if (call.state !== 'reconnecting') return;
+    if (session.connectionState !== 'connected') return;
+
+    console.log('[telco] Reconnect completed without state-change event — forcing state to connected');
+    syncUpdateCall(currentCallRef, { state: 'connected' });
+    reconnectingRef.current = false;
+    iceRestartPendingRef.current = false;
+    clearCallTimeout();
+    session.resetStallWatchdog();
+    // Restart the quality monitor if it was stopped
+    if (!monitorRef.current) {
+      const monitor = new QualityMonitor(session.getPeerConnection());
+      monitorRef.current = monitor;
+      monitor.onQualityUpdate = (q) => setConnectionQuality(q);
+      monitor.onTierChange = (tier) => session.applyQualityTier(tier);
+      monitor.start();
+    }
+  }, [clearCallTimeout]);
+
   // ── Reconnection (ICE restart) ──────────────────────────────────────
 
   /**
@@ -162,11 +196,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
       await sendSignal(call.peerPubkey, 'ice-restart', { sdp, mediaType: call.mediaType }, call.callId);
       // Allow RECONNECT_TIMEOUT for the answer + ICE re-handshake
       timeoutRef.current = setTimeout(() => {
-        if (currentCallRef.current?.state === 'reconnecting') {
-          // Try again — within the rate limit; or failCall if exceeded
-          reconnectingRef.current = false;
-          triggerReconnect('reconnect timeout');
+        if (currentCallRef.current?.state !== 'reconnecting') return;
+        // If connection is actually healthy (no real disconnect happened),
+        // just transition out of 'reconnecting' instead of retrying.
+        if (sessionRef.current?.connectionState === 'connected') {
+          markReconnectedIfHealthy();
+          return;
         }
+        // Try again — within the rate limit; or failCall if exceeded
+        reconnectingRef.current = false;
+        triggerReconnect('reconnect timeout');
       }, RECONNECT_TIMEOUT);
     } catch (err) {
       console.warn('[telco] restartIce threw:', err instanceof Error ? err.message : err);
@@ -174,7 +213,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       iceRestartPendingRef.current = false;
       failCall('ICE restart failed');
     }
-  }, [clearCallTimeout, sendSignal, failCall]);
+  }, [clearCallTimeout, sendSignal, failCall, markReconnectedIfHealthy]);
 
   // ── WebRTC connection state handler ─────────────────────────────────
 
@@ -531,9 +570,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
           if (session) {
             session.setRemoteAnswer(payload.sdp).then(() => {
               if (isReconnectAnswer) {
-                console.log('[telco] ICE-restart answer applied — awaiting connection re-establishment');
+                console.log('[telco] ICE-restart answer applied — checking if connection is already healthy');
                 iceRestartPendingRef.current = false;
-                // 'connected' connectionState event will clear reconnectingRef
+                // If connectionState never left 'connected' (brief stall, no
+                // hard disconnect), no 'connected' event will re-fire — force
+                // the state transition explicitly.
+                markReconnectedIfHealthy();
               }
             }).catch(() => failCall('Failed to set remote answer'));
             timeoutRef.current = setTimeout(() => failCall('Connection timeout'), RECONNECT_TIMEOUT);
@@ -611,6 +653,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
             const answerSdp = await session.createAnswer(payload.sdp);
             await sendSignal(peerPubkey, 'answer', { sdp: answerSdp }, signal.callId);
             console.log('[telco] Sent ICE-restart answer to peer');
+            // If the underlying connection never actually dropped (brief
+            // packet stall only), no 'connected' event will fire to take
+            // us out of 'reconnecting' — force the transition explicitly.
+            markReconnectedIfHealthy();
           } catch (err) {
             console.warn('[telco] ICE-restart createAnswer failed:', err instanceof Error ? err.message : err);
             // Don't failCall here — peer may retry, or the original connection may recover
@@ -622,7 +668,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener('dm-telco-signal', handler);
     return () => window.removeEventListener('dm-telco-signal', handler);
-  }, [sphere, sendSignal, cleanup, clearCallTimeout, clearDismissTimer, endCall, failCall, setupConnectionHandlers]);
+  }, [sphere, sendSignal, cleanup, clearCallTimeout, clearDismissTimer, endCall, failCall, setupConnectionHandlers, markReconnectedIfHealthy]);
 
   // ── Page-wide audio unlock ──────────────────────────────────────────
   // Browsers block audio playback (Web Audio + <audio>/<video> with sound)
