@@ -11,7 +11,11 @@ import {
   setConnectionQuality, resetCallState,
   setPeerCapability, setAudioLevels,
 } from './callStore';
-import { CALL_TIMEOUT, RECONNECT_TIMEOUT, CALL_ENDED_DISMISS_DELAY, CALL_FAILED_DISMISS_DELAY } from './constants';
+import {
+  CALL_TIMEOUT, RECONNECT_TIMEOUT,
+  CALL_ENDED_DISMISS_DELAY, CALL_FAILED_DISMISS_DELAY,
+  ICE_RESTART_MAX_ATTEMPTS, ICE_RESTART_WINDOW_MS,
+} from './constants';
 import { CallContext, type CallContextValue } from './CallContext';
 import type {
   CallInfo, MediaType,
@@ -51,6 +55,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false); // Atomic lock for startCall
   const currentCallRef = useRef<CallInfo | null>(null);
+  // ICE-restart bookkeeping
+  const iceRestartPendingRef = useRef(false); // We sent an ice-restart and await answer
+  const iceRestartAttemptsRef = useRef<number[]>([]); // Timestamps of restart attempts (for rate limit)
+  const reconnectingRef = useRef(false); // Atomic lock — prevents concurrent restart triggers
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -81,6 +89,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     monitorRef.current = null;
     sessionRef.current?.dispose();
     sessionRef.current = null;
+    // Reset reconnect bookkeeping for the next call
+    reconnectingRef.current = false;
+    iceRestartPendingRef.current = false;
+    iceRestartAttemptsRef.current = [];
   }, [clearCallTimeout]);
 
   const endCall = useCallback((reason: string) => {
@@ -107,20 +119,87 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }, CALL_FAILED_DISMISS_DELAY);
   }, [cleanup, clearDismissTimer]);
 
+  // ── Reconnection (ICE restart) ──────────────────────────────────────
+
+  /**
+   * Trigger an ICE restart on the peer connection. Rate-limited to
+   * ICE_RESTART_MAX_ATTEMPTS within ICE_RESTART_WINDOW_MS — beyond that,
+   * the call is marked failed instead of looping forever.
+   *
+   * Sets iceRestartPendingRef.current = true so that incoming ice-restart
+   * messages from the peer can be glare-resolved properly.
+   */
+  const triggerReconnect = useCallback(async (reason: string) => {
+    const session = sessionRef.current;
+    const call = currentCallRef.current;
+    if (!session || !call) return;
+    if (reconnectingRef.current) return; // Already in progress
+    if (call.state === 'ended' || call.state === 'failed') return;
+
+    // Rate-limit: keep only attempts within the rolling window
+    const now = Date.now();
+    iceRestartAttemptsRef.current = iceRestartAttemptsRef.current.filter(
+      (t) => now - t < ICE_RESTART_WINDOW_MS,
+    );
+    if (iceRestartAttemptsRef.current.length >= ICE_RESTART_MAX_ATTEMPTS) {
+      console.warn(`[telco] Reconnect bound exceeded (${ICE_RESTART_MAX_ATTEMPTS} in ${ICE_RESTART_WINDOW_MS}ms) — failing call`);
+      failCall('Connection lost — too many reconnect attempts');
+      return;
+    }
+    iceRestartAttemptsRef.current.push(now);
+
+    reconnectingRef.current = true;
+    iceRestartPendingRef.current = true;
+    syncUpdateCall(currentCallRef, { state: 'reconnecting' });
+    monitorRef.current?.stop();
+    clearCallTimeout();
+
+    console.log(`[telco] Triggering ICE restart (${reason}) — attempt ${iceRestartAttemptsRef.current.length}/${ICE_RESTART_MAX_ATTEMPTS}`);
+
+    try {
+      const sdp = await session.restartIce();
+      await sendSignal(call.peerPubkey, 'ice-restart', { sdp, mediaType: call.mediaType }, call.callId);
+      // Allow RECONNECT_TIMEOUT for the answer + ICE re-handshake
+      timeoutRef.current = setTimeout(() => {
+        if (currentCallRef.current?.state === 'reconnecting') {
+          // Try again — within the rate limit; or failCall if exceeded
+          reconnectingRef.current = false;
+          triggerReconnect('reconnect timeout');
+        }
+      }, RECONNECT_TIMEOUT);
+    } catch (err) {
+      console.warn('[telco] restartIce threw:', err instanceof Error ? err.message : err);
+      reconnectingRef.current = false;
+      iceRestartPendingRef.current = false;
+      failCall('ICE restart failed');
+    }
+  }, [clearCallTimeout, sendSignal, failCall]);
+
   // ── WebRTC connection state handler ─────────────────────────────────
 
   const setupConnectionHandlers = useCallback((session: WebRTCSession) => {
     session.onAudioLevels = (local: number, remote: number) => {
       setAudioLevels(local, remote);
     };
+    // Stall watchdog → trigger ICE restart when no inbound packets arrive
+    session.onConnectionStalled = () => {
+      triggerReconnect('packet stall');
+    };
+
     session.onConnectionStateChange = (state: RTCPeerConnectionState) => {
       const call = currentCallRef.current;
       if (!call) return;
+
+      console.log(`[telco] Connection state → ${state} (call.state=${call.state})`);
 
       switch (state) {
         case 'connected':
           clearCallTimeout();
           monitorRef.current?.stop(); // Stop old monitor if reconnecting
+          // Successful (re)connection — reset reconnect bookkeeping
+          reconnectingRef.current = false;
+          iceRestartPendingRef.current = false;
+          session.resetStallWatchdog();
           if (call.state === 'connecting' || call.state === 'reconnecting') {
             syncUpdateCall(currentCallRef, { state: 'connected', connectedAt: call.connectedAt ?? Date.now() });
             const monitor = new QualityMonitor(session.getPeerConnection());
@@ -128,6 +207,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
             monitor.onQualityUpdate = (q) => setConnectionQuality(q);
             monitor.onTierChange = (tier) => session.applyQualityTier(tier);
             monitor.start();
+            session.startStallWatchdog();
             // Diagnostic: log audio packet flow every 3s after connect
             const pc = session.getPeerConnection();
             const audioStatsInterval = setInterval(async () => {
@@ -173,36 +253,25 @@ export function CallProvider({ children }: { children: ReactNode }) {
           break;
 
         case 'disconnected':
+          // Brief disconnect — wait 3s before triggering reconnect, since
+          // many disconnect events recover on their own.
           clearCallTimeout();
           if (call.state === 'connected') {
             syncUpdateCall(currentCallRef, { state: 'reconnecting' });
             monitorRef.current?.stop();
-            timeoutRef.current = setTimeout(async () => {
+            timeoutRef.current = setTimeout(() => {
               const current = currentCallRef.current;
-              if (!current || current.state !== 'reconnecting') return;
-              try {
-                const newSdp = await session.restartIce();
-                await sendSignal(current.peerPubkey, 'ice-restart', { sdp: newSdp, mediaType: current.mediaType }, current.callId);
-                // Set a timeout for the reconnect to complete
-                timeoutRef.current = setTimeout(() => failCall('Reconnection timeout'), RECONNECT_TIMEOUT);
-              } catch {
-                failCall('ICE restart failed');
+              if (current?.state === 'reconnecting' && session.connectionState !== 'connected') {
+                triggerReconnect('connection disconnected');
               }
             }, 3000);
           }
           break;
 
         case 'failed':
+          // Hard failure — reconnect immediately
           clearCallTimeout();
-          if (call.state === 'reconnecting') {
-            failCall('Connection lost');
-          } else {
-            syncUpdateCall(currentCallRef, { state: 'reconnecting' });
-            timeoutRef.current = setTimeout(() => failCall('Connection failed'), RECONNECT_TIMEOUT);
-            session.restartIce().then(async (sdp) => {
-              await sendSignal(call.peerPubkey, 'ice-restart', { sdp, mediaType: call.mediaType }, call.callId);
-            }).catch(() => failCall('ICE restart failed'));
-          }
+          triggerReconnect('connection failed');
           break;
 
         case 'closed':
@@ -216,7 +285,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     session.onTrack = (stream: MediaStream) => {
       setRemoteStream(stream);
     };
-  }, [clearCallTimeout, sendSignal, endCall, failCall]);
+  }, [clearCallTimeout, endCall, triggerReconnect]);
 
   // ── Start outgoing call ─────────────────────────────────────────────
 
@@ -356,7 +425,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // ── Incoming signaling handler ──────────────────────────────────────
 
   useEffect(() => {
-    const handler = (e: Event) => {
+    const handler = async (e: Event) => {
       const { peerPubkey, content, isFromMe } = (e as CustomEvent<TelcoSignalDetail>).detail;
       if (isFromMe) return;
 
@@ -430,14 +499,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
         }
 
         case 'answer': {
-          if (!call || call.callId !== signal.callId || call.state !== 'calling') return;
+          if (!call || call.callId !== signal.callId) return;
+          // Accept answer for either initial 'calling' state or for an
+          // ICE-restart we initiated while in 'reconnecting' state.
+          const isReconnectAnswer = call.state === 'reconnecting' && iceRestartPendingRef.current;
+          if (call.state !== 'calling' && !isReconnectAnswer) return;
           clearCallTimeout();
-          syncUpdateCall(currentCallRef, { state: 'connecting' });
+          if (call.state === 'calling') {
+            syncUpdateCall(currentCallRef, { state: 'connecting' });
+          }
 
           const payload = signal.payload as unknown as AnswerPayload;
           const session = sessionRef.current;
           if (session) {
-            session.setRemoteAnswer(payload.sdp).catch(() => failCall('Failed to set remote answer'));
+            session.setRemoteAnswer(payload.sdp).then(() => {
+              if (isReconnectAnswer) {
+                console.log('[telco] ICE-restart answer applied — awaiting connection re-establishment');
+                iceRestartPendingRef.current = false;
+                // 'connected' connectionState event will clear reconnectingRef
+              }
+            }).catch(() => failCall('Failed to set remote answer'));
             timeoutRef.current = setTimeout(() => failCall('Connection timeout'), RECONNECT_TIMEOUT);
           }
           break;
@@ -474,10 +555,49 @@ export function CallProvider({ children }: { children: ReactNode }) {
           if (call.state !== 'connected' && call.state !== 'reconnecting') return;
           const session = sessionRef.current;
           if (!session) return;
+
+          // ── Concurrent-reconnect (glare) resolution ─────────────────
+          // If we ALSO sent an ice-restart and are awaiting an answer,
+          // we have a collision. Use Perfect Negotiation:
+          // - Higher-pubkey peer ROLLS BACK its local offer and accepts theirs.
+          // - Lower-pubkey peer IGNORES theirs (their answer to our offer wins).
+          // (Same lower-pubkey-wins direction as our offer-glare handling.)
+          const myPubkey = sphere?.identity?.chainPubkey ?? '';
+          const haveLocalOffer = session.signalingState === 'have-local-offer';
+
+          if (iceRestartPendingRef.current || haveLocalOffer) {
+            if (!myPubkey || myPubkey < peerPubkey) {
+              // We win — ignore their offer, expect their answer to ours
+              console.log('[telco] ICE-restart glare: we win, ignoring peer offer');
+              break;
+            }
+            // We lose — roll back our offer and accept theirs
+            console.log('[telco] ICE-restart glare: we lose, rolling back local offer');
+            try {
+              await session.rollbackLocalDescription();
+            } catch (err) {
+              console.warn('[telco] rollback failed:', err instanceof Error ? err.message : err);
+              // Fall through and try createAnswer anyway — may still succeed
+            }
+            iceRestartPendingRef.current = false;
+            // Cancel any in-flight reconnect timer; the peer's restart takes over
+            clearCallTimeout();
+            // Stay in 'reconnecting' state — connectionState=connected will clear it
+          }
+
+          // Process peer's ICE-restart offer
+          if (call.state === 'connected') {
+            syncUpdateCall(currentCallRef, { state: 'reconnecting' });
+          }
           const payload = signal.payload as unknown as OfferPayload;
-          session.createAnswer(payload.sdp).then(async (answerSdp) => {
+          try {
+            const answerSdp = await session.createAnswer(payload.sdp);
             await sendSignal(peerPubkey, 'answer', { sdp: answerSdp }, signal.callId);
-          }).catch(() => failCall('ICE restart answer failed'));
+            console.log('[telco] Sent ICE-restart answer to peer');
+          } catch (err) {
+            console.warn('[telco] ICE-restart createAnswer failed:', err instanceof Error ? err.message : err);
+            // Don't failCall here — peer may retry, or the original connection may recover
+          }
           break;
         }
       }

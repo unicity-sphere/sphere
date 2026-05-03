@@ -16,6 +16,14 @@ export const ICE_SERVERS: RTCIceServer[] = [
 export const CALL_TIMEOUT = 30_000;
 export const ICE_GATHER_TIMEOUT = 10_000;
 export const RECONNECT_TIMEOUT = 15_000;
+// Stall watchdog: if no inbound RTP packets for this duration while connected,
+// treat as a broken connection and trigger ICE restart.
+export const PACKET_STALL_THRESHOLD_MS = 10_000;
+export const PACKET_STALL_POLL_INTERVAL_MS = 2_000;
+// Bounded ICE-restart attempts: max ATTEMPTS within WINDOW. Beyond that,
+// fail the call rather than loop forever.
+export const ICE_RESTART_MAX_ATTEMPTS = 3;
+export const ICE_RESTART_WINDOW_MS = 60_000;
 export const CALL_ENDED_DISMISS_DELAY = 3_000;
 export const CALL_FAILED_DISMISS_DELAY = 5_000;
 export const CAPABILITY_STALE_MS = 24 * 60 * 60 * 1000; // 24 hours

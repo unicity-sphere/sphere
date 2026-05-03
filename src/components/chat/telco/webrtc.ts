@@ -1,4 +1,7 @@
-import { ICE_SERVERS, ICE_GATHER_TIMEOUT, QUALITY_TIERS } from './constants';
+import {
+  ICE_SERVERS, ICE_GATHER_TIMEOUT, QUALITY_TIERS,
+  PACKET_STALL_THRESHOLD_MS, PACKET_STALL_POLL_INTERVAL_MS,
+} from './constants';
 import type { MediaType, QualityTier } from './types';
 
 export type ConnectionStateHandler = (state: RTCPeerConnectionState) => void;
@@ -25,6 +28,14 @@ export class WebRTCSession {
   private _levelRafId: number | null = null;
   // Callback set by CallProvider to push levels into the store
   onAudioLevels: (local: number, remote: number) => void = () => {};
+  // Fired by the stall watchdog when no inbound packets have been seen
+  // for PACKET_STALL_THRESHOLD_MS. CallProvider uses this to trigger
+  // ICE restart even when connectionState is misleadingly still 'connected'.
+  onConnectionStalled: () => void = () => {};
+  // Stall watchdog state
+  private _stallWatchdogId: ReturnType<typeof setInterval> | null = null;
+  private _lastInboundPackets = 0;
+  private _lastInboundGrowAt = 0;
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -250,6 +261,76 @@ export class WebRTCSession {
     const desc = this.pc.localDescription;
     if (!desc) throw new Error('No local description after ICE gathering');
     return desc.sdp;
+  }
+
+  /**
+   * Roll back the local offer. Used during ICE-restart glare resolution
+   * by the "polite" peer to discard its own pending offer and accept the
+   * impolite peer's offer instead. Requires Chrome 102+ / equivalent.
+   */
+  async rollbackLocalDescription(): Promise<void> {
+    if (this.pc.signalingState !== 'have-local-offer') return;
+    await this.pc.setLocalDescription({ type: 'rollback' });
+  }
+
+  get signalingState(): RTCSignalingState {
+    return this.pc.signalingState;
+  }
+
+  /**
+   * Start the inbound-packet stall watchdog. Polls getStats() periodically
+   * and fires onConnectionStalled when no new audio packets have arrived
+   * for PACKET_STALL_THRESHOLD_MS — covers the case where Chrome's
+   * connectionState/iceConnectionState gets stuck at 'connected' even
+   * though the remote peer has gone silent (screen lock, network change,
+   * tab backgrounded, etc).
+   */
+  startStallWatchdog(): void {
+    if (this._stallWatchdogId !== null) return;
+    this._lastInboundPackets = 0;
+    this._lastInboundGrowAt = Date.now();
+    this._stallWatchdogId = setInterval(async () => {
+      if (this.disposed) return;
+      try {
+        const stats = await this.pc.getStats();
+        let received = 0;
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && (report as { kind?: string }).kind === 'audio') {
+            received += (report as { packetsReceived?: number }).packetsReceived ?? 0;
+          }
+        });
+        if (received > this._lastInboundPackets) {
+          this._lastInboundPackets = received;
+          this._lastInboundGrowAt = Date.now();
+        } else {
+          const stalledFor = Date.now() - this._lastInboundGrowAt;
+          if (stalledFor > PACKET_STALL_THRESHOLD_MS) {
+            console.warn(`[telco] Connection stalled — no inbound packets for ${stalledFor}ms`);
+            // Reset the timer so we don't fire repeatedly while reconnect is in progress
+            this._lastInboundGrowAt = Date.now();
+            this.onConnectionStalled();
+          }
+        }
+      } catch {
+        // Stats can fail during teardown — ignore
+      }
+    }, PACKET_STALL_POLL_INTERVAL_MS);
+  }
+
+  stopStallWatchdog(): void {
+    if (this._stallWatchdogId !== null) {
+      clearInterval(this._stallWatchdogId);
+      this._stallWatchdogId = null;
+    }
+  }
+
+  /**
+   * Reset the stall watchdog's baseline. Call after a successful ICE
+   * restart so a brief silence right after isn't immediately flagged
+   * as another stall.
+   */
+  resetStallWatchdog(): void {
+    this._lastInboundGrowAt = Date.now();
   }
 
   toggleMuteAudio(): boolean {
@@ -499,6 +580,9 @@ export class WebRTCSession {
       clearTimeout(this.gatherTimeoutId);
       this.gatherTimeoutId = null;
     }
+
+    // Stop the stall watchdog
+    this.stopStallWatchdog();
 
     // Cancel any audio-stats poll attached by CallProvider
     const audioStatsInterval = (this as unknown as { _audioStatsInterval?: ReturnType<typeof setInterval> })._audioStatsInterval;
