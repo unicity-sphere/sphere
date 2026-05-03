@@ -100,35 +100,34 @@ export function playCue(id: CueId): void {
 }
 
 /**
- * Vintage telephone bell. Two close-frequency triangle oscillators in the
- * upper-mid range (1000+1320Hz) plus a tremolo LFO that modulates amplitude
- * at ~22Hz. The fast tremolo + harmonic content of triangle waves produces
- * the characteristic metallic "ringing bell" trill of an old electromech-
- * anical ringer.
+ * Vintage telephone bell. Two triangle oscillators (1000+1320Hz, perfect-fifth)
+ * plus a 22Hz tremolo LFO modulating the master gain — produces the metallic
+ * "trill" of an electromechanical ringer.
  *
- * Pattern: 1.5s ring burst, 2.5s silence, repeat (4s cycle).
+ * Pattern: a CYCLE consists of 3 short rings ("brrr-brrr-brrr") then a long
+ * silence — like an old desk phone:
+ *   ring 350ms → pause 100ms → ring 350ms → pause 100ms → ring 350ms
+ *   → silence 2700ms → repeat
+ * Total cycle ≈ 4 seconds.
  */
 function startBellPattern(ctx: AudioContext) {
-  // Master gain: shapes the burst envelope (silent → loud → silent every 4s)
   const masterGain = ctx.createGain();
   masterGain.gain.value = 0;
   masterGain.connect(ctx.destination);
 
-  // Tremolo modulator: LFO at 22Hz that scales the master gain
-  // Output value oscillates between ~0.4 and 1.0 — creates the "trill"
+  // Tremolo modulator: LFO at 22Hz adds ±0.03 to masterGain.gain — when
+  // masterGain.gain is at its baseline of 0.07 during a ring, the actual
+  // output oscillates between ~0.04 and 0.10, creating the trill effect.
   const lfo = ctx.createOscillator();
   lfo.type = 'sine';
   lfo.frequency.value = 22;
   const lfoGain = ctx.createGain();
-  lfoGain.gain.value = 0.3; // tremolo depth (added to baseline 0.7 below)
+  lfoGain.gain.value = 0.03;
   lfo.connect(lfoGain);
-  // Connect LFO to a constant offset, then to masterGain.gain
-  // Simpler: connect lfoGain directly to masterGain.gain — the LFO adds
-  // ±0.3 around whatever masterGain.gain is set to.
   lfoGain.connect(masterGain.gain);
   lfo.start();
 
-  // Two carrier oscillators (triangle for richer harmonics than pure sine)
+  // Two carrier oscillators (triangle waves for the bell's harmonic content)
   const osc1 = ctx.createOscillator();
   osc1.type = 'triangle';
   osc1.frequency.value = 1000;
@@ -137,25 +136,36 @@ function startBellPattern(ctx: AudioContext) {
 
   const osc2 = ctx.createOscillator();
   osc2.type = 'triangle';
-  osc2.frequency.value = 1320; // a perfect-fifth interval — sounds like a bell
+  osc2.frequency.value = 1320;
   osc2.connect(masterGain);
   osc2.start();
 
   nodes.push(lfo, lfoGain, osc1, osc2, masterGain);
 
-  const burst = () => {
+  // Schedule a "ring-ring-ring" burst pattern on the masterGain envelope.
+  const RING_MS = 350;   // duration of each individual ring
+  const GAP_MS = 100;    // gap between rings within a burst
+  const RINGS_PER_BURST = 3;
+  const PEAK = 0.07;
+  const RAMP = 0.02;     // attack/release
+
+  const scheduleBurst = () => {
     if (audioCtx === null) return;
-    const t = ctx.currentTime;
-    // Envelope: ramp up over 30ms, hold ~1.5s, ramp down 50ms.
-    // Baseline of 0.07 (tremolo adds ±0.03 around it for ~0.04 to 0.10).
-    masterGain.gain.cancelScheduledValues(t);
-    masterGain.gain.setValueAtTime(0, t);
-    masterGain.gain.linearRampToValueAtTime(0.07, t + 0.03);
-    masterGain.gain.setValueAtTime(0.07, t + 1.45);
-    masterGain.gain.linearRampToValueAtTime(0, t + 1.5);
+    const t0 = ctx.currentTime;
+    masterGain.gain.cancelScheduledValues(t0);
+    masterGain.gain.setValueAtTime(0, t0);
+    for (let i = 0; i < RINGS_PER_BURST; i++) {
+      const tStart = t0 + i * (RING_MS + GAP_MS) / 1000;
+      const tHold = tStart + RAMP;
+      const tEnd = tStart + RING_MS / 1000;
+      masterGain.gain.setValueAtTime(0, tStart);
+      masterGain.gain.linearRampToValueAtTime(PEAK, tHold);
+      masterGain.gain.setValueAtTime(PEAK, tEnd - RAMP);
+      masterGain.gain.linearRampToValueAtTime(0, tEnd);
+    }
   };
-  burst();
-  cueInterval = setInterval(burst, 4000);
+  scheduleBurst();
+  cueInterval = setInterval(scheduleBurst, 4000);
 }
 
 /**

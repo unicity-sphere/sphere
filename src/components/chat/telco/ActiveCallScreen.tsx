@@ -46,13 +46,19 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
       {/* Remote video / avatar. Audio is unlocked synchronously inside
           startCall/acceptCall (within the user-gesture window of the
           Phone/Accept tap), so playback works without further interaction.
-          fit="contain" makes the whole remote frame fit the call window —
-          no cropping; black letterbox bars appear if aspect ratios differ. */}
-      <div className="flex-1 flex items-center justify-center">
+          The video is absolute-positioned (inset-0) so it definitively
+          fills the parent — combined with object-contain, that letterboxes
+          the whole remote frame inside the call window with no cropping. */}
+      <div className="flex-1 relative min-h-0">
         {isVideo && hasRemoteVideo ? (
-          <VideoFeed stream={remoteStream} muted fit="contain" className="w-full h-full" />
+          <VideoFeed
+            stream={remoteStream}
+            muted
+            fit="contain"
+            className="absolute inset-0 w-full h-full"
+          />
         ) : (
-          <div className="flex flex-col items-center gap-4">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
             <div
               className={`w-28 h-28 rounded-full bg-linear-to-br ${getColorFromPubkey(call.peerPubkey).gradient} flex items-center justify-center text-white text-3xl font-semibold`}
             >
