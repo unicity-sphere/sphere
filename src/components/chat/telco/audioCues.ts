@@ -55,6 +55,15 @@ function clearScheduled() {
   nodes = [];
 }
 
+/**
+ * Synchronously create + resume the cues AudioContext within a user gesture.
+ * Call from startCall/acceptCall (before the first await) so subsequent cues
+ * (ringback, drop, etc) are not blocked by autoplay policy.
+ */
+export function unlockCues(): void {
+  ensureCtx();
+}
+
 export function stopCue(): void {
   clearScheduled();
   activeCue = null;

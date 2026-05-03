@@ -16,7 +16,7 @@ interface ActiveCallScreenProps {
 }
 
 export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
-  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay } = useCall();
+  const { hangUp, toggleMuteAudio, toggleMuteVideo } = useCall();
   const localStream = useCallStore(s => s.localStream);
   const remoteStream = useCallStore(s => s.remoteStream);
   const audioMuted = useCallStore(s => s.audioMuted);
@@ -25,7 +25,6 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
   const isVideo = call.mediaType === 'video';
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   // Reactive remote-video detection.
   useEffect(() => {
@@ -42,24 +41,13 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
     };
   }, [remoteStream]);
 
-  // Whenever ANY click/touch happens on the call screen, retry audio play().
-  // Browsers can silently block autoplay — a fresh user gesture unlocks it.
-  // We do this on every interaction (cheap to call when already playing) until
-  // the user explicitly dismisses the unlock prompt by interacting once.
-  const handleAnyInteraction = () => {
-    retryRemoteAudioPlay();
-    setAudioUnlocked(true);
-  };
-
   return (
-    <div
-      className="relative w-full h-full bg-neutral-900 flex flex-col"
-      onClickCapture={handleAnyInteraction}
-      onTouchStartCapture={handleAnyInteraction}
-    >
-      {/* Remote video / avatar (audio plays via detached element from webrtc.ts).
-          fit="contain" so the whole remote frame fits inside the call window —
-          no cropping. Black letterbox bars appear if aspect ratios differ. */}
+    <div className="relative w-full h-full bg-neutral-900 flex flex-col">
+      {/* Remote video / avatar. Audio is unlocked synchronously inside
+          startCall/acceptCall (within the user-gesture window of the
+          Phone/Accept tap), so playback works without further interaction.
+          fit="contain" makes the whole remote frame fit the call window —
+          no cropping; black letterbox bars appear if aspect ratios differ. */}
       <div className="flex-1 flex items-center justify-center">
         {isVideo && hasRemoteVideo ? (
           <VideoFeed stream={remoteStream} muted fit="contain" className="w-full h-full" />
@@ -84,24 +72,12 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </div>
       )}
 
-      {/* Audio-unlock prompt — shown until first user tap on the call screen */}
-      {!audioUnlocked && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg z-20 pointer-events-none">
-          Tap anywhere to enable audio
-        </div>
-      )}
-
-      {/* Real-time audio level meters + device selectors — diagnostic.
-          Levels show if mic/peer-audio are actually producing amplitude.
-          Selectors let the user switch mic/speaker/camera during the call
-          (e.g., to fix a silent microphone). pointer-events-auto on
-          DeviceSelector so dropdowns are interactive even though the parent
-          is positioned above the click-capture call surface. */}
-      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex flex-col gap-2 items-center max-w-sm w-[calc(100%-2rem)]">
-        <div className="pointer-events-none w-full">
-          <AudioLevelMeter />
-        </div>
-        <div className="pointer-events-auto w-full" onClickCapture={(e) => e.stopPropagation()}>
+      {/* Real-time audio level meters + device selectors. Levels show
+          mic/peer-audio amplitude in real time. Selectors let the user
+          switch mic/speaker/camera during the call. */}
+      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex flex-col gap-2 items-center max-w-sm w-[calc(100%-2rem)] pointer-events-none">
+        <AudioLevelMeter />
+        <div className="pointer-events-auto w-full">
           <DeviceSelector isVideoCall={isVideo} />
         </div>
       </div>
@@ -117,7 +93,7 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         <QualityIndicator quality={quality} />
       </div>
 
-      {/* Bottom controls — pointer-events allowed */}
+      {/* Bottom controls */}
       <div className="absolute bottom-0 left-0 right-0 pb-8 pt-4 bg-gradient-to-t from-black/60 to-transparent">
         <CallControls
           audioMuted={audioMuted}

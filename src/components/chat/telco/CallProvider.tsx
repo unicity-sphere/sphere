@@ -3,7 +3,7 @@ import { useSphereContext } from '../../../sdk/hooks/core/useSphere';
 import { WebRTCSession } from './webrtc';
 import { QualityMonitor } from './qualityMonitor';
 import { encodeTelcoMessage, decodeTelcoMessage } from './signaling';
-import { playCue, stopCue } from './audioCues';
+import { playCue, stopCue, unlockCues } from './audioCues';
 import {
   setCurrentCall, updateCallState,
   setLocalStream, setRemoteStream,
@@ -322,6 +322,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
         const session = new WebRTCSession();
         sessionRef.current = session;
         setupConnectionHandlers(session);
+        // Unlock audio NOW while we still have user-gesture activation from
+        // the Phone/Video button click. After the first await the gesture
+        // window expires; subsequent autoplay attempts would be silently
+        // muted by Chrome.
+        session.unlockAudioPlayback();
+        unlockCues();
 
         const stream = await session.requestMedia(mediaType);
         setLocalStream(stream);
@@ -360,6 +366,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
         const session = new WebRTCSession();
         sessionRef.current = session;
         setupConnectionHandlers(session);
+        // Unlock audio while we still have user-gesture activation from
+        // the Accept button tap.
+        session.unlockAudioPlayback();
+        unlockCues();
 
         const stream = await session.requestMedia(call.mediaType);
         setLocalStream(stream);

@@ -569,9 +569,34 @@ export class WebRTCSession {
   }
 
   /**
+   * Synchronously create + resume the playback AudioContext within a user
+   * gesture (call start/accept tap). Call this BEFORE any await so the
+   * gesture activation is still valid when resume() is invoked. After this,
+   * Chrome will allow remote audio to play without further interaction.
+   */
+  unlockAudioPlayback(): void {
+    try {
+      if (!this._audioCtx) {
+        const Ctor = window.AudioContext
+          ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this._audioCtx = new Ctor();
+        this._audioGainNode = this._audioCtx.createGain();
+        this._audioGainNode.gain.value = 1.0;
+        this._audioGainNode.connect(this._audioCtx.destination);
+      }
+      if (this._audioCtx.state === 'suspended') {
+        this._audioCtx.resume().catch(() => {});
+      }
+    } catch (err) {
+      console.warn('[telco] unlockAudioPlayback failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Setup the Web Audio routing path. Connects the audio MediaStream to
    * an AudioContext destination. The context starts SUSPENDED — call
-   * retryRemoteAudioPlay() with a user gesture to resume it.
+   * unlockAudioPlayback() with a user gesture to resume it.
    */
   private setupWebAudioRoute(audioStream: MediaStream): void {
     try {
