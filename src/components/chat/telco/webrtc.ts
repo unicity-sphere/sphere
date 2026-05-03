@@ -12,6 +12,12 @@ export class WebRTCSession {
   private _localStream: MediaStream | null = null;
   private _remoteStream: MediaStream | null = null;
   private _remoteAudioEl: HTMLAudioElement | null = null;
+  // Web Audio pipeline — used as a parallel reliable path. AudioContext
+  // bypasses <audio> element autoplay quirks. Once running, audio plays
+  // for as long as the source node is connected to destination.
+  private _audioCtx: AudioContext | null = null;
+  private _audioSourceNode: MediaStreamAudioSourceNode | null = null;
+  private _audioGainNode: GainNode | null = null;
   private disposed = false;
   private mediaRequested = false;
   private gatherTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -50,10 +56,21 @@ export class WebRTCSession {
     this.pc.ontrack = (event) => {
       if (this.disposed) return;
 
-      // Detached <audio> element for reliable audio playback. Lives in
-      // document.body (not inside the call overlay portal) so it isn't
-      // affected by stacking-context quirks or React lifecycle.
+      // Audio playback: dual approach for maximum reliability.
+      //
+      // 1) Detached <audio> element (existing) — plays via the standard
+      //    media element pipeline. Reliable when the page has high media
+      //    engagement and AudioContext is unlocked.
+      //
+      // 2) Web Audio routing — connect the MediaStreamTrack to an
+      //    AudioContext's destination. Bypasses the <audio> element's
+      //    autoplay quirks entirely. Requires AudioContext.resume() with
+      //    a user gesture, which is triggered by retryRemoteAudioPlay().
+      //
+      // Both paths are wired up; the unmute flow ensures at least one
+      // produces audible output.
       if (event.track.kind === 'audio') {
+        // Path 1: <audio> element
         if (!this._remoteAudioEl) {
           const audio = document.createElement('audio');
           audio.autoplay = true;
@@ -63,17 +80,21 @@ export class WebRTCSession {
           audio.style.height = '1px';
           audio.style.opacity = '0';
           audio.style.pointerEvents = 'none';
+          // Mute the <audio> element to avoid double playback when Web
+          // Audio path produces sound. We unmute it via retryRemoteAudioPlay
+          // if Web Audio fails (e.g., older browsers).
+          audio.muted = true;
           document.body.appendChild(audio);
           this._remoteAudioEl = audio;
         }
-        // Audio-only stream so the element doesn't hold a video sink
-        this._remoteAudioEl.srcObject = new MediaStream([event.track]);
-        const p = this._remoteAudioEl.play();
-        if (p && typeof p.then === 'function') {
-          p.catch((err: Error) => {
-            console.warn('[telco] Detached audio play failed:', err.name, err.message);
-          });
-        }
+        const audioOnlyStream = new MediaStream([event.track]);
+        this._remoteAudioEl.srcObject = audioOnlyStream;
+        this._remoteAudioEl.play().catch(() => {
+          // Silent — we're relying on Web Audio path
+        });
+
+        // Path 2: Web Audio
+        this.setupWebAudioRoute(audioOnlyStream);
       }
 
       // Notify onTrack so React UI can render video, etc.
@@ -190,21 +211,75 @@ export class WebRTCSession {
   }
 
   /**
-   * Force-play the detached audio element. Call within a fresh user gesture
-   * to unlock autoplay when the browser silently blocked it.
+   * Setup the Web Audio routing path. Connects the audio MediaStream to
+   * an AudioContext destination. The context starts SUSPENDED — call
+   * retryRemoteAudioPlay() with a user gesture to resume it.
+   */
+  private setupWebAudioRoute(audioStream: MediaStream): void {
+    try {
+      if (!this._audioCtx) {
+        const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this._audioCtx = new Ctor();
+        this._audioGainNode = this._audioCtx.createGain();
+        this._audioGainNode.gain.value = 1.0;
+        this._audioGainNode.connect(this._audioCtx.destination);
+      }
+      // Recreate source node when track changes (stream is single-track audio)
+      if (this._audioSourceNode) {
+        try { this._audioSourceNode.disconnect(); } catch { /* noop */ }
+        this._audioSourceNode = null;
+      }
+      this._audioSourceNode = this._audioCtx.createMediaStreamSource(audioStream);
+      if (this._audioGainNode) this._audioSourceNode.connect(this._audioGainNode);
+      console.log('[telco] Web Audio route set up', {
+        contextState: this._audioCtx.state,
+        sampleRate: this._audioCtx.sampleRate,
+      });
+    } catch (err) {
+      console.warn('[telco] Web Audio setup failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Force-play the audio. Resumes the AudioContext (if suspended) and
+   * retries the <audio> element. Call within a fresh user gesture to
+   * unlock autoplay when the browser silently blocked it.
    */
   retryRemoteAudioPlay(): Promise<void> {
+    const tasks: Promise<void>[] = [];
+
+    // Resume Web Audio context — this is the reliable path
+    if (this._audioCtx && this._audioCtx.state === 'suspended') {
+      tasks.push(
+        this._audioCtx.resume().then(() => {
+          console.log('[telco] AudioContext resumed', {
+            state: this._audioCtx?.state,
+          });
+        }).catch((err: Error) => {
+          console.warn('[telco] AudioContext resume failed:', err.name, err.message);
+        })
+      );
+    }
+
+    // Also retry the <audio> element as a fallback (and unmute it)
     const a = this._remoteAudioEl;
-    if (!a) return Promise.resolve();
-    a.muted = false;
-    a.volume = 1.0;
-    return a.play().then(() => {
-      console.log('[telco] Remote audio play retry succeeded', {
-        paused: a.paused, muted: a.muted, volume: a.volume,
-      });
-    }).catch((err: Error) => {
-      console.warn('[telco] Remote audio play retry failed:', err.name, err.message);
-    });
+    if (a) {
+      a.muted = false;
+      a.volume = 1.0;
+      tasks.push(
+        a.play().then(() => {
+          console.log('[telco] Remote audio play retry succeeded', {
+            paused: a.paused, muted: a.muted, volume: a.volume,
+            ctxState: this._audioCtx?.state,
+          });
+        }).catch((err: Error) => {
+          console.warn('[telco] Remote audio play retry failed:', err.name, err.message);
+        })
+      );
+    }
+
+    return Promise.all(tasks).then(() => undefined);
   }
 
   dispose(): void {
@@ -233,6 +308,20 @@ export class WebRTCSession {
       this._remoteAudioEl.srcObject = null;
       this._remoteAudioEl.remove();
       this._remoteAudioEl = null;
+    }
+
+    // Tear down Web Audio pipeline
+    if (this._audioSourceNode) {
+      try { this._audioSourceNode.disconnect(); } catch { /* noop */ }
+      this._audioSourceNode = null;
+    }
+    if (this._audioGainNode) {
+      try { this._audioGainNode.disconnect(); } catch { /* noop */ }
+      this._audioGainNode = null;
+    }
+    if (this._audioCtx) {
+      this._audioCtx.close().catch(() => { /* noop */ });
+      this._audioCtx = null;
     }
 
     this.pc.onconnectionstatechange = null;
