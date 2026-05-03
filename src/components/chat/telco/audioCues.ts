@@ -78,10 +78,15 @@ export function playCue(id: CueId): void {
 
   switch (id) {
     case 'ring':
+      // Vintage telephone bell — higher carriers + tremolo for the metallic
+      // "trill" of an old electromechanical ringer. Sounds clearly different
+      // from the caller's ringback so each side gets a distinct cue.
+      startBellPattern(ctx);
+      break;
     case 'ringback':
-      // North-American style: 440Hz + 480Hz, 2s on / 4s off, repeat.
-      // Same pattern for both — caller hears "ringback", callee hears "ring".
-      startRingPattern(ctx);
+      // Standard dial-tone style: 440Hz + 480Hz, 2s on / 4s off — what the
+      // CALLER hears while waiting for the callee to pick up.
+      startRingbackPattern(ctx);
       break;
     case 'reconnecting':
       // Low single 300Hz pulse, 180ms on / 820ms off — subtle, conveys "trying"
@@ -94,7 +99,70 @@ export function playCue(id: CueId): void {
   }
 }
 
-function startRingPattern(ctx: AudioContext) {
+/**
+ * Vintage telephone bell. Two close-frequency triangle oscillators in the
+ * upper-mid range (1000+1320Hz) plus a tremolo LFO that modulates amplitude
+ * at ~22Hz. The fast tremolo + harmonic content of triangle waves produces
+ * the characteristic metallic "ringing bell" trill of an old electromech-
+ * anical ringer.
+ *
+ * Pattern: 1.5s ring burst, 2.5s silence, repeat (4s cycle).
+ */
+function startBellPattern(ctx: AudioContext) {
+  // Master gain: shapes the burst envelope (silent → loud → silent every 4s)
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = 0;
+  masterGain.connect(ctx.destination);
+
+  // Tremolo modulator: LFO at 22Hz that scales the master gain
+  // Output value oscillates between ~0.4 and 1.0 — creates the "trill"
+  const lfo = ctx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 22;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = 0.3; // tremolo depth (added to baseline 0.7 below)
+  lfo.connect(lfoGain);
+  // Connect LFO to a constant offset, then to masterGain.gain
+  // Simpler: connect lfoGain directly to masterGain.gain — the LFO adds
+  // ±0.3 around whatever masterGain.gain is set to.
+  lfoGain.connect(masterGain.gain);
+  lfo.start();
+
+  // Two carrier oscillators (triangle for richer harmonics than pure sine)
+  const osc1 = ctx.createOscillator();
+  osc1.type = 'triangle';
+  osc1.frequency.value = 1000;
+  osc1.connect(masterGain);
+  osc1.start();
+
+  const osc2 = ctx.createOscillator();
+  osc2.type = 'triangle';
+  osc2.frequency.value = 1320; // a perfect-fifth interval — sounds like a bell
+  osc2.connect(masterGain);
+  osc2.start();
+
+  nodes.push(lfo, lfoGain, osc1, osc2, masterGain);
+
+  const burst = () => {
+    if (audioCtx === null) return;
+    const t = ctx.currentTime;
+    // Envelope: ramp up over 30ms, hold ~1.5s, ramp down 50ms.
+    // Baseline of 0.07 (tremolo adds ±0.03 around it for ~0.04 to 0.10).
+    masterGain.gain.cancelScheduledValues(t);
+    masterGain.gain.setValueAtTime(0, t);
+    masterGain.gain.linearRampToValueAtTime(0.07, t + 0.03);
+    masterGain.gain.setValueAtTime(0.07, t + 1.45);
+    masterGain.gain.linearRampToValueAtTime(0, t + 1.5);
+  };
+  burst();
+  cueInterval = setInterval(burst, 4000);
+}
+
+/**
+ * Caller-side ringback (the "you-are-being-rung" tone the caller hears
+ * through the line). Standard NA-style 440+480Hz, 2s on / 4s off.
+ */
+function startRingbackPattern(ctx: AudioContext) {
   const gain = ctx.createGain();
   gain.gain.value = 0;
   gain.connect(ctx.destination);
