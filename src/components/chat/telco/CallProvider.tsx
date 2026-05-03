@@ -624,6 +624,38 @@ export function CallProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('dm-telco-signal', handler);
   }, [sphere, sendSignal, cleanup, clearCallTimeout, clearDismissTimer, endCall, failCall, setupConnectionHandlers]);
 
+  // ── Page-wide audio unlock ──────────────────────────────────────────
+  // Browsers block audio playback (Web Audio + <audio>/<video> with sound)
+  // until the user has interacted with the page at least once. The incoming
+  // call ring fires from a Nostr DM event handler — no user gesture — and
+  // would be silent on a freshly-loaded page.
+  //
+  // Workaround: attach a one-shot listener for ANY interaction (click, key,
+  // touch). On the first event, resume the cues AudioContext. After that,
+  // it stays in 'running' state for the whole session, and subsequent
+  // rings (which call playCue) play audibly.
+  //
+  // The listener self-removes after firing once.
+  useEffect(() => {
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      unlocked = true;
+      unlockCues();
+      document.removeEventListener('click', unlock, true);
+      document.removeEventListener('keydown', unlock, true);
+      document.removeEventListener('touchstart', unlock, true);
+    };
+    document.addEventListener('click', unlock, true);
+    document.addEventListener('keydown', unlock, true);
+    document.addEventListener('touchstart', unlock, true);
+    return () => {
+      document.removeEventListener('click', unlock, true);
+      document.removeEventListener('keydown', unlock, true);
+      document.removeEventListener('touchstart', unlock, true);
+    };
+  }, []);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {

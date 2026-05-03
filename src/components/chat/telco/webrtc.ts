@@ -135,8 +135,20 @@ export class WebRTCSession {
     if (this.mediaRequested) throw new Error('requestMedia already called');
     this.mediaRequested = true;
 
+    // Explicitly enable echo cancellation, noise suppression, and auto-gain
+    // control. Chrome usually defaults these on, but being explicit lets the
+    // browser's AEC subtract the remote audio (what's coming out of our
+    // speaker) from the local mic input — eliminating the howl/feedback when
+    // two devices are in the same room.
+    const audioConstraints: MediaTrackConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      ...(audioDeviceId ? { deviceId: { exact: audioDeviceId } } : {}),
+    };
+
     const constraints: MediaStreamConstraints = {
-      audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true,
+      audio: audioConstraints,
       video: mediaType === 'video'
         ? {
             width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
@@ -165,7 +177,12 @@ export class WebRTCSession {
   async switchAudioInput(deviceId: string): Promise<void> {
     if (!this._localStream) throw new Error('No active stream');
     const newStream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: { exact: deviceId } },
+      audio: {
+        deviceId: { exact: deviceId },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
     const newTrack = newStream.getAudioTracks()[0];
     if (!newTrack) throw new Error('No audio track on new device');
