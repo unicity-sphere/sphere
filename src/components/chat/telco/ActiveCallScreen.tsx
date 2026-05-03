@@ -116,8 +116,21 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
 
   return (
     <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Hidden audio element — plays remote audio reliably on mobile */}
-      <audio ref={audioRef} autoPlay playsInline className="hidden" />
+      {/* Audio element for remote audio. Do NOT use display:none / className="hidden":
+          some Chrome configurations don't route audio output to audio elements with
+          display:none. Hide via opacity/size/position instead. */}
+      <audio
+        ref={audioRef}
+        autoPlay
+        playsInline
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
 
       {/* Remote video / avatar */}
       <div className="flex-1 flex items-center justify-center">
