@@ -14,7 +14,7 @@ interface ActiveCallScreenProps {
 }
 
 export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
-  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay } = useCall();
+  const { hangUp, toggleMuteAudio, toggleMuteVideo, retryRemoteAudioPlay, playTestTone } = useCall();
   const localStream = useCallStore(s => s.localStream);
   const remoteStream = useCallStore(s => s.remoteStream);
   const audioMuted = useCallStore(s => s.audioMuted);
@@ -80,14 +80,20 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </div>
       )}
 
-      {/* Audio-unlock prompt: shown until the user interacts once. The whole
-          screen is clickable (above) — tapping ANYWHERE retries audio play
-          and dismisses this prompt. */}
-      {!audioUnlocked && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg pointer-events-none">
-          Tap anywhere to enable audio
-        </div>
-      )}
+      {/* Audio-unlock prompt + test tone button (always visible — diagnostic) */}
+      <div className="absolute top-20 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-20">
+        {!audioUnlocked && (
+          <div className="px-4 py-2 rounded-full bg-orange-500 text-white text-sm font-medium shadow-lg pointer-events-none">
+            Tap anywhere to enable audio
+          </div>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); playTestTone(); }}
+          className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium shadow"
+        >
+          🔊 Test 440Hz tone
+        </button>
+      </div>
 
       {/* Top bar: timer + quality */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent pointer-events-none">

@@ -9,6 +9,7 @@ export interface CallContextValue {
   toggleMuteAudio: () => void;
   toggleMuteVideo: () => void;
   retryRemoteAudioPlay: () => void;
+  playTestTone: () => void;
 }
 
 export const CallContext = createContext<CallContextValue | null>(null);

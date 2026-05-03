@@ -130,7 +130,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
             const audioStatsInterval = setInterval(async () => {
               try {
                 const stats = await pc.getStats();
-                let outPackets = 0, outBytes = 0, inPackets = 0, inBytes = 0, inLevel = 0;
+                let outPackets = 0, outBytes = 0, inPackets = 0, inBytes = 0;
+                let micLevel = 0; // local microphone amplitude
+                let speakerLevel = 0; // amplitude of audio we're hearing
                 stats.forEach((report) => {
                   if (report.type === 'outbound-rtp' && (report as { kind?: string }).kind === 'audio') {
                     const r = report as { packetsSent?: number; bytesSent?: number };
@@ -138,17 +140,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
                     outBytes = r.bytesSent ?? 0;
                   }
                   if (report.type === 'inbound-rtp' && (report as { kind?: string }).kind === 'audio') {
-                    const r = report as { packetsReceived?: number; bytesReceived?: number };
+                    const r = report as { packetsReceived?: number; bytesReceived?: number; audioLevel?: number };
                     inPackets = r.packetsReceived ?? 0;
                     inBytes = r.bytesReceived ?? 0;
+                    speakerLevel = r.audioLevel ?? 0;
                   }
                   if (report.type === 'media-source' && (report as { kind?: string }).kind === 'audio') {
                     const r = report as { audioLevel?: number };
-                    inLevel = r.audioLevel ?? 0;
+                    micLevel = r.audioLevel ?? 0;
                   }
                 });
-                // Print as a single string so values are readable in the console without expanding
-                console.log(`[telco] audio stats — sent: ${outPackets} pkts / ${outBytes} bytes — received: ${inPackets} pkts / ${inBytes} bytes — local-level: ${inLevel.toFixed(3)}`);
+                // Inspect remote audio track properties from the peer connection
+                let trackInfo = '';
+                pc.getReceivers().forEach((receiver) => {
+                  if (receiver.track?.kind === 'audio') {
+                    trackInfo = `track: enabled=${receiver.track.enabled} muted=${receiver.track.muted} readyState=${receiver.track.readyState}`;
+                  }
+                });
+                console.log(
+                  `[telco] audio — sent: ${outPackets}p/${outBytes}b — recv: ${inPackets}p/${inBytes}b — mic-level: ${micLevel.toFixed(3)} — INBOUND-LEVEL: ${speakerLevel.toFixed(3)} — ${trackInfo}`
+                );
               } catch {
                 // ignore
               }
@@ -323,6 +334,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     sessionRef.current?.retryRemoteAudioPlay();
   }, []);
 
+  const playTestTone = useCallback(() => {
+    sessionRef.current?.playTestTone();
+  }, []);
+
   // ── Incoming signaling handler ──────────────────────────────────────
 
   useEffect(() => {
@@ -475,6 +490,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     toggleMuteAudio,
     toggleMuteVideo,
     retryRemoteAudioPlay,
+    playTestTone,
   };
 
   return <CallContext value={value}>{children}</CallContext>;

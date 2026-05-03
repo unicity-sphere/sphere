@@ -211,6 +211,40 @@ export class WebRTCSession {
   }
 
   /**
+   * Play a 440Hz test tone through the Web Audio destination. Used to
+   * verify whether the audio output device is functional independently of
+   * WebRTC. If the user hears this tone, audio output works and the issue
+   * is with the WebRTC stream itself. If they don't, the problem is system-
+   * level (output device, OS volume, headphones, etc).
+   */
+  playTestTone(): void {
+    try {
+      if (!this._audioCtx) {
+        const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this._audioCtx = new Ctor();
+      }
+      const ctx = this._audioCtx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 440;
+      osc.type = 'sine';
+      gain.gain.value = 0.2;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        osc.disconnect();
+        gain.disconnect();
+      }, 500);
+      console.log('[telco] Test tone playing 440Hz for 500ms', { ctxState: ctx.state });
+    } catch (err) {
+      console.warn('[telco] Test tone failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Setup the Web Audio routing path. Connects the audio MediaStream to
    * an AudioContext destination. The context starts SUSPENDED — call
    * retryRemoteAudioPlay() with a user gesture to resume it.
