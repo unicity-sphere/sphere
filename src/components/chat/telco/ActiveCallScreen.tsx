@@ -6,6 +6,7 @@ import { CallControls } from './CallControls';
 import { CallTimer } from './CallTimer';
 import { QualityIndicator } from './QualityIndicator';
 import { AudioLevelMeter } from './AudioLevelMeter';
+import { DeviceSelector } from './DeviceSelector';
 import type { CallInfo } from './types';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { getColorFromPubkey } from '../utils/avatarColors';
@@ -96,11 +97,19 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </button>
       </div>
 
-      {/* Real-time audio level meters — diagnostic. Shows local mic input
-          amplitude and incoming remote audio amplitude. Lets the user see
-          immediately if their mic is silent or peer's audio isn't arriving. */}
-      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-        <AudioLevelMeter />
+      {/* Real-time audio level meters + device selectors — diagnostic.
+          Levels show if mic/peer-audio are actually producing amplitude.
+          Selectors let the user switch mic/speaker/camera during the call
+          (e.g., to fix a silent microphone). pointer-events-auto on
+          DeviceSelector so dropdowns are interactive even though the parent
+          is positioned above the click-capture call surface. */}
+      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex flex-col gap-2 items-center max-w-sm w-[calc(100%-2rem)]">
+        <div className="pointer-events-none w-full">
+          <AudioLevelMeter />
+        </div>
+        <div className="pointer-events-auto w-full" onClickCapture={(e) => e.stopPropagation()}>
+          <DeviceSelector isVideoCall={isVideo} />
+        </div>
       </div>
 
       {/* Top bar: timer + quality */}

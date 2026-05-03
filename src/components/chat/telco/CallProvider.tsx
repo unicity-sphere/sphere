@@ -341,6 +341,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     sessionRef.current?.playTestTone();
   }, []);
 
+  const switchAudioInput = useCallback(async (deviceId: string) => {
+    await sessionRef.current?.switchAudioInput(deviceId);
+  }, []);
+
+  const switchVideoInput = useCallback(async (deviceId: string) => {
+    await sessionRef.current?.switchVideoInput(deviceId);
+  }, []);
+
+  const switchAudioOutput = useCallback(async (deviceId: string) => {
+    await sessionRef.current?.switchAudioOutput(deviceId);
+  }, []);
+
   // ── Incoming signaling handler ──────────────────────────────────────
 
   useEffect(() => {
@@ -494,6 +506,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
     toggleMuteVideo,
     retryRemoteAudioPlay,
     playTestTone,
+    switchAudioInput,
+    switchVideoInput,
+    switchAudioOutput,
   };
 
   return <CallContext value={value}>{children}</CallContext>;

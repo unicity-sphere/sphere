@@ -120,14 +120,17 @@ export class WebRTCSession {
   /**
    * Request local media. Can only be called once per session.
    */
-  async requestMedia(mediaType: MediaType): Promise<MediaStream> {
+  async requestMedia(mediaType: MediaType, audioDeviceId?: string, videoDeviceId?: string): Promise<MediaStream> {
     if (this.mediaRequested) throw new Error('requestMedia already called');
     this.mediaRequested = true;
 
     const constraints: MediaStreamConstraints = {
-      audio: true,
+      audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true,
       video: mediaType === 'video'
-        ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
+        ? {
+            width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
+            ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
+          }
         : false,
     };
 
@@ -142,6 +145,76 @@ export class WebRTCSession {
     this.setupLocalAnalyser(stream);
 
     return stream;
+  }
+
+  /**
+   * Hot-swap the local audio (microphone) input device.
+   * Replaces the track on the sender without renegotiation.
+   */
+  async switchAudioInput(deviceId: string): Promise<void> {
+    if (!this._localStream) throw new Error('No active stream');
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+    });
+    const newTrack = newStream.getAudioTracks()[0];
+    if (!newTrack) throw new Error('No audio track on new device');
+
+    const sender = this.pc.getSenders().find(s => s.track?.kind === 'audio');
+    if (sender) await sender.replaceTrack(newTrack);
+
+    // Update local stream: remove old audio track, add new
+    const oldTrack = this._localStream.getAudioTracks()[0];
+    if (oldTrack) {
+      this._localStream.removeTrack(oldTrack);
+      oldTrack.stop();
+    }
+    this._localStream.addTrack(newTrack);
+
+    // Re-setup the local analyser to pick up the new track
+    this.setupLocalAnalyser(this._localStream);
+    console.log('[telco] Switched audio input', { deviceId, label: newTrack.label });
+  }
+
+  /**
+   * Hot-swap the local video (camera) input device.
+   */
+  async switchVideoInput(deviceId: string): Promise<void> {
+    if (!this._localStream) throw new Error('No active stream');
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId: { exact: deviceId },
+        width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
+      },
+    });
+    const newTrack = newStream.getVideoTracks()[0];
+    if (!newTrack) throw new Error('No video track on new device');
+
+    const sender = this.pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(newTrack);
+
+    // Update local stream
+    const oldTrack = this._localStream.getVideoTracks()[0];
+    if (oldTrack) {
+      this._localStream.removeTrack(oldTrack);
+      oldTrack.stop();
+    }
+    this._localStream.addTrack(newTrack);
+    console.log('[telco] Switched video input', { deviceId, label: newTrack.label });
+  }
+
+  /**
+   * Switch the audio output device (speaker). Uses setSinkId on the
+   * detached <audio> element. Chrome-only API; throws on Firefox.
+   */
+  async switchAudioOutput(deviceId: string): Promise<void> {
+    const audio = this._remoteAudioEl;
+    if (!audio) return;
+    const audioWithSink = audio as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+    if (typeof audioWithSink.setSinkId !== 'function') {
+      throw new Error('setSinkId is not supported in this browser');
+    }
+    await audioWithSink.setSinkId(deviceId);
+    console.log('[telco] Switched audio output', { deviceId });
   }
 
   async createOffer(): Promise<string> {
