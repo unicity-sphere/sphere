@@ -10,6 +10,11 @@ import {
   hideIncomingCallNotification,
 } from './notificationManager';
 import {
+  registerTelcoServiceWorker,
+  onServiceWorkerMessage,
+  type TelcoActionMessage,
+} from './serviceWorkerManager';
+import {
   setCurrentCall, updateCallState,
   setLocalStream, setRemoteStream,
   setAudioMuted, setVideoMuted,
@@ -799,20 +804,45 @@ export function CallProvider({ children }: { children: ReactNode }) {
         ? `@${callPeer.peerNametag.replace('@', '')}`
         : callPeer.peerPubkey.slice(0, 8) + '...';
       showIncomingCallNotification({
+        callId: callPeer.callId,
+        peerPubkey: callPeer.peerPubkey,
         peerName,
         isVideo: callPeer.mediaType === 'video',
-        onClick: () => { /* focusing the window is enough — Accept/Decline UI is in-page */ },
+        onClick: () => { /* focusing the window is enough — in-page UI takes over */ },
       });
     } else {
       hideIncomingCallNotification();
     }
   }, [callState, callPeer]);
 
-  // Request notification permission once at mount so the first incoming
-  // call doesn't have to interrupt with a permission prompt.
+  // ── Service worker + notification permission ──
+  // Register the telco SW (handles incoming-call notifications with
+  // Accept/Decline action buttons) and request notification permission so
+  // the first call doesn't have to interrupt with a permission prompt.
+  //
+  // Subscribe to action messages from the SW. The SW broadcasts to ALL
+  // open Sphere clients — each tab checks if its currentCall.callId
+  // matches and only the owner reacts. Other tabs (different identities,
+  // different browser accounts) silently ignore unrelated actions.
   useEffect(() => {
     ensureNotificationPermission();
-  }, []);
+    registerTelcoServiceWorker();
+    const unsub = onServiceWorkerMessage((msg: TelcoActionMessage) => {
+      const call = currentCallRef.current;
+      if (!call) return;
+      if (call.callId !== msg.callId) return; // not our call
+      if (call.state !== 'ringing') return;   // already past the ring stage
+
+      if (msg.action === 'accept' || msg.action === 'click') {
+        console.log('[telco] Accept via service-worker notification');
+        acceptCall();
+      } else if (msg.action === 'decline' || msg.action === 'dismiss') {
+        console.log(`[telco] Decline via service-worker notification (${msg.action})`);
+        declineCall();
+      }
+    });
+    return unsub;
+  }, [acceptCall, declineCall]);
 
   const value: CallContextValue = {
     startCall,

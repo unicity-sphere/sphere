@@ -1,29 +1,28 @@
 // System notification manager for incoming-call alerts.
 //
-// Uses the Web Notifications API. Notifications:
-//   - Pop up at the OS-level (typically bottom-right on Windows/Linux,
-//     top-right on macOS) — visible even when the Sphere tab is inactive
-//     or minimized.
-//   - Play a system ring sound that bypasses the page's autoplay policy
-//     (the OS handles audio, not the page).
-//   - Stay visible until interacted with (requireInteraction: true).
-//   - Clicking focuses the Sphere tab and closes the notification, so the
-//     user lands on the in-page Accept/Decline UI.
+// Two paths, picked at runtime:
 //
-// Action buttons (Accept/Decline directly in the notification) require a
-// Service Worker — out of scope for this iteration. Click-to-focus is
-// the simpler pattern most browsers honor consistently.
+// (a) SERVICE-WORKER NOTIFICATION (preferred when SW is registered)
+//     - Includes Accept/Decline action buttons in the OS popup itself
+//     - User can answer/reject without focusing the Sphere tab
+//     - SW broadcasts the action via postMessage; CallProvider picks it up
+//
+// (b) DIRECT NOTIFICATION API (fallback for browsers without SW or when
+//     registration failed)
+//     - No action buttons (browser limitation outside SW context)
+//     - Click-to-focus the tab; user picks Accept/Decline in-page
 
-let activeNotification: Notification | null = null;
+import { isServiceWorkerReady, postToServiceWorker } from './serviceWorkerManager';
+
+let activeFallbackNotification: Notification | null = null;
 
 export function isNotificationSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
 
 /**
- * Request notification permission. Returns the resolved permission state
- * ('granted', 'denied', or 'default'). Safe to call repeatedly — only the
- * first call shows the prompt; subsequent calls return the cached state.
+ * Request notification permission. Returns the resolved permission state.
+ * Safe to call repeatedly — only the first call shows the prompt.
  */
 export async function ensureNotificationPermission(): Promise<NotificationPermission> {
   if (!isNotificationSupported()) return 'denied';
@@ -37,49 +36,67 @@ export async function ensureNotificationPermission(): Promise<NotificationPermis
 }
 
 interface IncomingCallNotificationOptions {
+  callId: string;
+  peerPubkey: string;
   peerName: string;
   isVideo: boolean;
+  /** Called when the user clicks the notification body (no Accept/Decline). */
   onClick?: () => void;
 }
 
 /**
- * Show a system notification for an incoming call. Idempotent: replaces
- * any existing call notification (via the 'incoming-call' tag).
+ * Show a system notification for an incoming call. If the SW is registered,
+ * the notification includes Accept/Decline action buttons. Idempotent —
+ * replaces any previous incoming-call notification.
  */
 export function showIncomingCallNotification(opts: IncomingCallNotificationOptions): void {
   if (!isNotificationSupported()) return;
   if (Notification.permission !== 'granted') return;
 
-  // Close previous notification (if any) before creating new one
   hideIncomingCallNotification();
 
+  const title = `Incoming ${opts.isVideo ? 'video' : 'voice'} call`;
+  const body = `From ${opts.peerName}`;
+
+  // Preferred: SW-backed notification with action buttons
+  if (isServiceWorkerReady()) {
+    postToServiceWorker({
+      type: 'show-incoming-call',
+      title,
+      body,
+      icon: '/UnicityLogo.svg',
+      callId: opts.callId,
+      peerPubkey: opts.peerPubkey,
+    });
+    return;
+  }
+
+  // Fallback: direct Notification API (no actions, click-to-focus only)
   try {
-    const notification = new Notification(
-      `Incoming ${opts.isVideo ? 'video' : 'voice'} call`,
-      {
-        body: `From ${opts.peerName}`,
-        icon: '/UnicityLogo.svg',
-        tag: 'sphere-incoming-call',
-        requireInteraction: true,
-        // silent:false ensures the system ring sound plays — bypasses
-        // any page-level audio autoplay restriction.
-        silent: false,
-      },
-    );
-    notification.onclick = () => {
+    const n = new Notification(title, {
+      body,
+      icon: '/UnicityLogo.svg',
+      tag: 'sphere-incoming-call',
+      requireInteraction: true,
+      silent: false,
+    });
+    n.onclick = () => {
       window.focus();
-      notification.close();
+      n.close();
       opts.onClick?.();
     };
-    activeNotification = notification;
+    activeFallbackNotification = n;
   } catch (err) {
     console.warn('[telco] showIncomingCallNotification failed:', err);
   }
 }
 
 export function hideIncomingCallNotification(): void {
-  if (activeNotification) {
-    try { activeNotification.close(); } catch { /* noop */ }
-    activeNotification = null;
+  if (isServiceWorkerReady()) {
+    postToServiceWorker({ type: 'hide-incoming-call' });
+  }
+  if (activeFallbackNotification) {
+    try { activeFallbackNotification.close(); } catch { /* noop */ }
+    activeFallbackNotification = null;
   }
 }
