@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCallStore } from './callStore';
@@ -20,7 +21,18 @@ function getScreenKey(call: CallInfo): string {
 
 export function CallOverlay() {
   const call = useCallStore(s => s.currentCall);
+  const pipWindow = useCallStore(s => s.pipWindow);
   const { hangUp, acceptCall, declineCall } = useCall();
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  // Track the actual fullscreen state so we can re-render and avoid drift
+  // between our intent (windowMode='fullscreen') and the real document state.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const onChange = () => forceTick((n) => n + 1);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   const isVisible = call !== null && call.state !== 'idle';
 
@@ -28,6 +40,7 @@ export function CallOverlay() {
     <AnimatePresence>
       {isVisible && (
         <motion.div
+          ref={overlayRef}
           key="call-overlay"
           className="fixed inset-0 z-[9999] bg-neutral-900/95 backdrop-blur-sm"
           initial={{ opacity: 0 }}
@@ -70,6 +83,13 @@ export function CallOverlay() {
       )}
     </AnimatePresence>
   );
+
+  // If a Document Picture-in-Picture window is open, render the overlay
+  // INTO that window's body instead of our document. The main page shows
+  // a small "call in separate window" indicator.
+  if (pipWindow && isVisible) {
+    return createPortal(content, pipWindow.document.body);
+  }
 
   return createPortal(content, document.body);
 }

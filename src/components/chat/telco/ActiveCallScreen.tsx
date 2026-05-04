@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Maximize, Minimize, ExternalLink } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useCallStore } from './callStore';
 import { useCall } from './useCall';
 import { VideoFeed } from './VideoFeed';
@@ -7,6 +9,7 @@ import { CallTimer } from './CallTimer';
 import { QualityIndicator } from './QualityIndicator';
 import { AudioLevelMeter } from './AudioLevelMeter';
 import { DeviceSelector } from './DeviceSelector';
+import { isFullscreenActive, isSeparateWindowSupported } from './callWindowMode';
 import type { CallInfo } from './types';
 import { getDisplayName, getAvatar } from '../data/chatTypes';
 import { getColorFromPubkey } from '../utils/avatarColors';
@@ -16,15 +19,24 @@ interface ActiveCallScreenProps {
 }
 
 export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
-  const { hangUp, toggleMuteAudio, toggleMuteVideo } = useCall();
+  const { hangUp, toggleMuteAudio, toggleMuteVideo, toggleFullscreen, toggleSeparateWindow } = useCall();
   const localStream = useCallStore(s => s.localStream);
   const remoteStream = useCallStore(s => s.remoteStream);
   const audioMuted = useCallStore(s => s.audioMuted);
   const videoMuted = useCallStore(s => s.videoMuted);
   const quality = useCallStore(s => s.connectionQuality);
+  const pipWindow = useCallStore(s => s.pipWindow);
 
   const isVideo = call.mediaType === 'video';
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+  const [fullscreen, setFullscreen] = useState(isFullscreenActive());
+  const supportsSeparateWindow = isSeparateWindowSupported();
+
+  useEffect(() => {
+    const onChange = () => setFullscreen(isFullscreenActive());
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   // Reactive remote-video detection.
   useEffect(() => {
@@ -88,15 +100,40 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
         </div>
       </div>
 
-      {/* Top bar: timer + quality */}
-      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent pointer-events-none">
-        <div className="flex items-center gap-2">
+      {/* Top bar: timer + window-mode buttons + quality */}
+      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent">
+        <div className="flex items-center gap-2 pointer-events-none">
           {call.connectedAt && <CallTimer connectedAt={call.connectedAt} />}
           {call.state === 'reconnecting' && (
             <span className="text-yellow-400 text-xs animate-pulse">Reconnecting...</span>
           )}
         </div>
-        <QualityIndicator quality={quality} />
+        <div className="flex items-center gap-1.5">
+          {/* Separate-window (Document Picture-in-Picture). Hidden if
+              browser doesn't support documentPictureInPicture. */}
+          {supportsSeparateWindow && (
+            <motion.button
+              onClick={() => toggleSeparateWindow()}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                pipWindow ? 'bg-orange-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+              whileTap={{ scale: 0.9 }}
+              title={pipWindow ? 'Re-attach to page' : 'Open in separate window'}
+            >
+              <ExternalLink className="w-4 h-4" />
+            </motion.button>
+          )}
+          {/* Fullscreen */}
+          <motion.button
+            onClick={() => toggleFullscreen()}
+            className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 text-white hover:bg-white/20 transition-colors"
+            whileTap={{ scale: 0.9 }}
+            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {fullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+          </motion.button>
+          <QualityIndicator quality={quality} />
+        </div>
       </div>
 
       {/* Bottom controls */}

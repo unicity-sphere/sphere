@@ -5,13 +5,23 @@ import { QualityMonitor } from './qualityMonitor';
 import { encodeTelcoMessage, decodeTelcoMessage } from './signaling';
 import { playCue, stopCue, unlockCues } from './audioCues';
 import {
+  ensureNotificationPermission,
+  showIncomingCallNotification,
+  hideIncomingCallNotification,
+} from './notificationManager';
+import {
   setCurrentCall, updateCallState,
   setLocalStream, setRemoteStream,
   setAudioMuted, setVideoMuted,
   setConnectionQuality, resetCallState,
   setPeerCapability, setAudioLevels,
+  setPipWindow,
   useCallStore,
 } from './callStore';
+import {
+  enterFullscreen, exitFullscreen, isFullscreenActive,
+  isSeparateWindowSupported, openSeparateWindow,
+} from './callWindowMode';
 import {
   CALL_TIMEOUT, RECONNECT_TIMEOUT,
   CALL_ENDED_DISMISS_DELAY, CALL_FAILED_DISMISS_DELAY,
@@ -60,6 +70,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const iceRestartPendingRef = useRef(false); // We sent an ice-restart and await answer
   const iceRestartAttemptsRef = useRef<number[]>([]); // Timestamps of restart attempts (for rate limit)
   const reconnectingRef = useRef(false); // Atomic lock — prevents concurrent restart triggers
+  const pipWindowRef = useRef<Window | null>(null); // Document Picture-in-Picture window
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -479,6 +490,45 @@ export function CallProvider({ children }: { children: ReactNode }) {
     await sessionRef.current?.switchAudioOutput(deviceId);
   }, []);
 
+  // Fullscreen toggle for the call overlay
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (isFullscreenActive()) {
+        await exitFullscreen();
+      } else {
+        // Find the call overlay element to enter fullscreen on. The overlay
+        // is the topmost fixed-positioned element with z-9999.
+        const el = document.querySelector('[class*="z-[9999]"]') as HTMLElement | null;
+        if (el) await enterFullscreen(el);
+        else await enterFullscreen(document.documentElement);
+      }
+    } catch (err) {
+      console.warn('[telco] toggleFullscreen failed:', err);
+    }
+  }, []);
+
+  // Toggle Document Picture-in-Picture (separate browser window).
+  // Returns false if the browser doesn't support it, true if state changed.
+  const toggleSeparateWindow = useCallback(async (): Promise<boolean> => {
+    if (!isSeparateWindowSupported()) return false;
+    if (pipWindowRef.current) {
+      try { pipWindowRef.current.close(); } catch { /* noop */ }
+      pipWindowRef.current = null;
+      setPipWindow(null);
+      return true;
+    }
+    const w = await openSeparateWindow(480, 720);
+    if (!w) return false;
+    pipWindowRef.current = w;
+    setPipWindow(w);
+    // When the user closes the PiP window via its own X, clean up our state
+    w.addEventListener('pagehide', () => {
+      pipWindowRef.current = null;
+      setPipWindow(null);
+    });
+    return true;
+  }, []);
+
   // ── Incoming signaling handler ──────────────────────────────────────
 
   useEffect(() => {
@@ -719,6 +769,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // 'connected'    → silence (or stop reconnect cue)
   // 'ended/failed' → drop sound (single descending sweep)
   const callState = useCallStore(s => s.currentCall?.state);
+  const callPeer = useCallStore(s => s.currentCall);
   useEffect(() => {
     if (callState === 'calling') {
       playCue('ringback');
@@ -736,6 +787,33 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   }, [callState]);
 
+  // ── System notification driver ──
+  // On 'ringing' state, show an OS-level notification with system ring
+  // sound — works even if the Sphere tab is inactive/minimized and even
+  // before the user has interacted with the page (the system handles
+  // the audio, not the page autoplay-policy).
+  // Hide the notification when the call leaves the 'ringing' state.
+  useEffect(() => {
+    if (callState === 'ringing' && callPeer) {
+      const peerName = callPeer.peerNametag
+        ? `@${callPeer.peerNametag.replace('@', '')}`
+        : callPeer.peerPubkey.slice(0, 8) + '...';
+      showIncomingCallNotification({
+        peerName,
+        isVideo: callPeer.mediaType === 'video',
+        onClick: () => { /* focusing the window is enough — Accept/Decline UI is in-page */ },
+      });
+    } else {
+      hideIncomingCallNotification();
+    }
+  }, [callState, callPeer]);
+
+  // Request notification permission once at mount so the first incoming
+  // call doesn't have to interrupt with a permission prompt.
+  useEffect(() => {
+    ensureNotificationPermission();
+  }, []);
+
   const value: CallContextValue = {
     startCall,
     acceptCall,
@@ -748,6 +826,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
     switchAudioInput,
     switchVideoInput,
     switchAudioOutput,
+    toggleFullscreen,
+    toggleSeparateWindow,
   };
 
   return <CallContext value={value}>{children}</CallContext>;

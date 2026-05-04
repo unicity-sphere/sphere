@@ -114,6 +114,9 @@ export interface CallStoreState {
   // Real-time audio level meters (0.0 - 1.0)
   localAudioLevel: number;
   remoteAudioLevel: number;
+  // When the user pops the call into a Document Picture-in-Picture window,
+  // this holds the spawned Window. Null when in embedded/fullscreen mode.
+  pipWindow: Window | null;
 }
 
 // ── Event detail types ──────────────────────────────────────────────────────

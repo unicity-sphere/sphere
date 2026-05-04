@@ -14,6 +14,7 @@ const initialState: CallStoreState = {
   peerCapabilities: new Map(),
   localAudioLevel: 0,
   remoteAudioLevel: 0,
+  pipWindow: null,
 };
 
 // ── Store internals ─────────────────────────────────────────────────────────
@@ -71,6 +72,11 @@ export function setVideoMuted(muted: boolean) {
 
 export function setConnectionQuality(quality: ConnectionQuality | null) {
   state = { ...state, connectionQuality: quality };
+  emitChange();
+}
+
+export function setPipWindow(w: Window | null) {
+  state = { ...state, pipWindow: w };
   emitChange();
 }
 
