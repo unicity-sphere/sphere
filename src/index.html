@@ -29,6 +29,23 @@
       gtag('config', 'G-J2S6VSBDSH');
     </script>
     <script>
+      // GitHub Pages SPA path restore. The root 404.html redirects deep links
+      // from /base/{route}?qs to /base/?p=/{route}&qs; rewrite back before
+      // React Router reads the URL. No-op in production (no ?p= present).
+      (function() {
+        var params = new URLSearchParams(window.location.search);
+        var p = params.get('p');
+        if (!p) return;
+        params.delete('p');
+        var base = window.location.pathname.replace(/\/$/, '');
+        var remaining = params.toString();
+        window.history.replaceState(
+          null, '',
+          base + p + (remaining ? '?' + remaining : '') + window.location.hash
+        );
+      })();
+    </script>
+    <script>
       // Prevent FOUC by applying theme before React loads
       (function() {
         const stored = localStorage.getItem('sphere-theme');
