@@ -54,13 +54,12 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
   }, [remoteStream]);
 
   return (
-    <div className="relative w-full h-full bg-neutral-900 flex flex-col">
-      {/* Remote video / avatar. Audio is unlocked synchronously inside
-          startCall/acceptCall (within the user-gesture window of the
-          Phone/Accept tap), so playback works without further interaction.
-          The video is absolute-positioned (inset-0) so it definitively
-          fills the parent — combined with object-contain, that letterboxes
-          the whole remote frame inside the call window with no cropping. */}
+    <div className="w-full h-full bg-neutral-900 flex flex-col">
+      {/* Video region — takes remaining vertical space. All overlays
+          (top bar, local-video PiP, bottom call controls) live INSIDE
+          this region so they sit on top of the remote feed only. The
+          meters + device selectors below are real flex siblings, not
+          overlays, so they no longer cover the correspondent's image. */}
       <div className="flex-1 relative min-h-0">
         {isVideo && hasRemoteVideo ? (
           <VideoFeed
@@ -81,71 +80,70 @@ export function ActiveCallScreen({ call }: ActiveCallScreenProps) {
             </p>
           </div>
         )}
+
+        {/* Local video PiP (top-right corner of the video region) */}
+        {isVideo && localStream && (
+          <div className="absolute top-16 right-4 w-32 h-44 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg pointer-events-none">
+            <VideoFeed stream={localStream} muted mirror className="w-full h-full" />
+          </div>
+        )}
+
+        {/* Top bar: timer + window-mode buttons + quality (overlay) */}
+        <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent">
+          <div className="flex items-center gap-2 pointer-events-none">
+            {call.connectedAt && <CallTimer connectedAt={call.connectedAt} />}
+            {call.state === 'reconnecting' && (
+              <span className="text-yellow-400 text-xs animate-pulse">Reconnecting...</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {supportsSeparateWindow && (
+              <motion.button
+                onClick={() => toggleSeparateWindow()}
+                className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                  pipWindow ? 'bg-orange-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
+                }`}
+                whileTap={{ scale: 0.9 }}
+                title={pipWindow ? 'Re-attach to page' : 'Open in separate window'}
+              >
+                <ExternalLink className="w-4 h-4" />
+              </motion.button>
+            )}
+            <motion.button
+              onClick={() => toggleFullscreen()}
+              className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 text-white hover:bg-white/20 transition-colors"
+              whileTap={{ scale: 0.9 }}
+              title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              {fullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </motion.button>
+            <QualityIndicator quality={quality} />
+          </div>
+        </div>
+
+        {/* Bottom call controls: hangup / mute mic / toggle video (overlay) */}
+        <div className="absolute bottom-0 left-0 right-0 pb-6 pt-4 bg-gradient-to-t from-black/60 to-transparent">
+          <CallControls
+            audioMuted={audioMuted}
+            videoMuted={videoMuted}
+            showVideo={isVideo}
+            onToggleAudio={toggleMuteAudio}
+            onToggleVideo={toggleMuteVideo}
+            onHangUp={hangUp}
+          />
+        </div>
       </div>
 
-      {/* Local video PiP (top-right corner) */}
-      {isVideo && localStream && (
-        <div className="absolute top-16 right-4 w-32 h-44 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg pointer-events-none">
-          <VideoFeed stream={localStream} muted mirror className="w-full h-full" />
+      {/* Meters + device selectors — flex sibling BELOW the video, not
+          an overlay. Sound bars show mic / remote-audio amplitude in
+          real time; the dropdown switches mic/speaker/camera mid-call. */}
+      <div className="shrink-0 bg-neutral-950/80 border-t border-white/10 px-4 py-3 flex flex-col gap-2 items-center">
+        <div className="w-full max-w-sm">
+          <AudioLevelMeter />
         </div>
-      )}
-
-      {/* Real-time audio level meters + device selectors. Levels show
-          mic/peer-audio amplitude in real time. Selectors let the user
-          switch mic/speaker/camera during the call. */}
-      <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 flex flex-col gap-2 items-center max-w-sm w-[calc(100%-2rem)] pointer-events-none">
-        <AudioLevelMeter />
-        <div className="pointer-events-auto w-full">
+        <div className="w-full max-w-sm">
           <DeviceSelector isVideoCall={isVideo} />
         </div>
-      </div>
-
-      {/* Top bar: timer + window-mode buttons + quality */}
-      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/50 to-transparent">
-        <div className="flex items-center gap-2 pointer-events-none">
-          {call.connectedAt && <CallTimer connectedAt={call.connectedAt} />}
-          {call.state === 'reconnecting' && (
-            <span className="text-yellow-400 text-xs animate-pulse">Reconnecting...</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {/* Separate-window (Document Picture-in-Picture). Hidden if
-              browser doesn't support documentPictureInPicture. */}
-          {supportsSeparateWindow && (
-            <motion.button
-              onClick={() => toggleSeparateWindow()}
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
-                pipWindow ? 'bg-orange-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-              whileTap={{ scale: 0.9 }}
-              title={pipWindow ? 'Re-attach to page' : 'Open in separate window'}
-            >
-              <ExternalLink className="w-4 h-4" />
-            </motion.button>
-          )}
-          {/* Fullscreen */}
-          <motion.button
-            onClick={() => toggleFullscreen()}
-            className="w-8 h-8 rounded-full flex items-center justify-center bg-white/10 text-white hover:bg-white/20 transition-colors"
-            whileTap={{ scale: 0.9 }}
-            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            {fullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-          </motion.button>
-          <QualityIndicator quality={quality} />
-        </div>
-      </div>
-
-      {/* Bottom controls */}
-      <div className="absolute bottom-0 left-0 right-0 pb-8 pt-4 bg-gradient-to-t from-black/60 to-transparent">
-        <CallControls
-          audioMuted={audioMuted}
-          videoMuted={videoMuted}
-          showVideo={isVideo}
-          onToggleAudio={toggleMuteAudio}
-          onToggleVideo={toggleMuteVideo}
-          onHangUp={hangUp}
-        />
       </div>
     </div>
   );
