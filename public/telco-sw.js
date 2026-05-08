@@ -24,6 +24,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// Chrome's "Add to Home Screen" / installability check requires a fetch
+// handler in the SW. We don't need any caching strategy — just a no-op
+// passthrough so the install prompt becomes available.
+self.addEventListener('fetch', () => { /* network passthrough */ });
+
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || typeof data !== 'object') return;

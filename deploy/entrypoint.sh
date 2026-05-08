@@ -133,6 +133,20 @@ server {
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
+    # PWA manifest must be served as application/manifest+json (or
+    # application/json) for Chrome to accept it as the install descriptor.
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+    # Service worker: never cache, so SW updates propagate immediately.
+    location = /telco-sw.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Service-Worker-Allowed "/";
+        add_header X-Content-Type-Options "nosniff" always;
+    }
     location /assets/ {
         expires 1y;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -161,6 +175,15 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+    location = /telco-sw.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Service-Worker-Allowed "/";
+    }
     location / {
         try_files \$uri \$uri/ /index.html;
     }

@@ -5,6 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/Union.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0a0a0a" />
+    <!-- PWA manifest: lets users "Install Sphere" from Chrome on Android.
+         Installed PWAs are kept alive by the OS far longer than a backgrounded
+         tab, which keeps the Nostr WebSocket connection up so incoming-call
+         DMs are still delivered when the screen is off. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/sphere-1024.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sphere" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>Unicity Agent Sphere</title>
     <!-- Splash screen fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
