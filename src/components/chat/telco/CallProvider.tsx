@@ -14,6 +14,7 @@ import {
   onServiceWorkerMessage,
   type TelcoActionMessage,
 } from './serviceWorkerManager';
+import { ensurePushRegistration, sendWakeRequest } from './pushRelay';
 import {
   setCurrentCall, updateCallState,
   setLocalStream, setRemoteStream,
@@ -393,6 +394,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
         syncUpdateCall(currentCallRef, { state: 'calling' });
         await sendSignal(peerPubkey, 'offer', { sdp, mediaType } satisfies OfferPayload, callId);
 
+        // Ask the push-relay to wake the callee's phone via Web Push so the
+        // call rings even if their Sphere PWA is closed. Fire-and-forget —
+        // the offer DM is the primary signal; wake is best-effort.
+        if (sphere) {
+          const myNametag = sphere.identity?.nametag ?? undefined;
+          sendWakeRequest(
+            (to, content) => sphere.communications.sendDM(to, content),
+            { peerPubkey, peerNametag },
+            { callId, mediaType },
+            myNametag,
+          );
+        }
+
         timeoutRef.current = setTimeout(() => {
           sendSignal(peerPubkey, 'timeout', {}, callId);
           endCall('No answer');
@@ -402,7 +416,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         failCall(err instanceof Error ? err.message : 'Failed to start call');
       }
     })();
-  }, [setupConnectionHandlers, sendSignal, endCall, failCall, clearDismissTimer]);
+  }, [setupConnectionHandlers, sendSignal, endCall, failCall, clearDismissTimer, sphere]);
 
   // ── Accept incoming call ────────────────────────────────────────────
 
@@ -825,8 +839,20 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // matches and only the owner reacts. Other tabs (different identities,
   // different browser accounts) silently ignore unrelated actions.
   useEffect(() => {
-    ensureNotificationPermission();
-    registerTelcoServiceWorker();
+    let cancelled = false;
+    (async () => {
+      const granted = await ensureNotificationPermission();
+      await registerTelcoServiceWorker();
+      // Once permission is granted AND we have a sphere SDK identity, register
+      // this device's push subscription with the relay so we get woken up on
+      // incoming calls even when the PWA is closed. No-op if the relay isn't
+      // configured (env vars unset) or push isn't supported.
+      if (cancelled) return;
+      if (granted === 'granted' && sphere) {
+        ensurePushRegistration((to, content) => sphere.communications.sendDM(to, content))
+          .catch((err) => console.warn('[telco] ensurePushRegistration failed:', err));
+      }
+    })();
     const unsub = onServiceWorkerMessage((msg: TelcoActionMessage) => {
       const call = currentCallRef.current;
       if (!call) return;
@@ -841,8 +867,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
         declineCall();
       }
     });
-    return unsub;
-  }, [acceptCall, declineCall]);
+    return () => { cancelled = true; unsub(); };
+  }, [acceptCall, declineCall, sphere]);
 
   const value: CallContextValue = {
     startCall,
