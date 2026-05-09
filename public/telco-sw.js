@@ -187,25 +187,10 @@ self.addEventListener('notificationclick', (event) => {
   })());
 });
 
-self.addEventListener('notificationclose', (event) => {
-  // User dismissed the notification without choosing an action — treat as
-  // 'decline' for now so the call doesn't keep ringing on the caller's side.
-  const payload = event.notification.data || {};
-  if (event.notification.tag !== 'sphere-incoming-call') return;
-  event.waitUntil((async () => {
-    const allClients = await self.clients.matchAll({
-      type: 'window',
-      includeUncontrolled: true,
-    });
-    for (const client of allClients) {
-      try {
-        client.postMessage({
-          type: 'telco-action',
-          action: 'dismiss',
-          callId: payload.callId,
-          peerPubkey: payload.peerPubkey,
-        });
-      } catch { /* ignore */ }
-    }
-  })());
-});
+// NOTE: we intentionally do NOT translate notificationclose into a
+// decline. On Android, tapping an action button (Accept or Decline)
+// causes the OS to auto-dismiss the notification, which then fires
+// notificationclose right after notificationclick. Treating that as a
+// dismiss-decline would cancel a call the user just accepted. If the
+// user really wants to reject without answering, they tap the Decline
+// action; otherwise the call rings out via the caller's CALL_TIMEOUT.
