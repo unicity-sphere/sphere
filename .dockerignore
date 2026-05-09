@@ -8,6 +8,9 @@
 !public/
 !tsconfig*.json
 !vite.config.ts
+# Vite reads VITE_* vars from .env at build time. Without this, vars like
+# VITE_PUSH_RELAY_VAPID_PUBLIC_KEY end up empty in the bundled JS.
+!.env
 
 # Entrypoint for ssl-manager stage
 !deploy/entrypoint.sh
