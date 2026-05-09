@@ -10,14 +10,26 @@
   "theme_color": "#0a0a0a",
   "icons": [
     {
-      "src": "/icons/sphere-1024.png",
-      "sizes": "1024x1024",
+      "src": "/icons/sphere-192.png",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/sphere-1024.png",
-      "sizes": "1024x1024",
+      "src": "/icons/sphere-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/sphere-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/sphere-512-maskable.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
