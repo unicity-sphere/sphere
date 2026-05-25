@@ -1,0 +1,1340 @@
+// core/logger.ts
+var LOGGER_KEY = "__sphere_sdk_logger__";
+function getState() {
+  const g = globalThis;
+  if (!g[LOGGER_KEY]) {
+    g[LOGGER_KEY] = { debug: false, tags: {}, handler: null };
+  }
+  return g[LOGGER_KEY];
+}
+function isEnabled(tag) {
+  const state = getState();
+  if (tag in state.tags) return state.tags[tag];
+  return state.debug;
+}
+var logger = {
+  /**
+   * Configure the logger. Can be called multiple times (last write wins).
+   * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
+   */
+  configure(config) {
+    const state = getState();
+    if (config.debug !== void 0) state.debug = config.debug;
+    if (config.handler !== void 0) state.handler = config.handler;
+  },
+  /**
+   * Enable/disable debug logging for a specific tag.
+   * Per-tag setting overrides the global debug flag.
+   *
+   * @example
+   * ```ts
+   * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
+   * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
+   * ```
+   */
+  setTagDebug(tag, enabled) {
+    getState().tags[tag] = enabled;
+  },
+  /**
+   * Clear per-tag override, falling back to global debug flag.
+   */
+  clearTagDebug(tag) {
+    delete getState().tags[tag];
+  },
+  /** Returns true if debug mode is enabled for the given tag (or globally). */
+  isDebugEnabled(tag) {
+    if (tag) return isEnabled(tag);
+    return getState().debug;
+  },
+  /**
+   * Debug-level log. Only shown when debug is enabled (globally or for this tag).
+   * Use for detailed operational information.
+   */
+  debug(tag, message, ...args) {
+    if (!isEnabled(tag)) return;
+    const state = getState();
+    if (state.handler) {
+      state.handler("debug", tag, message, ...args);
+    } else {
+      console.log(`[${tag}]`, message, ...args);
+    }
+  },
+  /**
+   * Warning-level log. ALWAYS shown regardless of debug flag.
+   * Use for important but non-critical issues (timeouts, retries, degraded state).
+   */
+  warn(tag, message, ...args) {
+    const state = getState();
+    if (state.handler) {
+      state.handler("warn", tag, message, ...args);
+    } else {
+      console.warn(`[${tag}]`, message, ...args);
+    }
+  },
+  /**
+   * Error-level log. ALWAYS shown regardless of debug flag.
+   * Use for critical failures that should never be silenced.
+   */
+  error(tag, message, ...args) {
+    const state = getState();
+    if (state.handler) {
+      state.handler("error", tag, message, ...args);
+    } else {
+      console.error(`[${tag}]`, message, ...args);
+    }
+  },
+  /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+  reset() {
+    const g = globalThis;
+    delete g[LOGGER_KEY];
+  }
+};
+
+// core/errors.ts
+var REDACTED_FIELDS = Object.freeze([
+  // Cryptographic-secret fields (W40 original set).
+  "signedTransferTxBytes",
+  "signedCommitmentBytes",
+  "rawAuthenticator",
+  // Round 5 — defensive sister names (untrusted strings/payloads).
+  "aggregatorError",
+  "failureReasons",
+  "errorMessage",
+  "serverError",
+  "responseBody",
+  "requestBody",
+  "responseText",
+  "body",
+  "rawError",
+  "errorBody"
+]);
+var REDACTED_FIELDS_SET = new Set(REDACTED_FIELDS);
+var MAX_REDACT_DEPTH = 32;
+function redactionMarkerFor(field, value) {
+  if (value instanceof Uint8Array) {
+    return `[REDACTED: ${field}(${value.byteLength}-bytes)]`;
+  }
+  if (typeof value === "object" && value !== null && "byteLength" in value && typeof value.byteLength === "number") {
+    return `[REDACTED: ${field}(${value.byteLength}-bytes)]`;
+  }
+  if (typeof value === "string") {
+    return `[REDACTED: ${field}(${value.length}-chars)]`;
+  }
+  return `[REDACTED: ${field}]`;
+}
+function redactValue(value, visited, depth) {
+  if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
+  if (value === null || value === void 0) return value;
+  const t = typeof value;
+  if (t !== "object" && t !== "function") return value;
+  let isError = false;
+  try {
+    isError = value instanceof Error;
+  } catch {
+    isError = false;
+  }
+  if (isError) {
+    const errObj = value;
+    const memoExisting = visited.get(errObj);
+    if (memoExisting !== void 0) return memoExisting;
+    let proto;
+    try {
+      proto = Object.getPrototypeOf(errObj);
+    } catch {
+      proto = Error.prototype;
+    }
+    const clone = Object.create(proto);
+    visited.set(errObj, clone);
+    let errName;
+    try {
+      errName = errObj.name;
+    } catch {
+      errName = "[REDACTED: getter-threw]";
+    }
+    if (errName !== void 0) clone.name = errName;
+    let errMessage;
+    try {
+      errMessage = errObj.message;
+    } catch {
+      errMessage = "[REDACTED: getter-threw]";
+    }
+    if (errMessage !== void 0) clone.message = errMessage;
+    let errStack;
+    try {
+      errStack = errObj.stack;
+    } catch {
+      errStack = "[REDACTED: getter-threw]";
+    }
+    if (errStack !== void 0) clone.stack = errStack;
+    let errCause;
+    try {
+      errCause = errObj.cause;
+    } catch {
+      errCause = "[REDACTED: getter-threw]";
+    }
+    if (errCause !== void 0) {
+      clone.cause = redactValue(errCause, visited, depth + 1);
+    }
+    let keys;
+    try {
+      keys = Object.keys(errObj);
+    } catch {
+      return clone;
+    }
+    for (const key of keys) {
+      if (key === "name" || key === "message" || key === "stack" || key === "cause") {
+        continue;
+      }
+      let v;
+      try {
+        v = errObj[key];
+      } catch {
+        clone[key] = "[REDACTED: getter-threw]";
+        continue;
+      }
+      if (REDACTED_FIELDS_SET.has(key)) {
+        clone[key] = redactionMarkerFor(key, v);
+      } else {
+        clone[key] = redactValue(v, visited, depth + 1);
+      }
+    }
+    return clone;
+  }
+  let isU8 = false;
+  try {
+    isU8 = value instanceof Uint8Array;
+  } catch {
+    isU8 = false;
+  }
+  if (isU8) return value;
+  let isArray = false;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    isArray = false;
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    const memo = visited.get(obj);
+    if (memo !== void 0) return memo;
+    if (isArray) {
+      const arr = obj;
+      const out2 = [];
+      visited.set(obj, out2);
+      let len = 0;
+      try {
+        len = arr.length;
+      } catch {
+        len = 0;
+      }
+      for (let i = 0; i < len; i++) {
+        let item;
+        try {
+          item = arr[i];
+        } catch {
+          item = "[REDACTED: getter-threw]";
+        }
+        out2.push(redactValue(item, visited, depth + 1));
+      }
+      return out2;
+    }
+    const out = {};
+    visited.set(obj, out);
+    let keys;
+    try {
+      keys = Object.keys(obj);
+    } catch {
+      return "[REDACTED: keys-threw]";
+    }
+    for (const key of keys) {
+      let v;
+      try {
+        v = obj[key];
+      } catch {
+        out[key] = "[REDACTED: getter-threw]";
+        continue;
+      }
+      if (REDACTED_FIELDS_SET.has(key)) {
+        out[key] = redactionMarkerFor(key, v);
+      } else {
+        out[key] = redactValue(v, visited, depth + 1);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function redactCause(cause) {
+  if (cause === void 0) return void 0;
+  return redactValue(cause, /* @__PURE__ */ new WeakMap(), 0);
+}
+var SphereError = class extends Error {
+  code;
+  /**
+   * Eagerly-redacted forensic payload, read-only. Field names listed in
+   * {@link REDACTED_FIELDS} are replaced with opaque markers. The original
+   * `cause` (if any) is NOT retained on the instance — by the time this
+   * error exists, the original bytes are already gone.
+   *
+   * Aliased to the native `Error.cause` getter so Sentry / pino /
+   * `util.inspect` / explicit `error.cause` reads all see the SAME redacted
+   * view.
+   */
+  context;
+  constructor(message, code, cause) {
+    const redacted = redactCause(cause);
+    super(message, redacted !== void 0 ? { cause: redacted } : void 0);
+    this.name = "SphereError";
+    this.code = code;
+    this.context = redacted;
+  }
+};
+
+// constants.ts
+var STORAGE_KEYS_GLOBAL = {
+  /** Encrypted BIP39 mnemonic */
+  MNEMONIC: "mnemonic",
+  /** Encrypted master private key */
+  MASTER_KEY: "master_key",
+  /** BIP32 chain code */
+  CHAIN_CODE: "chain_code",
+  /** HD derivation path (full path like m/44'/0'/0'/0/0) */
+  DERIVATION_PATH: "derivation_path",
+  /** Base derivation path (like m/44'/0'/0' without chain/index) */
+  BASE_PATH: "base_path",
+  /** Derivation mode: bip32, wif_hmac, legacy_hmac */
+  DERIVATION_MODE: "derivation_mode",
+  /** Wallet source: mnemonic, file, unknown */
+  WALLET_SOURCE: "wallet_source",
+  /** Wallet existence flag */
+  WALLET_EXISTS: "wallet_exists",
+  /** Current active address index */
+  CURRENT_ADDRESS_INDEX: "current_address_index",
+  /** Nametag cache per address (separate from tracked addresses registry) */
+  ADDRESS_NAMETAGS: "address_nametags",
+  /** Active addresses registry (JSON: TrackedAddressesStorage) */
+  TRACKED_ADDRESSES: "tracked_addresses",
+  /** Last processed Nostr wallet event timestamp (unix seconds), keyed per pubkey */
+  LAST_WALLET_EVENT_TS: "last_wallet_event_ts",
+  /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
+  LAST_DM_EVENT_TS: "last_dm_event_ts",
+  /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
+  GROUP_CHAT_RELAY_URL: "group_chat_relay_url",
+  /** Cached token registry JSON (fetched from remote) */
+  TOKEN_REGISTRY_CACHE: "token_registry_cache",
+  /** Timestamp of last token registry cache update (ms since epoch) */
+  TOKEN_REGISTRY_CACHE_TS: "token_registry_cache_ts",
+  /** Cached price data JSON (from CoinGecko or other provider) */
+  PRICE_CACHE: "price_cache",
+  /** Timestamp of last price cache update (ms since epoch) */
+  PRICE_CACHE_TS: "price_cache_ts",
+  /**
+   * CID whose CAR is pinned + OrbitDB ref written but whose aggregator
+   * pointer publish is pending due to a transient failure. Persisted
+   * so a process restart resumes the retry rather than abandoning the
+   * publish (which would leave cross-device peers unable to discover
+   * the bundle via the aggregator path). Per-address suffix appended
+   * by the Profile provider (`<key>_<addressId>`).
+   */
+  PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid"
+};
+var STORAGE_KEYS_ADDRESS = {
+  /** Pending transfers for this address */
+  PENDING_TRANSFERS: "pending_transfers",
+  /** Transfer outbox for this address */
+  OUTBOX: "outbox",
+  /** Conversations for this address */
+  CONVERSATIONS: "conversations",
+  /** Messages for this address */
+  MESSAGES: "messages",
+  /** Transaction history for this address */
+  TRANSACTION_HISTORY: "transaction_history",
+  /** Pending V5 finalization tokens (unconfirmed instant split tokens) */
+  PENDING_V5_TOKENS: "pending_v5_tokens",
+  /** Group chat: joined groups for this address */
+  GROUP_CHAT_GROUPS: "group_chat_groups",
+  /** Group chat: messages for this address */
+  GROUP_CHAT_MESSAGES: "group_chat_messages",
+  /** Group chat: members for this address */
+  GROUP_CHAT_MEMBERS: "group_chat_members",
+  /** Group chat: processed event IDs for deduplication */
+  GROUP_CHAT_PROCESSED_EVENTS: "group_chat_processed_events",
+  /** Processed V5 split group IDs for Nostr re-delivery dedup */
+  PROCESSED_SPLIT_GROUP_IDS: "processed_split_group_ids",
+  /** Processed V6 combined transfer IDs for Nostr re-delivery dedup */
+  PROCESSED_COMBINED_TRANSFER_IDS: "processed_combined_transfer_ids",
+  // Invoice / Accounting storage keys
+  /** Set of cancelled invoice IDs (JSON string array) */
+  CANCELLED_INVOICES: "cancelled_invoices",
+  /** Set of closed invoice IDs (JSON string array) */
+  CLOSED_INVOICES: "closed_invoices",
+  /** Frozen balances for terminated invoices (JSON map: invoiceId → FrozenInvoiceBalances) */
+  FROZEN_BALANCES: "frozen_balances",
+  /** Auto-return settings (JSON: AutoReturnSettings) */
+  AUTO_RETURN: "auto_return",
+  /** Auto-return dedup ledger (JSON: AutoReturnLedger) */
+  AUTO_RETURN_LEDGER: "auto_return_ledger",
+  /** Invoice-transfer index metadata (JSON: Record<invoiceId, { terminated, frozenAt? }>) */
+  INV_LEDGER_INDEX: "inv_ledger_index",
+  /** Token scan state watermarks (JSON: Record<tokenId, txCount>) */
+  TOKEN_SCAN_STATE: "token_scan_state",
+  /**
+   * Persisted NOSTR-FIRST proof-polling jobs. Issue #144: the in-memory
+   * `proofPollingJobs` Map dies with the process; on CLI usage every
+   * `sphere <cmd>` is a fresh Node.js process, so V6-direct receives
+   * whose proof arrives later never finalize. We persist enough state
+   * (genesisTokenId, stateHash, requestIdHex, commitmentJson,
+   * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
+   */
+  PROOF_POLLING_JOBS: "proof_polling_jobs",
+  // Swap storage keys
+  /** Per-swap key: swap:{swapId} */
+  SWAP_RECORD_PREFIX: "swap:",
+  /** Lightweight index array for listing */
+  SWAP_INDEX: "swap_index",
+  // UXF inter-wallet transfer protocol storage keys (T.0.G7-fill-gaps)
+  /**
+   * Audit collection for structurally-valid-but-unspendable tokens
+   * (NOT_OUR_CURRENT_STATE / UNSPENDABLE_BY_US dispositions). Stored
+   * with composite id `${tokenId}.${observedTokenContentHash}` per
+   * PROFILE-ARCHITECTURE.md §10.10 / canonical UXF-TRANSFER-PROTOCOL §5.4.
+   * The per-entry-key writer treats the id as opaque — T.1.E declares
+   * the specific composite-id shape.
+   */
+  AUDIT: "audit",
+  /**
+   * Finalization queue for pending chain-mode transactions, keyed by
+   * the request id. Persists across process restarts per
+   * UXF-TRANSFER-PROTOCOL §5.5.
+   */
+  FINALIZATION_QUEUE: "finalizationQueue"
+};
+var STORAGE_KEYS = {
+  ...STORAGE_KEYS_GLOBAL,
+  ...STORAGE_KEYS_ADDRESS
+};
+function readIpfsGatewayEnvOverride() {
+  if (typeof process === "undefined" || typeof process.env === "undefined") {
+    return null;
+  }
+  const raw = process.env.SPHERE_IPFS_GATEWAY;
+  if (!raw) return null;
+  const parts = raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  return parts.length > 0 ? parts : null;
+}
+var ENV_IPFS_GATEWAYS = readIpfsGatewayEnvOverride();
+var DEFAULT_BASE_PATH = "m/44'/0'/0'";
+var DEFAULT_DERIVATION_PATH = `${DEFAULT_BASE_PATH}/0/0`;
+var HOST_READY_TYPE = "sphere-connect:host-ready";
+var HOST_READY_TIMEOUT = 3e4;
+
+// connect/protocol.ts
+var SPHERE_CONNECT_NAMESPACE = "sphere-connect";
+var SPHERE_CONNECT_VERSION = "1.0";
+var RPC_METHODS = {
+  GET_IDENTITY: "sphere_getIdentity",
+  GET_BALANCE: "sphere_getBalance",
+  GET_ASSETS: "sphere_getAssets",
+  GET_FIAT_BALANCE: "sphere_getFiatBalance",
+  GET_TOKENS: "sphere_getTokens",
+  GET_HISTORY: "sphere_getHistory",
+  L1_GET_BALANCE: "sphere_l1GetBalance",
+  L1_GET_HISTORY: "sphere_l1GetHistory",
+  RESOLVE: "sphere_resolve",
+  SUBSCRIBE: "sphere_subscribe",
+  UNSUBSCRIBE: "sphere_unsubscribe",
+  DISCONNECT: "sphere_disconnect",
+  GET_CONVERSATIONS: "sphere_getConversations",
+  GET_MESSAGES: "sphere_getMessages",
+  GET_DM_UNREAD_COUNT: "sphere_getDMUnreadCount",
+  MARK_AS_READ: "sphere_markAsRead",
+  GET_INVOICES: "sphere_getInvoices",
+  GET_INVOICE_STATUS: "sphere_getInvoiceStatus"
+};
+var INTENT_ACTIONS = {
+  SEND: "send",
+  L1_SEND: "l1_send",
+  DM: "dm",
+  PAYMENT_REQUEST: "payment_request",
+  RECEIVE: "receive",
+  SIGN_MESSAGE: "sign_message",
+  CREATE_INVOICE: "create_invoice",
+  CLOSE_INVOICE: "close_invoice",
+  CANCEL_INVOICE: "cancel_invoice",
+  PAY_INVOICE: "pay_invoice",
+  RETURN_INVOICE_PAYMENT: "return_invoice_payment",
+  IMPORT_INVOICE: "import_invoice",
+  SEND_INVOICE_RECEIPTS: "send_invoice_receipts",
+  SEND_CANCELLATION_NOTICES: "send_cancellation_notices",
+  SET_AUTO_RETURN: "set_auto_return"
+};
+var ERROR_CODES = {
+  // Standard JSON-RPC
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+  // Sphere Connect (4xxx)
+  NOT_CONNECTED: 4001,
+  PERMISSION_DENIED: 4002,
+  USER_REJECTED: 4003,
+  SESSION_EXPIRED: 4004,
+  ORIGIN_BLOCKED: 4005,
+  RATE_LIMITED: 4006,
+  INSUFFICIENT_BALANCE: 4100,
+  INVALID_RECIPIENT: 4101,
+  TRANSFER_FAILED: 4102,
+  INTENT_CANCELLED: 4200
+};
+var WALLET_EVENTS = {
+  /** Wallet locked or user logged out. dApp shows locked state and waits for unlock.
+   *  Pushed automatically by ConnectHost — no sphere_subscribe needed. */
+  LOCKED: "wallet:locked",
+  /** Active wallet address changed. dApp should update displayed identity.
+   *  Pushed automatically by ConnectHost — no sphere_subscribe needed. */
+  IDENTITY_CHANGED: "identity:changed"
+};
+function isSphereConnectMessage(msg) {
+  if (!msg || typeof msg !== "object") return false;
+  const m = msg;
+  return m.ns === SPHERE_CONNECT_NAMESPACE && m.v === SPHERE_CONNECT_VERSION;
+}
+function createRequestId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+// connect/permissions.ts
+var PERMISSION_SCOPES = {
+  IDENTITY_READ: "identity:read",
+  BALANCE_READ: "balance:read",
+  TOKENS_READ: "tokens:read",
+  HISTORY_READ: "history:read",
+  L1_READ: "l1:read",
+  EVENTS_SUBSCRIBE: "events:subscribe",
+  RESOLVE_PEER: "resolve:peer",
+  TRANSFER_REQUEST: "transfer:request",
+  L1_TRANSFER: "l1:transfer",
+  DM_REQUEST: "dm:request",
+  DM_READ: "dm:read",
+  DM_MANAGE: "dm:manage",
+  PAYMENT_REQUEST: "payment:request",
+  SIGN_REQUEST: "sign:request",
+  INVOICE_READ: "invoice:read",
+  INVOICE_WRITE: "invoice:write"
+};
+var ALL_PERMISSIONS = Object.values(PERMISSION_SCOPES);
+var DEFAULT_PERMISSIONS = [
+  PERMISSION_SCOPES.IDENTITY_READ
+];
+var METHOD_PERMISSIONS = {
+  [RPC_METHODS.GET_IDENTITY]: PERMISSION_SCOPES.IDENTITY_READ,
+  [RPC_METHODS.GET_BALANCE]: PERMISSION_SCOPES.BALANCE_READ,
+  [RPC_METHODS.GET_ASSETS]: PERMISSION_SCOPES.BALANCE_READ,
+  [RPC_METHODS.GET_FIAT_BALANCE]: PERMISSION_SCOPES.BALANCE_READ,
+  [RPC_METHODS.GET_TOKENS]: PERMISSION_SCOPES.TOKENS_READ,
+  [RPC_METHODS.GET_HISTORY]: PERMISSION_SCOPES.HISTORY_READ,
+  [RPC_METHODS.L1_GET_BALANCE]: PERMISSION_SCOPES.L1_READ,
+  [RPC_METHODS.L1_GET_HISTORY]: PERMISSION_SCOPES.L1_READ,
+  [RPC_METHODS.RESOLVE]: PERMISSION_SCOPES.RESOLVE_PEER,
+  [RPC_METHODS.SUBSCRIBE]: PERMISSION_SCOPES.EVENTS_SUBSCRIBE,
+  [RPC_METHODS.UNSUBSCRIBE]: PERMISSION_SCOPES.EVENTS_SUBSCRIBE,
+  [RPC_METHODS.GET_CONVERSATIONS]: PERMISSION_SCOPES.DM_READ,
+  [RPC_METHODS.GET_MESSAGES]: PERMISSION_SCOPES.DM_READ,
+  [RPC_METHODS.GET_DM_UNREAD_COUNT]: PERMISSION_SCOPES.DM_READ,
+  [RPC_METHODS.MARK_AS_READ]: PERMISSION_SCOPES.DM_MANAGE,
+  [RPC_METHODS.GET_INVOICES]: PERMISSION_SCOPES.INVOICE_READ,
+  [RPC_METHODS.GET_INVOICE_STATUS]: PERMISSION_SCOPES.INVOICE_READ
+};
+var INTENT_PERMISSIONS = {
+  [INTENT_ACTIONS.SEND]: PERMISSION_SCOPES.TRANSFER_REQUEST,
+  [INTENT_ACTIONS.L1_SEND]: PERMISSION_SCOPES.L1_TRANSFER,
+  [INTENT_ACTIONS.DM]: PERMISSION_SCOPES.DM_REQUEST,
+  [INTENT_ACTIONS.PAYMENT_REQUEST]: PERMISSION_SCOPES.PAYMENT_REQUEST,
+  [INTENT_ACTIONS.RECEIVE]: PERMISSION_SCOPES.IDENTITY_READ,
+  [INTENT_ACTIONS.SIGN_MESSAGE]: PERMISSION_SCOPES.SIGN_REQUEST,
+  [INTENT_ACTIONS.CREATE_INVOICE]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.CLOSE_INVOICE]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.CANCEL_INVOICE]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.PAY_INVOICE]: PERMISSION_SCOPES.TRANSFER_REQUEST,
+  [INTENT_ACTIONS.RETURN_INVOICE_PAYMENT]: PERMISSION_SCOPES.TRANSFER_REQUEST,
+  [INTENT_ACTIONS.IMPORT_INVOICE]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.SEND_INVOICE_RECEIPTS]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.SEND_CANCELLATION_NOTICES]: PERMISSION_SCOPES.INVOICE_WRITE,
+  [INTENT_ACTIONS.SET_AUTO_RETURN]: PERMISSION_SCOPES.INVOICE_WRITE
+};
+function hasMethodPermission(granted, method) {
+  const required = METHOD_PERMISSIONS[method];
+  if (!required) return false;
+  return granted.has(required);
+}
+function hasIntentPermission(granted, action) {
+  const required = INTENT_PERMISSIONS[action];
+  if (!required) return false;
+  return granted.has(required);
+}
+function validatePermissions(permissions) {
+  const validScopes = new Set(ALL_PERMISSIONS);
+  return permissions.every((p) => validScopes.has(p));
+}
+
+// connect/host/ConnectHost.ts
+var DEFAULT_SESSION_TTL_MS = 864e5;
+var DEFAULT_MAX_RPS = 20;
+function detectIntentSchemaVersion(params) {
+  if (!params || typeof params !== "object") return "legacy";
+  if (params.schemaVersion === "uxf-1") return "uxf-1";
+  const extras = params.additionalAssets;
+  if (Array.isArray(extras) && extras.length > 0) return "uxf-1";
+  if (params.bundle !== void 0 && params.bundle !== null) return "uxf-1";
+  if (params.uxfBundle !== void 0 && params.uxfBundle !== null) return "uxf-1";
+  if (params.uxf !== void 0 && params.uxf !== null) return "uxf-1";
+  return "legacy";
+}
+var ConnectHost = class {
+  sphere;
+  transport;
+  config;
+  session = null;
+  grantedPermissions = /* @__PURE__ */ new Set();
+  // Event subscription management
+  eventSubscriptions = /* @__PURE__ */ new Map();
+  // eventName → unsub
+  // Intent auto-approve: action → handler that bypasses wallet UI
+  autoApprovedIntents = /* @__PURE__ */ new Map();
+  // Rate limiting
+  rateLimitCounter = 0;
+  rateLimitResetAt = 0;
+  unsubscribeTransport = null;
+  constructor(config) {
+    this.sphere = config.sphere;
+    this.transport = config.transport;
+    this.config = config;
+    this.unsubscribeTransport = this.transport.onMessage(this.handleMessage.bind(this));
+  }
+  /** Get current active session */
+  getSession() {
+    return this.session;
+  }
+  /**
+   * Register an auto-approve handler for an intent action (session-scoped).
+   *
+   * The handler receives the same `schemaVersion` 4th argument that
+   * {@link ConnectHostConfig.onIntent} does: `'uxf-1'` when the host
+   * detects a UXF-1 shape, otherwise `'legacy'`. The argument is
+   * optional, so existing 3-arg handlers continue to work unchanged.
+   */
+  setIntentAutoApprove(action, handler) {
+    this.autoApprovedIntents.set(action, handler);
+  }
+  /** Remove auto-approve for an intent action. */
+  clearIntentAutoApprove(action) {
+    this.autoApprovedIntents.delete(action);
+  }
+  /**
+   * Update the Sphere instance (e.g. user switched address — new Sphere created).
+   * Re-subscribes auto-push events and notifies connected dApp of the new identity.
+   */
+  updateSphere(newSphere) {
+    this.sphere = newSphere;
+    const existing = this.eventSubscriptions.get(WALLET_EVENTS.IDENTITY_CHANGED);
+    if (existing) {
+      existing();
+      this.eventSubscriptions.delete(WALLET_EVENTS.IDENTITY_CHANGED);
+    }
+    if (this.session?.active) {
+      this.autoSubscribeIdentityChanged();
+      const identity = this.getPublicIdentity();
+      if (identity) {
+        this.pushClientEvent(WALLET_EVENTS.IDENTITY_CHANGED, identity);
+      }
+    }
+  }
+  /** Revoke the current session */
+  revokeSession() {
+    if (this.session) {
+      this.session.active = false;
+      this.cleanupEventSubscriptions();
+      this.autoApprovedIntents.clear();
+      this.session = null;
+      this.grantedPermissions.clear();
+    }
+  }
+  /**
+   * Notify connected dApp that wallet is locked/logged out, then revoke session.
+   * Call this BEFORE destroy() when the wallet locks so the dApp gets a clean signal
+   * instead of receiving NOT_CONNECTED errors on the next request.
+   */
+  notifyWalletLocked() {
+    if (this.session?.active) {
+      this.pushClientEvent(WALLET_EVENTS.LOCKED, {});
+    }
+    this.revokeSession();
+  }
+  /** Destroy the host, clean up all resources */
+  destroy() {
+    this.revokeSession();
+    if (this.unsubscribeTransport) {
+      this.unsubscribeTransport();
+      this.unsubscribeTransport = null;
+    }
+  }
+  // ===========================================================================
+  // Message Handling
+  // ===========================================================================
+  async handleMessage(msg) {
+    try {
+      if (msg.type === "handshake" && msg.direction === "request") {
+        await this.handleHandshake(msg);
+        return;
+      }
+      if (msg.type === "request") {
+        await this.handleRpcRequest(msg);
+        return;
+      }
+      if (msg.type === "intent") {
+        await this.handleIntentRequest(msg);
+        return;
+      }
+    } catch (error) {
+      logger.warn("ConnectHost", "Error handling message:", error);
+    }
+  }
+  // ===========================================================================
+  // Handshake
+  // ===========================================================================
+  async handleHandshake(msg) {
+    const dapp = msg.dapp;
+    if (!dapp) {
+      this.sendHandshakeResponse([], void 0, void 0);
+      return;
+    }
+    if (msg.sessionId && this.session?.active && this.session.id === msg.sessionId) {
+      const identity2 = this.getPublicIdentity();
+      this.sendHandshakeResponse([...this.grantedPermissions], this.session.id, identity2);
+      return;
+    }
+    const requestedPermissions = msg.permissions;
+    const { approved, grantedPermissions } = await this.config.onConnectionRequest(
+      dapp,
+      requestedPermissions,
+      msg.silent
+    );
+    if (!approved) {
+      this.sendHandshakeResponse([], void 0, void 0);
+      return;
+    }
+    const sessionId = createRequestId();
+    const allPermissions = [.../* @__PURE__ */ new Set([...DEFAULT_PERMISSIONS, ...grantedPermissions])];
+    const ttl = this.config.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
+    this.session = {
+      id: sessionId,
+      dapp,
+      permissions: allPermissions,
+      createdAt: Date.now(),
+      expiresAt: ttl > 0 ? Date.now() + ttl : 0,
+      active: true
+    };
+    this.grantedPermissions = new Set(allPermissions);
+    this.autoSubscribeIdentityChanged();
+    const identity = this.getPublicIdentity();
+    this.sendHandshakeResponse(allPermissions, sessionId, identity);
+  }
+  sendHandshakeResponse(permissions, sessionId, identity) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "handshake",
+      direction: "response",
+      permissions,
+      sessionId,
+      identity
+    });
+  }
+  // ===========================================================================
+  // RPC Requests (query)
+  // ===========================================================================
+  async handleRpcRequest(msg) {
+    if (!this.session?.active) {
+      this.sendError(msg.id, ERROR_CODES.NOT_CONNECTED, "Not connected");
+      return;
+    }
+    if (this.session.expiresAt > 0 && Date.now() > this.session.expiresAt) {
+      this.revokeSession();
+      this.sendError(msg.id, ERROR_CODES.SESSION_EXPIRED, "Session expired");
+      return;
+    }
+    if (!this.checkRateLimit()) {
+      this.sendError(msg.id, ERROR_CODES.RATE_LIMITED, "Too many requests");
+      return;
+    }
+    if (msg.method === RPC_METHODS.DISCONNECT) {
+      const disconnectedSession = this.session;
+      this.revokeSession();
+      this.sendResult(msg.id, { disconnected: true });
+      if (disconnectedSession && this.config.onDisconnect) {
+        Promise.resolve(this.config.onDisconnect(disconnectedSession)).catch((err) => logger.warn("Connect", "onDisconnect handler error", err));
+      }
+      return;
+    }
+    if (!hasMethodPermission(this.grantedPermissions, msg.method)) {
+      this.sendError(msg.id, ERROR_CODES.PERMISSION_DENIED, `Permission denied for ${msg.method}`);
+      return;
+    }
+    try {
+      const result = await this.executeMethod(msg.method, msg.params ?? {});
+      this.sendResult(msg.id, result);
+    } catch (error) {
+      this.sendError(msg.id, ERROR_CODES.INTERNAL_ERROR, error.message);
+    }
+  }
+  // ===========================================================================
+  // Intent Requests
+  // ===========================================================================
+  async handleIntentRequest(msg) {
+    if (!this.session?.active) {
+      this.sendIntentError(msg.id, ERROR_CODES.NOT_CONNECTED, "Not connected");
+      return;
+    }
+    if (this.session.expiresAt > 0 && Date.now() > this.session.expiresAt) {
+      this.revokeSession();
+      this.sendIntentError(msg.id, ERROR_CODES.SESSION_EXPIRED, "Session expired");
+      return;
+    }
+    if (!hasIntentPermission(this.grantedPermissions, msg.action)) {
+      this.sendIntentError(msg.id, ERROR_CODES.PERMISSION_DENIED, `Permission denied for intent: ${msg.action}`);
+      return;
+    }
+    const schemaVersion = detectIntentSchemaVersion(msg.params);
+    const autoHandler = this.autoApprovedIntents.get(msg.action);
+    if (autoHandler) {
+      const autoResponse = await autoHandler(msg.action, msg.params, this.session, schemaVersion);
+      if (autoResponse.error) {
+        this.sendIntentError(msg.id, autoResponse.error.code, autoResponse.error.message);
+      } else {
+        this.sendIntentResult(msg.id, autoResponse.result);
+      }
+      return;
+    }
+    const response = await this.config.onIntent(msg.action, msg.params, this.session, schemaVersion);
+    if (response.error) {
+      this.sendIntentError(msg.id, response.error.code, response.error.message);
+    } else {
+      this.sendIntentResult(msg.id, response.result);
+    }
+  }
+  // ===========================================================================
+  // Method Router
+  // ===========================================================================
+  async executeMethod(method, params) {
+    switch (method) {
+      case RPC_METHODS.GET_IDENTITY:
+        return this.getPublicIdentity();
+      case RPC_METHODS.GET_BALANCE:
+        return this.sphere.payments.getBalance(params.coinId);
+      case RPC_METHODS.GET_ASSETS:
+        return this.sphere.payments.getAssets(params.coinId);
+      case RPC_METHODS.GET_FIAT_BALANCE:
+        return { fiatBalance: await this.sphere.payments.getFiatBalance() };
+      case RPC_METHODS.GET_TOKENS:
+        return this.stripTokenSdkData(
+          this.sphere.payments.getTokens(
+            params.coinId ? { coinId: params.coinId } : void 0
+          )
+        );
+      case RPC_METHODS.GET_HISTORY:
+        return this.sphere.payments.getHistory();
+      case RPC_METHODS.L1_GET_BALANCE:
+        if (!this.sphere.payments.l1) {
+          throw new SphereError("L1 module not available", "MODULE_NOT_AVAILABLE");
+        }
+        return this.sphere.payments.l1.getBalance();
+      case RPC_METHODS.L1_GET_HISTORY:
+        if (!this.sphere.payments.l1) {
+          throw new SphereError("L1 module not available", "MODULE_NOT_AVAILABLE");
+        }
+        return this.sphere.payments.l1.getHistory(params.limit);
+      case RPC_METHODS.RESOLVE:
+        if (!params.identifier) {
+          throw new SphereError("Missing required parameter: identifier", "VALIDATION_ERROR");
+        }
+        return this.sphere.resolve(params.identifier);
+      case RPC_METHODS.SUBSCRIBE:
+        return this.handleSubscribe(params.event);
+      case RPC_METHODS.UNSUBSCRIBE:
+        return this.handleUnsubscribe(params.event);
+      case RPC_METHODS.GET_CONVERSATIONS: {
+        if (!this.sphere.communications) throw new SphereError("Communications module not available", "MODULE_NOT_AVAILABLE");
+        const convos = this.sphere.communications.getConversations();
+        const result = [];
+        const needsResolve = [];
+        for (const [peer, messages] of convos) {
+          if (messages.length === 0) continue;
+          const last = messages[messages.length - 1];
+          const peerNametag = messages.find((m) => m.senderPubkey === peer && m.senderNametag)?.senderNametag ?? messages.find((m) => m.recipientPubkey === peer && m.recipientNametag)?.recipientNametag;
+          const idx = result.length;
+          result.push({
+            peerPubkey: peer,
+            peerNametag,
+            lastMessage: last,
+            unreadCount: this.sphere.communications.getUnreadCount(peer),
+            messageCount: messages.length
+          });
+          if (!peerNametag) {
+            needsResolve.push({ index: idx, peerPubkey: peer });
+          }
+        }
+        if (needsResolve.length > 0) {
+          const resolved = await Promise.all(
+            needsResolve.map(
+              ({ peerPubkey }) => this.sphere.communications.resolvePeerNametag(peerPubkey).catch((err) => {
+                logger.debug("Connect", "Peer Unicity ID resolution failed", err);
+                return void 0;
+              })
+            )
+          );
+          for (let i = 0; i < needsResolve.length; i++) {
+            if (resolved[i]) {
+              result[needsResolve[i].index].peerNametag = resolved[i];
+            }
+          }
+        }
+        result.sort((a, b) => b.lastMessage.timestamp - a.lastMessage.timestamp);
+        return result;
+      }
+      case RPC_METHODS.GET_MESSAGES: {
+        if (!this.sphere.communications) throw new SphereError("Communications module not available", "MODULE_NOT_AVAILABLE");
+        if (!params.peerPubkey) throw new SphereError("Missing required parameter: peerPubkey", "VALIDATION_ERROR");
+        return this.sphere.communications.getConversationPage(
+          params.peerPubkey,
+          {
+            limit: params.limit,
+            before: params.before
+          }
+        );
+      }
+      case RPC_METHODS.GET_DM_UNREAD_COUNT: {
+        if (!this.sphere.communications) throw new SphereError("Communications module not available", "MODULE_NOT_AVAILABLE");
+        return {
+          unreadCount: this.sphere.communications.getUnreadCount(
+            params.peerPubkey
+          )
+        };
+      }
+      case RPC_METHODS.MARK_AS_READ: {
+        if (!this.sphere.communications) throw new SphereError("Communications module not available", "MODULE_NOT_AVAILABLE");
+        if (!params.messageIds || !Array.isArray(params.messageIds)) {
+          throw new SphereError("Missing required parameter: messageIds (string[])", "VALIDATION_ERROR");
+        }
+        await this.sphere.communications.markAsRead(params.messageIds);
+        return { marked: true, count: params.messageIds.length };
+      }
+      case RPC_METHODS.GET_INVOICES: {
+        if (!this.sphere.accounting) throw new SphereError("Accounting module not available", "MODULE_NOT_AVAILABLE");
+        const invoiceOpts = {};
+        if (params.state !== void 0) invoiceOpts.state = params.state;
+        if (params.limit !== void 0) invoiceOpts.limit = params.limit;
+        if (params.offset !== void 0) invoiceOpts.offset = params.offset;
+        if (params.sortBy !== void 0) invoiceOpts.sortBy = params.sortBy;
+        if (params.sortOrder !== void 0) invoiceOpts.sortOrder = params.sortOrder;
+        if (params.createdByMe !== void 0) invoiceOpts.createdByMe = params.createdByMe;
+        if (params.targetingMe !== void 0) invoiceOpts.targetingMe = params.targetingMe;
+        return this.sphere.accounting.getInvoices(invoiceOpts);
+      }
+      case RPC_METHODS.GET_INVOICE_STATUS: {
+        if (!this.sphere.accounting) throw new SphereError("Accounting module not available", "MODULE_NOT_AVAILABLE");
+        if (!params.invoiceId || typeof params.invoiceId !== "string") {
+          throw new SphereError("Missing required parameter: invoiceId", "VALIDATION_ERROR");
+        }
+        return this.sphere.accounting.getInvoiceStatus(params.invoiceId);
+      }
+      default:
+        throw new SphereError(`Unknown method: ${method}`, "VALIDATION_ERROR");
+    }
+  }
+  // ===========================================================================
+  // Event Subscriptions
+  // ===========================================================================
+  autoSubscribeIdentityChanged() {
+    if (this.eventSubscriptions.has(WALLET_EVENTS.IDENTITY_CHANGED)) return;
+    const unsub = this.sphere.on("identity:changed", (data) => {
+      this.pushClientEvent(WALLET_EVENTS.IDENTITY_CHANGED, data);
+    });
+    this.eventSubscriptions.set(WALLET_EVENTS.IDENTITY_CHANGED, unsub);
+  }
+  handleSubscribe(eventName) {
+    if (!eventName) throw new SphereError("Missing required parameter: event", "VALIDATION_ERROR");
+    if (this.eventSubscriptions.has(eventName)) {
+      return { subscribed: true, event: eventName };
+    }
+    const unsub = this.sphere.on(eventName, (data) => {
+      this.transport.send({
+        ns: SPHERE_CONNECT_NAMESPACE,
+        v: SPHERE_CONNECT_VERSION,
+        type: "event",
+        event: eventName,
+        data
+      });
+    });
+    this.eventSubscriptions.set(eventName, unsub);
+    return { subscribed: true, event: eventName };
+  }
+  handleUnsubscribe(eventName) {
+    if (!eventName) throw new SphereError("Missing required parameter: event", "VALIDATION_ERROR");
+    const unsub = this.eventSubscriptions.get(eventName);
+    if (unsub) {
+      unsub();
+      this.eventSubscriptions.delete(eventName);
+    }
+    return { unsubscribed: true, event: eventName };
+  }
+  cleanupEventSubscriptions() {
+    for (const [, unsub] of this.eventSubscriptions) {
+      unsub();
+    }
+    this.eventSubscriptions.clear();
+  }
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
+  /** Push an event to the dApp without requiring a sphere_subscribe call. */
+  pushClientEvent(event, data) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "event",
+      event,
+      data
+    });
+  }
+  getPublicIdentity() {
+    const id = this.sphere.identity;
+    if (!id) return void 0;
+    return {
+      chainPubkey: id.chainPubkey,
+      l1Address: id.l1Address,
+      directAddress: id.directAddress,
+      nametag: id.nametag
+    };
+  }
+  stripTokenSdkData(tokens) {
+    return tokens.map((t) => {
+      const token = t;
+      const { sdkData: _sdkData, ...publicFields } = token;
+      return publicFields;
+    });
+  }
+  sendResult(id, result) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "response",
+      id,
+      result
+    });
+  }
+  sendError(id, code, message) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "response",
+      id,
+      error: { code, message }
+    });
+  }
+  sendIntentResult(id, result) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "intent_result",
+      id,
+      result
+    });
+  }
+  sendIntentError(id, code, message) {
+    this.transport.send({
+      ns: SPHERE_CONNECT_NAMESPACE,
+      v: SPHERE_CONNECT_VERSION,
+      type: "intent_result",
+      id,
+      error: { code, message }
+    });
+  }
+  checkRateLimit() {
+    const maxRps = this.config.maxRequestsPerSecond ?? DEFAULT_MAX_RPS;
+    const now = Date.now();
+    if (now > this.rateLimitResetAt) {
+      this.rateLimitCounter = 0;
+      this.rateLimitResetAt = now + 1e3;
+    }
+    this.rateLimitCounter++;
+    return this.rateLimitCounter <= maxRps;
+  }
+};
+
+// connect/client/ConnectClient.ts
+var DEFAULT_TIMEOUT = 3e4;
+var DEFAULT_INTENT_TIMEOUT = 12e4;
+var ConnectClient = class {
+  transport;
+  dapp;
+  requestedPermissions;
+  timeout;
+  intentTimeout;
+  resumeSessionId;
+  silent;
+  sessionId = null;
+  grantedPermissions = [];
+  identity = null;
+  connected = false;
+  pendingRequests = /* @__PURE__ */ new Map();
+  eventHandlers = /* @__PURE__ */ new Map();
+  unsubscribeTransport = null;
+  // Handshake resolver (one-shot)
+  handshakeResolver = null;
+  constructor(config) {
+    this.transport = config.transport;
+    this.dapp = config.dapp;
+    this.requestedPermissions = config.permissions ?? [...ALL_PERMISSIONS];
+    this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
+    this.intentTimeout = config.intentTimeout ?? DEFAULT_INTENT_TIMEOUT;
+    this.resumeSessionId = config.resumeSessionId ?? null;
+    this.silent = config.silent ?? false;
+  }
+  // ===========================================================================
+  // Connection
+  // ===========================================================================
+  /** Connect to the wallet. Returns session info and public identity. */
+  async connect() {
+    this.unsubscribeTransport = this.transport.onMessage(this.handleMessage.bind(this));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.handshakeResolver = null;
+        reject(new Error("Connection timeout"));
+      }, this.timeout);
+      this.handshakeResolver = { resolve, reject, timer };
+      this.transport.send({
+        ns: SPHERE_CONNECT_NAMESPACE,
+        v: SPHERE_CONNECT_VERSION,
+        type: "handshake",
+        direction: "request",
+        permissions: this.requestedPermissions,
+        dapp: this.dapp,
+        ...this.resumeSessionId ? { sessionId: this.resumeSessionId } : {},
+        ...this.silent ? { silent: true } : {}
+      });
+    });
+  }
+  /** Disconnect from the wallet */
+  async disconnect() {
+    if (this.connected) {
+      try {
+        await this.query(RPC_METHODS.DISCONNECT);
+      } catch {
+      }
+    }
+    this.cleanup();
+  }
+  /** Whether currently connected */
+  get isConnected() {
+    return this.connected;
+  }
+  /** Granted permission scopes */
+  get permissions() {
+    return this.grantedPermissions;
+  }
+  /** Current session ID */
+  get session() {
+    return this.sessionId;
+  }
+  /** Public identity received during handshake */
+  get walletIdentity() {
+    return this.identity;
+  }
+  // ===========================================================================
+  // Query (read data)
+  // ===========================================================================
+  /** Send a query request and return the result */
+  async query(method, params) {
+    if (!this.connected) throw new SphereError("Not connected", "NOT_INITIALIZED");
+    const id = createRequestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`Query timeout: ${method}`));
+      }, this.timeout);
+      this.pendingRequests.set(id, {
+        resolve,
+        reject,
+        timer
+      });
+      this.transport.send({
+        ns: SPHERE_CONNECT_NAMESPACE,
+        v: SPHERE_CONNECT_VERSION,
+        type: "request",
+        id,
+        method,
+        params
+      });
+    });
+  }
+  // ===========================================================================
+  // Intent (trigger wallet UI)
+  // ===========================================================================
+  /** Send an intent request. The wallet will open its UI for user confirmation. */
+  async intent(action, params) {
+    if (!this.connected) throw new SphereError("Not connected", "NOT_INITIALIZED");
+    const id = createRequestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`Intent timeout: ${action}`));
+      }, this.intentTimeout);
+      this.pendingRequests.set(id, {
+        resolve,
+        reject,
+        timer
+      });
+      this.transport.send({
+        ns: SPHERE_CONNECT_NAMESPACE,
+        v: SPHERE_CONNECT_VERSION,
+        type: "intent",
+        id,
+        action,
+        params
+      });
+    });
+  }
+  // ===========================================================================
+  // Events
+  // ===========================================================================
+  /** Subscribe to a wallet event. Returns unsubscribe function. */
+  on(event, handler) {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, /* @__PURE__ */ new Set());
+      if (this.connected) {
+        this.query(RPC_METHODS.SUBSCRIBE, { event }).catch((err) => logger.debug("Connect", "Event subscription failed", err));
+      }
+    }
+    this.eventHandlers.get(event).add(handler);
+    return () => {
+      const handlers = this.eventHandlers.get(event);
+      if (handlers) {
+        handlers.delete(handler);
+        if (handlers.size === 0) {
+          this.eventHandlers.delete(event);
+          if (this.connected) {
+            this.query(RPC_METHODS.UNSUBSCRIBE, { event }).catch((err) => logger.debug("Connect", "Event unsubscription failed", err));
+          }
+        }
+      }
+    };
+  }
+  // ===========================================================================
+  // Message Handling
+  // ===========================================================================
+  handleMessage(msg) {
+    if (msg.type === "handshake" && msg.direction === "response") {
+      this.handleHandshakeResponse(msg);
+      return;
+    }
+    if (msg.type === "response") {
+      this.handlePendingResponse(msg.id, msg.result, msg.error);
+      return;
+    }
+    if (msg.type === "intent_result") {
+      this.handlePendingResponse(msg.id, msg.result, msg.error);
+      return;
+    }
+    if (msg.type === "event") {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        for (const handler of handlers) {
+          try {
+            handler(msg.data);
+          } catch (err) {
+            logger.debug("Connect", "Event handler error", err);
+          }
+        }
+      }
+    }
+  }
+  handleHandshakeResponse(msg) {
+    if (!this.handshakeResolver) return;
+    clearTimeout(this.handshakeResolver.timer);
+    if (msg.sessionId && msg.identity) {
+      this.sessionId = msg.sessionId;
+      this.grantedPermissions = msg.permissions;
+      this.identity = msg.identity;
+      this.connected = true;
+      this.handshakeResolver.resolve({
+        sessionId: msg.sessionId,
+        permissions: this.grantedPermissions,
+        identity: msg.identity
+      });
+    } else {
+      this.handshakeResolver.reject(new Error("Connection rejected by wallet"));
+    }
+    this.handshakeResolver = null;
+  }
+  handlePendingResponse(id, result, error) {
+    const pending = this.pendingRequests.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingRequests.delete(id);
+    if (error) {
+      const err = new Error(error.message);
+      err.code = error.code;
+      err.data = error.data;
+      pending.reject(err);
+    } else {
+      pending.resolve(result);
+    }
+  }
+  // ===========================================================================
+  // Cleanup
+  // ===========================================================================
+  cleanup() {
+    if (this.unsubscribeTransport) {
+      this.unsubscribeTransport();
+      this.unsubscribeTransport = null;
+    }
+    for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("Disconnected"));
+    }
+    this.pendingRequests.clear();
+    this.eventHandlers.clear();
+    this.connected = false;
+    this.sessionId = null;
+    this.grantedPermissions = [];
+    this.identity = null;
+  }
+};
+export {
+  ALL_PERMISSIONS,
+  ConnectClient,
+  ConnectHost,
+  DEFAULT_PERMISSIONS,
+  ERROR_CODES,
+  HOST_READY_TIMEOUT,
+  HOST_READY_TYPE,
+  INTENT_ACTIONS,
+  INTENT_PERMISSIONS,
+  METHOD_PERMISSIONS,
+  PERMISSION_SCOPES,
+  RPC_METHODS,
+  SPHERE_CONNECT_NAMESPACE,
+  SPHERE_CONNECT_VERSION,
+  WALLET_EVENTS,
+  createRequestId,
+  detectIntentSchemaVersion,
+  hasIntentPermission,
+  hasMethodPermission,
+  isSphereConnectMessage,
+  validatePermissions
+};
+//# sourceMappingURL=index.js.map

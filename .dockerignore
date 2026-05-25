@@ -14,3 +14,6 @@
 
 # Entrypoint for ssl-manager stage
 !deploy/entrypoint.sh
+
+# Local sphere-sdk vendor copy (file: reference for Docker builds)
+!vendor-sphere-sdk/
