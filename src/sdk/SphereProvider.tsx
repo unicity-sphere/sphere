@@ -169,6 +169,18 @@ export function SphereProvider({
         // storage (OrbitDB + aggregator pointer). On success, swap providers
         // and re-init Sphere; on failure, keep the legacy instance running
         // so the user sees their balance (DO NOT strand the wallet).
+        //
+        // Known limitation (acceptable for first-boot only): the helper
+        // snapshots `legacy.tokenStorage` once at the start. Tokens that
+        // arrive on the transport between snapshot and re-init land in
+        // legacy storage but NOT in Profile. The marker is then stamped,
+        // so the next boot won't re-migrate them. In practice the window
+        // is ~1-2 s on small wallets; after the first successful boot
+        // the wallet runs Profile-only so the race can't recur. A
+        // future SDK enhancement could add incremental migration; for
+        // now we accept the rare loss because the alternative
+        // (transport disconnect during migration) breaks DM delivery
+        // for the full migration window too.
         if (IS_UXF_BUILD) {
           const profileResult = await runProfileMigration({
             legacyProviders: browserProviders,
