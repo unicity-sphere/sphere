@@ -152,6 +152,16 @@ export function SphereProvider({
         storage: browserProviders.storage,
       });
 
+      // `Sphere.exists()` probes for wallet keys (mnemonic / masterKey)
+      // in the storage's underlying KV. Note: under UXF mode, the
+      // Profile-backed ProfileStorageProvider's local cache shares the
+      // SAME `sphere-storage` IndexedDB as the legacy
+      // `IndexedDBStorageProvider` (see sphere-sdk
+      // profile/browser.ts createBrowserProfileProviders → uses
+      // `createIndexedDBStorageProvider()` for the local cache). That
+      // means a wallet created FRESH under Profile on a previous boot
+      // also shows up via `Sphere.exists(legacyStorage)` on the next
+      // boot — no separate Profile-storage probe needed.
       const exists = await Sphere.exists(browserProviders.storage);
       setWalletExists(exists);
 
@@ -165,10 +175,20 @@ export function SphereProvider({
         });
 
         // UXF Profile mode + safe migration (re-entry-safe).
-        // When IS_UXF_BUILD: try to migrate legacy tokens into Profile-backed
-        // storage (OrbitDB + aggregator pointer). On success, swap providers
-        // and re-init Sphere; on failure, keep the legacy instance running
-        // so the user sees their balance (DO NOT strand the wallet).
+        //
+        // When IS_UXF_BUILD: try to migrate legacy tokens into
+        // Profile-backed storage (OrbitDB + aggregator pointer). The
+        // helper is idempotent — on subsequent loads the marker
+        // short-circuits the full work, so this is a one-shot per
+        // wallet. On success we swap providers and re-init Sphere; on
+        // failure we keep the legacy instance running so the user
+        // sees their balance (DO NOT strand the wallet).
+        //
+        // For wallets created FRESH under Profile (no legacy token
+        // data exists), the migration helper's source.load() returns
+        // an empty snapshot, target.save() is a no-op write, and the
+        // marker is stamped — making the second boot's call a fast
+        // marker-skip. This is safe and idempotent.
         //
         // Known limitation (acceptable for first-boot only): the helper
         // snapshots `legacy.tokenStorage` once at the start. Tokens that

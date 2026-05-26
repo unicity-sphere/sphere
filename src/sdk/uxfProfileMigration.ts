@@ -130,6 +130,54 @@ export async function runProfileMigration(
     await profile.tokenStorage.initialize();
     await profile.storage.connect();
 
+    // CRITICAL — wallet-data-loss guard.
+    //
+    // The migration helper's target.save() is a FULL OVERWRITE (it
+    // saves `shallowCopyStorageData(sourceData)` which only contains
+    // `_meta` plus whatever was in source). If the source (legacy
+    // tokenStorage) is empty and the target (Profile tokenStorage)
+    // already has tokens, the helper would silently wipe Profile.
+    //
+    // This can legitimately happen when a wallet was created FRESH
+    // under UXF on a previous boot (fresh-wallet branch wrote to
+    // Profile-only) and then a later boot enters the
+    // `Sphere.exists(legacy)===true` branch (because the local-cache
+    // IndexedDB for wallet keys is shared between legacy and Profile
+    // local caches — Profile uses `createIndexedDBStorageProvider()`
+    // for its local cache, identical DB name to legacy).
+    //
+    // We probe target Profile token storage first; if it already has
+    // any active tokens, archived entries, outbox, sent, or tombstone
+    // records, we skip migration entirely and adopt Profile as-is.
+    // The SDK marker check inside the helper does NOT cover this case
+    // (the marker is only stamped by a previous run of the helper, not
+    // by fresh-wallet creation).
+    try {
+      const targetSnapshot = await profile.tokenStorage.load();
+      if (targetSnapshot.success && targetSnapshot.data) {
+        if (hasMaterialContent(targetSnapshot.data as unknown as Record<string, unknown>)) {
+          logger.debug(
+            'SphereProvider',
+            'UXF migration skipped: Profile storage already populated (fresh-wallet path or prior migration)',
+          );
+          return {
+            profileStorage: profile.storage,
+            profileTokenStorage: profile.tokenStorage,
+            migrationCounts: { tokensMigrated: 0, archivedMigrated: 0 },
+            skippedDueToMarker: true,
+          };
+        }
+      }
+    } catch (err) {
+      // Probe failure is non-fatal — the helper will be called and its
+      // own source/target guards take over. We log and continue.
+      logger.warn(
+        'SphereProvider',
+        'Profile token storage probe failed before migration; proceeding',
+        err,
+      );
+    }
+
     setInitProgress({
       step: 'syncing_tokens',
       message: 'Migrating tokens to Profile storage…',
@@ -216,4 +264,56 @@ export async function runProfileMigration(
     }
     return null;
   }
+}
+
+/**
+ * Reserved structural keys in `TxfStorageDataBase` (see sphere-sdk
+ * types/txf.ts RESERVED_KEYS). Excluding `_meta` because it is
+ * always present (the helper synthesizes it) and never indicates the
+ * presence of user token data.
+ */
+const TXF_RESERVED_COLLECTIONS = new Set<string>([
+  '_nametag',
+  '_nametags',
+  '_tombstones',
+  '_invalidatedNametags',
+  '_outbox',
+  '_mintOutbox',
+  '_sent',
+  '_invalid',
+  '_integrity',
+  '_history',
+  '_audit',
+  '_finalizationQueue',
+]);
+
+/**
+ * Returns `true` if the loaded snapshot contains any user-meaningful
+ * data — active tokens (`_<hexTokenId>`), archived tokens
+ * (`archived-<tokenId>`), forks (`_forked_<tokenId>_<state>`), OR any
+ * reserved collection with non-empty contents.
+ *
+ * `_meta` alone is NOT material content (the helper always emits it
+ * even when migrating an empty wallet, and Profile providers emit it
+ * on every load() call).
+ */
+function hasMaterialContent(data: Record<string, unknown>): boolean {
+  for (const key of Object.keys(data)) {
+    if (key === '_meta') continue;
+    const v = data[key];
+    if (v === undefined || v === null) continue;
+    if (TXF_RESERVED_COLLECTIONS.has(key)) {
+      // Reserved collections are arrays/objects — check non-empty.
+      if (Array.isArray(v) && v.length > 0) return true;
+      if (!Array.isArray(v) && typeof v === 'object' && Object.keys(v as object).length > 0) {
+        return true;
+      }
+      continue;
+    }
+    // Anything else (token keys `_<hex>`, archived `archived-…`,
+    // forks `_forked_…`) is a token-shaped entry — its presence is
+    // material content.
+    return true;
+  }
+  return false;
 }

@@ -13,11 +13,22 @@ const FAKE_IDENTITY = {
   directAddress: 'DIRECT://example',
 } as const;
 
-function makeFakeProfileProviders() {
+function makeFakeProfileProviders(opts?: {
+  loadResult?: { success: boolean; data?: Record<string, unknown> };
+}) {
   const tokenStorage = {
     setIdentity: vi.fn(),
     initialize: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn().mockResolvedValue(undefined),
+    // Default: target Profile storage is empty (legacy → Profile path).
+    load: vi
+      .fn()
+      .mockResolvedValue(
+        opts?.loadResult ?? {
+          success: true,
+          data: { _meta: { version: 1, address: '', formatVersion: '2.0', updatedAt: 0 } },
+        },
+      ),
   };
   const storage = {
     setIdentity: vi.fn(),
@@ -269,6 +280,133 @@ describe('runProfileMigration', () => {
     expect(result).toBeNull();
     expect(profile.tokenStorage.disconnect).toHaveBeenCalledOnce();
     expect(profile.storage.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('CRITICAL: skips migration (no overwrite) when Profile token storage already has data', async () => {
+    // Simulate a Profile-native wallet (created fresh under UXF on a
+    // prior boot). The legacy local cache (shared `sphere-storage`
+    // IndexedDB) holds the mnemonic, so `Sphere.exists(legacy)`
+    // returns true and the exists-branch runs. But the legacy
+    // tokenStorage was never written — only the Profile OrbitDB-backed
+    // tokenStorage has tokens.
+    //
+    // The migration helper's `target.save()` is a FULL overwrite of
+    // `_meta` + (shallow copy of) source contents. If we let it run
+    // with an empty source, Profile data would be wiped.
+    //
+    // The guard probes Profile target via `tokenStorage.load()`; if
+    // the returned snapshot has ANY active/archived/outbox/sent/etc
+    // entries, we return early and DO NOT call the migration helper.
+    const profile = makeFakeProfileProviders({
+      loadResult: {
+        success: true,
+        data: {
+          _meta: { version: 1, address: '', formatVersion: '2.0', updatedAt: 0 },
+          '_abc123': { /* a real token entry */ genesis: { /* ... */ } },
+        },
+      },
+    });
+    const createProfileProviders = vi.fn().mockReturnValue(profile);
+    const migrate = vi.fn();
+
+    const result = await runProfileMigration({
+      legacyProviders: makeFakeLegacyProviders(),
+      sphere: makeFakeSphere(),
+      network: 'testnet',
+      setInitProgress,
+      createProfileProviders: createProfileProviders as never,
+      migrate: migrate as never,
+    });
+
+    // Migration helper MUST NOT have been called.
+    expect(migrate).not.toHaveBeenCalled();
+
+    // Caller still gets the Profile providers + `skippedDueToMarker:true`
+    // so the swap proceeds.
+    expect(result).not.toBeNull();
+    expect(result!.skippedDueToMarker).toBe(true);
+    expect(result!.profileStorage).toBe(profile.storage);
+    expect(result!.profileTokenStorage).toBe(profile.tokenStorage);
+
+    // No cleanup-disconnect — we're handing the providers to the caller.
+    expect(profile.tokenStorage.disconnect).not.toHaveBeenCalled();
+    expect(profile.storage.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('treats `_outbox`/`_sent`/`_tombstones` populated arrays as "Profile has data" and skips', async () => {
+    const profile = makeFakeProfileProviders({
+      loadResult: {
+        success: true,
+        data: {
+          _meta: { version: 1, address: '', formatVersion: '2.0', updatedAt: 0 },
+          _outbox: [{ id: 'outbox-1' }],
+        },
+      },
+    });
+    const createProfileProviders = vi.fn().mockReturnValue(profile);
+    const migrate = vi.fn();
+
+    const result = await runProfileMigration({
+      legacyProviders: makeFakeLegacyProviders(),
+      sphere: makeFakeSphere(),
+      network: 'testnet',
+      setInitProgress,
+      createProfileProviders: createProfileProviders as never,
+      migrate: migrate as never,
+    });
+
+    expect(migrate).not.toHaveBeenCalled();
+    expect(result?.skippedDueToMarker).toBe(true);
+  });
+
+  it('runs migration normally when Profile target has only `_meta` (truly empty)', async () => {
+    const profile = makeFakeProfileProviders({
+      loadResult: {
+        success: true,
+        data: {
+          _meta: { version: 1, address: '', formatVersion: '2.0', updatedAt: 0 },
+          _outbox: [],
+          _sent: [],
+        },
+      },
+    });
+    const createProfileProviders = vi.fn().mockReturnValue(profile);
+    const migrate = vi.fn().mockResolvedValue(baseMigrationResult);
+
+    const result = await runProfileMigration({
+      legacyProviders: makeFakeLegacyProviders(),
+      sphere: makeFakeSphere(),
+      network: 'testnet',
+      setInitProgress,
+      createProfileProviders: createProfileProviders as never,
+      migrate: migrate as never,
+    });
+
+    // Helper IS called — Profile target is empty, safe to overwrite.
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(result?.skippedDueToMarker).toBe(false);
+    expect(result?.migrationCounts.tokensMigrated).toBe(5);
+  });
+
+  it('proceeds with migration if the pre-flight load() probe throws (degrades to helper-driven path)', async () => {
+    const profile = makeFakeProfileProviders();
+    profile.tokenStorage.load = vi.fn().mockRejectedValue(new Error('orbitdb attach pending'));
+    const createProfileProviders = vi.fn().mockReturnValue(profile);
+    const migrate = vi.fn().mockResolvedValue(baseMigrationResult);
+
+    const result = await runProfileMigration({
+      legacyProviders: makeFakeLegacyProviders(),
+      sphere: makeFakeSphere(),
+      network: 'testnet',
+      setInitProgress,
+      createProfileProviders: createProfileProviders as never,
+      migrate: migrate as never,
+    });
+
+    // Probe failure is non-fatal — the migration helper runs and its
+    // own source.load() guards take over.
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(result?.skippedDueToMarker).toBe(false);
   });
 
   it('forwards every onProgress phase as a syncing_tokens step', async () => {
