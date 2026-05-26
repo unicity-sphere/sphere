@@ -26517,6 +26517,7 @@ var import_MintTransactionData3 = require("@unicitylabs/state-transition-sdk/lib
 var import_InclusionProofUtils5 = require("@unicitylabs/state-transition-sdk/lib/util/InclusionProofUtils");
 var import_InclusionProof = require("@unicitylabs/state-transition-sdk/lib/transaction/InclusionProof");
 var import_InvalidJsonStructureError = require("@unicitylabs/state-transition-sdk/lib/InvalidJsonStructureError");
+var import_VerificationError = require("@unicitylabs/state-transition-sdk/lib/verification/VerificationError");
 var import_TransferTransactionData2 = require("@unicitylabs/state-transition-sdk/lib/transaction/TransferTransactionData");
 var import_RequestId2 = require("@unicitylabs/state-transition-sdk/lib/api/RequestId");
 var import_Authenticator = require("@unicitylabs/state-transition-sdk/lib/api/Authenticator");
@@ -32251,46 +32252,53 @@ var PaymentsModule = class _PaymentsModule {
       });
       logger.debug("Payments", `[V6-RECOVER] Finalized stranded receive ${tokenId.slice(0, 12)} \u2192 confirmed`);
     } catch (err) {
-      const isPermanent = err instanceof import_InvalidJsonStructureError.InvalidJsonStructureError || err?.name === "InvalidJsonStructureError";
+      const isStructural = err instanceof import_InvalidJsonStructureError.InvalidJsonStructureError || err?.name === "InvalidJsonStructureError";
+      const verificationResult = err?.verificationResult;
+      const isMismatchMessage = (msg) => typeof msg === "string" && (msg === "Recipient address mismatch" || msg.includes("address mismatch"));
+      const isPermanentMismatch = (err instanceof import_VerificationError.VerificationError || err?.name === "VerificationError") && verificationResult?.status === 1 && isMismatchMessage(verificationResult.message);
+      const isPermanent = isStructural || isPermanentMismatch;
       if (isPermanent) {
+        const classLabel = isPermanentMismatch ? "permanent recipient-address mismatch (HD-index recovery exhausted)" : "permanent structural failure";
         logger.error(
           "Payments",
-          `[V6-RECOVER] Stranded receive ${tokenId.slice(0, 12)} hit permanent structural failure (no retry):`,
+          `[V6-RECOVER] Stranded receive ${tokenId.slice(0, 12)} hit ${classLabel} (no retry):`,
           err
         );
-        try {
-          const job = this.proofPollingJobs.get(tokenId);
-          let proofShape = "not-fetched";
-          if (job) {
-            try {
-              const proof = await this.deps.oracle.getProof(job.requestIdHex);
-              if (proof) {
-                const wrapper = proof;
-                let pj;
-                if (wrapper.proof !== void 0 && wrapper.proof !== null) {
-                  pj = wrapper.proof;
-                } else if ("proof" in wrapper && typeof wrapper.roundNumber === "number") {
-                  pj = null;
-                } else if (typeof wrapper.toJSON === "function") {
-                  pj = wrapper.toJSON();
+        if (isStructural) {
+          try {
+            const job = this.proofPollingJobs.get(tokenId);
+            let proofShape = "not-fetched";
+            if (job) {
+              try {
+                const proof = await this.deps.oracle.getProof(job.requestIdHex);
+                if (proof) {
+                  const wrapper = proof;
+                  let pj;
+                  if (wrapper.proof !== void 0 && wrapper.proof !== null) {
+                    pj = wrapper.proof;
+                  } else if ("proof" in wrapper && typeof wrapper.roundNumber === "number") {
+                    pj = null;
+                  } else if (typeof wrapper.toJSON === "function") {
+                    pj = wrapper.toJSON();
+                  } else {
+                    pj = proof;
+                  }
+                  proofShape = pj === null ? "null" : pj && typeof pj === "object" ? Object.keys(pj) : `non-object:${typeof pj}`;
                 } else {
-                  pj = proof;
+                  proofShape = "null";
                 }
-                proofShape = pj === null ? "null" : pj && typeof pj === "object" ? Object.keys(pj) : `non-object:${typeof pj}`;
-              } else {
-                proofShape = "null";
+              } catch (fetchErr) {
+                proofShape = `fetch-threw:${fetchErr?.message ?? fetchErr}`;
               }
-            } catch (fetchErr) {
-              proofShape = `fetch-threw:${fetchErr?.message ?? fetchErr}`;
             }
+            const lastTxKeys = lastTxJson && typeof lastTxJson === "object" ? Object.keys(lastTxJson) : `non-object:${typeof lastTxJson}`;
+            logger.debug(
+              "Payments",
+              `[V6-RECOVER] ${tokenId.slice(0, 12)} diagnostic shapes: lastTxJsonKeys=${JSON.stringify(lastTxKeys)} proofKeys=${JSON.stringify(proofShape)}`
+            );
+          } catch (diagErr) {
+            logger.debug("Payments", `[V6-RECOVER] ${tokenId.slice(0, 12)} diagnostic dump itself threw:`, diagErr);
           }
-          const lastTxKeys = lastTxJson && typeof lastTxJson === "object" ? Object.keys(lastTxJson) : `non-object:${typeof lastTxJson}`;
-          logger.debug(
-            "Payments",
-            `[V6-RECOVER] ${tokenId.slice(0, 12)} diagnostic shapes: lastTxJsonKeys=${JSON.stringify(lastTxKeys)} proofKeys=${JSON.stringify(proofShape)}`
-          );
-        } catch (diagErr) {
-          logger.debug("Payments", `[V6-RECOVER] ${tokenId.slice(0, 12)} diagnostic dump itself threw:`, diagErr);
         }
         const token = this.tokens.get(tokenId);
         if (token && (token.status === "pending" || token.status === "submitted")) {
@@ -32308,12 +32316,13 @@ var PaymentsModule = class _PaymentsModule {
           (persistErr) => logger.debug("Payments", `[V6-RECOVER] saveProofPollingJobs after permanent-fail mark failed:`, persistErr)
         );
         try {
+          const innerMsg = verificationResult?.message;
+          const alertCode = isPermanentMismatch ? "not-our-state" : "structural";
+          const alertMessage = isPermanentMismatch ? `Token ${tokenId.slice(0, 12)}... cannot be finalized: ${err?.message ?? "VerificationError"} (${innerMsg ?? "recipient address mismatch"}). The sender targeted a recipient predicate that none of this wallet's currently-tracked HD addresses derive. Marked invalid; no further automatic recovery attempts will run for this token. If the sender targeted an HD index you have not yet activated, activate it and re-import the OrbitDB pointer to retry.` : `Token ${tokenId.slice(0, 12)}... cannot be finalized: ${err?.message ?? "InvalidJsonStructureError"}. The stored last-transaction JSON or the aggregator proof has an unexpected shape. Marked invalid; no further automatic recovery attempts will run for this token. Manual diagnosis required \u2014 see debug logs for the shape dump.`;
           this.deps.emitEvent("transfer:operator-alert", {
-            code: "structural",
+            code: alertCode,
             tokenId,
-            message: sanitizeReasonString(
-              `Token ${tokenId.slice(0, 12)}... cannot be finalized: ${err?.message ?? "InvalidJsonStructureError"}. The stored last-transaction JSON or the aggregator proof has an unexpected shape. Marked invalid; no further automatic recovery attempts will run for this token. Manual diagnosis required \u2014 see debug logs for the shape dump.`
-            )
+            message: sanitizeReasonString(alertMessage)
           });
         } catch {
         }
@@ -57485,15 +57494,6 @@ var Sphere = class _Sphere {
         "Sphere",
         `pointer-win broadcast received: version=${payload.version} cid=${payload.cid} \u2014 triggering early reconcile`
       );
-      try {
-        pointer.noteSiblingWin(payload.version);
-      } catch (cacheErr) {
-        const cacheMsg = cacheErr instanceof Error ? cacheErr.message : String(cacheErr);
-        logger.debug(
-          "Sphere",
-          `pointer-win broadcast: noteSiblingWin threw (ignored): ${cacheMsg}`
-        );
-      }
       const recovered = await pointer.recoverLatest();
       if (recovered) {
         const outcome = await pointer.reconcileLocalVersionDownward(recovered);

@@ -1,6 +1,8 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { Header } from './Header';
+import { UxfBanner } from '../uxf';
+import { IS_UXF_BUILD } from '../../config/uxf';
 import { MiniChatBubbles } from '../chat/mini';
 import { CallProvider, CallOverlay } from '../chat/telco';
 import { MobileBottomNav } from '../mobile';
@@ -77,6 +79,7 @@ export function DashboardLayout() {
       {/* Content — above background layers */}
       <div className="relative z-10 flex flex-col h-full">
         <CallProvider>
+        {IS_UXF_BUILD && <UxfBanner />}
         {!isFullscreen && <Header />}
         <div className={`flex-1 min-h-0 flex relative ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
           <div className={`flex-1 w-full ${

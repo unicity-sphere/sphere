@@ -4310,30 +4310,6 @@ declare class ProfilePointerLayer {
         readonly signingPubKeyHex: string;
     };
     /**
-     * Issue #263 — sibling pointer-win broadcast observer.
-     *
-     * Sphere's `pointer-win` Nostr subscriber (see
-     * `Sphere.handleIncomingPointerWinBroadcast`) calls this AFTER signature
-     * verification and replay/dedup checks. The reconcile loop reads
-     * `#siblingHighestV` to bypass the initial discovery walkback when a
-     * sibling device has already announced "I just landed V=N" — turning a
-     * 30 s+ classifyVersion CAR fetch into a single ~50 ms aggregator RPC
-     * for the common case.
-     *
-     * Monotonic by construction — only versions strictly greater than the
-     * current cache value are stored. Stale broadcasts (lower-V than what
-     * we have already learned, or lower than our own current localVersion)
-     * are kept in the cache but ignored by the reconcile loop's `>= `
-     * comparison.
-     *
-     * Defensive about non-integer / negative inputs (already vetted by
-     * verifyWinBroadcastPayload upstream, but this method is a public API
-     * surface so we don't trust the caller).
-     *
-     * No-op once `shutdown()` has been called.
-     */
-    noteSiblingWin(version: PointerVersion): void;
-    /**
      * Wave F.2 architecture-advisory remediation: drain in-flight
      * publish/recover/probe operations before the surrounding
      * ProfileStorageProvider tears down OrbitDB. Previously the
@@ -4627,6 +4603,58 @@ interface OrbitDbConfig {
     readonly bootstrapPeers?: string[];
     /** Enable libp2p pubsub for replication (default: true) */
     readonly enablePubSub?: boolean;
+    /**
+     * Issue #266 — HTTP-only IPFS mode for wallet/CLI clients.
+     *
+     * When `true`, the OrbitDB adapter strips the libp2p networking
+     * cost that was burning wallet startup time:
+     *   - Forces libp2p into isolated mode (no DHT, bootstrap, autoNAT,
+     *     dcutr, peerDiscovery, delegatedRouting, ipnsFetch, ipnsPublish).
+     *     Only identify, identifyPush, keychain, ping, and the gossipsub
+     *     stub required by OrbitDB v3 remain. No outbound TCP connections
+     *     to port 4001; the global IPFS DHT is not joined.
+     *   - Replaces Helia's default block brokers. The defaults are
+     *     `bitswap` (would hang waiting for peers) and `trustlessGateway`
+     *     (walks public gateways like `trustless-gateway.link` /
+     *     `4everland.io` which do not host our wallet data and time out
+     *     ~30s per miss). Instead we install a single broker that
+     *     HTTP-fetches missing blocks from operator-controlled Kubo
+     *     gateways via `POST /api/v0/block/get?arg=<cid>`, configured
+     *     by `ipfsGateways` (see below).
+     *
+     * What is NOT stripped: Helia's `FsBlockstore` under
+     * `<directory>/blocks/`. The on-disk blockstore handles cross-PROCESS
+     * recovery on the same `dataDir` without depending on a successful
+     * flush-to-Kubo before process exit. Disk-resident blocks are
+     * MB-scale — negligible vs the libp2p costs we stripped.
+     * Cross-DEVICE recovery (different machine, fresh `dataDir`) is
+     * served by the HTTP block broker + the snapshot prefetch in
+     * `profile/ipfs-client.ts`.
+     *
+     * Recommended default for `createNodeProfileProviders` and
+     * `createBrowserProfileProviders` (the wallet client factories).
+     * Tests and operator-side bridges that want real peer discovery
+     * pass `httpOnlyIpfs: false` and configure `bootstrapPeers`
+     * explicitly.
+     *
+     * If `bootstrapPeers` is also supplied as a non-empty array,
+     * `httpOnlyIpfs: true` wins — the explicit isolation contract
+     * takes precedence over any peer list.
+     *
+     * @default false on the raw `OrbitDbConfig` (backward compat).
+     *          The wallet factories override to `true`.
+     */
+    readonly httpOnlyIpfs?: boolean;
+    /**
+     * Issue #266 — Operator-controlled Kubo HTTP gateway base URLs
+     * used by the HTTP block broker in `httpOnlyIpfs: true` mode. The
+     * broker races them via `Promise.any`. ProfileStorageProvider
+     * passes through `ProfileConfig.ipfsGateways` automatically; raw
+     * callers can supply this directly.
+     *
+     * Ignored when `httpOnlyIpfs !== true`.
+     */
+    readonly ipfsGateways?: ReadonlyArray<string>;
 }
 /**
  * Configuration for Profile initialization.

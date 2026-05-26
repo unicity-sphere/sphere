@@ -547,6 +547,61 @@ var init_oplog_entry = __esm({
   }
 });
 
+// profile/http-block-broker.ts
+var http_block_broker_exports = {};
+__export(http_block_broker_exports, {
+  createHttpBlockBroker: () => createHttpBlockBroker
+});
+function normalizeGateway(url) {
+  return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+function createHttpBlockBroker(config) {
+  const fetchTimeoutMs = config.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const gateways = config.gateways.map(normalizeGateway);
+  return () => ({
+    name: "sphere-http-kubo-broker",
+    async retrieve(cid, options) {
+      if (gateways.length === 0) {
+        throw new Error("sphere-http-kubo-broker: no gateways configured");
+      }
+      const cidString = cid.toString();
+      const attempts = gateways.map(async (gateway) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+        const onCallerAbort = () => controller.abort();
+        if (options?.signal) {
+          if (options.signal.aborted) controller.abort();
+          else options.signal.addEventListener("abort", onCallerAbort);
+        }
+        try {
+          const url = `${gateway}/api/v0/block/get?arg=${encodeURIComponent(cidString)}`;
+          const response = await fetch(url, { method: "POST", signal: controller.signal });
+          if (!response.ok) {
+            throw new Error(
+              `HTTP ${response.status} ${response.statusText} from ${gateway} for CID ${cidString}`
+            );
+          }
+          const arrayBuf = await response.arrayBuffer();
+          return new Uint8Array(arrayBuf);
+        } finally {
+          clearTimeout(timer);
+          if (options?.signal) options.signal.removeEventListener("abort", onCallerAbort);
+        }
+      });
+      return await Promise.any(attempts);
+    }
+    // `announce` is a no-op — pin durability is handled separately
+    // by the flush-scheduler in profile/ipfs-client.ts.
+  });
+}
+var DEFAULT_FETCH_TIMEOUT_MS;
+var init_http_block_broker = __esm({
+  "profile/http-block-broker.ts"() {
+    "use strict";
+    DEFAULT_FETCH_TIMEOUT_MS = 1e4;
+  }
+});
+
 // node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
@@ -4262,7 +4317,7 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
   }
   return expectedRootCid;
 }
-async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
+async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS2, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
   const localHelia = asHelia(helia);
   if (localHelia !== null) {
     const local = await tryGetBlockFromLocalHelia(localHelia, cid);
@@ -4382,7 +4437,7 @@ async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
     lastError
   );
 }
-async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS2, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
   let parsedRoot;
   try {
     parsedRoot = import_cid.CID.parse(rootCid);
@@ -4699,7 +4754,7 @@ async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
   }
   return result;
 }
-var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
+var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
 var init_ipfs_client = __esm({
   "profile/ipfs-client.ts"() {
     "use strict";
@@ -4716,7 +4771,7 @@ var init_ipfs_client = __esm({
     FETCH_CAR_MAX_BLOCKS = 1e4;
     DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
     DEFAULT_PIN_TIMEOUT_MS = 6e4;
-    DEFAULT_FETCH_TIMEOUT_MS = 3e4;
+    DEFAULT_FETCH_TIMEOUT_MS2 = 3e4;
     DEFAULT_VERIFY_TIMEOUT_MS = 1e4;
     DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
     SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
@@ -9199,7 +9254,7 @@ var init_ipns_record_manager = __esm({
 });
 
 // impl/shared/ipfs/ipfs-http-client.ts
-var DEFAULT_CONNECTIVITY_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_RESOLVE_TIMEOUT_MS, DEFAULT_PUBLISH_TIMEOUT_MS, DEFAULT_GATEWAY_PATH_TIMEOUT_MS, DEFAULT_ROUTING_API_TIMEOUT_MS, IpfsHttpClient;
+var DEFAULT_CONNECTIVITY_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS3, DEFAULT_RESOLVE_TIMEOUT_MS, DEFAULT_PUBLISH_TIMEOUT_MS, DEFAULT_GATEWAY_PATH_TIMEOUT_MS, DEFAULT_ROUTING_API_TIMEOUT_MS, IpfsHttpClient;
 var init_ipfs_http_client = __esm({
   "impl/shared/ipfs/ipfs-http-client.ts"() {
     "use strict";
@@ -9207,7 +9262,7 @@ var init_ipfs_http_client = __esm({
     init_ipfs_error_types();
     init_ipns_record_manager();
     DEFAULT_CONNECTIVITY_TIMEOUT_MS = 5e3;
-    DEFAULT_FETCH_TIMEOUT_MS2 = 15e3;
+    DEFAULT_FETCH_TIMEOUT_MS3 = 15e3;
     DEFAULT_RESOLVE_TIMEOUT_MS = 1e4;
     DEFAULT_PUBLISH_TIMEOUT_MS = 3e4;
     DEFAULT_GATEWAY_PATH_TIMEOUT_MS = 3e3;
@@ -9222,7 +9277,7 @@ var init_ipfs_http_client = __esm({
       cache;
       constructor(config, cache) {
         this.gateways = config.gateways;
-        this.fetchTimeoutMs = config.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS2;
+        this.fetchTimeoutMs = config.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS3;
         this.resolveTimeoutMs = config.resolveTimeoutMs ?? DEFAULT_RESOLVE_TIMEOUT_MS;
         this.publishTimeoutMs = config.publishTimeoutMs ?? DEFAULT_PUBLISH_TIMEOUT_MS;
         this.connectivityTimeoutMs = config.connectivityTimeoutMs ?? DEFAULT_CONNECTIVITY_TIMEOUT_MS;
@@ -10569,6 +10624,7 @@ var OrbitDbAdapter = class {
         gossipsubFactory = gossipsubModule.gossipsub ?? gossipsubModule.default?.gossipsub ?? gossipsubModule.default;
       } catch {
       }
+      const httpOnlyIpfs = config.httpOnlyIpfs === true;
       const heliaOptions = {};
       if (config.directory) {
         heliaOptions.directory = config.directory;
@@ -10598,7 +10654,7 @@ var OrbitDbAdapter = class {
             (addr) => !addr.includes("webrtc")
           );
         }
-        const isIsolated = Array.isArray(config.bootstrapPeers) && config.bootstrapPeers.length === 0;
+        const isIsolated = httpOnlyIpfs || Array.isArray(config.bootstrapPeers) && config.bootstrapPeers.length === 0;
         if (isIsolated) {
           libp2pConfig.peerDiscovery = [];
           if (libp2pConfig.services) {
@@ -10625,6 +10681,15 @@ var OrbitDbAdapter = class {
           pubsub: gossipsubFactory({ allowPublishToZeroTopicPeers: true })
         };
         heliaOptions.libp2p = libp2pConfig;
+        if (isIsolated) {
+          const gateways = Array.isArray(config.ipfsGateways) ? config.ipfsGateways.filter((g) => typeof g === "string" && g.length > 0) : [];
+          if (gateways.length > 0) {
+            const { createHttpBlockBroker: createHttpBlockBroker2 } = await Promise.resolve().then(() => (init_http_block_broker(), http_block_broker_exports));
+            heliaOptions.blockBrokers = [createHttpBlockBroker2({ gateways })];
+          } else {
+            heliaOptions.blockBrokers = [];
+          }
+        }
       } else if (gossipsubFactory) {
         heliaOptions.libp2p = {
           services: {
@@ -10648,7 +10713,14 @@ var OrbitDbAdapter = class {
           } catch (err) {
             const errName = err?.name;
             const errCode = err?.code;
-            if (errName === "NotFoundError" || errCode === "ERR_NOT_FOUND") {
+            if (errName === "NotFoundError" || errCode === "ERR_NOT_FOUND" || // Issue #266 — Helia throws InvalidConfigurationError when
+            // `blockBrokers: []` and the block isn't in the local
+            // blockstore. We treat this as "missing" so OrbitDB
+            // gracefully sees an unresolved head instead of erroring
+            // out the whole read. The HTTP recovery path
+            // (snapshot prefetch via profile/ipfs-client.ts) handles
+            // re-warming the blockstore from operator Kubo gateways.
+            errName === "InvalidConfigurationError" || errCode === "ERR_NO_BLOCK_BROKERS") {
               return void 0;
             }
             throw err;
@@ -16344,9 +16416,6 @@ async function reconcileAndPublish(input) {
   const maxAttempts = input.maxAttempts ?? PUBLISH_RETRY_BUDGET;
   const probeHistory = [];
   let currentLocalVersion = input.currentLocalVersion;
-  if (input.siblingHighestV !== void 0 && input.siblingHighestV > currentLocalVersion) {
-    currentLocalVersion = input.siblingHighestV;
-  }
   const RECONCILE_WALL_CLOCK_BUDGET_MS = 5 * 60 * 1e3;
   const reconcileDeadlineMs = Date.now() + RECONCILE_WALL_CLOCK_BUDGET_MS;
   for (let attempts = 0; attempts < maxAttempts; attempts++) {
@@ -16356,27 +16425,22 @@ async function reconcileAndPublish(input) {
       throw err;
     }
     const cidBytes = await input.cidProducer();
-    let nextV;
-    if (attempts === 0) {
-      nextV = currentLocalVersion + 1;
-    } else {
-      const discovery = await findLatestValidVersionWithWalkbackFloorRetry(
-        {
-          currentLocalVersion,
-          keyMaterial: input.keyMaterial,
-          signer: input.signer,
-          aggregatorClient: input.aggregatorClient,
-          trustBase: input.trustBase,
-          decodeCid: input.decodeCid,
-          fetchCar: input.fetchCar,
-          discoveryDeadlineMs: reconcileDeadlineMs,
-          abortSignal: input.abortSignal
-        },
-        input.abortSignal
-      );
-      probeHistory.push(...discovery.probeVersions);
-      nextV = Math.max(discovery.validV, discovery.includedV) + 1;
-    }
+    const discovery = await findLatestValidVersionWithWalkbackFloorRetry(
+      {
+        currentLocalVersion,
+        keyMaterial: input.keyMaterial,
+        signer: input.signer,
+        aggregatorClient: input.aggregatorClient,
+        trustBase: input.trustBase,
+        decodeCid: input.decodeCid,
+        fetchCar: input.fetchCar,
+        discoveryDeadlineMs: reconcileDeadlineMs,
+        abortSignal: input.abortSignal
+      },
+      input.abortSignal
+    );
+    probeHistory.push(...discovery.probeVersions);
+    const nextV = Math.max(discovery.validV, discovery.includedV) + 1;
     const outcome = await publishOnceAtVersion(
       {
         cidBytes,
@@ -16500,19 +16564,6 @@ var ProfilePointerLayer = class {
   // enqueued during drain.  Public methods check this flag and reject
   // immediately after shutdown starts.
   #shuttingDown = false;
-  // Issue #263 — in-memory cache of the highest sibling-broadcasted
-  // pointer version observed via `pointer-win` (RFC-251 Approach D)
-  // since this layer instance was constructed. Updated by
-  // `noteSiblingWin`; consumed by `#publishInner` as the fast-path
-  // floor so the reconcile loop can skip the initial discovery
-  // walkback when a sibling has already broadcast "I just landed V=N".
-  //
-  // Persisted: NO. Soft hint scoped to the current process lifetime —
-  // a wrong broadcast at worst pays one wasted ~50 ms submit before
-  // falling back to walkback. Restarting the process resets the cache;
-  // the next publish runs full discovery, then the cache rebuilds from
-  // inbound broadcasts.
-  #siblingHighestV = 0;
   constructor(init) {
     this.#init = init;
     const suppliedConfig = init.config ?? {};
@@ -16539,36 +16590,6 @@ var ProfilePointerLayer = class {
       signer: this.#init.signer,
       signingPubKeyHex: this.#init.signer.signingPubKeyHex
     };
-  }
-  /**
-   * Issue #263 — sibling pointer-win broadcast observer.
-   *
-   * Sphere's `pointer-win` Nostr subscriber (see
-   * `Sphere.handleIncomingPointerWinBroadcast`) calls this AFTER signature
-   * verification and replay/dedup checks. The reconcile loop reads
-   * `#siblingHighestV` to bypass the initial discovery walkback when a
-   * sibling device has already announced "I just landed V=N" — turning a
-   * 30 s+ classifyVersion CAR fetch into a single ~50 ms aggregator RPC
-   * for the common case.
-   *
-   * Monotonic by construction — only versions strictly greater than the
-   * current cache value are stored. Stale broadcasts (lower-V than what
-   * we have already learned, or lower than our own current localVersion)
-   * are kept in the cache but ignored by the reconcile loop's `>= `
-   * comparison.
-   *
-   * Defensive about non-integer / negative inputs (already vetted by
-   * verifyWinBroadcastPayload upstream, but this method is a public API
-   * surface so we don't trust the caller).
-   *
-   * No-op once `shutdown()` has been called.
-   */
-  noteSiblingWin(version) {
-    if (this.#shuttingDown) return;
-    if (!Number.isInteger(version) || version < 0) return;
-    if (version > this.#siblingHighestV) {
-      this.#siblingHighestV = version;
-    }
   }
   /**
    * Wrap an async operation so it's tracked in `#inFlight` and removes
@@ -16698,11 +16719,6 @@ var ProfilePointerLayer = class {
     const result = await reconcileAndPublish({
       cidProducer,
       currentLocalVersion,
-      // Issue #263 — pass the highest sibling-broadcasted version we've
-      // seen since process start. When >= currentLocalVersion, reconcile
-      // adopts it as the fast-path floor and skips the discovery walkback
-      // for attempt 0.
-      siblingHighestV: this.#siblingHighestV,
       keyMaterial: this.#init.keyMaterial,
       signer: this.#init.signer,
       aggregatorClient: this.#init.aggregatorClient,
@@ -18354,7 +18370,14 @@ var ProfileStorageProvider = class {
         await this.db.connect({
           ...orbitDbConfig,
           privateKey: dbNameOverride ? void 0 : identityAtStart.privateKey,
-          dbNameOverride
+          dbNameOverride,
+          // Issue #266 — when the adapter is in `httpOnlyIpfs` mode it
+          // needs the operator-controlled Kubo gateway list to install
+          // the HTTP block broker. We carry `ipfsGateways` from the
+          // top-level ProfileConfig (the canonical source) down into
+          // OrbitDbConfig so the raw OrbitDbAdapter doesn't have to
+          // reach back into ProfileConfig itself.
+          ipfsGateways: orbitDbConfig.ipfsGateways ?? this.options?.config?.ipfsGateways
         });
         this.dbStatus = "attached";
         this.attachedChainPubkey = identityAtStart.chainPubkey ?? null;
@@ -19689,6 +19712,21 @@ var FlushScheduler = class {
    */
   noDataFlushPending = false;
   /**
+   * Issue #268 — in-memory dedup for background consolidation tasks.
+   *
+   * `flushToIpfs` triggers consolidation when bundle count exceeds
+   * `CONSOLIDATION_THRESHOLD` (3). Without this flag a burst of N
+   * rapid flushes (e.g. faucet topup delivering 6 tokens in quick
+   * succession) would each spawn its own fire-and-forget consolidate
+   * coroutine. The engine's `isConsolidationInProgress` cross-device
+   * check would catch most of them, but only after each pays the
+   * cost of one OrbitDB read. This in-process flag short-circuits
+   * the spawn entirely, ensuring exactly one consolidation runs at a
+   * time per provider instance. Cleared in the `finally` of the
+   * fire-and-forget IIFE so the next eligible flush can spawn one.
+   */
+  consolidationInFlight = null;
+  /**
    * Arm (or re-arm) the debounce timer. Subsequent `save()` calls
    * within the debounce window coalesce into a single flush.
    */
@@ -19908,8 +19946,30 @@ var FlushScheduler = class {
       const tokenMissing = [];
       if (previousData && previousData !== data) {
         const previousTokens = this.host.extractTokensFromTxfData(previousData);
-        for (const tokenId of previousTokens.keys()) {
-          if (!tokens.has(tokenId)) tokenMissing.push(tokenId);
+        const stripKeyPrefix = (k) => {
+          if (k.startsWith("archived-")) return k.substring("archived-".length);
+          if (k.startsWith("_forked_")) {
+            const rest = k.substring("_forked_".length);
+            const sep = rest.indexOf("_");
+            return sep === -1 ? rest : rest.substring(0, sep);
+          }
+          if (k.startsWith("_")) return k.substring(1);
+          return k;
+        };
+        const currentTokenIds = /* @__PURE__ */ new Set();
+        for (const k of tokens.keys()) currentTokenIds.add(stripKeyPrefix(k));
+        const tombstoneTokenIds = /* @__PURE__ */ new Set();
+        for (const t of opState.tombstones ?? []) {
+          if (t && typeof t.tokenId === "string") {
+            tombstoneTokenIds.add(t.tokenId);
+          }
+        }
+        for (const key of previousTokens.keys()) {
+          if (tokens.has(key)) continue;
+          const id = stripKeyPrefix(key);
+          if (currentTokenIds.has(id)) continue;
+          if (tombstoneTokenIds.has(id)) continue;
+          tokenMissing.push(key);
         }
       }
       const loadedBundleCids = this.host.getLastLoadedFromBundleCids();
@@ -20057,31 +20117,47 @@ var FlushScheduler = class {
       this.host.setLastPinnedCid(null);
       if (this.host.getIsShuttingDown()) {
         this.host.log("Consolidation skipped: shutdown in progress");
+      } else if (this.consolidationInFlight !== null) {
+        this.host.log(
+          "Consolidation skipped: background task already running on this instance"
+        );
       } else if (await this.bundleIndex.shouldConsolidate()) {
-        try {
-          const { ConsolidationEngine: ConsolidationEngine2 } = await Promise.resolve().then(() => (init_consolidation(), consolidation_exports));
-          const engine = new ConsolidationEngine2(
-            this.host.db,
-            encryptionKey,
-            this.host.ipfsGateways
-          );
-          if (!await engine.isConsolidationInProgress()) {
+        this.consolidationInFlight = (async () => {
+          try {
+            const { ConsolidationEngine: ConsolidationEngine2 } = await Promise.resolve().then(() => (init_consolidation(), consolidation_exports));
+            const engine = new ConsolidationEngine2(
+              this.host.db,
+              encryptionKey,
+              this.host.ipfsGateways
+            );
+            if (await engine.isConsolidationInProgress()) {
+              this.host.log(
+                "Consolidation skipped: another device is in progress"
+              );
+              return;
+            }
+            if (this.host.getIsShuttingDown()) {
+              this.host.log(
+                "Consolidation skipped: shutdown started before background spawn"
+              );
+              return;
+            }
             const result = await engine.consolidate();
             if (result.consolidated) {
               this.host.log(
-                `Consolidation: merged ${result.sourceBundleCount} bundles \u2192 ${result.consolidatedCid ?? "n/a"}`
+                `Consolidation: merged ${result.sourceBundleCount} bundles \u2192 ${result.consolidatedCid ?? "n/a"} (background)`
               );
             } else {
               this.host.log("Consolidation skipped (engine no-op)");
             }
-          } else {
-            this.host.log("Consolidation skipped: another device is in progress");
+          } catch (err) {
+            this.host.log(
+              `Consolidation failed (non-fatal, background): ${err instanceof Error ? err.message : String(err)}`
+            );
+          } finally {
+            this.consolidationInFlight = null;
           }
-        } catch (err) {
-          this.host.log(
-            `Consolidation failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
+        })();
       }
       let publishResult = null;
       let publishThrew = void 0;
@@ -24447,6 +24523,11 @@ function createBrowserProfileProviders(config) {
     orbitDb: {
       privateKey: "",
       // Set later via setIdentity()
+      // Issue #266 — browser wallets default to HTTP-only IPFS:
+      // no libp2p DHT/bootstrap/peerDiscovery, memory-only blockstore,
+      // operator Kubo gateway via HTTP for persistence. Avoids
+      // burning the user's browser tab on libp2p protocol handlers.
+      httpOnlyIpfs: true,
       ...config.profileConfig?.orbitDb ?? {}
     },
     encrypt: config.profileConfig?.encrypt ?? true,
