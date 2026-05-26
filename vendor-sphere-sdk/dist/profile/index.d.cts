@@ -20645,6 +20645,36 @@ declare class ProfileStorageProvider implements StorageProvider {
      * `write()` rehydrates the max via `collectObservedLamports()`.
      */
     buildSentLedgerWriter(addressId: string, lamport?: Lamport): SentLedgerWriter | null;
+    /**
+     * Issue #285 — Build a {@link CidRefStore} bound to this provider's
+     * IPFS gateway list and profile encryption key. The store pins fat
+     * OpLog payloads (DM caches, group state, processed-event ledgers,
+     * pending V5 token lists) to IPFS and returns a small CID-reference
+     * envelope to embed in the OpLog (PROFILE-CID-REFERENCES.md §2).
+     *
+     * Without this primitive the four module write sites (
+     * `CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+     * `GroupChatModule.persistProcessedEvents`,
+     * `GroupChatModule.persistMessages`) inline their full JSON in the
+     * OpLog and routinely exceed the 128 KiB cap (issue #285).
+     *
+     * Returns null when:
+     *  - encryption is disabled (no key to encrypt the IPFS payload), OR
+     *  - the encryption key has not been derived yet (setIdentity
+     *    pending — the caller MUST retry after `setIdentity`), OR
+     *  - no IPFS gateways are configured (CidRefStore mandates at least
+     *    one gateway; without one, pins cannot be persisted).
+     *
+     * Lifecycle: callers SHOULD cache the returned store and rebuild via
+     * this method on identity rotation (the captured encryption key is
+     * the one at construction time).
+     *
+     * Wired into the four module write sites via Sphere's `initialize()`
+     * calls (`Sphere.wireProfileCidRefStore`). External consumers
+     * (e.g., #286 token-storage migration) can call this directly through
+     * the public profile/index export.
+     */
+    buildCidRefStore(): CidRefStore | null;
     disconnect(): Promise<void>;
     private doDisconnect;
     isConnected(): boolean;
@@ -21438,6 +21468,345 @@ interface LegacyImportResult {
 declare function importLegacyTokens(legacyTokenStorage: TokenStorageProvider<TxfStorageDataBase>, targetPayments: PaymentsModule, options?: LegacyImportOptions): Promise<LegacyImportResult>;
 
 /**
+ * Bidirectional Token Storage Migration (Issue #286)
+ *
+ * Copies a wallet's token inventory between two `TokenStorageProvider`
+ * implementations, preserving every TXF-level structural field
+ * (`_meta`, tokens, archived tokens, `_tombstones`, `_outbox`, `_sent`,
+ * `_invalid`, `_history`, `_audit`, `_finalizationQueue`).
+ *
+ * Designed to support consumer-driven storage swaps such as the
+ * sphere.telco PR #305 regression (an upgrade from
+ * `IndexedDBTokenStorageProvider` to `ProfileTokenStorageProvider`
+ * silently zeroed every existing wallet's balance because the new
+ * Profile store opens fresh, no migration runs). Calling
+ * `migrateTokenStorage()` BEFORE swapping the provider passed to
+ * `Sphere.init` makes the swap safe — and the same primitive supports
+ * a rollback to legacy if the new store is later disabled.
+ *
+ * ## Semantics
+ *
+ * - **Bidirectional.** Pass `direction: 'legacy-to-profile'` or
+ *   `'profile-to-legacy'`. The function treats the two providers
+ *   symmetrically — only the marker keyspace differs.
+ * - **Non-destructive.** The source provider is never written to. After
+ *   a successful migration the source still holds the original data,
+ *   so a future rollback in the OTHER direction reproduces the
+ *   original wallet state.
+ * - **Idempotent.** A per-direction marker
+ *   (`legacy_migration_v1_complete:<addressId>` /
+ *   `profile_migration_v1_complete:<addressId>`) is written to the
+ *   `markerStorage` after a successful copy. A second invocation in
+ *   the same direction with the marker present short-circuits.
+ *   Pass `force: true` to bypass the marker (e.g., the user added
+ *   tokens to legacy after the first migration and wants to refresh
+ *   the joint inventory).
+ * - **Crash-safe.** The target's `save()` is a full overwrite, not an
+ *   append — a crash mid-flight leaves the target with either the
+ *   pre-migration state (write didn't land) or the post-migration
+ *   state (write landed). Re-running re-loads the source snapshot
+ *   and re-writes the target. The marker is the LAST operation, so
+ *   any crash before it triggers a re-run on the next launch.
+ * - **Aggregator-spent aware.** When an `oracle` is passed, every
+ *   active token's current state hash is probed via `oracle.isSpent()`
+ *   before the target write. Tokens reported `spent` are demoted from
+ *   the active inventory to the `archived-` slot — they remain in the
+ *   user's history but no longer appear in `getAssets()` / spend
+ *   selection. This sits BESIDE the runtime `SpentStateRescanWorker`
+ *   (auto-installed by PaymentsModule, issue #281); the migration
+ *   probe is a one-shot equivalent for the wallet's first post-swap
+ *   load so the user doesn't see "phantom" spent balances even before
+ *   the worker's first scan cycle.
+ * - **OpLog cap safe.** `ProfileTokenStorageProvider.save()` does NOT
+ *   inline the TxfStorageDataBase in OpLog — it writes a UXF CAR to
+ *   IPFS and stamps a thin bundle CID ref in OrbitDB. So migrating
+ *   thousands of tokens is structurally bounded by IPFS payload size,
+ *   not the 128 KiB MAX_PAYLOAD_BYTES cap. The marker write itself is
+ *   ~200 bytes — well below the cap — and uses the system-class
+ *   `'cache_index'` entry type when the marker storage supports
+ *   `setEntry`.
+ *
+ * ## What this primitive does NOT migrate
+ *
+ * - Key-value storage entries (mnemonic, derivation path, group-chat,
+ *   pending V5 tokens, accounting state, proof-polling jobs). Those
+ *   live in the `StorageProvider` layer, which is a separate
+ *   abstraction (both Profile and legacy providers expose KV
+ *   compatible interfaces, so they survive a Profile swap on their
+ *   own without help from this primitive).
+ *
+ * Forked-token entries (`_forked_*`) ARE migrated as-is — they carry
+ * alternate state-history for a tokenId and live in their own
+ * keyspace slot (no collision with the active `_<tokenId>` key).
+ * The count is exposed via `forksMigrated` for operator visibility.
+ *
+ * ## Comparison with `importLegacyTokens`
+ *
+ * `importLegacyTokens` (the existing legacy → Profile helper) operates
+ * at the `PaymentsModule.importTokens` level. It re-builds the
+ * in-memory token map plus the local derived cache (history,
+ * tombstones, etc.) on a LIVE PaymentsModule. It is the right
+ * primitive when the caller has a live `Sphere` instance and wants
+ * to merge legacy tokens into the active wallet view.
+ *
+ * `migrateTokenStorage` operates at the `TokenStorageProvider` level.
+ * It is the right primitive when the caller is preparing storage
+ * BEFORE constructing `Sphere`, or rolling back from one storage
+ * shape to another. Both helpers can coexist: a typical sphere.telco
+ * `SphereProvider.initialize` calls `migrateTokenStorage()` to seed
+ * the Profile-backed target, then constructs Sphere with the Profile
+ * providers — and a subsequent in-app "merge legacy file" UI gesture
+ * calls `importLegacyTokens` to additively union an external TXF
+ * file.
+ *
+ * @example sphere.telco SphereProvider.initialize integration
+ * ```ts
+ * import { createBrowserProfileProviders } from '@unicitylabs/sphere-sdk/profile/browser';
+ * import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+ * import { migrateLegacyToProfile } from '@unicitylabs/sphere-sdk/profile';
+ *
+ * // Build legacy + Profile providers side-by-side
+ * const legacy = createBrowserProviders({ network: 'mainnet' });
+ * const profile = createBrowserProfileProviders({ network: 'mainnet' });
+ *
+ * // Initialize both with the same identity (so the addressId matches)
+ * legacy.tokenStorage.setIdentity(identity);
+ * profile.tokenStorage.setIdentity(identity);
+ * await legacy.tokenStorage.initialize();
+ * await profile.tokenStorage.initialize();
+ *
+ * // Migrate legacy → Profile, with aggregator-spent gating
+ * const result = await migrateLegacyToProfile({
+ *   legacy: legacy.tokenStorage,
+ *   profile: profile.tokenStorage,
+ *   identity,
+ *   oracle: providers.oracle,
+ *   markerStorage: profile.storage,
+ * });
+ * if (!result.success) {
+ *   console.error('migration failed', result.errors);
+ * }
+ *
+ * // Now construct Sphere with Profile providers — tokens visible
+ * const { sphere } = await Sphere.init({
+ *   ...profile,
+ *   transport: providers.transport,
+ *   oracle: providers.oracle,
+ * });
+ * ```
+ *
+ * @module profile/token-storage-migration
+ */
+
+/** Migration direction. */
+type MigrationDirection = 'legacy-to-profile' | 'profile-to-legacy';
+/** Per-phase progress callback payload. */
+interface TokenStorageMigrationProgress {
+    /** Address being migrated. */
+    readonly addressId: string;
+    /** Direction of the migration. */
+    readonly direction: MigrationDirection;
+    /** Phase name. */
+    readonly phase: 'check-marker' | 'source-load' | 'oracle-probe' | 'target-save' | 'await-flush' | 'stamp-marker' | 'complete';
+    /** Tokens processed so far in the current phase. */
+    readonly processed: number;
+    /** Total tokens expected in the current phase. */
+    readonly total: number;
+}
+/** Options for {@link migrateTokenStorage}. */
+interface TokenStorageMigrationOptions {
+    /** Source provider — read-only. */
+    readonly source: TokenStorageProvider<TxfStorageDataBase>;
+    /** Target provider — receives a single `save()` call. */
+    readonly target: TokenStorageProvider<TxfStorageDataBase>;
+    /** Direction (drives marker keyspace only). */
+    readonly direction: MigrationDirection;
+    /**
+     * Wallet identity. Both providers MUST already accept this identity
+     * (call `setIdentity` + `initialize` BEFORE invoking the migration).
+     * The function uses `identity.directAddress` to compute the marker
+     * keyspace and to call `oracle.isSpent(identity.chainPubkey, ...)`.
+     */
+    readonly identity: FullIdentity;
+    /**
+     * Optional aggregator. When provided, every active token's current
+     * state hash is probed. Tokens reported `spent` are demoted to the
+     * `archived-` slot in the target. Tokens whose probe THROWS are
+     * left in the active slot (defensive — same fail-closed semantics
+     * as the runtime worker).
+     */
+    readonly oracle?: OracleProvider;
+    /**
+     * Where to store the idempotency marker. Typical choice: the
+     * `StorageProvider` of the TARGET environment (Profile's
+     * `ProfileStorageProvider` for legacy→Profile; the legacy
+     * `IndexedDBStorageProvider` / `FileStorageProvider` for the
+     * reverse direction). When omitted, the marker phase is skipped
+     * entirely — every call re-runs the copy. Pass `null` explicitly
+     * for the same effect.
+     */
+    readonly markerStorage?: StorageProvider | null;
+    /**
+     * Optional per-phase progress callback.
+     */
+    readonly onProgress?: (p: TokenStorageMigrationProgress) => void;
+    /**
+     * Enumerate without writing. The target is NOT modified; the
+     * marker is NOT stamped. Useful for a CLI `--dry-run` flag.
+     */
+    readonly dryRun?: boolean;
+    /**
+     * Bypass the idempotency marker. The migration runs even if the
+     * marker is already set. The marker IS rewritten on success so
+     * subsequent calls observe the latest timestamp.
+     */
+    readonly force?: boolean;
+}
+/** Per-bucket counts captured by the migration. */
+interface TokenStorageMigrationCounts {
+    /** Active token entries (`_<tokenId>` keys, NOT including archived). */
+    readonly tokensMigrated: number;
+    /** Archived token entries (`archived-<tokenId>` keys). */
+    readonly archivedMigrated: number;
+    /** Tombstones (entries in `_tombstones`). */
+    readonly tombstonesMigrated: number;
+    /** OUTBOX entries (entries in `_outbox`). */
+    readonly outboxMigrated: number;
+    /** SENT entries (entries in `_sent`). */
+    readonly sentMigrated: number;
+    /** History entries (entries in `_history`). */
+    readonly historyMigrated: number;
+    /** Audit entries (entries in `_audit`). */
+    readonly auditMigrated: number;
+    /** Finalization queue entries (entries in `_finalizationQueue`). */
+    readonly finalizationQueueMigrated: number;
+    /** Invalid entries (entries in `_invalid`). */
+    readonly invalidMigrated: number;
+    /**
+     * Forked-token entries (`_forked_<tokenId>_<stateHash>`) copied
+     * as-is. Forks are alternate state-history for a tokenId; they
+     * live in their own keyspace slot and never collide with the
+     * active `_<tokenId>` key, so a literal byte-copy is safe and
+     * preserves the wallet's audit trail. Exposed separately from
+     * `tokensMigrated` for operator visibility.
+     */
+    readonly forksMigrated: number;
+    /**
+     * Active tokens demoted to `archived-` due to `oracle.isSpent === true`.
+     * Always 0 when `oracle` is omitted. Counted independently from
+     * `archivedMigrated` (those were already archived in source).
+     */
+    readonly spentTokensArchived: number;
+    /**
+     * Oracle probes that threw (network / RPC error). The token is left
+     * in its source bucket and is NOT demoted. The wallet's runtime
+     * `SpentStateRescanWorker` will re-probe after the wallet boots.
+     */
+    readonly oracleProbeErrors: number;
+}
+/** Result of a single {@link migrateTokenStorage} invocation. */
+interface TokenStorageMigrationResult extends TokenStorageMigrationCounts {
+    /** True when the migration ran without fatal errors. */
+    readonly success: boolean;
+    /** Computed addressId for the migrated identity. */
+    readonly addressId: string;
+    /** Direction passed to {@link migrateTokenStorage}. */
+    readonly direction: MigrationDirection;
+    /**
+     * True when the marker was set and `force` was false — the function
+     * returned early without touching the target. All counts are 0.
+     */
+    readonly skippedDueToMarker: boolean;
+    /** True when `dryRun` was set — counts are real but no writes happened. */
+    readonly dryRun: boolean;
+    /** Wall-clock duration. */
+    readonly durationMs: number;
+    /** Fatal-and-non-fatal failures collected during the run. */
+    readonly errors: ReadonlyArray<{
+        readonly phase: TokenStorageMigrationProgress['phase'];
+        readonly error: string;
+    }>;
+}
+/**
+ * Schema version of the migration marker payload. Bump when the
+ * marker JSON shape changes in a way that older readers can't parse.
+ */
+declare const TOKEN_STORAGE_MIGRATION_MARKER_VERSION: 1;
+/**
+ * Migrate a wallet's TXF token inventory from `source` to `target`,
+ * preserving every structural field of `TxfStorageDataBase`.
+ *
+ * See the module docstring for the full contract — idempotency,
+ * crash-safety, aggregator-spent gating, OpLog cap safety, and what
+ * is intentionally NOT migrated.
+ *
+ * @param opts See {@link TokenStorageMigrationOptions}.
+ * @returns See {@link TokenStorageMigrationResult}.
+ */
+declare function migrateTokenStorage(opts: TokenStorageMigrationOptions): Promise<TokenStorageMigrationResult>;
+/**
+ * Convenience wrapper for the common case: migrating from a legacy
+ * `IndexedDBTokenStorageProvider` / `FileTokenStorageProvider` to a
+ * Profile-backed `ProfileTokenStorageProvider`.
+ *
+ * Equivalent to `migrateTokenStorage({ source: legacy, target: profile,
+ * direction: 'legacy-to-profile', ... })`.
+ */
+declare function migrateLegacyToProfile(opts: {
+    readonly legacy: TokenStorageProvider<TxfStorageDataBase>;
+    readonly profile: TokenStorageProvider<TxfStorageDataBase>;
+    readonly identity: FullIdentity;
+    readonly oracle?: OracleProvider;
+    readonly markerStorage?: StorageProvider | null;
+    readonly onProgress?: (p: TokenStorageMigrationProgress) => void;
+    readonly dryRun?: boolean;
+    readonly force?: boolean;
+}): Promise<TokenStorageMigrationResult>;
+/**
+ * Convenience wrapper for the rollback direction:
+ * `ProfileTokenStorageProvider` → legacy
+ * `IndexedDBTokenStorageProvider` / `FileTokenStorageProvider`.
+ *
+ * Equivalent to `migrateTokenStorage({ source: profile, target: legacy,
+ * direction: 'profile-to-legacy', ... })`.
+ */
+declare function migrateProfileToLegacy(opts: {
+    readonly profile: TokenStorageProvider<TxfStorageDataBase>;
+    readonly legacy: TokenStorageProvider<TxfStorageDataBase>;
+    readonly identity: FullIdentity;
+    readonly oracle?: OracleProvider;
+    readonly markerStorage?: StorageProvider | null;
+    readonly onProgress?: (p: TokenStorageMigrationProgress) => void;
+    readonly dryRun?: boolean;
+    readonly force?: boolean;
+}): Promise<TokenStorageMigrationResult>;
+/**
+ * Check whether a migration marker is present for `(direction,
+ * addressId)`. Useful for UIs that want to surface "wallet already
+ * migrated" without running the full helper.
+ */
+declare function isTokenStorageMigrationComplete(opts: {
+    readonly markerStorage: StorageProvider;
+    readonly direction: MigrationDirection;
+    readonly identity: FullIdentity;
+}): Promise<boolean>;
+/**
+ * Clear a previously-stamped migration marker. Use this when the
+ * consumer wants to force-rerun the migration on the next invocation
+ * (e.g., the user added more tokens to legacy after the first
+ * migration).
+ *
+ * Note: clearing the marker does NOT delete the migrated data on the
+ * target. The next migration run will re-write the target with the
+ * latest source snapshot.
+ */
+declare function clearTokenStorageMigrationMarker(opts: {
+    readonly markerStorage: StorageProvider;
+    readonly direction: MigrationDirection;
+    readonly identity: FullIdentity;
+}): Promise<void>;
+
+/**
  * Profile Deriver
  *
  * Pure functions that derive transaction history, sent ledger, and
@@ -21682,4 +22051,4 @@ interface NodeProfileProviders {
     readonly tokenStorage: ProfileTokenStorageProvider;
 }
 
-export { type BrowserProfileProviders, type BrowserProfileProvidersConfig, CACHE_ONLY_KEYS, CAS_MAX_RETRIES, ConsolidationEngine, type ConsolidationPendingState, type ConsolidationResult, DEFAULT_ENCRYPTION_CONFIG, DEFAULT_LIST_KEYS_MAX_RESULTS, type DispositionEventEmitter, type DispositionPerEntryStorage, DispositionWriter, type DispositionWriterOptions, IPFS_STATE_KEYS_PATTERN, InMemoryDispositionStorageAdapter, Lamport, type LegacyImportOptions, type LegacyImportResult, MAX_LOCK_HOLD_MS, ManifestCas, ManifestCasConcurrentModificationError, type ManifestCasResult, ManifestStore, type ManifestStoreOptions, type MigrationPhase, type MigrationResult, type MinimalManifestStorage, type NodeProfileProviders, type NodeProfileProvidersConfig, NostrReplicationBridge, type NostrReplicationConfig, OrbitDbAdapter, type OrbitDbConfig, OrbitDbDispositionStorageAdapter, type OrbitDbDispositionStorageAdapterOptions, PROFILE_HKDF_INFO, PROFILE_KEY_MAPPING, PerTokenMutex, type PerTokenMutexOptions, type PerTokenMutexStrategy, type ProfileConfig, type ProfileDatabase, type ProfileEncryptionConfig, ProfileError, type ProfileErrorCode, type ProfileKeyMap, type ProfileKeyMapEntry, ProfileMigration, type ProfileProviders, ProfileStorageProvider, type ProfileStorageProviderOptions, ProfileTokenStorageProvider, type ProfileTokenStorageProviderOptions, type SyncEventCallback, type SyncEventType, type TokenManifest, type TokenManifestEntry, type TokenManifestStatus, type UxfBundleRef, auditKeyFor, computeAddressId, conflictingTokenIds, createProfileProviders, decryptProfileValue, decryptString, deriveHistoryFromArchived, deriveProfileEncryptionKey, deriveSentFromArchived, deriveStructuralManifest, deriveTombstonesFromArchived, encryptProfileValue, encryptString, fetchCarFromIpfs, fetchFromIpfs, importLegacyTokens, invalidKeyFor, isConflictingStatus, mergeAuditEntry, mergeManifestEntry, pinCarBlocksToIpfs, pinToIpfs, verifyCidAccessible };
+export { type BrowserProfileProviders, type BrowserProfileProvidersConfig, CACHE_ONLY_KEYS, CAS_MAX_RETRIES, CID_REF_SCHEMA_VERSION, type CidRef, CidRefStore, type CidRefStoreOptions, ConsolidationEngine, type ConsolidationPendingState, type ConsolidationResult, DEFAULT_ENCRYPTION_CONFIG, DEFAULT_LIST_KEYS_MAX_RESULTS, type DispositionEventEmitter, type DispositionPerEntryStorage, DispositionWriter, type DispositionWriterOptions, type FetchOptions, IPFS_STATE_KEYS_PATTERN, InMemoryDispositionStorageAdapter, Lamport, type LegacyImportOptions, type LegacyImportResult, MAX_LOCK_HOLD_MS, ManifestCas, ManifestCasConcurrentModificationError, type ManifestCasResult, ManifestStore, type ManifestStoreOptions, type MigrationDirection, type MigrationPhase, type MigrationResult, type MinimalManifestStorage, type NodeProfileProviders, type NodeProfileProvidersConfig, NostrReplicationBridge, type NostrReplicationConfig, OrbitDbAdapter, type OrbitDbConfig, OrbitDbDispositionStorageAdapter, type OrbitDbDispositionStorageAdapterOptions, PROFILE_HKDF_INFO, PROFILE_KEY_MAPPING, PerTokenMutex, type PerTokenMutexOptions, type PerTokenMutexStrategy, type PinOptions, type ProfileConfig, type ProfileDatabase, type ProfileEncryptionConfig, ProfileError, type ProfileErrorCode, type ProfileKeyMap, type ProfileKeyMapEntry, ProfileMigration, type ProfileProviders, ProfileStorageProvider, type ProfileStorageProviderOptions, ProfileTokenStorageProvider, type ProfileTokenStorageProviderOptions, type SyncEventCallback, type SyncEventType, TOKEN_STORAGE_MIGRATION_MARKER_VERSION, type TokenManifest, type TokenManifestEntry, type TokenManifestStatus, type TokenStorageMigrationCounts, type TokenStorageMigrationOptions, type TokenStorageMigrationProgress, type TokenStorageMigrationResult, type UxfBundleRef, auditKeyFor, clearTokenStorageMigrationMarker, computeAddressId, conflictingTokenIds, createProfileProviders, decryptProfileValue, decryptString, deriveHistoryFromArchived, deriveProfileEncryptionKey, deriveSentFromArchived, deriveStructuralManifest, deriveTombstonesFromArchived, encryptProfileValue, encryptString, fetchCarFromIpfs, fetchFromIpfs, importLegacyTokens, invalidKeyFor, isConflictingStatus, isTokenStorageMigrationComplete, mergeAuditEntry, mergeManifestEntry, migrateLegacyToProfile, migrateProfileToLegacy, migrateTokenStorage, pinCarBlocksToIpfs, pinToIpfs, verifyCidAccessible };

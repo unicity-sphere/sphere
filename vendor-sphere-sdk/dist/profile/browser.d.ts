@@ -949,6 +949,198 @@ declare class OrbitDbRecipientContextStorageAdapter {
 }
 
 /**
+ * CidRefStore — per-wallet CID-reference primitive (PROFILE-CID-REFERENCES.md §2).
+ *
+ * Enables OpLog values to reference IPFS-pinned content instead of inlining
+ * fat data. All encryption, content-addressing, and verification is handled
+ * here; callers provide plaintext bytes on pin, and receive plaintext bytes
+ * on fetch.
+ *
+ * Serialization pattern (embedded in OpLog via ProfileStorageProvider.set):
+ *   `storage.set(key, CidRefStore.stringifyRef(ref))`
+ *
+ * Read-side migration pattern (distinguish legacy inline from new ref):
+ *   const value = await storage.get(key);
+ *   const ref = CidRefStore.tryParseRef(value);
+ *   if (ref) {
+ *     // New path: fetch from IPFS.
+ *     const data = await cidRefStore.fetchJson<T>(ref);
+ *   } else {
+ *     // Legacy path: inline JSON.
+ *     const data = JSON.parse(value);
+ *   }
+ *
+ * @module profile/cid-ref-store
+ */
+/** Schema version of the CidRef envelope. */
+declare const CID_REF_SCHEMA_VERSION: 1;
+/**
+ * Reference envelope written inline in an OpLog value. Small (~100-150 bytes
+ * serialized) so the OpLog entry itself remains thin.
+ *
+ * @see PROFILE-CID-REFERENCES.md §2
+ */
+interface CidRef {
+    /** Schema version — must equal CID_REF_SCHEMA_VERSION. */
+    readonly v: typeof CID_REF_SCHEMA_VERSION;
+    /** IPFS CID of the pinned content. sha2-256 multihash expected. */
+    readonly cid: string;
+    /** Size in bytes of the blob pinned to IPFS. Used for telemetry + size-budget checks. */
+    readonly size: number;
+    /** Wall-clock timestamp (ms since epoch) when this ref was created. */
+    readonly ts: number;
+    /** Caller-supplied content-version tag for layered schema evolution. */
+    readonly contentV?: number;
+    /**
+     * When false, the pinned bytes are plaintext (unencrypted). When absent
+     * or true, the pinned bytes are AES-GCM ciphertext using the wallet's
+     * encryption key — the default, matches every pre-existing CidRef.
+     *
+     * Rationale for the plaintext mode: for content whose transit privacy
+     * is already bounded by another layer (e.g., NIP-29 group-chat messages
+     * flow through a relay as plaintext — see PROFILE-CID-REFERENCES.md §8.5
+     * and the module-level discussion in GroupChatModule), encryption per
+     * wallet defeats IPFS content-addressed dedup without adding any
+     * realistic privacy. Setting `enc: false` makes the CID a global
+     * dedup key across all wallets that store the same content.
+     *
+     * The field is self-describing — fetch decrypts iff `enc !== false`,
+     * so a caller that switches modes between write and read can't
+     * silently corrupt.
+     */
+    readonly enc?: boolean;
+}
+/**
+ * Options bag for pin operations. Supersedes the prior
+ * `pinBytes(bytes, contentV?)` positional signature (no in-tree caller
+ * passed contentV positionally as of commit 5cdeae6).
+ */
+interface PinOptions {
+    /** Caller-supplied content-version tag for schema evolution. */
+    readonly contentV?: number;
+    /**
+     * Default true (AES-GCM encrypt before pinning). Set false to pin
+     * plaintext bytes — enables IPFS content-dedup across wallets. ONLY
+     * use for content whose transit privacy is already public (e.g.,
+     * NIP-29 group-chat messages). See the `CidRef.enc` doc for rationale.
+     */
+    readonly encrypted?: boolean;
+}
+/**
+ * Options bag for fetch operations. Callers with strict encryption
+ * policies (every in-tree caller except group-chat-messages) should
+ * set `requireEncrypted: true` so a hostile ref claiming `enc: false`
+ * cannot trick the fetch path into returning attacker-controlled
+ * plaintext as if it were the legitimate ciphertext payload.
+ */
+interface FetchOptions {
+    /**
+     * When true, reject refs whose `enc === false` with CID_REF_CORRUPT.
+     * Defense-in-depth: OrbitDB origin-tag validation at a higher layer
+     * is the primary defense, but a caller who KNOWS their protocol
+     * produces only encrypted refs should enforce that at every fetch
+     * boundary. Default false (honor whatever the ref says).
+     *
+     * Symmetric opposite (`requirePlaintext`) is intentionally not
+     * provided — a ref's `enc` field is a declaration, not a request,
+     * and rejecting encrypted content serves no real threat model.
+     */
+    readonly requireEncrypted?: boolean;
+}
+interface CidRefStoreOptions {
+    /** IPFS gateway URLs. Same list used by ProfileTokenStorageProvider. */
+    readonly gateways: string[];
+    /**
+     * AES-256 encryption key derived from the wallet master key. Required
+     * — content stored at IPFS is always encrypted so public CIDs do not
+     * leak plaintext.
+     */
+    readonly encryptionKey: Uint8Array;
+    /**
+     * Pin timeout (ms). Defaults to 60_000 — consistent with ipfs-client
+     * DEFAULT_PIN_TIMEOUT_MS.
+     */
+    readonly pinTimeoutMs?: number;
+    /**
+     * Fetch timeout (ms). Defaults to 30_000 — consistent with ipfs-client
+     * DEFAULT_FETCH_TIMEOUT_MS.
+     */
+    readonly fetchTimeoutMs?: number;
+    /**
+     * Maximum accepted encrypted size for a single fetched blob. Defaults
+     * to 50 MiB, matching ipfs-client's default. Callers with smaller
+     * domain limits can override.
+     */
+    readonly maxFetchBytes?: number;
+    /**
+     * Debug logger. When absent, errors propagate as thrown but successes
+     * are silent.
+     */
+    readonly log?: (msg: string) => void;
+}
+declare class CidRefStore {
+    #private;
+    constructor(opts: CidRefStoreOptions);
+    /**
+     * Pin `plaintextBytes` to IPFS. By default the bytes are AES-GCM
+     * encrypted first — the CID is content-addressed over the ciphertext
+     * and the plaintext never leaves the wallet.
+     *
+     * Pass `{ encrypted: false }` to pin the plaintext directly. The CID
+     * then becomes a global dedup key across wallets. Use ONLY for content
+     * whose transit privacy is already public (see `CidRef.enc`).
+     */
+    pinBytes(plaintextBytes: Uint8Array, opts?: PinOptions): Promise<CidRef>;
+    /**
+     * Convenience: JSON-stringify + UTF-8 encode + pin. Wraps the synchronous
+     * JSON.stringify throw path (circular refs, BigInt) so callers see a
+     * typed ProfileError at the async boundary.
+     *
+     * Options are forwarded to `pinBytes` — pass `{ encrypted: false }` for
+     * plaintext pins (see CidRef.enc).
+     */
+    pinJson(value: unknown, opts?: PinOptions): Promise<CidRef>;
+    /**
+     * Fetch encrypted blob by CID, verify content-address, decrypt, return plaintext.
+     *
+     * Size-bounding (steelman fix): the fetch cap is `ref.size +
+     * FETCH_SIZE_TOLERANCE_BYTES`, NOT the instance-wide `#maxFetchBytes`.
+     * This prevents a hostile peer (via OrbitDB LWW) from crafting a
+     * poisoned ref with small `size` but pointing to a huge blob — the
+     * fetch aborts before 50 MiB are allocated.
+     *
+     * Post-fetch the exact size is asserted — an attacker who matches the
+     * cap but pads the blob internally still triggers CID_REF_SIZE_MISMATCH.
+     *
+     * Content-verification is handled by fetchFromIpfs's internal
+     * verifyCidMatchesBytes; we rely on that invariant (redundant call
+     * removed per steelman — it masks regressions rather than catching them).
+     */
+    fetchBytes(ref: CidRef, opts?: FetchOptions): Promise<Uint8Array>;
+    /** Convenience: fetchBytes + UTF-8 decode + JSON.parse. */
+    fetchJson<T = unknown>(ref: CidRef, opts?: FetchOptions): Promise<T>;
+    /** JSON-stringify a ref for embedding via `StorageProvider.set(key, stringifyRef(ref))`. */
+    static stringifyRef(ref: CidRef): string;
+    /**
+     * Try to parse a stored OpLog value as a CidRef. Returns null when the
+     * input is NOT a CidRef — callers use that signal to fall back to the
+     * legacy inline-JSON read path (PROFILE-CID-REFERENCES.md §6).
+     *
+     * Intentionally strict (hardened per steelman):
+     *   - `v === 1` (unknown versions fail-closed)
+     *   - `cid` must parse via multiformats CID.parse (rejects arbitrary
+     *     strings, legacy values that happen to have a `cid`-named field)
+     *   - `size` must be finite non-negative integer
+     *   - `ts` must be a plausible wall-clock value (> 0 — rejects legacy
+     *     values carrying `ts: 0` as an absence marker)
+     *   - `contentV` if present must be finite number
+     *
+     * Writers always produce valid refs via `pinJson` / `pinBytes` / `stringifyRef`.
+     */
+    static tryParseRef(value: string | null | undefined): CidRef | null;
+}
+
+/**
  * UXF Inter-Wallet Transfer — UxfTransferOutboxEntry schema (T.6.A)
  *
  * Bundle-grained outbox entry per `docs/uxf/UXF-TRANSFER-PROTOCOL.md` §7.
@@ -5820,6 +6012,36 @@ declare class ProfileStorageProvider implements StorageProvider {
      * `write()` rehydrates the max via `collectObservedLamports()`.
      */
     buildSentLedgerWriter(addressId: string, lamport?: Lamport): SentLedgerWriter | null;
+    /**
+     * Issue #285 — Build a {@link CidRefStore} bound to this provider's
+     * IPFS gateway list and profile encryption key. The store pins fat
+     * OpLog payloads (DM caches, group state, processed-event ledgers,
+     * pending V5 token lists) to IPFS and returns a small CID-reference
+     * envelope to embed in the OpLog (PROFILE-CID-REFERENCES.md §2).
+     *
+     * Without this primitive the four module write sites (
+     * `CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+     * `GroupChatModule.persistProcessedEvents`,
+     * `GroupChatModule.persistMessages`) inline their full JSON in the
+     * OpLog and routinely exceed the 128 KiB cap (issue #285).
+     *
+     * Returns null when:
+     *  - encryption is disabled (no key to encrypt the IPFS payload), OR
+     *  - the encryption key has not been derived yet (setIdentity
+     *    pending — the caller MUST retry after `setIdentity`), OR
+     *  - no IPFS gateways are configured (CidRefStore mandates at least
+     *    one gateway; without one, pins cannot be persisted).
+     *
+     * Lifecycle: callers SHOULD cache the returned store and rebuild via
+     * this method on identity rotation (the captured encryption key is
+     * the one at construction time).
+     *
+     * Wired into the four module write sites via Sphere's `initialize()`
+     * calls (`Sphere.wireProfileCidRefStore`). External consumers
+     * (e.g., #286 token-storage migration) can call this directly through
+     * the public profile/index export.
+     */
+    buildCidRefStore(): CidRefStore | null;
     disconnect(): Promise<void>;
     private doDisconnect;
     isConnected(): boolean;

@@ -40228,6 +40228,15 @@ var GroupChatModule = class {
   _lastPinnedMembersByGroup = /* @__PURE__ */ new Map();
   _lastPinnedMessagesByGroup = /* @__PURE__ */ new Map();
   /**
+   * Issue #285 — `processedEvents` (NIP-29 event ID dedup ledger) memo.
+   * Grows unbounded with relay activity (observed 263 KB after routine
+   * use) and was the second-worst soft-warn offender behind
+   * `groupChatMembers`. Pattern A encrypted pin (per-wallet view —
+   * dedup across wallets has no value).
+   */
+  _lastPinnedProcessedEventsJson = null;
+  _lastPinnedProcessedEventsRef = null;
+  /**
    * Pattern B per-message CID cache — maps a message's serialized JSON
    * to the CID it was pinned under. Lets repeated persists for the same
    * group reuse CIDs for unchanged messages (saves ~N pin round-trips
@@ -40298,6 +40307,8 @@ var GroupChatModule = class {
     this._lastPinnedMembersByGroup.clear();
     this._lastPinnedMessagesByGroup.clear();
     this._pinnedMessageCids.clear();
+    this._lastPinnedProcessedEventsJson = null;
+    this._lastPinnedProcessedEventsRef = null;
     const groupsJson = await storage.get(STORAGE_KEYS_ADDRESS.GROUP_CHAT_GROUPS);
     if (groupsJson) {
       const ref = CidRefStore.tryParseRef(groupsJson);
@@ -40585,10 +40596,41 @@ var GroupChatModule = class {
     }
     const processedJson = await storage.get(STORAGE_KEYS_ADDRESS.GROUP_CHAT_PROCESSED_EVENTS);
     if (processedJson) {
-      try {
-        const parsed = JSON.parse(processedJson);
+      const ref = CidRefStore.tryParseRef(processedJson);
+      let parsed = null;
+      if (ref) {
+        if (!this.deps.cidRefStore) {
+          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+          throw new ProfileError2(
+            "CID_REF_UNREADABLE",
+            `GroupChatModule.load: processedEvents key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
+          );
+        }
+        try {
+          parsed = await this.deps.cidRefStore.fetchJson(
+            ref,
+            { requireEncrypted: true }
+          );
+        } catch (err) {
+          logger.error(
+            "GroupChat",
+            "[GROUP_CHAT_PROCESSED_EVENTS] CID-ref fetch failed; starting fresh",
+            err
+          );
+        }
+      } else {
+        try {
+          parsed = JSON.parse(processedJson);
+        } catch {
+        }
+      }
+      if (Array.isArray(parsed)) {
         this.processedEventIds = new Set(parsed);
-      } catch {
+      } else if (parsed !== null) {
+        logger.error(
+          "GroupChat",
+          `[GROUP_CHAT_PROCESSED_EVENTS] decoded data is not an array (got ${typeof parsed}); starting fresh.`
+        );
       }
     }
   }
@@ -41840,10 +41882,45 @@ var GroupChatModule = class {
     }
     this._lastWrittenMemberGroupIds = current;
   }
+  /**
+   * Persist the NIP-29 event ID dedup ledger. The ledger grows
+   * unbounded with relay activity — observed 263 KB on routine sphere.telco
+   * use, which was the second-worst PAYLOAD-SIZE soft-warn after
+   * `groupChatMembers` (issue #285).
+   *
+   * Encryption policy: ENCRYPTED. The ledger is a per-wallet privacy
+   * footprint (it reveals which NIP-29 events this wallet has
+   * processed — including private/invite-only groups). Dedup across
+   * wallets is not a goal; the canonical-content-addressed property
+   * of plaintext pins would actively leak group-membership signal to
+   * any IPFS observer.
+   */
   async persistProcessedEvents() {
     if (!this.deps) return;
     const arr = Array.from(this.processedEventIds);
-    await this.deps.storage.set(STORAGE_KEYS_ADDRESS.GROUP_CHAT_PROCESSED_EVENTS, JSON.stringify(arr));
+    const cidRefStore = this.deps.cidRefStore;
+    if (cidRefStore) {
+      const json = JSON.stringify(arr);
+      if (this._lastPinnedProcessedEventsRef && this._lastPinnedProcessedEventsJson === json) {
+        await this.deps.storage.set(
+          STORAGE_KEYS_ADDRESS.GROUP_CHAT_PROCESSED_EVENTS,
+          CidRefStore.stringifyRef(this._lastPinnedProcessedEventsRef)
+        );
+        return;
+      }
+      const ref = await cidRefStore.pinJson(arr);
+      await this.deps.storage.set(
+        STORAGE_KEYS_ADDRESS.GROUP_CHAT_PROCESSED_EVENTS,
+        CidRefStore.stringifyRef(ref)
+      );
+      this._lastPinnedProcessedEventsJson = json;
+      this._lastPinnedProcessedEventsRef = ref;
+      return;
+    }
+    await this.deps.storage.set(
+      STORAGE_KEYS_ADDRESS.GROUP_CHAT_PROCESSED_EVENTS,
+      JSON.stringify(arr)
+    );
   }
   // ===========================================================================
   // Private — Relay URL Change Detection
@@ -56667,6 +56744,15 @@ var Sphere = class _Sphere {
           // wired across nametag-driven re-initialization.
           publishToIpfs: this._publishToIpfs ?? void 0,
           cidFetchGateways: this._cidFetchGateways ?? void 0,
+          // Issue #285 — preserve the CidRefStore across nametag re-init.
+          // The wallet's encryption key has not changed (only the nametag
+          // moved), so the cached store is still valid; we rebuild for
+          // safety because `Sphere.buildCidRefStoreOrNull()` is cheap
+          // (one constructor call). Without this line, the re-init would
+          // drop the deps.cidRefStore field back to undefined and the
+          // PaymentsModule would silently fall back to inline JSON for
+          // pending V5 token persistence.
+          cidRefStore: this.buildCidRefStoreOrNull() ?? void 0,
           // Issue #255 Problem A — re-thread HD-index recovery hooks on
           // nametag-driven re-init so per-address PaymentsModule
           // instances keep the recovery surface alive after identity
@@ -56792,6 +56878,7 @@ var Sphere = class _Sphere {
         `G3/G7: failed to wire Profile-backed recipient persisted storage (continuing with in-memory shims): ${safeErrorMessage(err)}`
       );
     }
+    const cidRefStore = this.buildCidRefStoreOrNull();
     payments.initialize({
       identity,
       storage: this._storage,
@@ -56806,6 +56893,8 @@ var Sphere = class _Sphere {
       // all addresses; the publisher is identity-independent).
       publishToIpfs: this._publishToIpfs ?? void 0,
       cidFetchGateways: this._cidFetchGateways ?? void 0,
+      // Issue #285 — CID-ref store for pending V5 token storage (fat-data).
+      cidRefStore: cidRefStore ?? void 0,
       // Issue #255 Problem A — HD-index recovery hooks for
       // finalizeTransferToken. See initializeModules() above for full
       // rationale.
@@ -56818,12 +56907,16 @@ var Sphere = class _Sphere {
       identity,
       storage: this._storage,
       transport: addressTransport,
-      emitEvent
+      emitEvent,
+      // Issue #285 — CID-ref store for per-address DM cache.
+      cidRefStore: cidRefStore ?? void 0
     });
     groupChat?.initialize({
       identity,
       storage: this._storage,
-      emitEvent
+      emitEvent,
+      // Issue #285 — CID-ref store for group/member/messages/processedEvents.
+      cidRefStore: cidRefStore ?? void 0
     });
     market?.initialize({
       identity,
@@ -56848,7 +56941,9 @@ var Sphere = class _Sphere {
           emitEvent,
           on: this.on.bind(this),
           storage: this._storage,
-          communications
+          communications,
+          // Issue #285 — CID-ref store for invoice ledger.
+          cidRefStore: cidRefStore ?? void 0
         });
       } else {
         logger.warn("Sphere", "Accounting module enabled but no token storage available \u2014 disabling");
@@ -57036,6 +57131,47 @@ var Sphere = class _Sphere {
         "Sphere",
         `wireProfilePersistedSendStorage threw \u2014 PaymentsModule falls back to legacy KV outbox: ${safeErrorMessage(err)}`
       );
+    }
+  }
+  /**
+   * Issue #285 — Construct a {@link CidRefStore} via the storage
+   * provider's `buildCidRefStore()` helper when available.
+   *
+   * The four fat-data OpLog write sites
+   * (`CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+   * `GroupChatModule.persistProcessedEvents`,
+   * `GroupChatModule.persistMessages`) — plus `PaymentsModule` pending
+   * V5 tokens and `AccountingModule` invoice ledger — accept an
+   * optional CidRefStore via their `initialize()` deps. Without one,
+   * each falls through to inline JSON storage which routinely exceeds
+   * the 128 KiB Profile OpLog cap (3.98 MB observed for the
+   * `announcements` group's `groupChatMembers` blob).
+   *
+   * Best-effort: when the storage provider is not a
+   * `ProfileStorageProvider`, when encryption is disabled, when the
+   * identity has not been set yet, or when no IPFS gateways are
+   * configured, this returns `null` and the modules retain their
+   * legacy inline behaviour (still bounded by the 128 KiB cap; the
+   * existing PAYLOAD-SIZE soft-warn will fire on offending writes).
+   *
+   * The returned store is cached per-Sphere-instance. Identity
+   * rotation (`load()` switching to a different address) MUST
+   * `_cidRefStore = null` to force a rebuild — the captured
+   * encryption key is the one at construction time.
+   */
+  buildCidRefStoreOrNull() {
+    try {
+      const storageWithBuilder = this._storage;
+      if (typeof storageWithBuilder.buildCidRefStore !== "function") {
+        return null;
+      }
+      return storageWithBuilder.buildCidRefStore();
+    } catch (err) {
+      logger.warn(
+        "Sphere",
+        `buildCidRefStoreOrNull threw \u2014 modules fall back to inline JSON storage: ${safeErrorMessage(err)}`
+      );
+      return null;
     }
   }
   /**
@@ -58840,6 +58976,7 @@ var Sphere = class _Sphere {
         `G3/G7: failed to wire Profile-backed recipient persisted storage (continuing with in-memory shims): ${safeErrorMessage(err)}`
       );
     }
+    const cidRefStore = this.buildCidRefStoreOrNull();
     this._payments.initialize({
       identity: this._identity,
       storage: this._storage,
@@ -58857,6 +58994,8 @@ var Sphere = class _Sphere {
       // (under cap) or rejects (over cap / force-cid).
       publishToIpfs: this._publishToIpfs ?? void 0,
       cidFetchGateways: this._cidFetchGateways ?? void 0,
+      // Issue #285 — CID-ref store for pending V5 token storage (fat-data).
+      cidRefStore: cidRefStore ?? void 0,
       // Issue #255 Problem A — HD-index recovery hooks for
       // finalizeTransferToken. Only wired when a master key is
       // available (HD derivation requires it); without it,
@@ -58870,12 +59009,17 @@ var Sphere = class _Sphere {
       identity: this._identity,
       storage: this._storage,
       transport: moduleTransport,
-      emitEvent
+      emitEvent,
+      // Issue #285 — CID-ref store for the per-address DM cache.
+      cidRefStore: cidRefStore ?? void 0
     });
     this._groupChat?.initialize({
       identity: this._identity,
       storage: this._storage,
-      emitEvent
+      emitEvent,
+      // Issue #285 — CID-ref store for group/member/messages/processedEvents
+      // (the four GroupChat fat-data write sites flagged in #285).
+      cidRefStore: cidRefStore ?? void 0
     });
     this._market?.initialize({
       identity: this._identity,
@@ -58900,7 +59044,10 @@ var Sphere = class _Sphere {
           emitEvent,
           on: this.on.bind(this),
           storage: this._storage,
-          communications: this._communications
+          communications: this._communications,
+          // Issue #285 — CID-ref store for invoice ledger (per-invoice
+          // Pattern A pin via §8.3).
+          cidRefStore: cidRefStore ?? void 0
         });
       } else {
         logger.warn("Sphere", "Accounting module enabled but no token storage available \u2014 disabling");

@@ -14,6 +14,9 @@ import {
   createBrowserProviders,
   type BrowserProviders,
 } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createBrowserProfileProviders } from '@unicitylabs/sphere-sdk/profile/browser';
+import { IS_UXF_BUILD } from '../config/uxf';
+import { runProfileMigration } from './uxfProfileMigration';
 import { SphereContext } from './SphereContext';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
@@ -149,17 +152,107 @@ export function SphereProvider({
         storage: browserProviders.storage,
       });
 
+      // `Sphere.exists()` probes for wallet keys (mnemonic / masterKey)
+      // in the storage's underlying KV. Note: under UXF mode, the
+      // Profile-backed ProfileStorageProvider's local cache shares the
+      // SAME `sphere-storage` IndexedDB as the legacy
+      // `IndexedDBStorageProvider` (see sphere-sdk
+      // profile/browser.ts createBrowserProfileProviders → uses
+      // `createIndexedDBStorageProvider()` for the local cache). That
+      // means a wallet created FRESH under Profile on a previous boot
+      // also shows up via `Sphere.exists(legacyStorage)` on the next
+      // boot — no separate Profile-storage probe needed.
       const exists = await Sphere.exists(browserProviders.storage);
       setWalletExists(exists);
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
-        const { sphere: instance } = await Sphere.init({
+        let { sphere: instance } = await Sphere.init({
           ...browserProviders,
           l1: {},
           discoverAddresses: false, // Run separately below for UX
           onProgress: setInitProgress,
         });
+
+        // UXF Profile mode + safe migration (re-entry-safe).
+        //
+        // When IS_UXF_BUILD: try to migrate legacy tokens into
+        // Profile-backed storage (OrbitDB + aggregator pointer). The
+        // helper is idempotent — on subsequent loads the marker
+        // short-circuits the full work, so this is a one-shot per
+        // wallet. On success we swap providers and re-init Sphere; on
+        // failure we keep the legacy instance running so the user
+        // sees their balance (DO NOT strand the wallet).
+        //
+        // For wallets created FRESH under Profile (no legacy token
+        // data exists), the migration helper's source.load() returns
+        // an empty snapshot, target.save() is a no-op write, and the
+        // marker is stamped — making the second boot's call a fast
+        // marker-skip. This is safe and idempotent.
+        //
+        // Known limitation (acceptable for first-boot only): the helper
+        // snapshots `legacy.tokenStorage` once at the start. Tokens that
+        // arrive on the transport between snapshot and re-init land in
+        // legacy storage but NOT in Profile. The marker is then stamped,
+        // so the next boot won't re-migrate them. In practice the window
+        // is ~1-2 s on small wallets; after the first successful boot
+        // the wallet runs Profile-only so the race can't recur. A
+        // future SDK enhancement could add incremental migration; for
+        // now we accept the rare loss because the alternative
+        // (transport disconnect during migration) breaks DM delivery
+        // for the full migration window too.
+        if (IS_UXF_BUILD) {
+          const profileResult = await runProfileMigration({
+            legacyProviders: browserProviders,
+            sphere: instance,
+            network,
+            setInitProgress,
+          });
+          if (profileResult) {
+            // Migration succeeded (or marker said it already had). Swap
+            // tokenStorage + storage to the Profile-backed versions and
+            // delete `ipfsTokenStorage` so `setupIpfsSync` becomes a
+            // no-op — Profile's OrbitDB replication is the wallet-sync
+            // path now; keeping the legacy IPNS provider on top would
+            // create a redundant + deprecated sync backend.
+            //
+            // `force: true` skips the legacy provider's awaitNextFlush
+            // gate. The legacy Sphere instance only read identity — no
+            // writes are queued — and we're discarding its providers
+            // anyway. A slow IPNS-pin flush here would otherwise block
+            // the migration for 30s+.
+            await instance.destroy({ force: true, reason: 'uxf-profile-swap' });
+            sphereRef.current = null;
+            browserProviders.storage = profileResult.profileStorage;
+            browserProviders.tokenStorage = profileResult.profileTokenStorage;
+            delete browserProviders.ipfsTokenStorage;
+            setProviders({ ...browserProviders });
+
+            // Re-point TokenRegistry's persistent cache at Profile
+            // storage. The earlier `TokenRegistry.configure(...)` call
+            // captured the now-discarded legacy storage handle; without
+            // this re-configure, cache writes would silently target a
+            // disconnected provider.
+            TokenRegistry.configure({
+              remoteUrl: netConfig.tokenRegistryUrl,
+              storage: browserProviders.storage,
+            });
+
+            // Re-init Sphere with the swapped providers. Token data is
+            // already in Profile storage; init reads it from there.
+            setInitProgress({ step: 'initializing', message: 'Loading Profile storage…' });
+            const reinit = await Sphere.init({
+              ...browserProviders,
+              l1: {},
+              discoverAddresses: false,
+              onProgress: setInitProgress,
+            });
+            instance = reinit.sphere;
+          }
+          // On migration failure, `instance` remains the legacy-backed
+          // Sphere — user keeps their balance, no swap happens.
+        }
+
         setupIpfsSync(instance, browserProviders);
         setInitProgress(null);
         sphereRef.current = instance;
@@ -189,6 +282,32 @@ export function SphereProvider({
           setIsDiscoveringAddresses(false);
         });
       } else {
+        // Fresh wallet path — no existing legacy data, so no migration is
+        // needed. When IS_UXF_BUILD, swap to Profile-backed providers
+        // preemptively so the subsequent createWallet()/importWallet()
+        // call writes directly into Profile storage.
+        if (IS_UXF_BUILD) {
+          const profile = createBrowserProfileProviders({
+            network,
+            oracle: browserProviders.oracle,
+          });
+          browserProviders.storage = profile.storage;
+          browserProviders.tokenStorage = profile.tokenStorage;
+          // Drop legacy IPNS-based wallet sync — Profile's OrbitDB
+          // replication handles cross-device sync now. `setupIpfsSync`
+          // guards on `ipfsTokenStorage`, so deleting it makes the call
+          // a safe no-op.
+          delete browserProviders.ipfsTokenStorage;
+          setProviders({ ...browserProviders });
+
+          // Re-point TokenRegistry at Profile storage (see comment in
+          // the exists branch above).
+          TokenRegistry.configure({
+            remoteUrl: netConfig.tokenRegistryUrl,
+            storage: browserProviders.storage,
+          });
+        }
+
         // Pre-connect transport for nametag lookups during onboarding
         const transport = browserProviders.transport;
         await transport.connect();

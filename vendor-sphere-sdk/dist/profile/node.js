@@ -4598,6 +4598,43 @@ async function tryReadFromSidecar(gateway, cid) {
     return null;
   }
 }
+async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  let lastError = null;
+  for (const gateway of effectiveGateways) {
+    try {
+      const url = `${gateway.replace(/\/$/, "")}/api/v0/dag/put?input-codec=raw&store-codec=raw&pin=true&hash=sha2-256`;
+      const form = new FormData();
+      form.append("data", new Blob([data]), "data");
+      const response = await fetch(url, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status} ${response.statusText} from ${gateway}`);
+        continue;
+      }
+      const result = await response.json();
+      const returnedCid = result.Cid?.["/"] ?? result.Hash;
+      if (!returnedCid) {
+        lastError = new Error("IPFS pin response did not contain a CID");
+        continue;
+      }
+      const expectedCid = CID.createV1(raw.code, createMultihash(18, sha256(data))).toString();
+      submitToSidecarBestEffort(gateway, expectedCid, data);
+      return expectedCid;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw new ProfileError(
+    "ORBITDB_WRITE_FAILED",
+    `IPFS pin failed on all gateways: ${lastError?.message ?? "unknown error"}`,
+    lastError
+  );
+}
 async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
   const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
   validateGatewayUrls(effectiveGateways);
@@ -7664,13 +7701,13 @@ var init_json = __esm({
 
 // uxf/ipld.ts
 import { encode as dagCborEncode3, decode as dagCborDecode2 } from "@ipld/dag-cbor";
-import { CID as CID4 } from "multiformats";
+import { CID as CID5 } from "multiformats";
 import { CarWriter as CarWriter2 } from "@ipld/car/writer";
 import { CarReader as CarReader3 } from "@ipld/car";
 function contentHashToCid(hash) {
   const digestBytes = hexToBytes6(hash);
   const digest = createSha256Digest(digestBytes);
-  return CID4.createV1(DAG_CBOR_CODE2, digest);
+  return CID5.createV1(DAG_CBOR_CODE2, digest);
 }
 function cidToContentHash(cid) {
   if (cid.multihash.code !== 18) {
@@ -7686,7 +7723,7 @@ function elementToIpldBlock(element) {
   const bytes = dagCborEncode3(canonical);
   const hashBytes = sha256Sync(bytes);
   const digest = createSha256Digest(hashBytes);
-  const cid = CID4.createV1(DAG_CBOR_CODE2, digest);
+  const cid = CID5.createV1(DAG_CBOR_CODE2, digest);
   return { cid, bytes };
 }
 async function exportToCar(pkg) {
@@ -7713,7 +7750,7 @@ async function exportToCar(pkg) {
   const manifestBytes = dagCborEncode3(manifestNode);
   const manifestHashBytes = sha256Sync(manifestBytes);
   const manifestDigest = createSha256Digest(manifestHashBytes);
-  const manifestCid = CID4.createV1(DAG_CBOR_CODE2, manifestDigest);
+  const manifestCid = CID5.createV1(DAG_CBOR_CODE2, manifestDigest);
   const envelopeNode = {
     version: pkg.envelope.version,
     createdAt: pkg.envelope.createdAt,
@@ -7729,7 +7766,7 @@ async function exportToCar(pkg) {
   const envelopeBytes = dagCborEncode3(envelopeNode);
   const envelopeHashBytes = sha256Sync(envelopeBytes);
   const envelopeDigest = createSha256Digest(envelopeHashBytes);
-  const envelopeCid = CID4.createV1(DAG_CBOR_CODE2, envelopeDigest);
+  const envelopeCid = CID5.createV1(DAG_CBOR_CODE2, envelopeDigest);
   const { writer, out } = CarWriter2.create([envelopeCid]);
   const chunks = [];
   const collectPromise = (async () => {
@@ -7811,7 +7848,7 @@ async function importFromCar(car) {
   assertBlockHashMatchesCid(envelopeBlock.bytes, envelopeCid, "Envelope");
   const envelopeNode = dagCborDecode2(envelopeBlock.bytes);
   const manifestCid = envelopeNode.manifest;
-  if (!(manifestCid instanceof CID4)) {
+  if (!(manifestCid instanceof CID5)) {
     throw new UxfError(
       "SERIALIZATION_ERROR",
       "Envelope does not contain a valid manifest CID link"
@@ -7899,7 +7936,7 @@ async function importFromCar(car) {
         `Invalid manifest tokenId: ${tokenId.slice(0, 32)}\u2026`
       );
     }
-    if (!(cid instanceof CID4)) {
+    if (!(cid instanceof CID5)) {
       throw new UxfError(
         "SERIALIZATION_ERROR",
         `Manifest value for tokenId ${tokenId} is not a CID`
@@ -8108,14 +8145,14 @@ function decodeIpldChildren(children) {
       result[key] = null;
     } else if (value instanceof Uint8Array) {
       result[key] = decodeChildBytes(value, key);
-    } else if (value instanceof CID4) {
+    } else if (value instanceof CID5) {
       result[key] = cidToContentHash(value);
     } else if (Array.isArray(value)) {
       result[key] = value.map((item, index) => {
         if (item instanceof Uint8Array) {
           return decodeChildBytes(item, `${key}[${index}]`);
         }
-        if (item instanceof CID4) {
+        if (item instanceof CID5) {
           return cidToContentHash(item);
         }
         throw new UxfError(
@@ -10190,7 +10227,7 @@ var init_pb_encode = __esm({
 });
 
 // node_modules/@ipld/dag-pb/src/util.js
-import { CID as CID5 } from "multiformats/cid";
+import { CID as CID6 } from "multiformats/cid";
 function toByteView(buf) {
   if (buf instanceof ArrayBuffer) {
     return new Uint8Array(buf, 0, buf.byteLength);
@@ -10206,7 +10243,7 @@ var init_util = __esm({
 });
 
 // node_modules/@ipld/dag-pb/src/index.js
-import { CID as CID6 } from "multiformats/cid";
+import { CID as CID7 } from "multiformats/cid";
 function decode2(bytes) {
   const buf = toByteView(bytes);
   const pbn = decodeNode(buf);
@@ -10218,7 +10255,7 @@ function decode2(bytes) {
     node.Links = pbn.Links.map((l) => {
       const link = {};
       try {
-        link.Hash = CID6.decode(l.Hash);
+        link.Hash = CID7.decode(l.Hash);
       } catch {
       }
       if (!link.Hash) {
@@ -10501,7 +10538,7 @@ __export(ipns_reader_exports, {
   resolveProfileSnapshot: () => resolveProfileSnapshot,
   runIpnsToPointerMigration: () => runIpnsToPointerMigration
 });
-import { CID as CID7 } from "multiformats/cid";
+import { CID as CID8 } from "multiformats/cid";
 async function loadLibp2pModules() {
   if (!libp2pModules) {
     const [crypto, peerIdMod] = await Promise.all([
@@ -10553,7 +10590,7 @@ async function fetchFileFromIpfs(gateways, cid, timeoutMs, maxSizeBytes = 1 * 10
   let lastError = null;
   let parsedCid;
   try {
-    parsedCid = CID7.parse(cid);
+    parsedCid = CID8.parse(cid);
   } catch (err) {
     throw new ProfileError(
       "BUNDLE_NOT_FOUND",
@@ -10769,7 +10806,7 @@ async function runIpnsToPointerMigration(params) {
       continue;
     }
     try {
-      CID7.parse(b.cid);
+      CID8.parse(b.cid);
     } catch {
       skippedMalformed++;
       log(`migration: dropping bundle with malformed cid=${b.cid.slice(0, 40)}\u2026`);
@@ -14339,6 +14376,255 @@ var SentLedgerWriter = class {
   }
 };
 
+// profile/cid-ref-store.ts
+init_encryption();
+init_errors();
+init_ipfs_client();
+import { CID as CID2 } from "multiformats/cid";
+var CID_REF_SCHEMA_VERSION = 1;
+var FETCH_SIZE_TOLERANCE_BYTES = 128;
+var CidRefStore = class {
+  #gateways;
+  #encryptionKey;
+  #pinTimeoutMs;
+  #fetchTimeoutMs;
+  #maxFetchBytes;
+  #log;
+  constructor(opts) {
+    if (!opts.gateways || opts.gateways.length === 0) {
+      throw new ProfileError("PROFILE_NOT_INITIALIZED", "CidRefStore: at least one IPFS gateway is required.");
+    }
+    if (!opts.encryptionKey || opts.encryptionKey.byteLength !== 32) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `CidRefStore: encryptionKey must be 32 bytes, got ${opts.encryptionKey?.byteLength ?? 0}.`
+      );
+    }
+    this.#gateways = [...opts.gateways];
+    this.#encryptionKey = opts.encryptionKey;
+    this.#pinTimeoutMs = opts.pinTimeoutMs ?? 6e4;
+    this.#fetchTimeoutMs = opts.fetchTimeoutMs ?? 3e4;
+    this.#maxFetchBytes = opts.maxFetchBytes ?? 50 * 1024 * 1024;
+    this.#log = opts.log;
+  }
+  // ── Pin primitives ──────────────────────────────────────────────────────
+  /**
+   * Pin `plaintextBytes` to IPFS. By default the bytes are AES-GCM
+   * encrypted first — the CID is content-addressed over the ciphertext
+   * and the plaintext never leaves the wallet.
+   *
+   * Pass `{ encrypted: false }` to pin the plaintext directly. The CID
+   * then becomes a global dedup key across wallets. Use ONLY for content
+   * whose transit privacy is already public (see `CidRef.enc`).
+   */
+  async pinBytes(plaintextBytes, opts) {
+    const encryptedMode = opts?.encrypted ?? true;
+    const bytesToPin = encryptedMode ? await encryptProfileValue(this.#encryptionKey, plaintextBytes) : plaintextBytes;
+    const cid = await pinToIpfs([...this.#gateways], bytesToPin, this.#pinTimeoutMs);
+    const ref = {
+      v: CID_REF_SCHEMA_VERSION,
+      cid,
+      size: bytesToPin.byteLength,
+      ts: Date.now(),
+      ...opts?.contentV !== void 0 ? { contentV: opts.contentV } : {},
+      // Only serialize `enc` when it's NON-default (false). Keeps every
+      // pre-existing ref envelope byte-identical — the flag's absence
+      // means "encrypted" per backward-compat rule.
+      ...!encryptedMode ? { enc: false } : {}
+    };
+    this.#log?.(
+      `CidRefStore.pinBytes: pinned ${bytesToPin.byteLength} bytes to ${cid} (plaintext ${plaintextBytes.byteLength} bytes, encrypted=${encryptedMode})`
+    );
+    return ref;
+  }
+  /**
+   * Convenience: JSON-stringify + UTF-8 encode + pin. Wraps the synchronous
+   * JSON.stringify throw path (circular refs, BigInt) so callers see a
+   * typed ProfileError at the async boundary.
+   *
+   * Options are forwarded to `pinBytes` — pass `{ encrypted: false }` for
+   * plaintext pins (see CidRef.enc).
+   */
+  async pinJson(value, opts) {
+    let json;
+    try {
+      json = JSON.stringify(value);
+    } catch (err) {
+      throw new ProfileError(
+        "ENCRYPTION_FAILED",
+        `CidRefStore.pinJson: JSON.stringify failed \u2014 value has circular ref or unserializable type (${err instanceof Error ? err.message : String(err)}).`,
+        err
+      );
+    }
+    if (json === void 0) {
+      throw new ProfileError(
+        "ENCRYPTION_FAILED",
+        `CidRefStore.pinJson: value is not JSON-serializable (got undefined after stringify).`
+      );
+    }
+    const bytes = new TextEncoder().encode(json);
+    return this.pinBytes(bytes, opts);
+  }
+  // ── Fetch primitives ────────────────────────────────────────────────────
+  /**
+   * Fetch encrypted blob by CID, verify content-address, decrypt, return plaintext.
+   *
+   * Size-bounding (steelman fix): the fetch cap is `ref.size +
+   * FETCH_SIZE_TOLERANCE_BYTES`, NOT the instance-wide `#maxFetchBytes`.
+   * This prevents a hostile peer (via OrbitDB LWW) from crafting a
+   * poisoned ref with small `size` but pointing to a huge blob — the
+   * fetch aborts before 50 MiB are allocated.
+   *
+   * Post-fetch the exact size is asserted — an attacker who matches the
+   * cap but pads the blob internally still triggers CID_REF_SIZE_MISMATCH.
+   *
+   * Content-verification is handled by fetchFromIpfs's internal
+   * verifyCidMatchesBytes; we rely on that invariant (redundant call
+   * removed per steelman — it masks regressions rather than catching them).
+   */
+  async fetchBytes(ref, opts) {
+    validateRef(ref);
+    if (opts?.requireEncrypted && ref.enc === false) {
+      throw new ProfileError(
+        "CID_REF_CORRUPT",
+        `CidRef declares enc=false but caller required encrypted mode \u2014 possible poisoned ref at cid=${ref.cid}. Refusing to fetch.`
+      );
+    }
+    const perRefCap = Math.min(
+      ref.size + FETCH_SIZE_TOLERANCE_BYTES,
+      this.#maxFetchBytes
+    );
+    let fetched;
+    try {
+      fetched = await fetchFromIpfs(
+        [...this.#gateways],
+        ref.cid,
+        this.#fetchTimeoutMs,
+        perRefCap
+      );
+    } catch (err) {
+      if (err instanceof ProfileError && err.code === "BUNDLE_NOT_FOUND" && /size limit|exceeded|\d+ bytes/i.test(err.message)) {
+        throw new ProfileError(
+          "CID_REF_SIZE_MISMATCH",
+          `CidRef size cap (${perRefCap} bytes from declared ${ref.size}) exceeded during fetch of cid=${ref.cid}. Possible poisoned ref from LWW replication. Original: ${err.message}`,
+          err
+        );
+      }
+      throw err;
+    }
+    const sizeDelta = Math.abs(fetched.byteLength - ref.size);
+    if (sizeDelta > FETCH_SIZE_TOLERANCE_BYTES) {
+      throw new ProfileError(
+        "CID_REF_SIZE_MISMATCH",
+        `CidRef declared size ${ref.size} but fetched ${fetched.byteLength} bytes (delta ${sizeDelta} > tolerance ${FETCH_SIZE_TOLERANCE_BYTES}). Possible replication corruption or poisoned ref at cid=${ref.cid}.`
+      );
+    }
+    const isEncrypted = ref.enc !== false;
+    if (!isEncrypted) {
+      this.#log?.(
+        `CidRefStore.fetchBytes: fetched ${fetched.byteLength} plaintext bytes from ${ref.cid} (enc=false)`
+      );
+      return fetched;
+    }
+    const plaintext = await decryptProfileValue(this.#encryptionKey, fetched);
+    this.#log?.(
+      `CidRefStore.fetchBytes: fetched ${fetched.byteLength} bytes from ${ref.cid} (plaintext ${plaintext.byteLength} bytes)`
+    );
+    return plaintext;
+  }
+  /** Convenience: fetchBytes + UTF-8 decode + JSON.parse. */
+  async fetchJson(ref, opts) {
+    const bytes = await this.fetchBytes(ref, opts);
+    const json = new TextDecoder().decode(bytes);
+    return JSON.parse(json);
+  }
+  // ── Serialization (for embedding in OpLog values) ──────────────────────
+  /** JSON-stringify a ref for embedding via `StorageProvider.set(key, stringifyRef(ref))`. */
+  static stringifyRef(ref) {
+    validateRef(ref);
+    return JSON.stringify(ref);
+  }
+  /**
+   * Try to parse a stored OpLog value as a CidRef. Returns null when the
+   * input is NOT a CidRef — callers use that signal to fall back to the
+   * legacy inline-JSON read path (PROFILE-CID-REFERENCES.md §6).
+   *
+   * Intentionally strict (hardened per steelman):
+   *   - `v === 1` (unknown versions fail-closed)
+   *   - `cid` must parse via multiformats CID.parse (rejects arbitrary
+   *     strings, legacy values that happen to have a `cid`-named field)
+   *   - `size` must be finite non-negative integer
+   *   - `ts` must be a plausible wall-clock value (> 0 — rejects legacy
+   *     values carrying `ts: 0` as an absence marker)
+   *   - `contentV` if present must be finite number
+   *
+   * Writers always produce valid refs via `pinJson` / `pinBytes` / `stringifyRef`.
+   */
+  static tryParseRef(value) {
+    if (value == null || value === "") return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const r = parsed;
+    if (r.v !== CID_REF_SCHEMA_VERSION) return null;
+    if (typeof r.cid !== "string" || r.cid.length === 0) return null;
+    try {
+      CID2.parse(r.cid);
+    } catch {
+      return null;
+    }
+    if (typeof r.size !== "number" || !Number.isFinite(r.size) || r.size < 0 || !Number.isInteger(r.size)) {
+      return null;
+    }
+    if (typeof r.ts !== "number" || !Number.isFinite(r.ts) || r.ts <= 0 || !Number.isInteger(r.ts)) {
+      return null;
+    }
+    if (r.contentV !== void 0 && (typeof r.contentV !== "number" || !Number.isFinite(r.contentV))) {
+      return null;
+    }
+    if (r.enc !== void 0 && typeof r.enc !== "boolean") {
+      return null;
+    }
+    return {
+      v: CID_REF_SCHEMA_VERSION,
+      cid: r.cid,
+      size: r.size,
+      ts: r.ts,
+      ...r.contentV !== void 0 ? { contentV: r.contentV } : {},
+      ...r.enc !== void 0 ? { enc: r.enc } : {}
+    };
+  }
+};
+function validateRef(ref) {
+  if (ref.v !== CID_REF_SCHEMA_VERSION) {
+    throw new ProfileError(
+      "CID_REF_CORRUPT",
+      `CidRef has unknown schema version ${String(ref.v)} (expected ${CID_REF_SCHEMA_VERSION}).`
+    );
+  }
+  if (typeof ref.cid !== "string" || ref.cid.length === 0) {
+    throw new ProfileError("CID_REF_CORRUPT", `CidRef has invalid cid "${String(ref.cid)}".`);
+  }
+  try {
+    CID2.parse(ref.cid);
+  } catch (err) {
+    throw new ProfileError(
+      "CID_REF_CORRUPT",
+      `CidRef has unparseable cid "${ref.cid}": ${err instanceof Error ? err.message : String(err)}`,
+      err
+    );
+  }
+  if (typeof ref.size !== "number" || !Number.isFinite(ref.size) || ref.size < 0) {
+    throw new ProfileError("CID_REF_CORRUPT", `CidRef has invalid size ${String(ref.size)}.`);
+  }
+}
+
 // profile/lamport.ts
 init_errors3();
 var Lamport = class {
@@ -14457,7 +14743,7 @@ init_oplog_envelope_io();
 // profile/pointer-wiring.ts
 init_logger();
 init_hex();
-import { CID as CID3 } from "multiformats/cid";
+import { CID as CID4 } from "multiformats/cid";
 
 // profile/aggregator-pointer/constants.ts
 init_utils();
@@ -17732,7 +18018,7 @@ init_logger();
 init_errors();
 init_ipfs_client();
 import { encode as dagCborEncode, decode as dagCborDecode } from "@ipld/dag-cbor";
-import { CID as CID2 } from "multiformats/cid";
+import { CID as CID3 } from "multiformats/cid";
 import { create as createMultihash2 } from "multiformats/hashes/digest";
 import { CarWriter } from "@ipld/car/writer";
 import { CarReader } from "@ipld/car";
@@ -17757,7 +18043,7 @@ function sha2562(bytes) {
 }
 function dagCborCid(bytes) {
   const digest = createMultihash2(18, sha2562(bytes));
-  return CID2.createV1(DAG_CBOR_CODE, digest);
+  return CID3.createV1(DAG_CBOR_CODE, digest);
 }
 function concatBytes2(chunks) {
   let total = 0;
@@ -18216,12 +18502,12 @@ function parseV3EntryGroups(groupsRaw) {
     seenGroupKeys.add(gr.groupKey);
     let entriesCidStr;
     const cidValue = gr.entriesCid;
-    const asCid = cidValue instanceof Object ? CID2.asCID(cidValue) : null;
+    const asCid = cidValue instanceof Object ? CID3.asCID(cidValue) : null;
     if (asCid !== null) {
       entriesCidStr = asCid.toString();
     } else if (typeof cidValue === "string" && cidValue.length > 0) {
       try {
-        CID2.parse(cidValue);
+        CID3.parse(cidValue);
       } catch {
         throw new ProfileError(
           "PROFILE_NOT_INITIALIZED",
@@ -18274,7 +18560,7 @@ function parseBundleEntries(bundlesRaw) {
       throw new ProfileError("PROFILE_NOT_INITIALIZED", "Bundle entry missing `cid`.");
     }
     try {
-      CID2.parse(br.cid);
+      CID3.parse(br.cid);
     } catch {
       throw new ProfileError(
         "PROFILE_NOT_INITIALIZED",
@@ -18336,7 +18622,7 @@ function buildCarFetcher(gateways) {
   return async (cidBytes) => {
     let cidString;
     try {
-      cidString = CID3.decode(cidBytes).toString();
+      cidString = CID4.decode(cidBytes).toString();
     } catch {
       return { ok: false, kind: "car_parse_failed" };
     }
@@ -18413,7 +18699,7 @@ function buildFetchAndJoin(deps) {
   return async (remoteCid, remoteVersion) => {
     let cidString;
     try {
-      cidString = CID3.decode(remoteCid).toString();
+      cidString = CID4.decode(remoteCid).toString();
     } catch (err) {
       throw new AggregatorPointerError(
         AggregatorPointerErrorCode.PROTOCOL_ERROR,
@@ -18475,7 +18761,7 @@ function buildCidDecoder() {
         return { ok: false };
       }
       const cidBytes = full.subarray(1, 1 + cidLen);
-      const cid = CID3.decode(cidBytes);
+      const cid = CID4.decode(cidBytes);
       return { ok: true, cidBytes: new Uint8Array(cid.bytes) };
     } catch {
       return { ok: false };
@@ -19301,6 +19587,55 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
       addressId,
       lamport: lamport ?? new Lamport(),
       notifyProfileDirty: this.profileDirtyNotifier ?? void 0
+    });
+  }
+  /**
+   * Issue #285 — Build a {@link CidRefStore} bound to this provider's
+   * IPFS gateway list and profile encryption key. The store pins fat
+   * OpLog payloads (DM caches, group state, processed-event ledgers,
+   * pending V5 token lists) to IPFS and returns a small CID-reference
+   * envelope to embed in the OpLog (PROFILE-CID-REFERENCES.md §2).
+   *
+   * Without this primitive the four module write sites (
+   * `CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+   * `GroupChatModule.persistProcessedEvents`,
+   * `GroupChatModule.persistMessages`) inline their full JSON in the
+   * OpLog and routinely exceed the 128 KiB cap (issue #285).
+   *
+   * Returns null when:
+   *  - encryption is disabled (no key to encrypt the IPFS payload), OR
+   *  - the encryption key has not been derived yet (setIdentity
+   *    pending — the caller MUST retry after `setIdentity`), OR
+   *  - no IPFS gateways are configured (CidRefStore mandates at least
+   *    one gateway; without one, pins cannot be persisted).
+   *
+   * Lifecycle: callers SHOULD cache the returned store and rebuild via
+   * this method on identity rotation (the captured encryption key is
+   * the one at construction time).
+   *
+   * Wired into the four module write sites via Sphere's `initialize()`
+   * calls (`Sphere.wireProfileCidRefStore`). External consumers
+   * (e.g., #286 token-storage migration) can call this directly through
+   * the public profile/index export.
+   */
+  buildCidRefStore() {
+    if (!this.encryptionEnabled) {
+      this.log("buildCidRefStore: encryption disabled \u2014 returning null");
+      return null;
+    }
+    if (this.profileEncryptionKey === null) {
+      this.log("buildCidRefStore: encryption key not yet derived (setIdentity pending) \u2014 returning null");
+      return null;
+    }
+    const gateways = this.options?.config?.ipfsGateways;
+    if (!gateways || gateways.length === 0) {
+      this.log("buildCidRefStore: no IPFS gateways configured \u2014 returning null");
+      return null;
+    }
+    return new CidRefStore({
+      gateways: [...gateways],
+      encryptionKey: this.profileEncryptionKey,
+      log: this.debug ? (msg) => this.log(msg) : void 0
     });
   }
   async disconnect() {
@@ -21106,7 +21441,7 @@ var HistoryStore = class {
 // profile/profile-token-storage/lifecycle-manager.ts
 init_hex();
 init_encryption();
-import { CID as CID8 } from "multiformats/cid";
+import { CID as CID9 } from "multiformats/cid";
 init_logger();
 init_ipfs_client();
 var PERMANENT_POINTER_ERROR_CODES = /* @__PURE__ */ new Set([
@@ -21509,7 +21844,7 @@ var LifecycleManager = class {
       }
       if (recovered) {
         try {
-          const recoveredCidStr = CID8.decode(recovered.cid).toString();
+          const recoveredCidStr = CID9.decode(recovered.cid).toString();
           if (recoveredCidStr === snapshotCid) {
             this.host.log(
               `Shutdown durability: aggregator read-back matched snapshot ${snapshotCid} (version=${recovered.version})`
@@ -21691,7 +22026,7 @@ var LifecycleManager = class {
       }
       if (recovered) {
         try {
-          const recoveredStr = CID8.decode(recovered.cid).toString();
+          const recoveredStr = CID9.decode(recovered.cid).toString();
           if (recoveredStr === snapshotCid) {
             this.host.log(
               `Profile durability: aggregator read-back matched ${snapshotCid} (version=${recovered.version})`
@@ -21841,7 +22176,7 @@ var LifecycleManager = class {
     }
     const inFlight = (async () => {
       try {
-        const cidBytes = CID8.parse(cidString).bytes;
+        const cidBytes = CID9.parse(cidString).bytes;
         const result = await pointer.publish(async () => cidBytes);
         this.host.setLastDiscoveredPointerCid(cidString);
         this.host.setPendingPublishCid(null);
@@ -22063,7 +22398,7 @@ var LifecycleManager = class {
     }
     let cidString;
     try {
-      cidString = CID8.decode(recovered.cid).toString();
+      cidString = CID9.decode(recovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer recover: failed to decode recovered CID bytes: ${msg}`);
@@ -22248,7 +22583,7 @@ var LifecycleManager = class {
     }
     let cidString;
     try {
-      cidString = CID8.decode(recovered.cid).toString();
+      cidString = CID9.decode(recovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer poll: failed to decode recovered CID bytes: ${msg}`);
