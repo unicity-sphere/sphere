@@ -1,0 +1,217 @@
+{
+  "name": "@unicitylabs/sphere-sdk",
+  "version": "0.7.2",
+  "description": "Modular TypeScript SDK for Unicity wallet operations",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./impl/browser": {
+      "import": "./dist/impl/browser/index.js",
+      "require": "./dist/impl/browser/index.cjs"
+    },
+    "./impl/browser/ipfs": {
+      "import": "./dist/impl/browser/ipfs.js",
+      "require": "./dist/impl/browser/ipfs.cjs"
+    },
+    "./impl/nodejs": {
+      "import": {
+        "types": "./dist/impl/nodejs/index.d.ts",
+        "default": "./dist/impl/nodejs/index.js"
+      },
+      "require": {
+        "types": "./dist/impl/nodejs/index.d.cts",
+        "default": "./dist/impl/nodejs/index.cjs"
+      }
+    },
+    "./core": {
+      "import": {
+        "types": "./dist/core/index.d.ts",
+        "default": "./dist/core/index.js"
+      },
+      "require": {
+        "types": "./dist/core/index.d.cts",
+        "default": "./dist/core/index.cjs"
+      }
+    },
+    "./l1": {
+      "import": {
+        "types": "./dist/l1/index.d.ts",
+        "default": "./dist/l1/index.js"
+      },
+      "require": {
+        "types": "./dist/l1/index.d.cts",
+        "default": "./dist/l1/index.cjs"
+      }
+    },
+    "./connect": {
+      "import": {
+        "types": "./dist/connect/index.d.ts",
+        "default": "./dist/connect/index.js"
+      },
+      "require": {
+        "types": "./dist/connect/index.d.cts",
+        "default": "./dist/connect/index.cjs"
+      }
+    },
+    "./connect/browser": {
+      "import": {
+        "types": "./dist/impl/browser/connect/index.d.ts",
+        "default": "./dist/impl/browser/connect/index.js"
+      },
+      "require": {
+        "types": "./dist/impl/browser/connect/index.d.cts",
+        "default": "./dist/impl/browser/connect/index.cjs"
+      }
+    },
+    "./connect/nodejs": {
+      "import": {
+        "types": "./dist/impl/nodejs/connect/index.d.ts",
+        "default": "./dist/impl/nodejs/connect/index.js"
+      },
+      "require": {
+        "types": "./dist/impl/nodejs/connect/index.d.cts",
+        "default": "./dist/impl/nodejs/connect/index.cjs"
+      }
+    },
+    "./uxf": {
+      "import": {
+        "types": "./dist/uxf/index.d.ts",
+        "default": "./dist/uxf/index.js"
+      },
+      "require": {
+        "types": "./dist/uxf/index.d.cts",
+        "default": "./dist/uxf/index.cjs"
+      }
+    },
+    "./profile": {
+      "import": {
+        "types": "./dist/profile/index.d.ts",
+        "default": "./dist/profile/index.js"
+      },
+      "require": {
+        "types": "./dist/profile/index.d.cts",
+        "default": "./dist/profile/index.cjs"
+      }
+    },
+    "./profile/browser": {
+      "import": {
+        "types": "./dist/profile/browser.d.ts",
+        "default": "./dist/profile/browser.js"
+      },
+      "require": {
+        "types": "./dist/profile/browser.d.cts",
+        "default": "./dist/profile/browser.cjs"
+      }
+    },
+    "./profile/node": {
+      "import": {
+        "types": "./dist/profile/node.d.ts",
+        "default": "./dist/profile/node.js"
+      },
+      "require": {
+        "types": "./dist/profile/node.d.cts",
+        "default": "./dist/profile/node.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:watch": "tsup --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:relay": "vitest run --config vitest.relay.config.ts",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "cli": "echo 'The CLI has moved to @unicity-sphere/cli — install it with: npm install -g @unicity-sphere/cli' && exit 1"
+  },
+  "keywords": [
+    "unicity",
+    "wallet",
+    "sdk",
+    "crypto",
+    "nostr",
+    "ipfs"
+  ],
+  "author": "Unicity Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/unicity-sphere/sphere-sdk.git"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-gossipsub": "^14.1.2",
+    "@ipld/car": "^5.4.2",
+    "@ipld/dag-cbor": "^9.2.5",
+    "@libp2p/bootstrap": "^12.0.11",
+    "@libp2p/crypto": "^5.1.13",
+    "@libp2p/peer-id": "^6.0.4",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@orbitdb/core": "^3.0.2",
+    "@unicitylabs/nostr-js-sdk": "^0.5.0",
+    "@unicitylabs/state-transition-sdk": "1.6.1-rc.f37cb85",
+    "async-mutex": "^0.5.0",
+    "bip39": "^3.1.0",
+    "blockstore-fs": "^4.0.1",
+    "buffer": "^6.0.3",
+    "canonicalize": "^3.0.0",
+    "crypto-js": "^4.2.0",
+    "elliptic": "^6.6.1",
+    "helia": "^6.1.1",
+    "ipns": "^10.0.0",
+    "multiformats": "^13.4.2",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/crypto-js": "^4.2.2",
+    "@types/elliptic": "^6.4.18",
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "@unicitylabs/infra-probe": "^0.4.0",
+    "eslint": "^9.39.2",
+    "fake-indexeddb": "^6.2.5",
+    "fast-check": "^4.7.0",
+    "testcontainers": "^11.11.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.6.0",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^2.0.0",
+    "ws": "^8.18.1"
+  },
+  "peerDependencies": {
+    "ws": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

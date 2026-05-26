@@ -82,6 +82,20 @@
   --scrollbar-track: transparent;
 }
 
+/* UXF build accent — greenish palette overlaid on top of the base theme.
+   Applied when <html> carries the `uxf` class (set by UxfThemeInitializer). */
+.uxf {
+  --color-brand-uxf: #22c55e;
+  --color-brand-uxf-dark: #16a34a;
+  --color-brand-uxf-glass: rgba(34, 197, 94, 0.15);
+  --color-brand-uxf-border: rgba(34, 197, 94, 0.30);
+  --color-brand-uxf-glow: rgba(34, 197, 94, 0.35);
+  --color-brand-uxf-dim: rgba(34, 197, 94, 0.08);
+  /* Override the brand-orange surface hover/active with green equivalents */
+  --color-surface-hover: rgba(34, 197, 94, 0.06);
+  --color-surface-active: rgba(34, 197, 94, 0.12);
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;

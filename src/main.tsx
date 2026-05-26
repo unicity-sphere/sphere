@@ -6,6 +6,8 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queryClient'
 import { ThemeInitializer } from './components/theme'
+import { UxfThemeInitializer, UxfMigrationPrompt } from './components/uxf'
+import { IS_UXF_BUILD } from './config/uxf'
 import { SphereProvider } from './sdk/SphereProvider'
 import { ServicesProvider } from './contexts/ServicesProvider'
 import { ConnectProvider } from './components/connect'
@@ -34,10 +36,12 @@ createRoot(document.getElementById('root')!).render(
         <ServicesProvider>
           <ConnectProvider>
             <ThemeInitializer>
+              {IS_UXF_BUILD && <UxfThemeInitializer />}
               <BrowserRouter basename={import.meta.env.BASE_URL}>
                 <App />
               </BrowserRouter>
               <ToastContainer />
+              {IS_UXF_BUILD && <UxfMigrationPrompt />}
             </ThemeInitializer>
           </ConnectProvider>
         </ServicesProvider>
