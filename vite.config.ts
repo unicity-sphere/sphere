@@ -27,6 +27,14 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       nodePolyfills({
         protocolImports: true,
+        // Explicitly polyfill `fs` (covers `fs/promises`) so that
+        // unreachable Node-only branches inside sphere-sdk's Profile
+        // bundle (e.g. defaultNodeLockPrimitives, which is wrapped in a
+        // never-called-in-browser code path but contains a static
+        // `await import("fs/promises")` Vite resolves at build time)
+        // don't break the production build. The polyfill resolves to an
+        // empty module in the browser; the code path is never executed.
+        include: ['fs'],
         globals: {
           Buffer: 'build',
         },
@@ -103,6 +111,24 @@ export default defineConfig(({ mode }) => {
         'vite-plugin-node-polyfills/shims/buffer': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/buffer'),
         'vite-plugin-node-polyfills/shims/process': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/process'),
         'vite-plugin-node-polyfills/shims/global': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/global'),
+        // sphere-sdk's Profile browser bundle has unreachable Node-only
+        // branches (defaultNodeLockPrimitives, the
+        // FsBlockstore fallback) that do static `await import(...)` of
+        // Node-only modules. Vite resolves those strings at build time
+        // even though the branches are never executed in the browser;
+        // without explicit aliases the resolver chases either:
+        //   - `node-stdlib-browser/.../empty.js/promises` (file-as-dir
+        //     when `fs` is mapped to an empty file), or
+        //   - real npm packages that themselves `import "node:fs"`
+        //     (blockstore-fs, proper-lockfile).
+        // Map every Node-only target to the empty mock so the build
+        // succeeds; runtime never actually calls them.
+        'fs/promises': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'node:fs/promises': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'node:fs': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        fs: path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'blockstore-fs': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'proper-lockfile': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
       },
     },
     build: {
