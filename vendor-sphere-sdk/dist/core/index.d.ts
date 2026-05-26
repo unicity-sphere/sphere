@@ -18814,6 +18814,15 @@ declare class GroupChatModule {
     private _lastPinnedMembersByGroup;
     private _lastPinnedMessagesByGroup;
     /**
+     * Issue #285 — `processedEvents` (NIP-29 event ID dedup ledger) memo.
+     * Grows unbounded with relay activity (observed 263 KB after routine
+     * use) and was the second-worst soft-warn offender behind
+     * `groupChatMembers`. Pattern A encrypted pin (per-wallet view —
+     * dedup across wallets has no value).
+     */
+    private _lastPinnedProcessedEventsJson;
+    private _lastPinnedProcessedEventsRef;
+    /**
      * Pattern B per-message CID cache — maps a message's serialized JSON
      * to the CID it was pinned under. Lets repeated persists for the same
      * group reuse CIDs for unchanged messages (saves ~N pin round-trips
@@ -18964,6 +18973,19 @@ declare class GroupChatModule {
      * other CID-refs migration in the suite.
      */
     private persistMembers;
+    /**
+     * Persist the NIP-29 event ID dedup ledger. The ledger grows
+     * unbounded with relay activity — observed 263 KB on routine sphere.telco
+     * use, which was the second-worst PAYLOAD-SIZE soft-warn after
+     * `groupChatMembers` (issue #285).
+     *
+     * Encryption policy: ENCRYPTED. The ledger is a per-wallet privacy
+     * footprint (it reveals which NIP-29 events this wallet has
+     * processed — including private/invite-only groups). Dedup across
+     * wallets is not a goal; the canonical-content-addressed property
+     * of plaintext pins would actively leak group-membership signal to
+     * any IPFS observer.
+     */
     private persistProcessedEvents;
     private checkAndClearOnRelayChange;
     private wrapMessageContent;
@@ -22120,6 +22142,33 @@ declare class Sphere {
      *                  to derive the addressId scope for both writers).
      */
     private wireProfilePersistedSendStorage;
+    /**
+     * Issue #285 — Construct a {@link CidRefStore} via the storage
+     * provider's `buildCidRefStore()` helper when available.
+     *
+     * The four fat-data OpLog write sites
+     * (`CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+     * `GroupChatModule.persistProcessedEvents`,
+     * `GroupChatModule.persistMessages`) — plus `PaymentsModule` pending
+     * V5 tokens and `AccountingModule` invoice ledger — accept an
+     * optional CidRefStore via their `initialize()` deps. Without one,
+     * each falls through to inline JSON storage which routinely exceeds
+     * the 128 KiB Profile OpLog cap (3.98 MB observed for the
+     * `announcements` group's `groupChatMembers` blob).
+     *
+     * Best-effort: when the storage provider is not a
+     * `ProfileStorageProvider`, when encryption is disabled, when the
+     * identity has not been set yet, or when no IPFS gateways are
+     * configured, this returns `null` and the modules retain their
+     * legacy inline behaviour (still bounded by the 128 KiB cap; the
+     * existing PAYLOAD-SIZE soft-warn will fire on offending writes).
+     *
+     * The returned store is cached per-Sphere-instance. Identity
+     * rotation (`load()` switching to a different address) MUST
+     * `_cidRefStore = null` to force a rebuild — the captured
+     * encryption key is the one at construction time.
+     */
+    private buildCidRefStoreOrNull;
     /**
      * Ensure the transport multiplexer exists and register an address.
      * Creates the mux on first call. Returns an AddressTransportAdapter

@@ -10257,11 +10257,11 @@ function toByteView(buf) {
   }
   return buf;
 }
-var import_cid4, textEncoder2;
+var import_cid5, textEncoder2;
 var init_util = __esm({
   "node_modules/@ipld/dag-pb/src/util.js"() {
     "use strict";
-    import_cid4 = require("multiformats/cid");
+    import_cid5 = require("multiformats/cid");
     textEncoder2 = new TextEncoder();
   }
 });
@@ -10278,7 +10278,7 @@ function decode2(bytes) {
     node.Links = pbn.Links.map((l) => {
       const link = {};
       try {
-        link.Hash = import_cid5.CID.decode(l.Hash);
+        link.Hash = import_cid6.CID.decode(l.Hash);
       } catch {
       }
       if (!link.Hash) {
@@ -10295,11 +10295,11 @@ function decode2(bytes) {
   }
   return node;
 }
-var import_cid5;
+var import_cid6;
 var init_src = __esm({
   "node_modules/@ipld/dag-pb/src/index.js"() {
     "use strict";
-    import_cid5 = require("multiformats/cid");
+    import_cid6 = require("multiformats/cid");
     init_pb_decode();
     init_pb_encode();
     init_util();
@@ -10614,7 +10614,7 @@ async function fetchFileFromIpfs(gateways, cid, timeoutMs, maxSizeBytes = 1 * 10
   let lastError = null;
   let parsedCid;
   try {
-    parsedCid = import_cid6.CID.parse(cid);
+    parsedCid = import_cid7.CID.parse(cid);
   } catch (err) {
     throw new ProfileError(
       "BUNDLE_NOT_FOUND",
@@ -10830,7 +10830,7 @@ async function runIpnsToPointerMigration(params) {
       continue;
     }
     try {
-      import_cid6.CID.parse(b.cid);
+      import_cid7.CID.parse(b.cid);
     } catch {
       skippedMalformed++;
       log(`migration: dropping bundle with malformed cid=${b.cid.slice(0, 40)}\u2026`);
@@ -10856,13 +10856,13 @@ async function runIpnsToPointerMigration(params) {
   );
   return { migrated: true, bundlesImported: imported };
 }
-var import_cid6, PROFILE_IPNS_HKDF_INFO, LEGACY_IPNS_SEQUENCE_KEY, MIGRATION_DONE_KEY, SNAPSHOT_VERSION, libp2pModules;
+var import_cid7, PROFILE_IPNS_HKDF_INFO, LEGACY_IPNS_SEQUENCE_KEY, MIGRATION_DONE_KEY, SNAPSHOT_VERSION, libp2pModules;
 var init_ipns_reader = __esm({
   "profile/migration/ipns-reader.ts"() {
     "use strict";
     init_hkdf();
     init_sha2();
-    import_cid6 = require("multiformats/cid");
+    import_cid7 = require("multiformats/cid");
     init_ipfs_cache();
     init_ipfs_http_client();
     init_crypto();
@@ -10882,6 +10882,8 @@ var profile_exports = {};
 __export(profile_exports, {
   CACHE_ONLY_KEYS: () => CACHE_ONLY_KEYS,
   CAS_MAX_RETRIES: () => CAS_MAX_RETRIES,
+  CID_REF_SCHEMA_VERSION: () => CID_REF_SCHEMA_VERSION,
+  CidRefStore: () => CidRefStore,
   ConsolidationEngine: () => ConsolidationEngine,
   DEFAULT_ENCRYPTION_CONFIG: () => DEFAULT_ENCRYPTION_CONFIG,
   DEFAULT_LIST_KEYS_MAX_RESULTS: () => DEFAULT_LIST_KEYS_MAX_RESULTS,
@@ -10903,7 +10905,9 @@ __export(profile_exports, {
   ProfileMigration: () => ProfileMigration,
   ProfileStorageProvider: () => ProfileStorageProvider,
   ProfileTokenStorageProvider: () => ProfileTokenStorageProvider,
+  TOKEN_STORAGE_MIGRATION_MARKER_VERSION: () => TOKEN_STORAGE_MIGRATION_MARKER_VERSION,
   auditKeyFor: () => auditKeyFor,
+  clearTokenStorageMigrationMarker: () => clearTokenStorageMigrationMarker,
   computeAddressId: () => computeAddressId,
   conflictingTokenIds: () => conflictingTokenIds,
   createProfileProviders: () => createProfileProviders,
@@ -10921,8 +10925,12 @@ __export(profile_exports, {
   importLegacyTokens: () => importLegacyTokens,
   invalidKeyFor: () => invalidKeyFor,
   isConflictingStatus: () => isConflictingStatus,
+  isTokenStorageMigrationComplete: () => isTokenStorageMigrationComplete,
   mergeAuditEntry: () => mergeAuditEntry,
   mergeManifestEntry: () => mergeManifestEntry,
+  migrateLegacyToProfile: () => migrateLegacyToProfile,
+  migrateProfileToLegacy: () => migrateProfileToLegacy,
+  migrateTokenStorage: () => migrateTokenStorage,
   pinCarBlocksToIpfs: () => pinCarBlocksToIpfs,
   pinToIpfs: () => pinToIpfs,
   verifyCidAccessible: () => verifyCidAccessible
@@ -12582,6 +12590,17 @@ var STORAGE_KEYS = {
   ...STORAGE_KEYS_GLOBAL,
   ...STORAGE_KEYS_ADDRESS
 };
+function getAddressId(directAddress) {
+  let hash = directAddress;
+  if (hash.startsWith("DIRECT://")) {
+    hash = hash.slice(9);
+  } else if (hash.startsWith("DIRECT:")) {
+    hash = hash.slice(7);
+  }
+  const first = hash.slice(0, 6).toLowerCase();
+  const last = hash.slice(-6).toLowerCase();
+  return `DIRECT_${first}_${last}`;
+}
 var BUILTIN_IPFS_GATEWAYS = [
   "https://unicity-ipfs1.dyndns.org"
 ];
@@ -14934,6 +14953,255 @@ var SentLedgerWriter = class {
   }
 };
 
+// profile/cid-ref-store.ts
+var import_cid2 = require("multiformats/cid");
+init_encryption();
+init_errors();
+init_ipfs_client();
+var CID_REF_SCHEMA_VERSION = 1;
+var FETCH_SIZE_TOLERANCE_BYTES = 128;
+var CidRefStore = class {
+  #gateways;
+  #encryptionKey;
+  #pinTimeoutMs;
+  #fetchTimeoutMs;
+  #maxFetchBytes;
+  #log;
+  constructor(opts) {
+    if (!opts.gateways || opts.gateways.length === 0) {
+      throw new ProfileError("PROFILE_NOT_INITIALIZED", "CidRefStore: at least one IPFS gateway is required.");
+    }
+    if (!opts.encryptionKey || opts.encryptionKey.byteLength !== 32) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `CidRefStore: encryptionKey must be 32 bytes, got ${opts.encryptionKey?.byteLength ?? 0}.`
+      );
+    }
+    this.#gateways = [...opts.gateways];
+    this.#encryptionKey = opts.encryptionKey;
+    this.#pinTimeoutMs = opts.pinTimeoutMs ?? 6e4;
+    this.#fetchTimeoutMs = opts.fetchTimeoutMs ?? 3e4;
+    this.#maxFetchBytes = opts.maxFetchBytes ?? 50 * 1024 * 1024;
+    this.#log = opts.log;
+  }
+  // ── Pin primitives ──────────────────────────────────────────────────────
+  /**
+   * Pin `plaintextBytes` to IPFS. By default the bytes are AES-GCM
+   * encrypted first — the CID is content-addressed over the ciphertext
+   * and the plaintext never leaves the wallet.
+   *
+   * Pass `{ encrypted: false }` to pin the plaintext directly. The CID
+   * then becomes a global dedup key across wallets. Use ONLY for content
+   * whose transit privacy is already public (see `CidRef.enc`).
+   */
+  async pinBytes(plaintextBytes, opts) {
+    const encryptedMode = opts?.encrypted ?? true;
+    const bytesToPin = encryptedMode ? await encryptProfileValue(this.#encryptionKey, plaintextBytes) : plaintextBytes;
+    const cid = await pinToIpfs([...this.#gateways], bytesToPin, this.#pinTimeoutMs);
+    const ref = {
+      v: CID_REF_SCHEMA_VERSION,
+      cid,
+      size: bytesToPin.byteLength,
+      ts: Date.now(),
+      ...opts?.contentV !== void 0 ? { contentV: opts.contentV } : {},
+      // Only serialize `enc` when it's NON-default (false). Keeps every
+      // pre-existing ref envelope byte-identical — the flag's absence
+      // means "encrypted" per backward-compat rule.
+      ...!encryptedMode ? { enc: false } : {}
+    };
+    this.#log?.(
+      `CidRefStore.pinBytes: pinned ${bytesToPin.byteLength} bytes to ${cid} (plaintext ${plaintextBytes.byteLength} bytes, encrypted=${encryptedMode})`
+    );
+    return ref;
+  }
+  /**
+   * Convenience: JSON-stringify + UTF-8 encode + pin. Wraps the synchronous
+   * JSON.stringify throw path (circular refs, BigInt) so callers see a
+   * typed ProfileError at the async boundary.
+   *
+   * Options are forwarded to `pinBytes` — pass `{ encrypted: false }` for
+   * plaintext pins (see CidRef.enc).
+   */
+  async pinJson(value, opts) {
+    let json;
+    try {
+      json = JSON.stringify(value);
+    } catch (err) {
+      throw new ProfileError(
+        "ENCRYPTION_FAILED",
+        `CidRefStore.pinJson: JSON.stringify failed \u2014 value has circular ref or unserializable type (${err instanceof Error ? err.message : String(err)}).`,
+        err
+      );
+    }
+    if (json === void 0) {
+      throw new ProfileError(
+        "ENCRYPTION_FAILED",
+        `CidRefStore.pinJson: value is not JSON-serializable (got undefined after stringify).`
+      );
+    }
+    const bytes = new TextEncoder().encode(json);
+    return this.pinBytes(bytes, opts);
+  }
+  // ── Fetch primitives ────────────────────────────────────────────────────
+  /**
+   * Fetch encrypted blob by CID, verify content-address, decrypt, return plaintext.
+   *
+   * Size-bounding (steelman fix): the fetch cap is `ref.size +
+   * FETCH_SIZE_TOLERANCE_BYTES`, NOT the instance-wide `#maxFetchBytes`.
+   * This prevents a hostile peer (via OrbitDB LWW) from crafting a
+   * poisoned ref with small `size` but pointing to a huge blob — the
+   * fetch aborts before 50 MiB are allocated.
+   *
+   * Post-fetch the exact size is asserted — an attacker who matches the
+   * cap but pads the blob internally still triggers CID_REF_SIZE_MISMATCH.
+   *
+   * Content-verification is handled by fetchFromIpfs's internal
+   * verifyCidMatchesBytes; we rely on that invariant (redundant call
+   * removed per steelman — it masks regressions rather than catching them).
+   */
+  async fetchBytes(ref, opts) {
+    validateRef(ref);
+    if (opts?.requireEncrypted && ref.enc === false) {
+      throw new ProfileError(
+        "CID_REF_CORRUPT",
+        `CidRef declares enc=false but caller required encrypted mode \u2014 possible poisoned ref at cid=${ref.cid}. Refusing to fetch.`
+      );
+    }
+    const perRefCap = Math.min(
+      ref.size + FETCH_SIZE_TOLERANCE_BYTES,
+      this.#maxFetchBytes
+    );
+    let fetched;
+    try {
+      fetched = await fetchFromIpfs(
+        [...this.#gateways],
+        ref.cid,
+        this.#fetchTimeoutMs,
+        perRefCap
+      );
+    } catch (err) {
+      if (err instanceof ProfileError && err.code === "BUNDLE_NOT_FOUND" && /size limit|exceeded|\d+ bytes/i.test(err.message)) {
+        throw new ProfileError(
+          "CID_REF_SIZE_MISMATCH",
+          `CidRef size cap (${perRefCap} bytes from declared ${ref.size}) exceeded during fetch of cid=${ref.cid}. Possible poisoned ref from LWW replication. Original: ${err.message}`,
+          err
+        );
+      }
+      throw err;
+    }
+    const sizeDelta = Math.abs(fetched.byteLength - ref.size);
+    if (sizeDelta > FETCH_SIZE_TOLERANCE_BYTES) {
+      throw new ProfileError(
+        "CID_REF_SIZE_MISMATCH",
+        `CidRef declared size ${ref.size} but fetched ${fetched.byteLength} bytes (delta ${sizeDelta} > tolerance ${FETCH_SIZE_TOLERANCE_BYTES}). Possible replication corruption or poisoned ref at cid=${ref.cid}.`
+      );
+    }
+    const isEncrypted = ref.enc !== false;
+    if (!isEncrypted) {
+      this.#log?.(
+        `CidRefStore.fetchBytes: fetched ${fetched.byteLength} plaintext bytes from ${ref.cid} (enc=false)`
+      );
+      return fetched;
+    }
+    const plaintext = await decryptProfileValue(this.#encryptionKey, fetched);
+    this.#log?.(
+      `CidRefStore.fetchBytes: fetched ${fetched.byteLength} bytes from ${ref.cid} (plaintext ${plaintext.byteLength} bytes)`
+    );
+    return plaintext;
+  }
+  /** Convenience: fetchBytes + UTF-8 decode + JSON.parse. */
+  async fetchJson(ref, opts) {
+    const bytes = await this.fetchBytes(ref, opts);
+    const json = new TextDecoder().decode(bytes);
+    return JSON.parse(json);
+  }
+  // ── Serialization (for embedding in OpLog values) ──────────────────────
+  /** JSON-stringify a ref for embedding via `StorageProvider.set(key, stringifyRef(ref))`. */
+  static stringifyRef(ref) {
+    validateRef(ref);
+    return JSON.stringify(ref);
+  }
+  /**
+   * Try to parse a stored OpLog value as a CidRef. Returns null when the
+   * input is NOT a CidRef — callers use that signal to fall back to the
+   * legacy inline-JSON read path (PROFILE-CID-REFERENCES.md §6).
+   *
+   * Intentionally strict (hardened per steelman):
+   *   - `v === 1` (unknown versions fail-closed)
+   *   - `cid` must parse via multiformats CID.parse (rejects arbitrary
+   *     strings, legacy values that happen to have a `cid`-named field)
+   *   - `size` must be finite non-negative integer
+   *   - `ts` must be a plausible wall-clock value (> 0 — rejects legacy
+   *     values carrying `ts: 0` as an absence marker)
+   *   - `contentV` if present must be finite number
+   *
+   * Writers always produce valid refs via `pinJson` / `pinBytes` / `stringifyRef`.
+   */
+  static tryParseRef(value) {
+    if (value == null || value === "") return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const r = parsed;
+    if (r.v !== CID_REF_SCHEMA_VERSION) return null;
+    if (typeof r.cid !== "string" || r.cid.length === 0) return null;
+    try {
+      import_cid2.CID.parse(r.cid);
+    } catch {
+      return null;
+    }
+    if (typeof r.size !== "number" || !Number.isFinite(r.size) || r.size < 0 || !Number.isInteger(r.size)) {
+      return null;
+    }
+    if (typeof r.ts !== "number" || !Number.isFinite(r.ts) || r.ts <= 0 || !Number.isInteger(r.ts)) {
+      return null;
+    }
+    if (r.contentV !== void 0 && (typeof r.contentV !== "number" || !Number.isFinite(r.contentV))) {
+      return null;
+    }
+    if (r.enc !== void 0 && typeof r.enc !== "boolean") {
+      return null;
+    }
+    return {
+      v: CID_REF_SCHEMA_VERSION,
+      cid: r.cid,
+      size: r.size,
+      ts: r.ts,
+      ...r.contentV !== void 0 ? { contentV: r.contentV } : {},
+      ...r.enc !== void 0 ? { enc: r.enc } : {}
+    };
+  }
+};
+function validateRef(ref) {
+  if (ref.v !== CID_REF_SCHEMA_VERSION) {
+    throw new ProfileError(
+      "CID_REF_CORRUPT",
+      `CidRef has unknown schema version ${String(ref.v)} (expected ${CID_REF_SCHEMA_VERSION}).`
+    );
+  }
+  if (typeof ref.cid !== "string" || ref.cid.length === 0) {
+    throw new ProfileError("CID_REF_CORRUPT", `CidRef has invalid cid "${String(ref.cid)}".`);
+  }
+  try {
+    import_cid2.CID.parse(ref.cid);
+  } catch (err) {
+    throw new ProfileError(
+      "CID_REF_CORRUPT",
+      `CidRef has unparseable cid "${ref.cid}": ${err instanceof Error ? err.message : String(err)}`,
+      err
+    );
+  }
+  if (typeof ref.size !== "number" || !Number.isFinite(ref.size) || ref.size < 0) {
+    throw new ProfileError("CID_REF_CORRUPT", `CidRef has invalid size ${String(ref.size)}.`);
+  }
+}
+
 // profile/lamport.ts
 init_errors3();
 var Lamport = class {
@@ -15050,7 +15318,7 @@ init_oplog_entry();
 init_oplog_envelope_io();
 
 // profile/pointer-wiring.ts
-var import_cid3 = require("multiformats/cid");
+var import_cid4 = require("multiformats/cid");
 init_logger();
 init_hex();
 
@@ -18321,7 +18589,7 @@ init_ipfs_client();
 
 // profile/profile-lean-snapshot.ts
 var import_dag_cbor2 = require("@ipld/dag-cbor");
-var import_cid2 = require("multiformats/cid");
+var import_cid3 = require("multiformats/cid");
 init_sha2();
 var import_digest2 = require("multiformats/hashes/digest");
 var import_writer = require("@ipld/car/writer");
@@ -18350,7 +18618,7 @@ function sha2562(bytes) {
 }
 function dagCborCid(bytes) {
   const digest = (0, import_digest2.create)(18, sha2562(bytes));
-  return import_cid2.CID.createV1(DAG_CBOR_CODE, digest);
+  return import_cid3.CID.createV1(DAG_CBOR_CODE, digest);
 }
 function concatBytes2(chunks) {
   let total = 0;
@@ -18809,12 +19077,12 @@ function parseV3EntryGroups(groupsRaw) {
     seenGroupKeys.add(gr.groupKey);
     let entriesCidStr;
     const cidValue = gr.entriesCid;
-    const asCid = cidValue instanceof Object ? import_cid2.CID.asCID(cidValue) : null;
+    const asCid = cidValue instanceof Object ? import_cid3.CID.asCID(cidValue) : null;
     if (asCid !== null) {
       entriesCidStr = asCid.toString();
     } else if (typeof cidValue === "string" && cidValue.length > 0) {
       try {
-        import_cid2.CID.parse(cidValue);
+        import_cid3.CID.parse(cidValue);
       } catch {
         throw new ProfileError(
           "PROFILE_NOT_INITIALIZED",
@@ -18867,7 +19135,7 @@ function parseBundleEntries(bundlesRaw) {
       throw new ProfileError("PROFILE_NOT_INITIALIZED", "Bundle entry missing `cid`.");
     }
     try {
-      import_cid2.CID.parse(br.cid);
+      import_cid3.CID.parse(br.cid);
     } catch {
       throw new ProfileError(
         "PROFILE_NOT_INITIALIZED",
@@ -18929,7 +19197,7 @@ function buildCarFetcher(gateways) {
   return async (cidBytes) => {
     let cidString;
     try {
-      cidString = import_cid3.CID.decode(cidBytes).toString();
+      cidString = import_cid4.CID.decode(cidBytes).toString();
     } catch {
       return { ok: false, kind: "car_parse_failed" };
     }
@@ -19006,7 +19274,7 @@ function buildFetchAndJoin(deps) {
   return async (remoteCid, remoteVersion) => {
     let cidString;
     try {
-      cidString = import_cid3.CID.decode(remoteCid).toString();
+      cidString = import_cid4.CID.decode(remoteCid).toString();
     } catch (err) {
       throw new AggregatorPointerError(
         AggregatorPointerErrorCode.PROTOCOL_ERROR,
@@ -19068,7 +19336,7 @@ function buildCidDecoder() {
         return { ok: false };
       }
       const cidBytes = full.subarray(1, 1 + cidLen);
-      const cid = import_cid3.CID.decode(cidBytes);
+      const cid = import_cid4.CID.decode(cidBytes);
       return { ok: true, cidBytes: new Uint8Array(cid.bytes) };
     } catch {
       return { ok: false };
@@ -19896,6 +20164,55 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
       notifyProfileDirty: this.profileDirtyNotifier ?? void 0
     });
   }
+  /**
+   * Issue #285 — Build a {@link CidRefStore} bound to this provider's
+   * IPFS gateway list and profile encryption key. The store pins fat
+   * OpLog payloads (DM caches, group state, processed-event ledgers,
+   * pending V5 token lists) to IPFS and returns a small CID-reference
+   * envelope to embed in the OpLog (PROFILE-CID-REFERENCES.md §2).
+   *
+   * Without this primitive the four module write sites (
+   * `CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+   * `GroupChatModule.persistProcessedEvents`,
+   * `GroupChatModule.persistMessages`) inline their full JSON in the
+   * OpLog and routinely exceed the 128 KiB cap (issue #285).
+   *
+   * Returns null when:
+   *  - encryption is disabled (no key to encrypt the IPFS payload), OR
+   *  - the encryption key has not been derived yet (setIdentity
+   *    pending — the caller MUST retry after `setIdentity`), OR
+   *  - no IPFS gateways are configured (CidRefStore mandates at least
+   *    one gateway; without one, pins cannot be persisted).
+   *
+   * Lifecycle: callers SHOULD cache the returned store and rebuild via
+   * this method on identity rotation (the captured encryption key is
+   * the one at construction time).
+   *
+   * Wired into the four module write sites via Sphere's `initialize()`
+   * calls (`Sphere.wireProfileCidRefStore`). External consumers
+   * (e.g., #286 token-storage migration) can call this directly through
+   * the public profile/index export.
+   */
+  buildCidRefStore() {
+    if (!this.encryptionEnabled) {
+      this.log("buildCidRefStore: encryption disabled \u2014 returning null");
+      return null;
+    }
+    if (this.profileEncryptionKey === null) {
+      this.log("buildCidRefStore: encryption key not yet derived (setIdentity pending) \u2014 returning null");
+      return null;
+    }
+    const gateways = this.options?.config?.ipfsGateways;
+    if (!gateways || gateways.length === 0) {
+      this.log("buildCidRefStore: no IPFS gateways configured \u2014 returning null");
+      return null;
+    }
+    return new CidRefStore({
+      gateways: [...gateways],
+      encryptionKey: this.profileEncryptionKey,
+      log: this.debug ? (msg) => this.log(msg) : void 0
+    });
+  }
   async disconnect() {
     if (this.disconnectPromise) {
       return this.disconnectPromise;
@@ -20455,6 +20772,9 @@ function isArchivedKey(key) {
 }
 function isForkedKey(key) {
   return key.startsWith(FORKED_PREFIX);
+}
+function archivedKeyFromTokenId(tokenId) {
+  return `${ARCHIVED_PREFIX}${tokenId}`;
 }
 
 // profile/profile-token-storage-provider.ts
@@ -21708,7 +22028,7 @@ var HistoryStore = class {
 
 // profile/profile-token-storage/lifecycle-manager.ts
 init_hex();
-var import_cid7 = require("multiformats/cid");
+var import_cid8 = require("multiformats/cid");
 init_encryption();
 init_logger();
 init_ipfs_client();
@@ -22112,7 +22432,7 @@ var LifecycleManager = class {
       }
       if (recovered) {
         try {
-          const recoveredCidStr = import_cid7.CID.decode(recovered.cid).toString();
+          const recoveredCidStr = import_cid8.CID.decode(recovered.cid).toString();
           if (recoveredCidStr === snapshotCid) {
             this.host.log(
               `Shutdown durability: aggregator read-back matched snapshot ${snapshotCid} (version=${recovered.version})`
@@ -22294,7 +22614,7 @@ var LifecycleManager = class {
       }
       if (recovered) {
         try {
-          const recoveredStr = import_cid7.CID.decode(recovered.cid).toString();
+          const recoveredStr = import_cid8.CID.decode(recovered.cid).toString();
           if (recoveredStr === snapshotCid) {
             this.host.log(
               `Profile durability: aggregator read-back matched ${snapshotCid} (version=${recovered.version})`
@@ -22444,7 +22764,7 @@ var LifecycleManager = class {
     }
     const inFlight = (async () => {
       try {
-        const cidBytes = import_cid7.CID.parse(cidString).bytes;
+        const cidBytes = import_cid8.CID.parse(cidString).bytes;
         const result = await pointer.publish(async () => cidBytes);
         this.host.setLastDiscoveredPointerCid(cidString);
         this.host.setPendingPublishCid(null);
@@ -22505,9 +22825,9 @@ var LifecycleManager = class {
               }
             });
           } catch (broadcastErr) {
-            const errMsg = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
+            const errMsg2 = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
             this.host.log(
-              `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg}`
+              `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg2}`
             );
           }
         }
@@ -22666,7 +22986,7 @@ var LifecycleManager = class {
     }
     let cidString;
     try {
-      cidString = import_cid7.CID.decode(recovered.cid).toString();
+      cidString = import_cid8.CID.decode(recovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer recover: failed to decode recovered CID bytes: ${msg}`);
@@ -22851,7 +23171,7 @@ var LifecycleManager = class {
     }
     let cidString;
     try {
-      cidString = import_cid7.CID.decode(recovered.cid).toString();
+      cidString = import_cid8.CID.decode(recovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer poll: failed to decode recovered CID bytes: ${msg}`);
@@ -26052,6 +26372,443 @@ function emptyResult(extra) {
     rejectionsTruncated: false,
     skippedByCode: { duplicate: 0, tombstoned: 0, "genesis-exists": 0, unknown: 0 },
     ...extra
+  };
+}
+
+// profile/token-storage-migration.ts
+init_logger();
+var TOKEN_STORAGE_MIGRATION_MARKER_VERSION = 1;
+var MARKER_KEY_PREFIX_LEGACY_TO_PROFILE = "legacy_migration_v1_complete";
+var MARKER_KEY_PREFIX_PROFILE_TO_LEGACY = "profile_migration_v1_complete";
+var RESERVED_KEYS2 = /* @__PURE__ */ new Set([
+  "_meta",
+  "_tombstones",
+  "_outbox",
+  "_sent",
+  "_invalid",
+  "_history",
+  "_integrity",
+  "_audit",
+  "_finalizationQueue",
+  "_nametag",
+  "_nametags",
+  "_invalidatedNametags",
+  "_mintOutbox"
+]);
+async function migrateTokenStorage(opts) {
+  const startTime = Date.now();
+  const errors = [];
+  if (!opts.identity.directAddress) {
+    return failureResult({
+      addressId: "",
+      direction: opts.direction,
+      errors: [{ phase: "check-marker", error: "identity.directAddress is required" }],
+      dryRun: !!opts.dryRun,
+      durationMs: Date.now() - startTime
+    });
+  }
+  const addressId = getAddressId(opts.identity.directAddress);
+  const markerKey = markerKeyFor(opts.direction, addressId);
+  emitProgress(opts.onProgress, addressId, opts.direction, "check-marker", 0, 0);
+  if (!opts.force && opts.markerStorage) {
+    try {
+      const existing = await opts.markerStorage.get(markerKey);
+      if (existing && isHonoredMarkerPayload(existing)) {
+        logger.debug(
+          "TokenStorageMigration",
+          `marker present (${markerKey}); skipping (use force:true to override)`
+        );
+        return {
+          success: true,
+          addressId,
+          direction: opts.direction,
+          skippedDueToMarker: true,
+          dryRun: !!opts.dryRun,
+          tokensMigrated: 0,
+          archivedMigrated: 0,
+          tombstonesMigrated: 0,
+          outboxMigrated: 0,
+          sentMigrated: 0,
+          historyMigrated: 0,
+          auditMigrated: 0,
+          finalizationQueueMigrated: 0,
+          invalidMigrated: 0,
+          forksMigrated: 0,
+          spentTokensArchived: 0,
+          oracleProbeErrors: 0,
+          durationMs: Date.now() - startTime,
+          errors: []
+        };
+      }
+    } catch (err) {
+      errors.push({
+        phase: "check-marker",
+        error: `marker read failed: ${errMsg(err)} (proceeding)`
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "source-load", 0, 0);
+  let sourceData;
+  try {
+    const loaded = await opts.source.load();
+    if (!loaded.success || !loaded.data) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          {
+            phase: "source-load",
+            error: loaded.error ?? "source.load() returned no data"
+          }
+        ],
+        dryRun: !!opts.dryRun,
+        durationMs: Date.now() - startTime
+      });
+    }
+    sourceData = loaded.data;
+  } catch (err) {
+    return failureResult({
+      addressId,
+      direction: opts.direction,
+      errors: [...errors, { phase: "source-load", error: errMsg(err) }],
+      dryRun: !!opts.dryRun,
+      durationMs: Date.now() - startTime
+    });
+  }
+  const buckets = classifyBuckets(sourceData);
+  emitProgress(
+    opts.onProgress,
+    addressId,
+    opts.direction,
+    "oracle-probe",
+    0,
+    buckets.activeTokens.length
+  );
+  let spentTokensArchived = 0;
+  let oracleProbeErrors = 0;
+  const targetData = shallowCopyStorageData(sourceData);
+  if (opts.oracle) {
+    const pubkey = opts.identity.chainPubkey;
+    if (!pubkey) {
+      errors.push({
+        phase: "oracle-probe",
+        error: "oracle provided but identity.chainPubkey is missing \u2014 skipping probe"
+      });
+    } else {
+      const ORACLE_PROBE_CONCURRENCY = 4;
+      const candidates = buckets.activeTokens.map((entry) => ({
+        ...entry,
+        stateHash: extractCurrentStateHashFromTxf(entry.txf)
+      })).filter((c) => c.stateHash.length > 0);
+      for (let i = 0; i < candidates.length; i += ORACLE_PROBE_CONCURRENCY) {
+        const batch = candidates.slice(i, i + ORACLE_PROBE_CONCURRENCY);
+        const outcomes = await Promise.all(
+          batch.map(async (c) => {
+            try {
+              const spent = await opts.oracle.isSpent(pubkey, c.stateHash);
+              return { ok: true, key: c.key, txf: c.txf, spent };
+            } catch (err) {
+              return { ok: false, key: c.key, err };
+            }
+          })
+        );
+        for (const outcome of outcomes) {
+          if (!outcome.ok) {
+            oracleProbeErrors += 1;
+            logger.debug(
+              "TokenStorageMigration",
+              `oracle.isSpent threw for ${outcome.key}: ${errMsg(outcome.err)} (leaving in active slot)`
+            );
+            continue;
+          }
+          if (outcome.spent) {
+            const tokenId = outcome.key.startsWith("_") ? outcome.key.slice(1) : outcome.key;
+            const archivedKey = archivedKeyFromTokenId(tokenId);
+            const slot = targetData;
+            if (slot[archivedKey] !== void 0) {
+              logger.debug(
+                "TokenStorageMigration",
+                `oracle reported ${outcome.key} spent, but target already has ${archivedKey} \u2014 leaving in active slot to avoid clobbering existing archived payload`
+              );
+              continue;
+            }
+            slot[archivedKey] = outcome.txf;
+            delete slot[outcome.key];
+            spentTokensArchived += 1;
+          }
+        }
+      }
+    }
+  }
+  const sourceMeta = targetData._meta ?? {};
+  targetData._meta = {
+    version: sourceMeta.version ?? 1,
+    address: sourceMeta.address ?? (opts.identity.l1Address ?? ""),
+    formatVersion: sourceMeta.formatVersion ?? "2.0",
+    ipnsName: sourceMeta.ipnsName,
+    updatedAt: Date.now()
+  };
+  const finalBuckets = classifyBuckets(targetData);
+  const counts = {
+    tokensMigrated: finalBuckets.activeTokens.length,
+    archivedMigrated: finalBuckets.archivedTokens.length,
+    tombstonesMigrated: targetData._tombstones?.length ?? 0,
+    outboxMigrated: targetData._outbox?.length ?? 0,
+    sentMigrated: targetData._sent?.length ?? 0,
+    historyMigrated: targetData._history?.length ?? 0,
+    auditMigrated: targetData._audit?.length ?? 0,
+    finalizationQueueMigrated: targetData._finalizationQueue?.length ?? 0,
+    invalidMigrated: targetData._invalid?.length ?? 0,
+    forksMigrated: buckets.forksMigrated,
+    spentTokensArchived,
+    oracleProbeErrors
+  };
+  if (opts.dryRun) {
+    emitProgress(opts.onProgress, addressId, opts.direction, "complete", 0, 0);
+    return {
+      success: true,
+      addressId,
+      direction: opts.direction,
+      skippedDueToMarker: false,
+      dryRun: true,
+      ...counts,
+      durationMs: Date.now() - startTime,
+      errors
+    };
+  }
+  emitProgress(
+    opts.onProgress,
+    addressId,
+    opts.direction,
+    "target-save",
+    counts.tokensMigrated,
+    counts.tokensMigrated
+  );
+  try {
+    const saved = await opts.target.save(targetData);
+    if (!saved.success) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          { phase: "target-save", error: saved.error ?? "target.save() returned !success" }
+        ],
+        dryRun: false,
+        durationMs: Date.now() - startTime,
+        // Preserve the counts we computed pre-save so callers can see
+        // what would have been migrated.
+        counts
+      });
+    }
+  } catch (err) {
+    return failureResult({
+      addressId,
+      direction: opts.direction,
+      errors: [...errors, { phase: "target-save", error: errMsg(err) }],
+      dryRun: false,
+      durationMs: Date.now() - startTime,
+      counts
+    });
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "await-flush", 0, 0);
+  if (typeof opts.target.awaitNextFlush === "function") {
+    try {
+      await opts.target.awaitNextFlush();
+    } catch (err) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          { phase: "await-flush", error: `awaitNextFlush failed: ${errMsg(err)}` }
+        ],
+        dryRun: false,
+        durationMs: Date.now() - startTime,
+        counts
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "stamp-marker", 0, 0);
+  if (opts.markerStorage) {
+    const markerPayload = JSON.stringify({
+      v: TOKEN_STORAGE_MIGRATION_MARKER_VERSION,
+      direction: opts.direction,
+      addressId,
+      completedAt: Date.now(),
+      counts
+    });
+    try {
+      const markerStorageWithSetEntry = opts.markerStorage;
+      if (typeof markerStorageWithSetEntry.setEntry === "function") {
+        await markerStorageWithSetEntry.setEntry(markerKey, markerPayload, "cache_index");
+      } else {
+        await opts.markerStorage.set(markerKey, markerPayload);
+      }
+    } catch (err) {
+      errors.push({
+        phase: "stamp-marker",
+        error: `marker write failed: ${errMsg(err)} (data is durable on target)`
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "complete", 0, 0);
+  return {
+    success: true,
+    addressId,
+    direction: opts.direction,
+    skippedDueToMarker: false,
+    dryRun: false,
+    ...counts,
+    durationMs: Date.now() - startTime,
+    errors
+  };
+}
+async function migrateLegacyToProfile(opts) {
+  return migrateTokenStorage({
+    source: opts.legacy,
+    target: opts.profile,
+    direction: "legacy-to-profile",
+    identity: opts.identity,
+    oracle: opts.oracle,
+    markerStorage: opts.markerStorage,
+    onProgress: opts.onProgress,
+    dryRun: opts.dryRun,
+    force: opts.force
+  });
+}
+async function migrateProfileToLegacy(opts) {
+  return migrateTokenStorage({
+    source: opts.profile,
+    target: opts.legacy,
+    direction: "profile-to-legacy",
+    identity: opts.identity,
+    oracle: opts.oracle,
+    markerStorage: opts.markerStorage,
+    onProgress: opts.onProgress,
+    dryRun: opts.dryRun,
+    force: opts.force
+  });
+}
+async function isTokenStorageMigrationComplete(opts) {
+  if (!opts.identity.directAddress) return false;
+  const addressId = getAddressId(opts.identity.directAddress);
+  const key = markerKeyFor(opts.direction, addressId);
+  const value = await opts.markerStorage.get(key);
+  return value !== null && value !== "";
+}
+async function clearTokenStorageMigrationMarker(opts) {
+  if (!opts.identity.directAddress) return;
+  const addressId = getAddressId(opts.identity.directAddress);
+  const key = markerKeyFor(opts.direction, addressId);
+  await opts.markerStorage.remove(key);
+}
+function isHonoredMarkerPayload(raw2) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw2);
+  } catch {
+    return true;
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    return true;
+  }
+  const obj = parsed;
+  if (obj.v === void 0) {
+    return true;
+  }
+  if (typeof obj.v !== "number" || !Number.isFinite(obj.v) || obj.v < 0) {
+    return false;
+  }
+  return obj.v <= TOKEN_STORAGE_MIGRATION_MARKER_VERSION;
+}
+function markerKeyFor(direction, addressId) {
+  const prefix = direction === "legacy-to-profile" ? MARKER_KEY_PREFIX_LEGACY_TO_PROFILE : MARKER_KEY_PREFIX_PROFILE_TO_LEGACY;
+  void STORAGE_PREFIX;
+  return `${prefix}:${addressId}`;
+}
+function classifyBuckets(data) {
+  const activeTokens = [];
+  const archivedTokens = [];
+  let forksMigrated = 0;
+  for (const [key, value] of Object.entries(data)) {
+    if (RESERVED_KEYS2.has(key)) continue;
+    if (isForkedKey(key)) {
+      if (value && typeof value === "object") forksMigrated += 1;
+      continue;
+    }
+    if (!value || typeof value !== "object") continue;
+    const txf = value;
+    if (isArchivedKey(key)) {
+      archivedTokens.push({ key, txf });
+    } else if (isTokenKey(key)) {
+      activeTokens.push({ key, txf });
+    }
+  }
+  return { activeTokens, archivedTokens, forksMigrated };
+}
+function shallowCopyStorageData(data) {
+  const out = {
+    _meta: { ...data._meta }
+  };
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "_meta") continue;
+    out[key] = value;
+  }
+  return out;
+}
+function extractCurrentStateHashFromTxf(txf) {
+  if (!txf) return "";
+  if (Array.isArray(txf.transactions) && txf.transactions.length > 0) {
+    for (let i = txf.transactions.length - 1; i >= 0; i -= 1) {
+      const tx = txf.transactions[i];
+      if (tx?.inclusionProof?.authenticator?.stateHash) {
+        return tx.inclusionProof.authenticator.stateHash;
+      }
+    }
+  }
+  if (txf.genesis?.inclusionProof?.authenticator?.stateHash) {
+    return txf.genesis.inclusionProof.authenticator.stateHash;
+  }
+  return "";
+}
+function emitProgress(cb, addressId, direction, phase, processed, total) {
+  if (!cb) return;
+  try {
+    cb({ addressId, direction, phase, processed, total });
+  } catch (err) {
+    logger.debug(
+      "TokenStorageMigration",
+      `onProgress threw (ignored): ${errMsg(err)}`
+    );
+  }
+}
+function errMsg(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function failureResult(args) {
+  const c = args.counts;
+  return {
+    success: false,
+    addressId: args.addressId,
+    direction: args.direction,
+    skippedDueToMarker: false,
+    dryRun: args.dryRun,
+    tokensMigrated: c?.tokensMigrated ?? 0,
+    archivedMigrated: c?.archivedMigrated ?? 0,
+    tombstonesMigrated: c?.tombstonesMigrated ?? 0,
+    outboxMigrated: c?.outboxMigrated ?? 0,
+    sentMigrated: c?.sentMigrated ?? 0,
+    historyMigrated: c?.historyMigrated ?? 0,
+    auditMigrated: c?.auditMigrated ?? 0,
+    finalizationQueueMigrated: c?.finalizationQueueMigrated ?? 0,
+    invalidMigrated: c?.invalidMigrated ?? 0,
+    forksMigrated: c?.forksMigrated ?? 0,
+    spentTokensArchived: c?.spentTokensArchived ?? 0,
+    oracleProbeErrors: c?.oracleProbeErrors ?? 0,
+    durationMs: args.durationMs,
+    errors: args.errors
   };
 }
 
