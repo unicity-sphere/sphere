@@ -14,8 +14,6 @@ import {
   createBrowserProviders,
   type BrowserProviders,
 } from '@unicitylabs/sphere-sdk/impl/browser';
-import { createBrowserProfileProviders } from '@unicitylabs/sphere-sdk/profile/browser';
-import { IS_UXF_BUILD } from '../config/uxf';
 import { SphereContext } from './SphereContext';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
@@ -139,39 +137,6 @@ export function SphereProvider({
         market: true,
         ...getIpfsConfig(),
       });
-
-      // UXF Profile mode (issue: page-was-deprecation-drift) — when
-      // VITE_UXF_BUILD=true, override the IndexedDB-backed storage with
-      // ProfileStorageProvider (OrbitDB + aggregator pointer) and drop
-      // the legacy IpfsStorageProvider-based wallet sync. Profile mode
-      // handles cross-device wallet sync natively; keeping the IPNS
-      // path active would create a redundant (and now-deprecated) sync
-      // backend.
-      //
-      // We keep `createBrowserProviders` because we still want its
-      // `publishToIpfs` / `cidFetchGateways` outputs (used by the
-      // per-send `uxf-cid` delivery branch — independent of wallet
-      // sync). The deprecation warning emitted by the SDK at
-      // IpfsStorageProvider construction is cosmetic here; we discard
-      // the constructed instance below. A follow-up SDK opt-out
-      // (something like `tokenSync: { ipfs: { walletSyncOnly: false } }`)
-      // would let us suppress it fully.
-      if (IS_UXF_BUILD) {
-        const profileProviders = createBrowserProfileProviders({
-          network,
-          // Share the aggregator's RootTrustBase per SPEC §8.4.2 H6 so the
-          // Profile pointer layer trusts the same set of validators.
-          oracle: browserProviders.oracle,
-        });
-        browserProviders.storage = profileProviders.storage;
-        browserProviders.tokenStorage = profileProviders.tokenStorage;
-        // Drop the legacy IPNS-based wallet sync provider — Profile's
-        // OrbitDB replication is the cross-device sync path now.
-        // `setupIpfsSync` already guards on this field, so removing it
-        // turns the call into a no-op.
-        delete browserProviders.ipfsTokenStorage;
-      }
-
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
 
