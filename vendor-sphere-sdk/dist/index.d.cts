@@ -569,7 +569,81 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * converge via the existing WALKBACK_FLOOR + reconcile path
  * (just slower, ~60-90 s vs ~1 s).
  */
- | 'storage:pointer-published';
+ | 'storage:pointer-published'
+/**
+ * Issue #264 — emitted by the flush scheduler when it auto-merges
+ * a detected monotonicity gap in place (previously this fired
+ * POINTER_MONOTONICITY_VIOLATION on `storage:error` and aborted
+ * the flush). Distinct from `storage:error` so operators see
+ * auto-merges as routine convergence work, not alarms.
+ *
+ * `data` payload (see flush-scheduler.ts for the canonical shape):
+ *   - `recoveredTokenIds: string[]`   token ids re-merged from
+ *     `previousData` to satisfy the token-set invariant.
+ *   - `recoveredTokenCount: number`
+ *   - `mergedUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     inline-fetched and merged into the in-flight UXF package.
+ *   - `mergedUnknownBundleCount: number`
+ *   - `residualUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     that could not be fetched (network down, malformed CAR,
+ *     etc.) — the flush continued without them; downstream
+ *     convergence retries on the next flush.
+ *   - `residualUnknownBundleCount: number`
+ *   - `residualTokenMissingIds: string[]`   token ids the token-set
+ *     check flagged but `previousData` could not provide (only
+ *     possible when `previousData === null`).
+ *   - `residualTokenMissingCount: number`
+ *   - `recoveredOutboxIdsDroppedAsSent: string[]`   outbox-entry
+ *     ids that the SENT-wins dedup removed during the
+ *     `OperationalState` union — surfaced for operator audit.
+ *   - `recoveredOutboxIdsDroppedAsSentCount: number`
+ *   - `truncated: boolean`   true when any of the listed arrays
+ *     were capped at 100 entries for log-volume control.
+ *
+ * Informational only. The flush continues to publish the
+ * best-effort superset CAR regardless; residuals are addressed by
+ * subsequent cross-device syncs detecting the same gap and
+ * re-attempting the inline merge.
+ */
+ | 'storage:monotonicity-recovered'
+/**
+ * Issue #272 — emitted when the per-flush remote-durability
+ * HEAD-verify leg (`verifyFlushDurability`), now run as a background
+ * task detached from the synchronous flush completion path, fails
+ * for a just-pinned bundle CID and/or snapshot CID.
+ *
+ * Local-durability is unaffected: the bundle CAR pin POST returned
+ * 200, the OrbitDB bundle ref is written, and (when wired) the
+ * snapshot publish call returned ok. What this event signals is that
+ * the operator's IPFS gateway has not yet served the just-pinned
+ * CID back via HEAD within the configured deadline (default 30s).
+ * This is a gateway propagation property — not a receiver crash-
+ * safety property — and does NOT close the at-least-once Nostr ack
+ * gate. Distinct from `storage:error` (terminal fatal class).
+ *
+ * `data` carries `{ cid, snapshotCid?, code?, details? }`:
+ *   - `cid`         the bundle CID whose HEAD-verify failed
+ *   - `snapshotCid` the snapshot CID (when also verified)
+ *   - `code`        the structured error code (e.g.,
+ *                   `FLUSH_DURABILITY_TIMEOUT`)
+ *   - `details`     the failed-leg detail array from
+ *                   `verifyFlushDurability`
+ *
+ * Operator action: investigate operator Kubo gateway propagation
+ * lag if this fires repeatedly for distinct CIDs. Single-shot fires
+ * (a CID that eventually does propagate) are expected under normal
+ * testnet contention and require no action.
+ *
+ * Before #272: this same failure threw inline and forced the
+ * at-least-once gate's `awaitNextFlush` to reject, causing the
+ * Nostr `since` cursor to refuse to advance and the inbound
+ * TOKEN_TRANSFER event to replay on every reconnect. Each replay
+ * triggered another flush, each flush re-hit the same HEAD-verify
+ * timeout, producing a sustained busy-spin (134 replays for 14
+ * unique event IDs in the §C.2 soak failure observed at
+ * `integration/all-fixes` HEAD `6102d59`).
+ */
+ | 'storage:durability-deferred';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -5846,7 +5920,24 @@ interface TrackedAddress extends TrackedAddressEntry {
     /** Primary nametag (from nametag cache, without @ prefix) */
     readonly nametag?: string;
 }
-type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received';
+type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update'
+/**
+ * Issue #264 — Sphere bridge of the provider-level
+ * `storage:monotonicity-recovered` event. Fires when the
+ * flush-scheduler auto-merges a detected monotonicity gap in
+ * place: tokens re-merged from the previously-loaded baseline,
+ * unknown bundle CIDs inline-fetched + merged, OUTBOX entries
+ * dropped by SENT-wins dedup, or residuals surfaced for
+ * subsequent retries. See `StorageEventType` for the full payload
+ * shape — Sphere forwards the provider event's `data` verbatim
+ * with an added `providerId` field.
+ *
+ * Informational. Distinct from `transfer:operator-alert` /
+ * `storage:error`: auto-merges are routine convergence work, not
+ * alarms. Observability hook for dashboards plotting recovery rates,
+ * not a paging signal.
+ */
+ | 'storage:monotonicity-recovered' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received';
 interface SphereEventMap {
     'transfer:incoming': IncomingTransfer;
     'transfer:confirmed': TransferResult;
@@ -6623,6 +6714,20 @@ interface SphereEventMap {
         cid: string;
         added: number;
         removed: number;
+    };
+    'storage:monotonicity-recovered': {
+        providerId: string;
+        recoveredTokenIds: string[];
+        recoveredTokenCount: number;
+        mergedUnknownBundleCids: string[];
+        mergedUnknownBundleCount: number;
+        residualUnknownBundleCids: string[];
+        residualUnknownBundleCount: number;
+        residualTokenMissingIds: string[];
+        residualTokenMissingCount: number;
+        recoveredOutboxIdsDroppedAsSent: string[];
+        recoveredOutboxIdsDroppedAsSentCount: number;
+        truncated: boolean;
     };
     'groupchat:message': GroupMessageData;
     'groupchat:joined': {
@@ -16470,6 +16575,32 @@ interface UxfTransferFeatures {
      */
     readonly spentStateRescan?: boolean;
     /**
+     * Issue #280 — when `true` (default ON), trigger an immediate
+     * aggregator-spent rescan cycle synchronously after `load()`
+     * populates the token map. Defense-in-depth: catches tokens whose
+     * SENT/OUTBOX local records were missing (corrupt, lost, or never
+     * present — e.g. on cross-device recovery) by asking the aggregator
+     * whether each `'confirmed'` token's current destination state has
+     * been superseded. Superseded tokens are routed through the same
+     * disposition path as the periodic worker (`reason:
+     * 'off-record-spend'`).
+     *
+     * Without this flag, the SDK's periodic `SpentStateRescanWorker`
+     * eventually catches the divergence (default 5-minute interval) —
+     * but the user can attempt a double-spend in the interim. The
+     * recovery-time trigger closes that window for the high-risk
+     * post-recovery period.
+     *
+     * Requires `features.spentStateRescan === true` (the worker must
+     * be installed). When the worker is absent, this flag is a no-op.
+     * Bounded concurrency (8 by default, matches the worker's
+     * `MAX_CONCURRENT_SPENT_RESCANS`); large wallets do not serialize.
+     *
+     * Set `false` to suppress (e.g. cost-sensitive deployments accepting
+     * the periodic-sweep window, or tests that mock the aggregator).
+     */
+    readonly recoveryAggregatorCheck?: boolean;
+    /**
      * Phase 9.6.D — when `true` (default when `senderUxf` is on),
      * auto-install and start a {@link FinalizationWorkerSender} in
      * {@link PaymentsModule.initialize} so instant-mode sends drive the
@@ -18062,8 +18193,25 @@ declare class PaymentsModule {
     getAssets(coinId?: string): Promise<Asset[]>;
     /**
      * Aggregate tokens by coinId with confirmed/unconfirmed breakdown.
-     * Excludes tokens with status 'spent' or 'invalid'.
-     * Tokens with status 'transferring' are counted as unconfirmed (visible in UI as "Sending").
+     *
+     * Excludes:
+     *   - tokens with status `'spent'` or `'invalid'`;
+     *   - invoice tokens (`coinId === INVOICE_TOKEN_TYPE_HEX`) — they carry
+     *     no monetary value and only exist as ledger anchors; surfacing them
+     *     produced the phantom `: 0 (1 token)` entry in #282 on the
+     *     IPFS-recovery side, where `txfToToken` had no invoice branch and
+     *     left coinId/symbol empty;
+     *   - defensive: any residual token with empty `coinId` (catch-all for
+     *     future shapes that slip past `txfToToken`'s typed branches).
+     *
+     * Tokens with status `'transferring'` are counted as unconfirmed
+     * (visible in UI as "Sending").
+     *
+     * The returned array is sorted deterministically by symbol (ASCII
+     * case-insensitive) with coinId as the tie-breaker. Without this sort,
+     * multi-device wallets render the same asset set in different orders
+     * because the underlying `this.tokens` Map iterates in insertion order
+     * — which depends on snapshot replay sequence (#282 Residual #1).
      */
     private aggregateTokens;
     /**
@@ -20942,6 +21090,40 @@ declare const STORAGE_KEYS_GLOBAL: {
     readonly LAST_WALLET_EVENT_TS: "last_wallet_event_ts";
     /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
     readonly LAST_DM_EVENT_TS: "last_dm_event_ts";
+    /**
+     * Issue #275 — persistent dedup for Nostr wallet event IDs that have
+     * been SUCCESSFULLY processed (cursor advanced). Keyed per pubkey;
+     * stored as a JSON string array bounded by
+     * `LIMITS.PROCESSED_EVENT_IDS_CAP` (FIFO eviction).
+     *
+     * Distinct from in-memory `inFlightEventIds`: this set persists across
+     * process restarts so cross-process CLI invocations don't re-walk the
+     * full relay backlog. At-least-once is preserved because we ONLY add
+     * to this set after the event's cursor was advanced (durability ok
+     * or replay budget exhausted), never after a transient failure.
+     */
+    readonly PROCESSED_WALLET_EVENT_IDS: "processed_wallet_event_ids";
+    /**
+     * Issue #275 — persistent durability-cooldown ledger for
+     * TOKEN_TRANSFER events. Tracks `attempts` and `nextRetryAt` across
+     * process restarts so the bounded replay budget
+     * (`DURABILITY_MAX_REPLAY_ATTEMPTS = 3`) accumulates across CLI
+     * invocations rather than resetting per-process.
+     */
+    readonly FAILED_EVENT_COOLDOWNS: "failed_event_cooldowns";
+    /**
+     * Issue #275 — persistent dedup set for the MultiAddressTransportMux
+     * level. The Mux maintains its own `processedEventIds` (independent
+     * of NostrTransportProvider's set) and dispatches to per-address
+     * adapters. Without persistence, every fresh CLI invocation
+     * re-walked the relay backlog through the Mux path as well as the
+     * outer-provider path. Bounded by `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+     * Per-wallet storage scope: each Sphere instance has its own
+     * `storage` provider, so a bare global key is sufficient (no
+     * per-pubkey suffix needed because the Mux spans all per-wallet
+     * addresses).
+     */
+    readonly MUX_PROCESSED_EVENT_IDS: "mux_processed_event_ids";
     /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
     readonly GROUP_CHAT_RELAY_URL: "group_chat_relay_url";
     /** Cached token registry JSON (fetched from remote) */
@@ -21132,6 +21314,40 @@ declare const STORAGE_KEYS: {
     readonly LAST_WALLET_EVENT_TS: "last_wallet_event_ts";
     /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
     readonly LAST_DM_EVENT_TS: "last_dm_event_ts";
+    /**
+     * Issue #275 — persistent dedup for Nostr wallet event IDs that have
+     * been SUCCESSFULLY processed (cursor advanced). Keyed per pubkey;
+     * stored as a JSON string array bounded by
+     * `LIMITS.PROCESSED_EVENT_IDS_CAP` (FIFO eviction).
+     *
+     * Distinct from in-memory `inFlightEventIds`: this set persists across
+     * process restarts so cross-process CLI invocations don't re-walk the
+     * full relay backlog. At-least-once is preserved because we ONLY add
+     * to this set after the event's cursor was advanced (durability ok
+     * or replay budget exhausted), never after a transient failure.
+     */
+    readonly PROCESSED_WALLET_EVENT_IDS: "processed_wallet_event_ids";
+    /**
+     * Issue #275 — persistent durability-cooldown ledger for
+     * TOKEN_TRANSFER events. Tracks `attempts` and `nextRetryAt` across
+     * process restarts so the bounded replay budget
+     * (`DURABILITY_MAX_REPLAY_ATTEMPTS = 3`) accumulates across CLI
+     * invocations rather than resetting per-process.
+     */
+    readonly FAILED_EVENT_COOLDOWNS: "failed_event_cooldowns";
+    /**
+     * Issue #275 — persistent dedup set for the MultiAddressTransportMux
+     * level. The Mux maintains its own `processedEventIds` (independent
+     * of NostrTransportProvider's set) and dispatches to per-address
+     * adapters. Without persistence, every fresh CLI invocation
+     * re-walked the relay backlog through the Mux path as well as the
+     * outer-provider path. Bounded by `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+     * Per-wallet storage scope: each Sphere instance has its own
+     * `storage` provider, so a bare global key is sufficient (no
+     * per-pubkey suffix needed because the Mux spans all per-wallet
+     * addresses).
+     */
+    readonly MUX_PROCESSED_EVENT_IDS: "mux_processed_event_ids";
     /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
     readonly GROUP_CHAT_RELAY_URL: "group_chat_relay_url";
     /** Cached token registry JSON (fetched from remote) */
@@ -21322,6 +21538,21 @@ declare const LIMITS: {
     readonly MEMO_MAX_LENGTH: 500;
     /** Max message length */
     readonly MESSAGE_MAX_LENGTH: 10000;
+    /**
+     * Issue #275 — FIFO cap for persisted dedup IDs in
+     * `STORAGE_KEYS_GLOBAL.PROCESSED_WALLET_EVENT_IDS`. Sized for several
+     * days of Nostr relay retention (typical relay holds 1-7 days). A
+     * 10k cap at ~70 bytes per id is ~700KB serialized — well under
+     * IndexedDB / file storage budgets.
+     */
+    readonly PROCESSED_EVENT_IDS_CAP: 10000;
+    /**
+     * Issue #275 — debounce interval for persisted dedup-set flushes.
+     * Coalesces rapid arrivals (e.g., EOSE replay burst of N events) into
+     * a single storage write rather than N writes. 200ms matches the
+     * proven pattern in `GroupChatModule.persistProcessedEvents`.
+     */
+    readonly PROCESSED_EVENT_IDS_FLUSH_MS: 200;
 };
 
 /**
@@ -23958,78 +24189,159 @@ declare function randomUUID(): string;
 /**
  * Centralized SDK Logger
  *
- * A lightweight singleton logger that works across all tsup bundles
- * by storing state on globalThis. Supports three log levels:
- * - debug: detailed messages (only shown when debug=true)
- * - warn: important warnings (ALWAYS shown regardless of debug flag)
- * - error: critical errors (ALWAYS shown regardless of debug flag)
+ * Lightweight singleton logger that works across all tsup bundles by storing
+ * state on globalThis. Issue #274 extends the original three-level logger
+ * (`debug | warn | error`) with timestamps, env/localStorage bootstrap,
+ * namespace globs, level qualifiers, lazy message builders, timing spans,
+ * secret redaction, and pluggable sinks.
  *
- * Global debug flag enables all logging. Per-tag overrides allow
- * granular control (e.g., only transport debug).
+ * Back-compat: the legacy call shapes still work unchanged.
  *
- * @example
  * ```ts
- * import { logger } from '@unicitylabs/sphere-sdk';
+ * logger.configure({ debug: true });        // existing
+ * logger.setTagDebug('Nostr', true);        // existing
+ * logger.debug('Payments', 'sent', { id }); // existing — single-tag
+ * logger.warn('Sphere', 'degraded');        // existing
+ * ```
  *
- * // Enable all debug logging
- * logger.configure({ debug: true });
+ * New surface:
  *
- * // Enable only specific tags
- * logger.setTagDebug('Nostr', true);
+ * ```ts
+ * // Per-namespace toggle via env: SPHERE_DEBUG=payments:*,transport:nostr=trace
+ * // Per-namespace toggle via localStorage in browsers.
+ * // Runtime toggle:
+ * setDebug('payments:*,transport:nostr=trace');
+ * disableDebug();
+ * listDebug();
  *
- * // Usage in SDK classes
- * logger.debug('Payments', 'Transfer started', { amount, recipient });
- * logger.warn('Nostr', 'queryEvents timed out after 5s');
- * logger.error('Sphere', 'Critical failure', error);
+ * const span = logger.time('Payments', 'send', { recipient: '@bob' });
+ * span.mark('split-planned', { sources: 4 });
+ * span.end({ ok: true });   // -> one debug line with durationMs + marks
+ *
+ * // Pluggable sinks (default = console). Multiple sinks allowed; ring buffer
+ * // included for `sphere debug timings`-style summaries.
+ * const buf = createRingBufferSink(1024);
+ * const remove = addSink(buf);
  * ```
  */
-type LogLevel = 'debug' | 'warn' | 'error';
-type LogHandler = (level: LogLevel, tag: string, message: string, ...args: unknown[]) => void;
+type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+/**
+ * Legacy handler signature. Pre-existing consumers receive 'debug'|'warn'|'error'
+ * only — the new `trace`/`info` levels are downgraded to 'debug' before being
+ * passed to a legacy handler to keep its switch-statement exhaustive.
+ */
+type LogHandler = (level: 'debug' | 'warn' | 'error', tag: string, message: string, ...args: unknown[]) => void;
 interface LoggerConfig {
-    /** Enable debug logging globally (default: false). When false, only warn and error messages are shown. */
+    /** Global debug toggle (legacy). Enables `debug` level for all tags lacking an override. */
     debug?: boolean;
-    /** Custom log handler. If provided, replaces console output. Useful for tests or custom log sinks. */
+    /** Legacy single-sink shim. Setting `handler` removes all sinks except this one. */
     handler?: LogHandler | null;
+    /**
+     * Prepend ISO-8601 ms timestamp + level + namespace to each line. Defaults
+     * to true once any namespace is enabled at debug-or-lower; false otherwise.
+     * Pass explicit boolean to override.
+     */
+    timestamps?: boolean;
+    /** Honour the redaction denylist on `fields` / args (default true). */
+    redaction?: boolean;
 }
+interface LogRecord {
+    ts: number;
+    level: LogLevel;
+    namespace: string;
+    message: string;
+    fields?: Record<string, unknown>;
+    /** Extra positional args from the legacy `logger.debug(tag, msg, ...args)` signature. */
+    args?: unknown[];
+}
+interface LogSink {
+    /**
+     * `formatted` is the default-formatted single-line string the console sink
+     * would emit. Custom sinks can ignore it and re-render from the record.
+     */
+    write(record: LogRecord, formatted: string): void;
+    flush?(): Promise<void> | void;
+    close?(): Promise<void> | void;
+}
+interface Span {
+    /** Record a checkpoint with elapsed-ms-from-start. Buffered into the span. */
+    mark(label: string, fields?: Record<string, unknown>): void;
+    /** Elapsed ms since the span was created. */
+    elapsed(): number;
+    /**
+     * End the span successfully. Emits ONE `debug`-level record carrying
+     * `{ spanName, durationMs, marks: [...] }`. Returns durationMs.
+     */
+    end(extraFields?: Record<string, unknown>): number;
+    /**
+     * End the span with error. Emits ONE `warn`-level record carrying the err
+     * message + marks. Returns durationMs.
+     */
+    endWithError(err: unknown, extraFields?: Record<string, unknown>): number;
+}
+interface NamespacedLogger {
+    readonly namespace: string;
+    isEnabled(level: LogLevel): boolean;
+    trace(message: string, fields?: Record<string, unknown>): void;
+    debug(message: string, fields?: Record<string, unknown>): void;
+    info(message: string, fields?: Record<string, unknown>): void;
+    warn(message: string, fields?: Record<string, unknown>): void;
+    error(message: string, fields?: Record<string, unknown> | Error): void;
+    /** Lazy form — `build()` is only invoked when the level passes the gate. */
+    traceLazy(build: () => [string, Record<string, unknown>?]): void;
+    debugLazy(build: () => [string, Record<string, unknown>?]): void;
+    /** Child logger with appended namespace segment, e.g. 'payments' -> 'payments:send'. */
+    child(suffix: string): NamespacedLogger;
+    /** Timing span helper — emits one line at .end() / .endWithError(). */
+    time(spanName: string, initialFields?: Record<string, unknown>): Span;
+}
+interface RingBufferSink extends LogSink {
+    getRecords(): LogRecord[];
+    clear(): void;
+    capacity: number;
+}
+declare function createRingBufferSink(capacity: number): RingBufferSink;
+declare function getLogger(namespace: string): NamespacedLogger;
+/**
+ * Helper for instrumenting a function body with a single timing span. The span
+ * is ended on resolve and endWithError'd on reject — so the caller always sees
+ * exactly one log line per invocation. Use sparingly on hot paths; spans
+ * allocate a marks array even when the namespace is disabled.
+ *
+ * ```ts
+ * const result = await withSpan('payments:receive', 'receive',
+ *   { finalize: !!opts?.finalize },
+ *   async (span) => {
+ *     // body — may call span.mark('events-fetched', { count })
+ *     return result;
+ *   });
+ * ```
+ */
+declare function withSpan<T>(namespace: string, spanName: string, initialFields: Record<string, unknown> | undefined, fn: (span: Span) => Promise<T>): Promise<T>;
+declare function setDebug(spec: string | boolean): void;
+declare function disableDebug(): void;
+declare function listDebug(): {
+    namespace: string;
+    level: LogLevel;
+}[];
+declare function addSink(sink: LogSink): () => void;
+declare function clearSinks(): void;
 declare const logger: {
-    /**
-     * Configure the logger. Can be called multiple times (last write wins).
-     * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
-     */
     configure(config: LoggerConfig): void;
-    /**
-     * Enable/disable debug logging for a specific tag.
-     * Per-tag setting overrides the global debug flag.
-     *
-     * @example
-     * ```ts
-     * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
-     * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
-     * ```
-     */
     setTagDebug(tag: string, enabled: boolean): void;
-    /**
-     * Clear per-tag override, falling back to global debug flag.
-     */
     clearTagDebug(tag: string): void;
-    /** Returns true if debug mode is enabled for the given tag (or globally). */
     isDebugEnabled(tag?: string): boolean;
-    /**
-     * Debug-level log. Only shown when debug is enabled (globally or for this tag).
-     * Use for detailed operational information.
-     */
+    /** Legacy single-tag debug. Keeps the `tag, message, ...args` signature. */
     debug(tag: string, message: string, ...args: unknown[]): void;
-    /**
-     * Warning-level log. ALWAYS shown regardless of debug flag.
-     * Use for important but non-critical issues (timeouts, retries, degraded state).
-     */
+    /** Legacy single-tag info — promoted alias for `debug`. */
+    info(tag: string, message: string, ...args: unknown[]): void;
+    /** Legacy single-tag trace — gated by trace-or-lower namespace level. */
+    trace(tag: string, message: string, ...args: unknown[]): void;
     warn(tag: string, message: string, ...args: unknown[]): void;
-    /**
-     * Error-level log. ALWAYS shown regardless of debug flag.
-     * Use for critical failures that should never be silenced.
-     */
     error(tag: string, message: string, ...args: unknown[]): void;
-    /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+    /** Per-tag span helper — same as `getLogger(tag).time(...)`. */
+    time(tag: string, spanName: string, initialFields?: Record<string, unknown>): Span;
+    /** Reset all logger state. Primarily for tests. */
     reset(): void;
 };
 
@@ -25541,4 +25853,4 @@ declare function addressesMatch(a: string, b: string): boolean;
  */
 type UxfErrorCode = 'INVALID_HASH' | 'MISSING_ELEMENT' | 'TOKEN_NOT_FOUND' | 'STATE_INDEX_OUT_OF_RANGE' | 'TYPE_MISMATCH' | 'INVALID_INSTANCE_CHAIN' | 'DUPLICATE_TOKEN' | 'SERIALIZATION_ERROR' | 'VERIFICATION_FAILED' | 'CYCLE_DETECTED' | 'INVALID_PACKAGE' | 'INVALID_INPUT' | 'LIMIT_EXCEEDED' | 'NOT_IMPLEMENTED';
 
-export { AUDIT_STATUSES, type AdditionalAsset, type AddressInfo, type AddressMode, type AddressType, type AggregatorClient, type AggregatorEvent, type AggregatorEventCallback, type AggregatorEventType, type AggregatorProvider, type AggregatorProviderConfig, type Asset, type AssetTarget, type AuditEntry, type AuditStatus, BUILTIN_IPFS_GATEWAYS, type BackgroundProgressStatus, type BaseProvider, type BroadcastHandler, type BroadcastMessage, type BuildSplitBundleResult, type CMasterKeyData, COIN_TYPES, type CheckNetworkHealthOptions, CoinGeckoPriceProvider, type CombinedTransferBundleV6, CommunicationsModule, type CommunicationsModuleConfig, type CommunicationsModuleDependencies, type ComposingIndicator, type ConsolidationPendingState, type ContentHash, type ConversationPage, type CreateGroupOptions, type CreateInvoiceRequest, DEFAULT_AGGREGATOR_TIMEOUT, DEFAULT_AGGREGATOR_URL, DEFAULT_DERIVATION_PATH, DEFAULT_ELECTRUM_URL, DEFAULT_GROUP_RELAYS, DEFAULT_IPFS_BOOTSTRAP_PEERS, DEFAULT_IPFS_GATEWAYS, DEFAULT_MARKET_API_URL, DEFAULT_NOSTR_RELAYS, DEV_AGGREGATOR_URL, DISPOSITION_REASONS, type DecryptionProgressCallback, type DeliveryStrategy, type DerivationMode, type DirectMessage, type DirectTokenEntry, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type DispositionReason, type DispositionRecord, type EncryptedData, type ExtendedValidationResult, type FullIdentity, type GetConversationPageOptions, type GetInvoicesOptions, type GetSwapsFilter, GroupChatModule, type GroupChatModuleConfig, type GroupChatModuleDependencies, type GroupData, type GroupMemberData, type GroupMessageData, GroupRole, GroupVisibility, type HealthCheckFn, type Identity, type IdentityConfig, type InclusionProof, type IncomingBroadcast, type IncomingMessage, type IncomingPaymentRequest, type IncomingTokenTransfer, type IncomingTransfer, type InitProgress, type InitProgressCallback, type InitProgressStep, type InstanceChainEntry, type InstanceChainIndex, type InstanceSelectionStrategy, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitOptions, type InstantSplitProcessResult, type InstantSplitResult, type InstantSplitV5RecoveryMetadata, type IntentStatus, type IntentType, type InternalTransferMode, type InvalidEntry, type InvalidatedNametagEntry, type InvoiceRequestedAsset, index as L1, type L1Balance, L1PaymentsModule, type L1PaymentsModuleConfig, type L1PaymentsModuleDependencies, type L1SendRequest, type L1SendResult, type L1Transaction, type L1Utxo, LIMITS, type LegacyCombinedTransferPayload, type LegacyFileImportOptions, type LegacyFileInfo, type LegacyFileParseResult, type LegacyFileParsedData, type LegacyFileType, type LegacyInstantSplitPayload, type LegacySdkPayload, type LegacySphereTxfPayload, type LegacyTokenTransferPayload, type LoadResult, type LogHandler, type LogLevel, type LoggerConfig, type LoggingConfig, type ManifestAuxiliary, type ManifestEntry, type ManifestEntryDelta, type ManifestFields, type ManifestSignatures, type MarketIntent, MarketModule, type MarketModuleConfig, type MarketModuleDependencies, type MessageHandler, type MigrationPhase, type MigrationResult, type MintOutboxEntry, type MintParams, type MintResult, NETWORKS, NIP29_KINDS, NOSTR_EVENT_KINDS, type NametagBindingProof, type NametagData, type NetworkHealthResult, type NetworkType, type OracleEvent, type OracleEventCallback, type OracleEventType, type OracleProvider, type OutboxEntry, type OutgoingPaymentRequest, type ParsedAddress, type ParsedStorageData, type PayInvoiceParams, type PaymentRequest, type PaymentRequestHandler, type PaymentRequestResponse, type PaymentRequestResponseHandler, type PaymentRequestResponseType, type PaymentRequestResult, type PaymentRequestStatus, type PaymentSession, type PaymentSessionDirection, type PaymentSessionError, type PaymentSessionErrorCode, type PaymentSessionStatus, PaymentsModule, type PaymentsModuleConfig, type PaymentsModuleDependencies, type PeerInfo, type PendingV5Finalization, type PostIntentRequest, type PostIntentResult, type PricePlatform, type PriceProvider, type PriceProviderConfig, type ProfileConfig, type ProfileEncryptionConfig, type ProfileErrorCode, type ProviderMetadata, type ProviderRole, type ProviderStatus, type ProviderStatusInfo, type ReceiveOptions, type ReceiveResult, type RegistryNetwork, type ReturnPaymentParams, SIGN_MESSAGE_PREFIX, STORAGE_KEYS, STORAGE_KEYS_ADDRESS, STORAGE_KEYS_GLOBAL, STORAGE_PREFIX, type SaveResult, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type SearchFilters, type SearchIntentResult, type SearchOptions, type SearchResult, type ServiceHealthResult, type SpentTokenInfo, type SpentTokenResult, Sphere, type SphereConfig, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereEventHandler, type SphereEventMap, type SphereEventType, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, type SphereStatus, type SplitPaymentSession, type SplitRecoveryResult, type StorageEvent, type StorageEventCallback, type StorageEventType, type StorageProvider, type StorageProviderConfig, type SubmitResult, type SwapDeal, type SwapManifest, SwapModule, type SwapModuleConfig, type SwapProgress, type SwapProposalResult, type SwapRef, type SwapRole, type SyncResult$1 as SyncResult, TEST_AGGREGATOR_URL, TEST_ELECTRUM_URL, TEST_NOSTR_RELAYS, TIMEOUTS, type Token, type TokenDefinition, type TokenIcon, type TokenPrice, TokenRegistry, type TokenState, type TokenStatus, type TokenStorageProvider, type TokenTransferDetail, type TokenTransferHandler, type TokenTransferPayload, type ValidationResult as TokenValidationResult, TokenValidator, type TombstoneEntry, type TrackedAddress, type TrackedAddressEntry, type TransactionHistoryEntry, type TransferCommitment, type TransferMode, type TransferRequest, type TransferResult, type TransferStatus, type TransportEvent, type TransportEventCallback, type TransportEventType, type TransportProvider, type TransportProviderConfig, type TrustBaseLoader, type TxfAuthenticator, type TxfGenesis, type TxfGenesisData, type TxfInclusionProof, type TxfIntegrity, type TxfInvalidEntry, type TxfMerkleStep, type TxfMerkleTreePath, type TxfMeta, type TxfOutboxEntry, type TxfSentEntry, type TxfState, type TxfStorageData, type TxfStorageDataBase, type TxfToken, type TxfTombstone, type TxfTransaction, type UnconfirmedResolutionResult, type UxfBundleRef, type UxfDelta, type UxfElement, type UxfElementContent, type UxfElementHeader, type UxfElementType, type UxfEnvelope, type UxfErrorCode, type UxfIndexes, type UxfInstanceKind, type UxfManifest, type UxfPackageData, type UxfStorageAdapter, type UxfTransferPayload, type UxfTransferPayloadBase, type UxfTransferPayloadCar, type UxfTransferPayloadCid, type UxfVerificationIssue, type UxfVerificationResult, type V5FinalizationStage, type ValidationAction, type ValidationIssue, type ValidationResult$1 as ValidationResult, type WaitOptions, type WalletDatInfo, type WalletInfo, type WalletJSON$1 as WalletJSON, type WalletJSONExportOptions$1 as WalletJSONExportOptions, type WalletSource, addressesMatch, archivedKeyFromTokenId, base58Decode, base58Encode, buildManifest, buildTxfStorageData, bytesToHex, checkNetworkHealth, coinIdsMatch, computeSwapId, countCommittedTransactions, createAddress, createCommunicationsModule, createGroupChatModule, createKeyPair, createL1PaymentsModule, createMarketModule, createNametagBinding, createPaymentSession, createPaymentSessionError, createPaymentsModule, createPriceProvider, createSphere, createSplitPaymentSession, createSwapModule, createTokenValidator, decodeBech32, decrypt$1 as decrypt, decryptCMasterKey, decryptJson, decryptMnemonic, decryptPrivateKey, decryptSimple, decryptTextFormatKey, decryptWallet, decryptWithSalt, deriveAddressInfo, deriveChildKey$1 as deriveChildKey, deriveKeyAtPath$1 as deriveKeyAtPath, doubleSha256, encodeBech32, encrypt$1 as encrypt, encryptMnemonic, encryptSimple, encryptWallet, extractFromText, findPattern, forkedKeyFromTokenIdAndState, formatAmount, generateAddressFromMasterKey, generateMasterKey, generateMnemonic, generatePrivateKey, getAddressHrp, getAddressId, getAddressStorageKey, getCoinIdByName, getCoinIdBySymbol, getCurrentStateHash, getPublicKey, getSphere, getTokenDecimals, getTokenDefinition, getTokenIconUrl, getTokenId, getTokenName, getTokenSymbol, hasMissingNewStateHash, hasUncommittedTransactions, hasValidTxfData, hash160, hashSignMessage, hexToBytes, hexToWIF, identityFromMnemonicSync, initSphere, isArchivedKey, isAuditStatus, isCoinAsset, isCombinedTransferBundleV6, isDispositionReason, isForkedKey, isInstantSplitBundle, isInstantSplitBundleV4, isInstantSplitBundleV5, isKnownToken, isLegacyTokenTransferPayload, isNftAsset, isPaymentSessionTerminal, isPaymentSessionTimedOut, isSQLiteDatabase, isSphereError, isTextWalletEncrypted, isTokenKey, isUxfTransferPayload, isUxfTransferPayloadCar, isUxfTransferPayloadCid, isValidAddress, isValidBech32, isValidDirectAddress, isValidNametag, isValidPrivateKey, isValidTokenId, isWalletDatEncrypted, isWalletTextFormat, keyFromTokenId, loadSphere, logger, mnemonicToSeedSync, normalizeAddress, normalizeCoinId, normalizeSdkTokenToStorage, objectToTxf, parseAddress, parseAndDecryptWalletDat, parseAndDecryptWalletText, parseForkedKey, parseTxfStorageData, parseWalletDat, parseWalletText, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, sha256, signMessage, signSwapManifest, sleep, sphereExists, toHumanReadable, toSmallestUnit, tokenIdFromArchivedKey, tokenIdFromKey, tokenToTxf, txfToToken, validateManifest, validateMnemonic, verifyManifestIntegrity, verifyNametagBinding, verifySignedMessage, verifySwapSignature };
+export { AUDIT_STATUSES, type AdditionalAsset, type AddressInfo, type AddressMode, type AddressType, type AggregatorClient, type AggregatorEvent, type AggregatorEventCallback, type AggregatorEventType, type AggregatorProvider, type AggregatorProviderConfig, type Asset, type AssetTarget, type AuditEntry, type AuditStatus, BUILTIN_IPFS_GATEWAYS, type BackgroundProgressStatus, type BaseProvider, type BroadcastHandler, type BroadcastMessage, type BuildSplitBundleResult, type CMasterKeyData, COIN_TYPES, type CheckNetworkHealthOptions, CoinGeckoPriceProvider, type CombinedTransferBundleV6, CommunicationsModule, type CommunicationsModuleConfig, type CommunicationsModuleDependencies, type ComposingIndicator, type ConsolidationPendingState, type ContentHash, type ConversationPage, type CreateGroupOptions, type CreateInvoiceRequest, DEFAULT_AGGREGATOR_TIMEOUT, DEFAULT_AGGREGATOR_URL, DEFAULT_DERIVATION_PATH, DEFAULT_ELECTRUM_URL, DEFAULT_GROUP_RELAYS, DEFAULT_IPFS_BOOTSTRAP_PEERS, DEFAULT_IPFS_GATEWAYS, DEFAULT_MARKET_API_URL, DEFAULT_NOSTR_RELAYS, DEV_AGGREGATOR_URL, DISPOSITION_REASONS, type DecryptionProgressCallback, type DeliveryStrategy, type DerivationMode, type DirectMessage, type DirectTokenEntry, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type DispositionReason, type DispositionRecord, type EncryptedData, type ExtendedValidationResult, type FullIdentity, type GetConversationPageOptions, type GetInvoicesOptions, type GetSwapsFilter, GroupChatModule, type GroupChatModuleConfig, type GroupChatModuleDependencies, type GroupData, type GroupMemberData, type GroupMessageData, GroupRole, GroupVisibility, type HealthCheckFn, type Identity, type IdentityConfig, type InclusionProof, type IncomingBroadcast, type IncomingMessage, type IncomingPaymentRequest, type IncomingTokenTransfer, type IncomingTransfer, type InitProgress, type InitProgressCallback, type InitProgressStep, type InstanceChainEntry, type InstanceChainIndex, type InstanceSelectionStrategy, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitOptions, type InstantSplitProcessResult, type InstantSplitResult, type InstantSplitV5RecoveryMetadata, type IntentStatus, type IntentType, type InternalTransferMode, type InvalidEntry, type InvalidatedNametagEntry, type InvoiceRequestedAsset, index as L1, type L1Balance, L1PaymentsModule, type L1PaymentsModuleConfig, type L1PaymentsModuleDependencies, type L1SendRequest, type L1SendResult, type L1Transaction, type L1Utxo, LIMITS, type LegacyCombinedTransferPayload, type LegacyFileImportOptions, type LegacyFileInfo, type LegacyFileParseResult, type LegacyFileParsedData, type LegacyFileType, type LegacyInstantSplitPayload, type LegacySdkPayload, type LegacySphereTxfPayload, type LegacyTokenTransferPayload, type LoadResult, type LogHandler, type LogLevel, type LogRecord, type LogSink, type LoggerConfig, type LoggingConfig, type ManifestAuxiliary, type ManifestEntry, type ManifestEntryDelta, type ManifestFields, type ManifestSignatures, type MarketIntent, MarketModule, type MarketModuleConfig, type MarketModuleDependencies, type MessageHandler, type MigrationPhase, type MigrationResult, type MintOutboxEntry, type MintParams, type MintResult, NETWORKS, NIP29_KINDS, NOSTR_EVENT_KINDS, type NamespacedLogger, type NametagBindingProof, type NametagData, type NetworkHealthResult, type NetworkType, type OracleEvent, type OracleEventCallback, type OracleEventType, type OracleProvider, type OutboxEntry, type OutgoingPaymentRequest, type ParsedAddress, type ParsedStorageData, type PayInvoiceParams, type PaymentRequest, type PaymentRequestHandler, type PaymentRequestResponse, type PaymentRequestResponseHandler, type PaymentRequestResponseType, type PaymentRequestResult, type PaymentRequestStatus, type PaymentSession, type PaymentSessionDirection, type PaymentSessionError, type PaymentSessionErrorCode, type PaymentSessionStatus, PaymentsModule, type PaymentsModuleConfig, type PaymentsModuleDependencies, type PeerInfo, type PendingV5Finalization, type PostIntentRequest, type PostIntentResult, type PricePlatform, type PriceProvider, type PriceProviderConfig, type ProfileConfig, type ProfileEncryptionConfig, type ProfileErrorCode, type ProviderMetadata, type ProviderRole, type ProviderStatus, type ProviderStatusInfo, type ReceiveOptions, type ReceiveResult, type RegistryNetwork, type ReturnPaymentParams, type RingBufferSink, SIGN_MESSAGE_PREFIX, STORAGE_KEYS, STORAGE_KEYS_ADDRESS, STORAGE_KEYS_GLOBAL, STORAGE_PREFIX, type SaveResult, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type SearchFilters, type SearchIntentResult, type SearchOptions, type SearchResult, type ServiceHealthResult, type Span, type SpentTokenInfo, type SpentTokenResult, Sphere, type SphereConfig, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereEventHandler, type SphereEventMap, type SphereEventType, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, type SphereStatus, type SplitPaymentSession, type SplitRecoveryResult, type StorageEvent, type StorageEventCallback, type StorageEventType, type StorageProvider, type StorageProviderConfig, type SubmitResult, type SwapDeal, type SwapManifest, SwapModule, type SwapModuleConfig, type SwapProgress, type SwapProposalResult, type SwapRef, type SwapRole, type SyncResult$1 as SyncResult, TEST_AGGREGATOR_URL, TEST_ELECTRUM_URL, TEST_NOSTR_RELAYS, TIMEOUTS, type Token, type TokenDefinition, type TokenIcon, type TokenPrice, TokenRegistry, type TokenState, type TokenStatus, type TokenStorageProvider, type TokenTransferDetail, type TokenTransferHandler, type TokenTransferPayload, type ValidationResult as TokenValidationResult, TokenValidator, type TombstoneEntry, type TrackedAddress, type TrackedAddressEntry, type TransactionHistoryEntry, type TransferCommitment, type TransferMode, type TransferRequest, type TransferResult, type TransferStatus, type TransportEvent, type TransportEventCallback, type TransportEventType, type TransportProvider, type TransportProviderConfig, type TrustBaseLoader, type TxfAuthenticator, type TxfGenesis, type TxfGenesisData, type TxfInclusionProof, type TxfIntegrity, type TxfInvalidEntry, type TxfMerkleStep, type TxfMerkleTreePath, type TxfMeta, type TxfOutboxEntry, type TxfSentEntry, type TxfState, type TxfStorageData, type TxfStorageDataBase, type TxfToken, type TxfTombstone, type TxfTransaction, type UnconfirmedResolutionResult, type UxfBundleRef, type UxfDelta, type UxfElement, type UxfElementContent, type UxfElementHeader, type UxfElementType, type UxfEnvelope, type UxfErrorCode, type UxfIndexes, type UxfInstanceKind, type UxfManifest, type UxfPackageData, type UxfStorageAdapter, type UxfTransferPayload, type UxfTransferPayloadBase, type UxfTransferPayloadCar, type UxfTransferPayloadCid, type UxfVerificationIssue, type UxfVerificationResult, type V5FinalizationStage, type ValidationAction, type ValidationIssue, type ValidationResult$1 as ValidationResult, type WaitOptions, type WalletDatInfo, type WalletInfo, type WalletJSON$1 as WalletJSON, type WalletJSONExportOptions$1 as WalletJSONExportOptions, type WalletSource, addSink, addressesMatch, archivedKeyFromTokenId, base58Decode, base58Encode, buildManifest, buildTxfStorageData, bytesToHex, checkNetworkHealth, clearSinks, coinIdsMatch, computeSwapId, countCommittedTransactions, createAddress, createCommunicationsModule, createGroupChatModule, createKeyPair, createL1PaymentsModule, createMarketModule, createNametagBinding, createPaymentSession, createPaymentSessionError, createPaymentsModule, createPriceProvider, createRingBufferSink, createSphere, createSplitPaymentSession, createSwapModule, createTokenValidator, decodeBech32, decrypt$1 as decrypt, decryptCMasterKey, decryptJson, decryptMnemonic, decryptPrivateKey, decryptSimple, decryptTextFormatKey, decryptWallet, decryptWithSalt, deriveAddressInfo, deriveChildKey$1 as deriveChildKey, deriveKeyAtPath$1 as deriveKeyAtPath, disableDebug, doubleSha256, encodeBech32, encrypt$1 as encrypt, encryptMnemonic, encryptSimple, encryptWallet, extractFromText, findPattern, forkedKeyFromTokenIdAndState, formatAmount, generateAddressFromMasterKey, generateMasterKey, generateMnemonic, generatePrivateKey, getAddressHrp, getAddressId, getAddressStorageKey, getCoinIdByName, getCoinIdBySymbol, getCurrentStateHash, getLogger, getPublicKey, getSphere, getTokenDecimals, getTokenDefinition, getTokenIconUrl, getTokenId, getTokenName, getTokenSymbol, hasMissingNewStateHash, hasUncommittedTransactions, hasValidTxfData, hash160, hashSignMessage, hexToBytes, hexToWIF, identityFromMnemonicSync, initSphere, isArchivedKey, isAuditStatus, isCoinAsset, isCombinedTransferBundleV6, isDispositionReason, isForkedKey, isInstantSplitBundle, isInstantSplitBundleV4, isInstantSplitBundleV5, isKnownToken, isLegacyTokenTransferPayload, isNftAsset, isPaymentSessionTerminal, isPaymentSessionTimedOut, isSQLiteDatabase, isSphereError, isTextWalletEncrypted, isTokenKey, isUxfTransferPayload, isUxfTransferPayloadCar, isUxfTransferPayloadCid, isValidAddress, isValidBech32, isValidDirectAddress, isValidNametag, isValidPrivateKey, isValidTokenId, isWalletDatEncrypted, isWalletTextFormat, keyFromTokenId, listDebug, loadSphere, logger, mnemonicToSeedSync, normalizeAddress, normalizeCoinId, normalizeSdkTokenToStorage, objectToTxf, parseAddress, parseAndDecryptWalletDat, parseAndDecryptWalletText, parseForkedKey, parseTxfStorageData, parseWalletDat, parseWalletText, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, setDebug, sha256, signMessage, signSwapManifest, sleep, sphereExists, toHumanReadable, toSmallestUnit, tokenIdFromArchivedKey, tokenIdFromKey, tokenToTxf, txfToToken, validateManifest, validateMnemonic, verifyManifestIntegrity, verifyNametagBinding, verifySignedMessage, verifySwapSignature, withSpan };

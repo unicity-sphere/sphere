@@ -2341,7 +2341,81 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * converge via the existing WALKBACK_FLOOR + reconcile path
  * (just slower, ~60-90 s vs ~1 s).
  */
- | 'storage:pointer-published';
+ | 'storage:pointer-published'
+/**
+ * Issue #264 — emitted by the flush scheduler when it auto-merges
+ * a detected monotonicity gap in place (previously this fired
+ * POINTER_MONOTONICITY_VIOLATION on `storage:error` and aborted
+ * the flush). Distinct from `storage:error` so operators see
+ * auto-merges as routine convergence work, not alarms.
+ *
+ * `data` payload (see flush-scheduler.ts for the canonical shape):
+ *   - `recoveredTokenIds: string[]`   token ids re-merged from
+ *     `previousData` to satisfy the token-set invariant.
+ *   - `recoveredTokenCount: number`
+ *   - `mergedUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     inline-fetched and merged into the in-flight UXF package.
+ *   - `mergedUnknownBundleCount: number`
+ *   - `residualUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     that could not be fetched (network down, malformed CAR,
+ *     etc.) — the flush continued without them; downstream
+ *     convergence retries on the next flush.
+ *   - `residualUnknownBundleCount: number`
+ *   - `residualTokenMissingIds: string[]`   token ids the token-set
+ *     check flagged but `previousData` could not provide (only
+ *     possible when `previousData === null`).
+ *   - `residualTokenMissingCount: number`
+ *   - `recoveredOutboxIdsDroppedAsSent: string[]`   outbox-entry
+ *     ids that the SENT-wins dedup removed during the
+ *     `OperationalState` union — surfaced for operator audit.
+ *   - `recoveredOutboxIdsDroppedAsSentCount: number`
+ *   - `truncated: boolean`   true when any of the listed arrays
+ *     were capped at 100 entries for log-volume control.
+ *
+ * Informational only. The flush continues to publish the
+ * best-effort superset CAR regardless; residuals are addressed by
+ * subsequent cross-device syncs detecting the same gap and
+ * re-attempting the inline merge.
+ */
+ | 'storage:monotonicity-recovered'
+/**
+ * Issue #272 — emitted when the per-flush remote-durability
+ * HEAD-verify leg (`verifyFlushDurability`), now run as a background
+ * task detached from the synchronous flush completion path, fails
+ * for a just-pinned bundle CID and/or snapshot CID.
+ *
+ * Local-durability is unaffected: the bundle CAR pin POST returned
+ * 200, the OrbitDB bundle ref is written, and (when wired) the
+ * snapshot publish call returned ok. What this event signals is that
+ * the operator's IPFS gateway has not yet served the just-pinned
+ * CID back via HEAD within the configured deadline (default 30s).
+ * This is a gateway propagation property — not a receiver crash-
+ * safety property — and does NOT close the at-least-once Nostr ack
+ * gate. Distinct from `storage:error` (terminal fatal class).
+ *
+ * `data` carries `{ cid, snapshotCid?, code?, details? }`:
+ *   - `cid`         the bundle CID whose HEAD-verify failed
+ *   - `snapshotCid` the snapshot CID (when also verified)
+ *   - `code`        the structured error code (e.g.,
+ *                   `FLUSH_DURABILITY_TIMEOUT`)
+ *   - `details`     the failed-leg detail array from
+ *                   `verifyFlushDurability`
+ *
+ * Operator action: investigate operator Kubo gateway propagation
+ * lag if this fires repeatedly for distinct CIDs. Single-shot fires
+ * (a CID that eventually does propagate) are expected under normal
+ * testnet contention and require no action.
+ *
+ * Before #272: this same failure threw inline and forced the
+ * at-least-once gate's `awaitNextFlush` to reject, causing the
+ * Nostr `since` cursor to refuse to advance and the inbound
+ * TOKEN_TRANSFER event to replay on every reconnect. Each replay
+ * triggered another flush, each flush re-hit the same HEAD-verify
+ * timeout, producing a sustained busy-spin (134 replays for 14
+ * unique event IDs in the §C.2 soak failure observed at
+ * `integration/all-fixes` HEAD `6102d59`).
+ */
+ | 'storage:durability-deferred';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -4234,6 +4308,46 @@ interface PointerLayerConfig {
      * outside NODE_ENV=development. See SPEC §13 W6.
      */
     readonly allowUnverifiedOverride?: boolean;
+    /**
+     * Issue #264 — enables the `pointer-win` Nostr broadcast publisher
+     * (in `LifecycleManager.publishAggregatorPointerBestEffort` after a
+     * successful publish) AND the per-wallet subscriber (in
+     * `Sphere.maybeInstallPointerWinSubscription`).
+     *
+     * OFF BY DEFAULT post-#264: broadcasts were originally introduced
+     * (PR #257, RFC-251 Approach D) as an optimization to short-circuit
+     * the aggregator's 30-60s read-replica lag for sibling devices that
+     * share an HD identity. Issue #264 reframes them as an OPTIONAL
+     * convergence-speed optimization, not a correctness requirement —
+     * convergence is now guaranteed by:
+     *   1. The aggregator pointer versions alone (the load-bearing
+     *      cross-device source of truth); AND
+     *   2. The flush-scheduler's monotonicity-violation auto-merge,
+     *      which reconstructs the missing state in-place rather than
+     *      throwing.
+     *
+     * With auto-merge in place, broadcasts add no correctness signal —
+     * a wrong/stale broadcast at best speeds convergence and at worst
+     * triggers an extra wasted publish cycle. We turn them off so the
+     * system's convergence properties can be tested without the
+     * optimization layer obscuring them.
+     *
+     * When `enablePointerWinBroadcasts !== true`:
+     *   - `LifecycleManager.publishAggregatorPointerBestEffort` skips
+     *     signing the broadcast payload and emitting the
+     *     `storage:pointer-published` event (publisher side OFF).
+     *   - `Sphere.maybeInstallPointerWinSubscription` returns early —
+     *     the per-wallet Nostr subscription is never installed
+     *     (subscriber side OFF).
+     *
+     * Strictly `=== true` to enable — defends against accidental
+     * truthy-but-not-boolean values (`'true'`, `1`) being interpreted
+     * as enabled.
+     *
+     * Flip to `true` to re-enable the optimization layer once auto-merge
+     * convergence is proven without it.
+     */
+    readonly enablePointerWinBroadcasts?: boolean;
 }
 
 interface ProfilePointerLayerInit {
@@ -4292,6 +4406,73 @@ interface ReconcileDownwardResult {
 declare class ProfilePointerLayer {
     #private;
     constructor(init: ProfilePointerLayerInit);
+    /**
+     * Issue #264 — capability gate for the pointer-win broadcast
+     * pipeline. Consulted by:
+     *   - `LifecycleManager.publishAggregatorPointerBestEffort` before
+     *     signing the broadcast payload and emitting the
+     *     `storage:pointer-published` event (publisher).
+     *   - `Sphere.maybeInstallPointerWinSubscription` before installing
+     *     the per-wallet Nostr subscription (subscriber).
+     *
+     * Default: `false`. See PointerLayerConfig.enablePointerWinBroadcasts
+     * for the full rationale.
+     *
+     * **API pairing contract.** Test stubs / alternative pointer-layer
+     * implementations that expose `winBroadcastsEnabled()` MUST also
+     * expose `getSignerForWinBroadcast()` — the publisher and subscriber
+     * guards treat them as a coupled pair (a partial implementation is
+     * treated as flag=false / fail-closed). Implementing only one
+     * silently disables broadcasts with no error.
+     *
+     * **Accessor contract.** `winBroadcastsEnabled()` MUST be a pure
+     * accessor and MUST NOT throw. Both the publisher (lifecycle-
+     * manager) and subscriber (Sphere) guards wrap the accessor call
+     * in a defensive try/catch that treats a throw as flag=false
+     * (fail-closed). The publish path still reports success; the
+     * subscriber early-returns without registering the per-wallet
+     * Nostr subscription. A single log line is emitted per accessor
+     * throw at debug-level (Sphere) and host-log level
+     * (lifecycle-manager) so operators can correlate. A real
+     * `ProfilePointerLayer` reads its frozen config snapshot and
+     * cannot throw; this defensive treatment exists so a misbehaving
+     * stub or alternative implementation cannot silently corrupt
+     * publish-success classification or trigger noisy
+     * subscription-install retries.
+     *
+     * **Init-time-only flag.** The flag is captured in the frozen
+     * `#config` snapshot at construction time. Flipping
+     * `enablePointerWinBroadcasts` at runtime (e.g., via a hot config
+     * reload that constructs a NEW `ProfilePointerLayer`) requires:
+     *   (1) Tearing down the old layer (calling `shutdown()`); AND
+     *   (2) Rebuilding the wiring so the new layer's
+     *       `winBroadcastsEnabled() === true` is observed by both
+     *       publisher and subscriber on next event.
+     * The publisher side picks up the new flag on its next successful
+     * publish. The subscriber side picks it up on the next emitted
+     * `storage:pointer-published` event — which only fires when the
+     * publisher is also enabled, so the first such event after the flip
+     * arms the subscription automatically. There is no third trigger
+     * that would re-arm the subscriber on a flip from false→true
+     * without a fresh publish.
+     *
+     * **Receive-only-wallet caveat.** A wallet that has the flag
+     * enabled but never PUBLISHES (e.g., a pure receive endpoint that
+     * only ingests sibling-device payments) will never emit a
+     * `storage:pointer-published` event of its own. Its
+     * `maybeInstallPointerWinSubscription` is therefore not triggered
+     * by its own publish path; the subscription only arms if some
+     * external code path calls `maybeInstallPointerWinSubscription()`
+     * directly. As of #264, `core/Sphere.ts` does NOT arrange an
+     * explicit init-time call — receive-only-wallet support for
+     * pointer-win broadcasts requires a follow-up wiring change (an
+     * init-time invocation gated on the flag's enabled state, OR a
+     * lazy first-incoming-event trigger). Acceptable today because
+     * the flag is default-OFF and the broadcast pipeline is an
+     * optimization layer (the aggregator pointer + auto-merge cover
+     * correctness without it).
+     */
+    winBroadcastsEnabled(): boolean;
     /**
      * RFC-251 Approach D (issue #255 Problem B) — expose the pointer layer's
      * signing pubkey + signer to the integration wiring layer (Sphere /
@@ -5454,6 +5635,38 @@ declare class ProfileStorageProvider implements StorageProvider {
      * the wrong CAR shape to the bundle index.
      */
     setSnapshotApplier(applier: ((snapshot: LeanProfileSnapshot) => Promise<ApplySnapshotResult>) | null): void;
+    /**
+     * Issue #280 — register an optional observability hook fired when
+     * `readEnvelopePayload()` falls back from the envelope-decode path
+     * (`db.getEntry`) to the raw-bytes path (`db.get`). This signals
+     * that a stored entry's CBOR envelope is unreadable but the raw
+     * ciphertext could still be served via the legacy compat path.
+     *
+     * Two legitimate reasons for fallback exist:
+     *   1. Pre-#247 legacy ciphertext written via `db.put` (expected).
+     *   2. Live envelope corruption (a real defect — see Issue #280).
+     *
+     * The hook lets operators detect (2) by surfacing the key + error
+     * to their telemetry pipeline. Re-registration is idempotent (the
+     * most recent hook wins); pass `null` to disable.
+     *
+     * The provider applies its own per-key+message dedup so a single
+     * persistent corruption does not spam the hook on every read.
+     * The hook contract MUST NOT throw — exceptions are swallowed.
+     */
+    setEnvelopeFallbackNotifier(notifier: ((info: {
+        readonly key: string;
+        readonly errorMessage: string;
+    }) => void) | null): void;
+    private envelopeFallbackNotifier;
+    /**
+     * Issue #280 — dedup set for {@link envelopeFallbackNotifier}.
+     * Limits a single (key, errorMessage) pair to fire the hook AND log
+     * the warning once per provider instance. Bounded to a sane cap so
+     * an adversarial input cannot grow it without bound.
+     */
+    private envelopeFallbackSeen;
+    private static readonly ENVELOPE_FALLBACK_DEDUP_CAP;
     constructor(localCache: StorageProvider, db: ProfileDatabase, options?: ProfileStorageProviderOptions | undefined);
     connect(): Promise<void>;
     /**
@@ -5671,16 +5884,50 @@ declare class ProfileStorageProvider implements StorageProvider {
     private writeEnvelope;
     /**
      * Read an envelope's encrypted payload from OrbitDB. Returns null if
-     * the key is absent. Legacy raw-bytes entries are auto-wrapped by
-     * `getEntry`'s legacy fallback (§7.1), so this helper works on both
-     * pre-schema and post-schema OpLog contents.
+     * the key is absent.
      *
-     * Passes `trustLocalClaim: true` — callers at this layer have already
-     * established that this wallet's OrbitDB instance is its own source of
-     * truth (no cross-wallet sharing). Peer writes reach this path only
-     * through replication events, which clear the locally-authored set.
+     * Issue #280 — uses the dual-format reader from `oplog-envelope-io.ts`
+     * so a `getEntry()` decode failure (e.g., bytes that aren't a valid
+     * CBOR envelope) automatically falls back to `db.get(key)` for the
+     * raw ciphertext. Without this fallback, a corrupted-envelope read at
+     * a SENT/OUTBOX/etc. key would propagate up through
+     * `getEncryptedRaw()` and the lean-snapshot exporter would silently
+     * skip the entry (`profile-lean-snapshot.ts:433` `— skipping` log
+     * line) — producing a profile snapshot that omits the SENT record
+     * for a payment. On the recipient peer that imports the snapshot,
+     * the previously-spent input token then reappears as still-owned
+     * because no tombstone-by-SENT logic fires. End-user symptom: phantom
+     * double-balance after IPFS-only recovery (§D bob).
+     *
+     * The dual-format path also matches the legacy compat behavior of
+     * the per-writer readers (SentLedgerWriter, OutboxWriter, etc.),
+     * which is the canonical contract for "read whatever's at this key,
+     * envelope-wrapped or raw" — both shapes appear in long-lived wallets
+     * because of in-place format migration (Issue #247).
+     *
+     * NOTE: this method is also called via `getEncryptedRaw()` from the
+     * lean-snapshot builder. Even when the envelope is corrupt locally,
+     * we still want the raw ciphertext bytes — they ARE persistable
+     * verbatim into the snapshot and the recipient peer will simply skip
+     * the unparseable entry via the same dual-format reader downstream.
+     * The Layer-2 aggregator-spent recovery check (see
+     * `PaymentsModule.runRecoveryAggregatorSpentSweep`) is the durable
+     * defense regardless of which side hits the corruption first.
      */
     private readEnvelopePayload;
+    /**
+     * Issue #280 — dispatcher for the envelope-fallback hook. Logs at
+     * warn level on the first sighting of a unique (key, errorMessage)
+     * pair AND invokes the user-supplied notifier (if any) so it can
+     * route the signal into operator telemetry (a typed event such as
+     * `profile:corrupt-oplog-entry-detected`).
+     *
+     * Why both: the warn log is unconditional (always landed by the
+     * structured logger), the notifier is opt-in (lets consumers
+     * choose how to react — e.g. emit a Sphere event, push to a
+     * metrics endpoint, alert on threshold).
+     */
+    private handleEnvelopeFallback;
     /**
      * Remove key from both cache and OrbitDB.
      */

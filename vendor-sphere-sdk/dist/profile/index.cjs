@@ -154,10 +154,10 @@ function concatBytes(...arrays) {
     sum += a.length;
   }
   const res = new Uint8Array(sum);
-  for (let i = 0, pad = 0; i < arrays.length; i++) {
+  for (let i = 0, pad2 = 0; i < arrays.length; i++) {
     const a = arrays[i];
-    res.set(a, pad);
-    pad += a.length;
+    res.set(a, pad2);
+    pad2 += a.length;
   }
   return res;
 }
@@ -214,16 +214,16 @@ var init_hmac = __esm({
         this.blockLen = this.iHash.blockLen;
         this.outputLen = this.iHash.outputLen;
         const blockLen = this.blockLen;
-        const pad = new Uint8Array(blockLen);
-        pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
-        for (let i = 0; i < pad.length; i++)
-          pad[i] ^= 54;
-        this.iHash.update(pad);
+        const pad2 = new Uint8Array(blockLen);
+        pad2.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+        for (let i = 0; i < pad2.length; i++)
+          pad2[i] ^= 54;
+        this.iHash.update(pad2);
         this.oHash = hash.create();
-        for (let i = 0; i < pad.length; i++)
-          pad[i] ^= 54 ^ 92;
-        this.oHash.update(pad);
-        clean(pad);
+        for (let i = 0; i < pad2.length; i++)
+          pad2[i] ^= 54 ^ 92;
+        this.oHash.update(pad2);
+        clean(pad2);
       }
       update(buf) {
         aexists(this);
@@ -1133,93 +1133,474 @@ var init_encryption = __esm({
 // core/logger.ts
 function getState() {
   const g = globalThis;
-  if (!g[LOGGER_KEY]) {
-    g[LOGGER_KEY] = { debug: false, tags: {}, handler: null };
+  const existing = g[LOGGER_KEY];
+  if (!existing) {
+    const fresh = {
+      debug: false,
+      tags: {},
+      levels: {},
+      handler: null,
+      sinks: [],
+      timestamps: false,
+      redaction: true,
+      envBootstrapped: false
+    };
+    g[LOGGER_KEY] = fresh;
+    bootstrapFromEnv(fresh);
+    return fresh;
   }
-  return g[LOGGER_KEY];
+  if (existing.levels === void 0) existing.levels = {};
+  if (existing.sinks === void 0) existing.sinks = [];
+  if (existing.timestamps === void 0) existing.timestamps = false;
+  if (existing.redaction === void 0) existing.redaction = true;
+  if (existing.envBootstrapped === void 0) {
+    existing.envBootstrapped = false;
+    bootstrapFromEnv(existing);
+  }
+  return existing;
 }
-function isEnabled(tag) {
-  const state = getState();
-  if (tag in state.tags) return state.tags[tag];
-  return state.debug;
+function readEnvSpec() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      const v = process.env.SPHERE_DEBUG ?? process.env.SPHERE_LOG;
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      const v = localStorage.getItem("SPHERE_DEBUG");
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  return null;
 }
-var LOGGER_KEY, logger;
+function bootstrapFromEnv(state) {
+  if (state.envBootstrapped) return;
+  state.envBootstrapped = true;
+  const spec = readEnvSpec();
+  if (spec) applySpec(state, spec);
+}
+function parseSpec(spec) {
+  const out = [];
+  if (spec.length > SPEC_MAX_LENGTH) {
+    try {
+      console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_LENGTH} bytes \u2014 rejecting`);
+    } catch {
+    }
+    return out;
+  }
+  let processed = 0;
+  for (const rawEntry of spec.split(",")) {
+    if (processed >= SPEC_MAX_ENTRIES) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_ENTRIES} entries \u2014 truncating`);
+      } catch {
+      }
+      break;
+    }
+    processed += 1;
+    const trimmed = rawEntry.trim();
+    if (!trimmed) continue;
+    let pattern = trimmed;
+    let level = "debug";
+    const negate = pattern.startsWith("-") || pattern.startsWith("!");
+    if (negate) pattern = pattern.slice(1).trim();
+    const eq = pattern.indexOf("=");
+    if (eq >= 0) {
+      const levelPart = pattern.slice(eq + 1).trim().toLowerCase();
+      pattern = pattern.slice(0, eq).trim();
+      if (VALID_LEVELS.has(levelPart)) {
+        level = levelPart;
+      } else if (levelPart.length > 0) {
+        try {
+          console.warn(
+            `[logger] SPHERE_DEBUG entry "${rawEntry.trim()}": unknown level "${levelPart}" \u2014 falling back to "debug". Valid: trace, debug, info, warn, error.`
+          );
+        } catch {
+        }
+      }
+    }
+    if (!pattern) continue;
+    if (!SPEC_PATTERN_RE.test(pattern)) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG entry has invalid pattern "${pattern}" \u2014 skipping`);
+      } catch {
+      }
+      continue;
+    }
+    out.push({ pattern, level, negate });
+  }
+  return out;
+}
+function applySpec(state, spec) {
+  const entries = parseSpec(spec);
+  if (entries.length === 0) return;
+  for (const entry of entries) {
+    if (entry.pattern === "*" && !entry.negate) {
+      state.debug = LEVEL_RANK[entry.level] <= LEVEL_RANK.debug;
+      state.levels["*"] = entry.level;
+      continue;
+    }
+    if (entry.negate) {
+      state.levels[entry.pattern] = "warn";
+    } else {
+      state.levels[entry.pattern] = entry.level;
+    }
+  }
+  state.timestamps = true;
+}
+function* namespaceAncestors(ns) {
+  if (!ns) {
+    yield "*";
+    return;
+  }
+  let cursor = ns;
+  while (true) {
+    yield cursor;
+    yield `${cursor}:*`;
+    const idx = cursor.lastIndexOf(":");
+    if (idx <= 0) break;
+    cursor = cursor.slice(0, idx);
+  }
+  yield "*";
+}
+function resolveMinLevel(state, namespace) {
+  for (const candidate of namespaceAncestors(namespace)) {
+    const lvl = state.levels[candidate];
+    if (lvl) return lvl;
+  }
+  if (namespace in state.tags) {
+    return state.tags[namespace] ? "debug" : "warn";
+  }
+  return state.debug ? "debug" : "warn";
+}
+function isLevelEnabled(state, namespace, level) {
+  if (LEVEL_RANK[level] >= ALWAYS_LEVEL_RANK) return true;
+  const min = resolveMinLevel(state, namespace);
+  return LEVEL_RANK[level] >= LEVEL_RANK[min];
+}
+function shouldRedactKey(key) {
+  const k = key.toLowerCase();
+  if (REDACT_KEYS.has(k)) return true;
+  return REDACT_KEY_RE.test(key);
+}
+function redactFields(input) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  return redactValue(input, 0, seen);
+}
+function redactValue(value, depth, seen) {
+  if (value == null) return value;
+  if (depth >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return REDACT_TRUNCATED;
+    seen.add(value);
+    return value.map((el) => redactValue(el, depth + 1, seen));
+  }
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    if (seen.has(obj)) return REDACT_TRUNCATED;
+    seen.add(obj);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (shouldRedactKey(k)) {
+        out[k] = REDACTED;
+      } else {
+        out[k] = redactValue(v, depth + 1, seen);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function redactArgs(args) {
+  if (args.length === 0) return args;
+  const seen = /* @__PURE__ */ new WeakSet();
+  return args.map((a) => redactValue(a, 0, seen));
+}
+function pad(level) {
+  switch (level) {
+    case "trace":
+      return "TRACE";
+    case "debug":
+      return "DEBUG";
+    case "info":
+      return "INFO ";
+    case "warn":
+      return "WARN ";
+    case "error":
+      return "ERROR";
+  }
+}
+function escapeControlChars(s) {
+  if (typeof s !== "string") return String(s);
+  if (!/[\x00-\x1f\x7f]/.test(s)) return s;
+  return s.replace(/[\x00-\x1f\x7f]/g, (c) => {
+    const code2 = c.charCodeAt(0);
+    if (code2 === 10) return "\\n";
+    if (code2 === 13) return "\\r";
+    if (code2 === 9) return "\\t";
+    if (code2 === 27) return "\\x1b";
+    return `\\x${code2.toString(16).padStart(2, "0")}`;
+  });
+}
+function formatRecord(state, record) {
+  const wantTs = state.timestamps === true;
+  const ts = wantTs ? `[${new Date(record.ts).toISOString()}] ` : "";
+  const level = wantTs ? `[${pad(record.level)}] ` : "";
+  const ns = `[${escapeControlChars(record.namespace)}]`;
+  const safeMessage = escapeControlChars(record.message);
+  let msg = `${ts}${level}${ns} ${safeMessage}`;
+  if (record.fields && Object.keys(record.fields).length > 0) {
+    try {
+      msg += ` ${JSON.stringify(record.fields)}`;
+    } catch {
+      msg += " [unserializable fields]";
+    }
+  }
+  return msg;
+}
+function emit(state, level, namespace, message, fields, args) {
+  const safeFields = fields && state.redaction ? redactFields(fields) : fields;
+  const safeArgs = args.length && state.redaction ? redactArgs(args) : args;
+  const record = {
+    ts: Date.now(),
+    level,
+    namespace,
+    message,
+    fields: safeFields,
+    args: safeArgs.length > 0 ? safeArgs : void 0
+  };
+  if (state.handler) {
+    const downgraded = level === "warn" || level === "error" ? level : "debug";
+    state.handler(downgraded, namespace, message, ...record.args ?? []);
+    return;
+  }
+  const sinks = state.sinks.length > 0 ? state.sinks : [CONSOLE_SINK];
+  const formatted = formatRecord(state, record);
+  for (const sink of sinks) {
+    try {
+      sink.write(record, formatted);
+    } catch (err) {
+      try {
+        console.error("[logger] sink threw", err);
+      } catch {
+      }
+    }
+  }
+}
+function now() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch {
+  }
+  return Date.now();
+}
+function makeSpan(state, namespace, spanName, initialFields) {
+  const start = now();
+  const marks = [];
+  let ended = false;
+  return {
+    mark(label, fields) {
+      if (ended) return;
+      marks.push({ label, elapsedMs: Math.round((now() - start) * 1e3) / 1e3, fields });
+    },
+    elapsed() {
+      return Math.round((now() - start) * 1e3) / 1e3;
+    },
+    end(extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      if (!isLevelEnabled(state, namespace, "debug")) return dur;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "debug", namespace, `span.end ${spanName}`, fields, []);
+      return dur;
+    },
+    endWithError(err, extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur,
+        err: err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "warn", namespace, `span.error ${spanName}`, fields, []);
+      return dur;
+    }
+  };
+}
+var LEVEL_RANK, ALWAYS_LEVEL_RANK, LOGGER_KEY, VALID_LEVELS, SPEC_MAX_LENGTH, SPEC_MAX_ENTRIES, SPEC_PATTERN_RE, REDACT_KEYS, REDACT_KEY_RE, REDACTED, REDACT_MAX_DEPTH, REDACT_TRUNCATED, CONSOLE_SINK, logger;
 var init_logger = __esm({
   "core/logger.ts"() {
     "use strict";
+    LEVEL_RANK = {
+      trace: 0,
+      debug: 1,
+      info: 2,
+      warn: 3,
+      error: 4
+    };
+    ALWAYS_LEVEL_RANK = LEVEL_RANK.warn;
     LOGGER_KEY = "__sphere_sdk_logger__";
+    VALID_LEVELS = /* @__PURE__ */ new Set(["trace", "debug", "info", "warn", "error"]);
+    SPEC_MAX_LENGTH = 8 * 1024;
+    SPEC_MAX_ENTRIES = 256;
+    SPEC_PATTERN_RE = /^[A-Za-z0-9:_*\-]{1,128}$/;
+    REDACT_KEYS = /* @__PURE__ */ new Set([
+      // BIP-32 / BIP-39 / wallet secrets
+      "privatekey",
+      "private_key",
+      "priv",
+      "privkey",
+      "priv_key",
+      "masterkey",
+      "master_key",
+      "chaincode",
+      "chain_code",
+      "mnemonic",
+      "seed",
+      "seedphrase",
+      "seed_phrase",
+      "recoveryphrase",
+      "recovery_phrase",
+      "wif",
+      "xpriv",
+      "xprv",
+      // Nostr / transport secrets
+      "nsec",
+      "nsechex",
+      "nsec_hex",
+      // Crypto material
+      "keymaterial",
+      "key_material",
+      "rawkey",
+      "raw_key",
+      "keyhex",
+      "key_hex",
+      "signingkey",
+      "signing_key",
+      "attestkey",
+      "attest_key",
+      "hmackey",
+      "hmac_key",
+      "encryptionkey",
+      "encryption_key",
+      "ciphertext",
+      "iv",
+      "salt",
+      "nonce",
+      // IPFS / libp2p
+      "peerid",
+      "peer_id",
+      "ipnskey",
+      "ipns_key",
+      "ipns_private_key",
+      // Auth tokens
+      "secret",
+      "apikey",
+      "api_key",
+      "accesstoken",
+      "access_token",
+      "refreshtoken",
+      "refresh_token",
+      "sessiontoken",
+      "session_token",
+      "bearer",
+      "authorization",
+      "auth",
+      "token",
+      // Generic password
+      "password",
+      "passphrase"
+    ]);
+    REDACT_KEY_RE = new RegExp(
+      "(?:^|[._-])(?:secret|priv|private|nsec|mnemonic|seed|password|passphrase|apikey|api_key|bearer|authorization|token|wif|xpriv|xprv|chaincode|masterkey|encryptionkey|hmackey|attestkey|peerid|ipnskey)(?:[._-]|$)|(?:^|[a-zA-Z])(?:Secret|Priv|Private|Nsec|Mnemonic|Seed|Password|Passphrase|ApiKey|Bearer|Authorization|Token|Wif|Xpriv|Xprv|ChainCode|MasterKey|EncryptionKey|HmacKey|AttestKey|PeerId|IpnsKey)|(?:^|[a-z])(?:priv|seed|nsec|mnemonic|password|secret|wallet|signing|encryption|chain|master|hmac|attest|peer|ipns|cipher|access|refresh|session|api|raw)(?:[A-Z][a-zA-Z]*)?(?:Key|Phrase|Token|Hex|Code|Text|Material)(?:[A-Z]|$|[._-])"
+    );
+    REDACTED = "[REDACTED]";
+    REDACT_MAX_DEPTH = 8;
+    REDACT_TRUNCATED = "[REDACTED:depth-exceeded]";
+    CONSOLE_SINK = {
+      write(record, formatted) {
+        const state = getState();
+        const legacy = record.fields === void 0 && state.timestamps !== true;
+        const target = record.level === "error" ? console.error : record.level === "warn" ? console.warn : console.log;
+        if (legacy) {
+          const prefix = `[${record.namespace}]`;
+          if (record.args && record.args.length > 0) target(prefix, record.message, ...record.args);
+          else target(prefix, record.message);
+        } else {
+          if (record.args && record.args.length > 0) target(formatted, ...record.args);
+          else target(formatted);
+        }
+      }
+    };
     logger = {
-      /**
-       * Configure the logger. Can be called multiple times (last write wins).
-       * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
-       */
       configure(config) {
         const state = getState();
-        if (config.debug !== void 0) state.debug = config.debug;
+        if (config.debug !== void 0) {
+          state.debug = config.debug;
+        }
         if (config.handler !== void 0) state.handler = config.handler;
+        if (config.timestamps !== void 0) state.timestamps = config.timestamps;
+        if (config.redaction !== void 0) state.redaction = config.redaction;
       },
-      /**
-       * Enable/disable debug logging for a specific tag.
-       * Per-tag setting overrides the global debug flag.
-       *
-       * @example
-       * ```ts
-       * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
-       * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
-       * ```
-       */
       setTagDebug(tag, enabled) {
         getState().tags[tag] = enabled;
       },
-      /**
-       * Clear per-tag override, falling back to global debug flag.
-       */
       clearTagDebug(tag) {
         delete getState().tags[tag];
       },
-      /** Returns true if debug mode is enabled for the given tag (or globally). */
       isDebugEnabled(tag) {
-        if (tag) return isEnabled(tag);
-        return getState().debug;
+        const state = getState();
+        if (tag) return isLevelEnabled(state, tag, "debug");
+        return state.debug || Object.values(state.levels).some((l) => LEVEL_RANK[l] <= LEVEL_RANK.debug);
       },
-      /**
-       * Debug-level log. Only shown when debug is enabled (globally or for this tag).
-       * Use for detailed operational information.
-       */
+      /** Legacy single-tag debug. Keeps the `tag, message, ...args` signature. */
       debug(tag, message, ...args) {
-        if (!isEnabled(tag)) return;
         const state = getState();
-        if (state.handler) {
-          state.handler("debug", tag, message, ...args);
-        } else {
-          console.log(`[${tag}]`, message, ...args);
-        }
+        if (!isLevelEnabled(state, tag, "debug")) return;
+        emit(state, "debug", tag, message, void 0, args);
       },
-      /**
-       * Warning-level log. ALWAYS shown regardless of debug flag.
-       * Use for important but non-critical issues (timeouts, retries, degraded state).
-       */
+      /** Legacy single-tag info — promoted alias for `debug`. */
+      info(tag, message, ...args) {
+        const state = getState();
+        if (!isLevelEnabled(state, tag, "info")) return;
+        emit(state, "info", tag, message, void 0, args);
+      },
+      /** Legacy single-tag trace — gated by trace-or-lower namespace level. */
+      trace(tag, message, ...args) {
+        const state = getState();
+        if (!isLevelEnabled(state, tag, "trace")) return;
+        emit(state, "trace", tag, message, void 0, args);
+      },
       warn(tag, message, ...args) {
-        const state = getState();
-        if (state.handler) {
-          state.handler("warn", tag, message, ...args);
-        } else {
-          console.warn(`[${tag}]`, message, ...args);
-        }
+        emit(getState(), "warn", tag, message, void 0, args);
       },
-      /**
-       * Error-level log. ALWAYS shown regardless of debug flag.
-       * Use for critical failures that should never be silenced.
-       */
       error(tag, message, ...args) {
-        const state = getState();
-        if (state.handler) {
-          state.handler("error", tag, message, ...args);
-        } else {
-          console.error(`[${tag}]`, message, ...args);
-        }
+        emit(getState(), "error", tag, message, void 0, args);
       },
-      /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+      /** Per-tag span helper — same as `getLogger(tag).time(...)`. */
+      time(tag, spanName, initialFields) {
+        return makeSpan(getState(), tag, spanName, initialFields);
+      },
+      /** Reset all logger state. Primarily for tests. */
       reset() {
         const g = globalThis;
         delete g[LOGGER_KEY];
@@ -3879,7 +4260,7 @@ function unwrapEnvelopeBytes(bytes) {
     return bytes;
   }
 }
-async function getEnvelopePayload(db, key) {
+async function getEnvelopePayload(db, key, onFallback) {
   if (typeof db.getEntry === "function") {
     try {
       const envelope = await db.getEntry(key, {
@@ -3890,7 +4271,15 @@ async function getEnvelopePayload(db, key) {
       }
       return null;
     } catch (err) {
-      void err;
+      if (onFallback !== void 0) {
+        try {
+          onFallback({
+            key,
+            errorMessage: err instanceof Error ? err.message : String(err)
+          });
+        } catch {
+        }
+      }
     }
   }
   return db.get(key);
@@ -3915,7 +4304,7 @@ function redactionMarkerFor(field, value) {
   }
   return `[REDACTED: ${field}]`;
 }
-function redactValue(value, visited, depth) {
+function redactValue2(value, visited, depth) {
   if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
   if (value === null || value === void 0) return value;
   const t = typeof value;
@@ -3966,7 +4355,7 @@ function redactValue(value, visited, depth) {
       errCause = "[REDACTED: getter-threw]";
     }
     if (errCause !== void 0) {
-      clone.cause = redactValue(errCause, visited, depth + 1);
+      clone.cause = redactValue2(errCause, visited, depth + 1);
     }
     let keys;
     try {
@@ -3988,7 +4377,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         clone[key] = redactionMarkerFor(key, v);
       } else {
-        clone[key] = redactValue(v, visited, depth + 1);
+        clone[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return clone;
@@ -4027,7 +4416,7 @@ function redactValue(value, visited, depth) {
         } catch {
           item = "[REDACTED: getter-threw]";
         }
-        out2.push(redactValue(item, visited, depth + 1));
+        out2.push(redactValue2(item, visited, depth + 1));
       }
       return out2;
     }
@@ -4050,7 +4439,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         out[key] = redactionMarkerFor(key, v);
       } else {
-        out[key] = redactValue(v, visited, depth + 1);
+        out[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return out;
@@ -4059,7 +4448,7 @@ function redactValue(value, visited, depth) {
 }
 function redactCause(cause) {
   if (cause === void 0) return void 0;
-  return redactValue(cause, /* @__PURE__ */ new WeakMap(), 0);
+  return redactValue2(cause, /* @__PURE__ */ new WeakMap(), 0);
 }
 var REDACTED_FIELDS, REDACTED_FIELDS_SET, MAX_REDACT_DEPTH, SphereError;
 var init_errors3 = __esm({
@@ -4703,16 +5092,16 @@ async function verifyCidAccessibleWithRetry(gateways, cid, options) {
     if (ok) {
       return { ok: true, attempts, elapsedMs: Date.now() - startedAt };
     }
-    const now = Date.now();
-    if (now >= deadline) {
+    const now2 = Date.now();
+    if (now2 >= deadline) {
       return {
         ok: false,
         attempts,
-        elapsedMs: now - startedAt,
+        elapsedMs: now2 - startedAt,
         failureKind: "deadline-exceeded"
       };
     }
-    const remaining = deadline - now;
+    const remaining = deadline - now2;
     const sleepMs = Math.min(delay, remaining);
     if (sleepMs > 0) {
       await sleepInterruptible(sleepMs, options.signal);
@@ -8269,11 +8658,11 @@ var init_UxfPackage = __esm({
        * Create a new empty package.
        */
       static create(options) {
-        const now = Math.floor(Date.now() / 1e3);
+        const now2 = Math.floor(Date.now() / 1e3);
         const envelope = {
           version: "1.0.0",
-          createdAt: now,
-          updatedAt: now,
+          createdAt: now2,
+          updatedAt: now2,
           ...options?.description !== void 0 ? { description: options.description } : {},
           ...options?.creator !== void 0 ? { creator: options.creator } : {}
         };
@@ -10033,21 +10422,21 @@ function walkFile(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, vi
   if (depth > MAX_RECURSION_DEPTH) {
     throw new Error(`unixfs-verify: recursion depth exceeded ${MAX_RECURSION_DEPTH}`);
   }
-  const cidKey = canonicalCidKey(rootCid);
-  const blockBytes = blocks.get(cidKey);
+  const cidKey2 = canonicalCidKey(rootCid);
+  const blockBytes = blocks.get(cidKey2);
   if (!blockBytes) {
     throw new Error(`unixfs-verify: block ${rootCid.toString()} missing from CAR`);
   }
-  if (pathVisited.has(cidKey)) {
+  if (pathVisited.has(cidKey2)) {
     throw new Error(
       `unixfs-verify: cycle detected at block ${rootCid.toString()}`
     );
   }
-  pathVisited.add(cidKey);
+  pathVisited.add(cidKey2);
   try {
     walkFileInner(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter);
   } finally {
-    pathVisited.delete(cidKey);
+    pathVisited.delete(cidKey2);
   }
 }
 function walkFileInner(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter) {
@@ -10663,6 +11052,145 @@ init_encryption();
 init_logger();
 init_hex();
 init_errors();
+
+// profile/helia-blockstore-shim.ts
+var BLOCKSTORE_GET_LRU_MAX_DEFAULT = 64;
+var BLOCKSTORE_GET_LRU_PER_ENTRY_MAX_DEFAULT = 1 * 1024 * 1024;
+async function drainGenerator(source) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of source) {
+    chunks.push(chunk);
+    total += chunk.length;
+  }
+  if (chunks.length === 0) return void 0;
+  if (chunks.length === 1) return chunks[0];
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    combined.set(c, offset);
+    offset += c.length;
+  }
+  return combined;
+}
+function isMissError(err) {
+  if (err === null || typeof err !== "object") return false;
+  const e = err;
+  return e.name === "NotFoundError" || e.code === "ERR_NOT_FOUND" || e.name === "InvalidConfigurationError" || e.code === "ERR_NO_BLOCK_BROKERS";
+}
+function cidKey(cid) {
+  if (cid == null) return null;
+  let s;
+  try {
+    s = cid.toString?.();
+  } catch {
+    return null;
+  }
+  if (typeof s !== "string" || s.length === 0) return null;
+  if (s.startsWith("[object ")) return null;
+  return s;
+}
+function installHeliaBlockstoreGetShim(blockstore, options) {
+  const lruMax = options?.lruMax ?? BLOCKSTORE_GET_LRU_MAX_DEFAULT;
+  const perEntryMax = options?.perEntryMax ?? BLOCKSTORE_GET_LRU_PER_ENTRY_MAX_DEFAULT;
+  const originalGet = blockstore.get.bind(blockstore);
+  const originalPut = typeof blockstore.put === "function" ? blockstore.put.bind(blockstore) : null;
+  const originalDelete = typeof blockstore.delete === "function" ? blockstore.delete.bind(blockstore) : null;
+  const lru = /* @__PURE__ */ new Map();
+  const inflight = /* @__PURE__ */ new Map();
+  let hits = 0;
+  let misses = 0;
+  const touch = (key, value) => {
+    if (lruMax <= 0 || value.byteLength === 0 || value.byteLength > perEntryMax) {
+      return;
+    }
+    lru.set(key, value);
+    while (lru.size > lruMax) {
+      const oldest = lru.keys().next().value;
+      if (oldest === void 0) break;
+      lru.delete(oldest);
+    }
+  };
+  const wrappedGet = async (cid, opts) => {
+    const key = cidKey(cid);
+    if (key !== null) {
+      const cached = lru.get(key);
+      if (cached !== void 0) {
+        lru.delete(key);
+        lru.set(key, cached);
+        hits++;
+        return cached;
+      }
+      const pending = inflight.get(key);
+      if (pending !== void 0) {
+        hits++;
+        return pending;
+      }
+    }
+    misses++;
+    const work = (async () => {
+      try {
+        const source = originalGet(cid, opts);
+        return await drainGenerator(source);
+      } catch (err) {
+        if (isMissError(err)) return void 0;
+        throw err;
+      } finally {
+        if (key !== null) inflight.delete(key);
+      }
+    })();
+    if (key !== null) inflight.set(key, work);
+    const result = await work;
+    if (key !== null && result instanceof Uint8Array) {
+      touch(key, result);
+    }
+    return result;
+  };
+  blockstore.get = wrappedGet;
+  let wrappedPut = null;
+  if (originalPut !== null) {
+    wrappedPut = (cid, val, opts) => {
+      const key = cidKey(cid);
+      if (key !== null) {
+        lru.delete(key);
+        inflight.delete(key);
+      }
+      return originalPut(cid, val, opts);
+    };
+    blockstore.put = wrappedPut;
+  }
+  let wrappedDelete = null;
+  if (originalDelete !== null) {
+    wrappedDelete = (cid, opts) => {
+      const key = cidKey(cid);
+      if (key !== null) {
+        lru.delete(key);
+        inflight.delete(key);
+      }
+      return originalDelete(cid, opts);
+    };
+    blockstore.delete = wrappedDelete;
+  }
+  return {
+    cacheSize: () => lru.size,
+    inflightSize: () => inflight.size,
+    hits: () => hits,
+    misses: () => misses,
+    uninstall: () => {
+      blockstore.get = originalGet;
+      if (originalPut !== null) {
+        blockstore.put = originalPut;
+      }
+      if (originalDelete !== null) {
+        blockstore.delete = originalDelete;
+      }
+      lru.clear();
+      inflight.clear();
+    }
+  };
+}
+
+// profile/orbitdb-adapter.ts
 init_oplog_entry();
 var OrbitDbAdapter = class {
   // ---- private fields (typed as `any` because @orbitdb/core may not be installed) ----
@@ -10901,41 +11429,7 @@ var OrbitDbAdapter = class {
       this.helia = await createHelia(heliaOptions);
       const heliaInstance = this.helia;
       if (heliaInstance?.blockstore && typeof heliaInstance.blockstore.get === "function") {
-        const blockstore = heliaInstance.blockstore;
-        const originalGet = blockstore.get.bind(blockstore);
-        blockstore.get = async (cid, options) => {
-          const chunks = [];
-          let total = 0;
-          try {
-            for await (const chunk of originalGet(cid, options)) {
-              chunks.push(chunk);
-              total += chunk.length;
-            }
-          } catch (err) {
-            const errName = err?.name;
-            const errCode = err?.code;
-            if (errName === "NotFoundError" || errCode === "ERR_NOT_FOUND" || // Issue #266 — Helia throws InvalidConfigurationError when
-            // `blockBrokers: []` and the block isn't in the local
-            // blockstore. We treat this as "missing" so OrbitDB
-            // gracefully sees an unresolved head instead of erroring
-            // out the whole read. The HTTP recovery path
-            // (snapshot prefetch via profile/ipfs-client.ts) handles
-            // re-warming the blockstore from operator Kubo gateways.
-            errName === "InvalidConfigurationError" || errCode === "ERR_NO_BLOCK_BROKERS") {
-              return void 0;
-            }
-            throw err;
-          }
-          if (chunks.length === 0) return void 0;
-          if (chunks.length === 1) return chunks[0];
-          const combined = new Uint8Array(total);
-          let offset = 0;
-          for (const c of chunks) {
-            combined.set(c, offset);
-            offset += c.length;
-          }
-          return combined;
-        };
+        installHeliaBlockstoreGetShim(heliaInstance.blockstore);
       }
       const createOrbitDB = orbitdbModule.createOrbitDB ?? orbitdbModule.default?.createOrbitDB;
       if (typeof createOrbitDB !== "function") {
@@ -11959,6 +12453,40 @@ var STORAGE_KEYS_GLOBAL = {
   LAST_WALLET_EVENT_TS: "last_wallet_event_ts",
   /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
   LAST_DM_EVENT_TS: "last_dm_event_ts",
+  /**
+   * Issue #275 — persistent dedup for Nostr wallet event IDs that have
+   * been SUCCESSFULLY processed (cursor advanced). Keyed per pubkey;
+   * stored as a JSON string array bounded by
+   * `LIMITS.PROCESSED_EVENT_IDS_CAP` (FIFO eviction).
+   *
+   * Distinct from in-memory `inFlightEventIds`: this set persists across
+   * process restarts so cross-process CLI invocations don't re-walk the
+   * full relay backlog. At-least-once is preserved because we ONLY add
+   * to this set after the event's cursor was advanced (durability ok
+   * or replay budget exhausted), never after a transient failure.
+   */
+  PROCESSED_WALLET_EVENT_IDS: "processed_wallet_event_ids",
+  /**
+   * Issue #275 — persistent durability-cooldown ledger for
+   * TOKEN_TRANSFER events. Tracks `attempts` and `nextRetryAt` across
+   * process restarts so the bounded replay budget
+   * (`DURABILITY_MAX_REPLAY_ATTEMPTS = 3`) accumulates across CLI
+   * invocations rather than resetting per-process.
+   */
+  FAILED_EVENT_COOLDOWNS: "failed_event_cooldowns",
+  /**
+   * Issue #275 — persistent dedup set for the MultiAddressTransportMux
+   * level. The Mux maintains its own `processedEventIds` (independent
+   * of NostrTransportProvider's set) and dispatches to per-address
+   * adapters. Without persistence, every fresh CLI invocation
+   * re-walked the relay backlog through the Mux path as well as the
+   * outer-provider path. Bounded by `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+   * Per-wallet storage scope: each Sphere instance has its own
+   * `storage` provider, so a bare global key is sufficient (no
+   * per-pubkey suffix needed because the Mux spans all per-wallet
+   * addresses).
+   */
+  MUX_PROCESSED_EVENT_IDS: "mux_processed_event_ids",
   /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
   GROUP_CHAT_RELAY_URL: "group_chat_relay_url",
   /** Cached token registry JSON (fetched from remote) */
@@ -14519,6 +15047,7 @@ var Lamport = class {
 
 // profile/profile-storage-provider.ts
 init_oplog_entry();
+init_oplog_envelope_io();
 
 // profile/pointer-wiring.ts
 var import_cid3 = require("multiformats/cid");
@@ -14845,7 +15374,7 @@ function assertAuthorizedMasterKey(candidate) {
 }
 
 // profile/aggregator-pointer/secret-key.ts
-var REDACTED = "[REDACTED SecretKey]";
+var REDACTED2 = "[REDACTED SecretKey]";
 var UINT8_ARRAY_CTOR2 = Uint8Array;
 var SecretKey = class {
   #bytes;
@@ -14875,19 +15404,19 @@ var SecretKey = class {
     return this.#label;
   }
   toString() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   toJSON() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   // Node.js util.inspect customization — same redaction.
   // The symbol lookup is string-based to avoid a hard 'util' import in browser.
   [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   // Browser devtools / template-literal coercion fallback.
   [Symbol.toPrimitive](_hint) {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   /**
    * Best-effort zeroization: overwrites the underlying buffer with zeros
@@ -16388,20 +16917,20 @@ async function readLedger(store, v) {
 async function writeLedger(store, v, record) {
   await store.set(attemptsKey(v), JSON.stringify(record));
 }
-async function recordAttempt(store, v, gateway, now = Date.now()) {
+async function recordAttempt(store, v, gateway, now2 = Date.now()) {
   await withLedgerLock(v, async () => {
     let ledger;
     try {
       ledger = await readLedger(store, v);
     } catch (err) {
       if (err instanceof AggregatorPointerError && err.code === AggregatorPointerErrorCode.CORRUPT) {
-        ledger = { firstAttemptTs: now, attempts: [] };
+        ledger = { firstAttemptTs: now2, attempts: [] };
       } else {
         throw err;
       }
     }
-    const firstAttemptTs = ledger.attempts.length === 0 ? now : Math.min(ledger.firstAttemptTs, now);
-    const attempts = [...ledger.attempts, { ts: now, gateway }];
+    const firstAttemptTs = ledger.attempts.length === 0 ? now2 : Math.min(ledger.firstAttemptTs, now2);
+    const attempts = [...ledger.attempts, { ts: now2, gateway }];
     while (attempts.length > MAX_ATTEMPTS_RETAINED) {
       attempts.shift();
     }
@@ -16411,21 +16940,21 @@ async function recordAttempt(store, v, gateway, now = Date.now()) {
 async function clearAttempts(store, v) {
   await store.remove(attemptsKey(v));
 }
-async function canInvokeAcceptCarLoss(store, v, now = Date.now()) {
+async function canInvokeAcceptCarLoss(store, v, now2 = Date.now()) {
   const ledger = await readLedger(store, v);
   const attempts = ledger.attempts;
   const attemptCount = attempts.length;
   let elapsedMs = 0;
   if (attemptCount > 0) {
-    elapsedMs = Math.max(0, now - ledger.firstAttemptTs);
+    elapsedMs = Math.max(0, now2 - ledger.firstAttemptTs);
   }
   const attemptsRemaining = Math.max(0, CAR_FETCH_PERSISTENT_RETRY_ATTEMPTS - attemptCount);
   const msRemaining = Math.max(0, CAR_FETCH_PERSISTENT_TOTAL_DURATION_MS - elapsedMs);
   const eligible = attemptsRemaining === 0 && msRemaining === 0;
   return { eligible, attemptCount, elapsedMs, attemptsRemaining, msRemaining };
 }
-async function assertAcceptCarLossEligible(store, v, now = Date.now()) {
-  const gate = await canInvokeAcceptCarLoss(store, v, now);
+async function assertAcceptCarLossEligible(store, v, now2 = Date.now()) {
+  const gate = await canInvokeAcceptCarLoss(store, v, now2);
   if (!gate.eligible) {
     throw new AggregatorPointerError(
       AggregatorPointerErrorCode.UNREACHABLE_RECOVERY_BLOCKED,
@@ -16988,22 +17517,27 @@ async function reconcileAndPublish(input) {
       throw err;
     }
     const cidBytes = await input.cidProducer();
-    const discovery = await findLatestValidVersionWithWalkbackFloorRetry(
-      {
-        currentLocalVersion,
-        keyMaterial: input.keyMaterial,
-        signer: input.signer,
-        aggregatorClient: input.aggregatorClient,
-        trustBase: input.trustBase,
-        decodeCid: input.decodeCid,
-        fetchCar: input.fetchCar,
-        discoveryDeadlineMs: reconcileDeadlineMs,
-        abortSignal: input.abortSignal
-      },
-      input.abortSignal
-    );
-    probeHistory.push(...discovery.probeVersions);
-    const nextV = Math.max(discovery.validV, discovery.includedV) + 1;
+    let nextV;
+    if (attempts === 0) {
+      nextV = currentLocalVersion + 1;
+    } else {
+      const discovery = await findLatestValidVersionWithWalkbackFloorRetry(
+        {
+          currentLocalVersion,
+          keyMaterial: input.keyMaterial,
+          signer: input.signer,
+          aggregatorClient: input.aggregatorClient,
+          trustBase: input.trustBase,
+          decodeCid: input.decodeCid,
+          fetchCar: input.fetchCar,
+          discoveryDeadlineMs: reconcileDeadlineMs,
+          abortSignal: input.abortSignal
+        },
+        input.abortSignal
+      );
+      probeHistory.push(...discovery.probeVersions);
+      nextV = Math.max(discovery.validV, discovery.includedV) + 1;
+    }
     const outcome = await publishOnceAtVersion(
       {
         cidBytes,
@@ -17132,8 +17666,78 @@ var ProfilePointerLayer = class {
     const suppliedConfig = init.config ?? {};
     assertConfigCapabilities(suppliedConfig);
     this.#config = Object.freeze({
-      allowOperatorOverrides: suppliedConfig.allowOperatorOverrides === true
+      allowOperatorOverrides: suppliedConfig.allowOperatorOverrides === true,
+      enablePointerWinBroadcasts: suppliedConfig.enablePointerWinBroadcasts === true
     });
+  }
+  /**
+   * Issue #264 — capability gate for the pointer-win broadcast
+   * pipeline. Consulted by:
+   *   - `LifecycleManager.publishAggregatorPointerBestEffort` before
+   *     signing the broadcast payload and emitting the
+   *     `storage:pointer-published` event (publisher).
+   *   - `Sphere.maybeInstallPointerWinSubscription` before installing
+   *     the per-wallet Nostr subscription (subscriber).
+   *
+   * Default: `false`. See PointerLayerConfig.enablePointerWinBroadcasts
+   * for the full rationale.
+   *
+   * **API pairing contract.** Test stubs / alternative pointer-layer
+   * implementations that expose `winBroadcastsEnabled()` MUST also
+   * expose `getSignerForWinBroadcast()` — the publisher and subscriber
+   * guards treat them as a coupled pair (a partial implementation is
+   * treated as flag=false / fail-closed). Implementing only one
+   * silently disables broadcasts with no error.
+   *
+   * **Accessor contract.** `winBroadcastsEnabled()` MUST be a pure
+   * accessor and MUST NOT throw. Both the publisher (lifecycle-
+   * manager) and subscriber (Sphere) guards wrap the accessor call
+   * in a defensive try/catch that treats a throw as flag=false
+   * (fail-closed). The publish path still reports success; the
+   * subscriber early-returns without registering the per-wallet
+   * Nostr subscription. A single log line is emitted per accessor
+   * throw at debug-level (Sphere) and host-log level
+   * (lifecycle-manager) so operators can correlate. A real
+   * `ProfilePointerLayer` reads its frozen config snapshot and
+   * cannot throw; this defensive treatment exists so a misbehaving
+   * stub or alternative implementation cannot silently corrupt
+   * publish-success classification or trigger noisy
+   * subscription-install retries.
+   *
+   * **Init-time-only flag.** The flag is captured in the frozen
+   * `#config` snapshot at construction time. Flipping
+   * `enablePointerWinBroadcasts` at runtime (e.g., via a hot config
+   * reload that constructs a NEW `ProfilePointerLayer`) requires:
+   *   (1) Tearing down the old layer (calling `shutdown()`); AND
+   *   (2) Rebuilding the wiring so the new layer's
+   *       `winBroadcastsEnabled() === true` is observed by both
+   *       publisher and subscriber on next event.
+   * The publisher side picks up the new flag on its next successful
+   * publish. The subscriber side picks it up on the next emitted
+   * `storage:pointer-published` event — which only fires when the
+   * publisher is also enabled, so the first such event after the flip
+   * arms the subscription automatically. There is no third trigger
+   * that would re-arm the subscriber on a flip from false→true
+   * without a fresh publish.
+   *
+   * **Receive-only-wallet caveat.** A wallet that has the flag
+   * enabled but never PUBLISHES (e.g., a pure receive endpoint that
+   * only ingests sibling-device payments) will never emit a
+   * `storage:pointer-published` event of its own. Its
+   * `maybeInstallPointerWinSubscription` is therefore not triggered
+   * by its own publish path; the subscription only arms if some
+   * external code path calls `maybeInstallPointerWinSubscription()`
+   * directly. As of #264, `core/Sphere.ts` does NOT arrange an
+   * explicit init-time call — receive-only-wallet support for
+   * pointer-win broadcasts requires a follow-up wiring change (an
+   * init-time invocation gated on the flag's enabled state, OR a
+   * lazy first-incoming-event trigger). Acceptable today because
+   * the flag is default-OFF and the broadcast pipeline is an
+   * optimization layer (the aggregator pointer + auto-merge cover
+   * correctness without it).
+   */
+  winBroadcastsEnabled() {
+    return this.#config.enablePointerWinBroadcasts === true;
   }
   /**
    * RFC-251 Approach D (issue #255 Problem B) — expose the pointer layer's
@@ -17295,7 +17899,9 @@ var ProfilePointerLayer = class {
       resolveRemoteCid: this.#init.resolveRemoteCid,
       abortSignal
     });
-    this.#lastProbeVersions = result.probeHistory;
+    if (result.probeHistory.length > 0) {
+      this.#lastProbeVersions = result.probeHistory;
+    }
     return { version: result.v, attemptsUsed: result.attemptsUsed };
   }
   // ── recoverLatest ────────────────────────────────────────────────────────
@@ -17408,7 +18014,9 @@ var ProfilePointerLayer = class {
       walkbackLimit,
       abortSignal
     });
-    this.#lastProbeVersions = result.probeVersions;
+    if (result.probeVersions.length > 0) {
+      this.#lastProbeVersions = result.probeVersions;
+    }
     return result;
   }
   // ── isReachable ──────────────────────────────────────────────────────────
@@ -18708,7 +19316,7 @@ function getReverseMapping(profileKey) {
   }
   return null;
 }
-var ProfileStorageProvider = class {
+var ProfileStorageProvider = class _ProfileStorageProvider {
   constructor(localCache, db, options) {
     this.localCache = localCache;
     this.db = db;
@@ -18871,6 +19479,37 @@ var ProfileStorageProvider = class {
   setSnapshotApplier(applier) {
     this.snapshotApplier = applier;
   }
+  /**
+   * Issue #280 — register an optional observability hook fired when
+   * `readEnvelopePayload()` falls back from the envelope-decode path
+   * (`db.getEntry`) to the raw-bytes path (`db.get`). This signals
+   * that a stored entry's CBOR envelope is unreadable but the raw
+   * ciphertext could still be served via the legacy compat path.
+   *
+   * Two legitimate reasons for fallback exist:
+   *   1. Pre-#247 legacy ciphertext written via `db.put` (expected).
+   *   2. Live envelope corruption (a real defect — see Issue #280).
+   *
+   * The hook lets operators detect (2) by surfacing the key + error
+   * to their telemetry pipeline. Re-registration is idempotent (the
+   * most recent hook wins); pass `null` to disable.
+   *
+   * The provider applies its own per-key+message dedup so a single
+   * persistent corruption does not spam the hook on every read.
+   * The hook contract MUST NOT throw — exceptions are swallowed.
+   */
+  setEnvelopeFallbackNotifier(notifier) {
+    this.envelopeFallbackNotifier = notifier;
+  }
+  envelopeFallbackNotifier = null;
+  /**
+   * Issue #280 — dedup set for {@link envelopeFallbackNotifier}.
+   * Limits a single (key, errorMessage) pair to fire the hook AND log
+   * the warning once per provider instance. Bounded to a sane cap so
+   * an adversarial input cannot grow it without bound.
+   */
+  envelopeFallbackSeen = /* @__PURE__ */ new Set();
+  static ENVELOPE_FALLBACK_DEDUP_CAP = 1024;
   // ===========================================================================
   // BaseProvider Implementation
   // ===========================================================================
@@ -19474,23 +20113,73 @@ var ProfileStorageProvider = class {
   }
   /**
    * Read an envelope's encrypted payload from OrbitDB. Returns null if
-   * the key is absent. Legacy raw-bytes entries are auto-wrapped by
-   * `getEntry`'s legacy fallback (§7.1), so this helper works on both
-   * pre-schema and post-schema OpLog contents.
+   * the key is absent.
    *
-   * Passes `trustLocalClaim: true` — callers at this layer have already
-   * established that this wallet's OrbitDB instance is its own source of
-   * truth (no cross-wallet sharing). Peer writes reach this path only
-   * through replication events, which clear the locally-authored set.
+   * Issue #280 — uses the dual-format reader from `oplog-envelope-io.ts`
+   * so a `getEntry()` decode failure (e.g., bytes that aren't a valid
+   * CBOR envelope) automatically falls back to `db.get(key)` for the
+   * raw ciphertext. Without this fallback, a corrupted-envelope read at
+   * a SENT/OUTBOX/etc. key would propagate up through
+   * `getEncryptedRaw()` and the lean-snapshot exporter would silently
+   * skip the entry (`profile-lean-snapshot.ts:433` `— skipping` log
+   * line) — producing a profile snapshot that omits the SENT record
+   * for a payment. On the recipient peer that imports the snapshot,
+   * the previously-spent input token then reappears as still-owned
+   * because no tombstone-by-SENT logic fires. End-user symptom: phantom
+   * double-balance after IPFS-only recovery (§D bob).
+   *
+   * The dual-format path also matches the legacy compat behavior of
+   * the per-writer readers (SentLedgerWriter, OutboxWriter, etc.),
+   * which is the canonical contract for "read whatever's at this key,
+   * envelope-wrapped or raw" — both shapes appear in long-lived wallets
+   * because of in-place format migration (Issue #247).
+   *
+   * NOTE: this method is also called via `getEncryptedRaw()` from the
+   * lean-snapshot builder. Even when the envelope is corrupt locally,
+   * we still want the raw ciphertext bytes — they ARE persistable
+   * verbatim into the snapshot and the recipient peer will simply skip
+   * the unparseable entry via the same dual-format reader downstream.
+   * The Layer-2 aggregator-spent recovery check (see
+   * `PaymentsModule.runRecoveryAggregatorSpentSweep`) is the durable
+   * defense regardless of which side hits the corruption first.
    */
   async readEnvelopePayload(profileKey) {
     if (this.supportsEnvelopes()) {
-      const envelope = await this.db.getEntry(profileKey, {
-        trustLocalClaim: true
+      return getEnvelopePayload(this.db, profileKey, (info) => {
+        this.handleEnvelopeFallback(info);
       });
-      return envelope ? envelope.payload : null;
     }
     return this.db.get(profileKey);
+  }
+  /**
+   * Issue #280 — dispatcher for the envelope-fallback hook. Logs at
+   * warn level on the first sighting of a unique (key, errorMessage)
+   * pair AND invokes the user-supplied notifier (if any) so it can
+   * route the signal into operator telemetry (a typed event such as
+   * `profile:corrupt-oplog-entry-detected`).
+   *
+   * Why both: the warn log is unconditional (always landed by the
+   * structured logger), the notifier is opt-in (lets consumers
+   * choose how to react — e.g. emit a Sphere event, push to a
+   * metrics endpoint, alert on threshold).
+   */
+  handleEnvelopeFallback(info) {
+    const dedupKey = `${info.key}${info.errorMessage}`;
+    if (this.envelopeFallbackSeen.has(dedupKey)) return;
+    if (this.envelopeFallbackSeen.size >= _ProfileStorageProvider.ENVELOPE_FALLBACK_DEDUP_CAP) {
+      return;
+    }
+    this.envelopeFallbackSeen.add(dedupKey);
+    logger.warn(
+      "ProfileStorage",
+      `[ENVELOPE-FALLBACK] OpLog envelope decode failed for key="${redactProfileKey(info.key)}" \u2014 served raw bytes via legacy compat path. This is expected for pre-#247 wallets but indicates live envelope corruption when seen on freshly-written entries. error="${info.errorMessage}"`
+    );
+    if (this.envelopeFallbackNotifier !== null) {
+      try {
+        this.envelopeFallbackNotifier(info);
+      } catch {
+      }
+    }
   }
   /**
    * Remove key from both cache and OrbitDB.
@@ -19821,7 +20510,7 @@ function* iterateActive(data) {
     yield [key, token];
   }
 }
-function deriveTombstonesFromArchived(data, now = Date.now()) {
+function deriveTombstonesFromArchived(data, now2 = Date.now()) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   for (const [, token] of iterateArchived(data)) {
@@ -19835,12 +20524,12 @@ function deriveTombstonesFromArchived(data, now = Date.now()) {
     out.push({
       tokenId,
       stateHash,
-      timestamp: now
+      timestamp: now2
     });
   }
   return out;
 }
-function deriveSentFromArchived(data, now = Date.now()) {
+function deriveSentFromArchived(data, now2 = Date.now()) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   for (const [, token] of iterateArchived(data)) {
@@ -19855,12 +20544,12 @@ function deriveSentFromArchived(data, now = Date.now()) {
       tokenId,
       recipient,
       txHash,
-      sentAt: now
+      sentAt: now2
     });
   }
   return out;
 }
-function deriveHistoryFromArchived(data, ourAddress, now = Date.now()) {
+function deriveHistoryFromArchived(data, ourAddress, now2 = Date.now()) {
   const entries = [];
   const seenDedup = /* @__PURE__ */ new Set();
   let counter = 0;
@@ -19880,7 +20569,7 @@ function deriveHistoryFromArchived(data, ourAddress, now = Date.now()) {
       amount,
       coinId,
       symbol: coinId,
-      timestamp: now,
+      timestamp: now2,
       tokenId,
       recipientAddress: recipient
     });
@@ -19904,7 +20593,7 @@ function deriveHistoryFromArchived(data, ourAddress, now = Date.now()) {
         amount,
         coinId,
         symbol: coinId,
-        timestamp: now,
+        timestamp: now2,
         tokenId
       });
     }
@@ -20270,6 +20959,97 @@ function isUxfBundleRef(value) {
 init_ipfs_client();
 init_transfer_payload();
 var POINTER_MONOTONICITY_VIOLATION = "POINTER_MONOTONICITY_VIOLATION";
+var POINTER_MONOTONICITY_RECOVERED = "POINTER_MONOTONICITY_RECOVERED";
+var MONOTONICITY_RECOVERY_PAYLOAD_CAP = 100;
+function unionOpStateWithSentWins(currentOp, previousOp) {
+  function readId(entry) {
+    if (!entry || typeof entry !== "object") return void 0;
+    const id = entry.id;
+    return typeof id === "string" ? id : void 0;
+  }
+  function readTokenId(entry) {
+    if (!entry || typeof entry !== "object") return void 0;
+    const id = entry.tokenId;
+    return typeof id === "string" ? id : void 0;
+  }
+  function unionById(current, previous) {
+    const byId = /* @__PURE__ */ new Map();
+    const noId = [];
+    for (const e of previous) {
+      const id = readId(e);
+      if (id !== void 0) byId.set(id, e);
+      else noId.push(e);
+    }
+    for (const e of current) {
+      const id = readId(e);
+      if (id !== void 0) byId.set(id, e);
+      else noId.push(e);
+    }
+    return [...byId.values(), ...noId];
+  }
+  function unionByTokenIdOrJson(current, previous) {
+    const byTokenId = /* @__PURE__ */ new Map();
+    const byJson = /* @__PURE__ */ new Map();
+    const nonSerializable = [];
+    function ingest2(arr) {
+      for (const e of arr) {
+        const tid = readTokenId(e);
+        if (tid !== void 0) {
+          byTokenId.set(tid, e);
+          continue;
+        }
+        try {
+          byJson.set(JSON.stringify(e), e);
+        } catch {
+          nonSerializable.push(e);
+        }
+      }
+    }
+    ingest2(previous);
+    ingest2(current);
+    return [...byTokenId.values(), ...byJson.values(), ...nonSerializable];
+  }
+  const mergedSent = unionById(currentOp.sent, previousOp.sent);
+  const mergedAudit = unionById(currentOp.audit, previousOp.audit);
+  const mergedFinalizationQueue = unionById(
+    currentOp.finalizationQueue,
+    previousOp.finalizationQueue
+  );
+  let mergedOutbox = unionById(currentOp.outbox, previousOp.outbox);
+  const sentIds = /* @__PURE__ */ new Set();
+  for (const e of mergedSent) {
+    const id = readId(e);
+    if (id !== void 0) sentIds.add(id);
+  }
+  const droppedOutboxIds = [];
+  if (sentIds.size > 0) {
+    mergedOutbox = mergedOutbox.filter((e) => {
+      const id = readId(e);
+      if (id !== void 0 && sentIds.has(id)) {
+        droppedOutboxIds.push(id);
+        return false;
+      }
+      return true;
+    });
+  }
+  return {
+    merged: {
+      tombstones: unionByTokenIdOrJson(currentOp.tombstones, previousOp.tombstones),
+      outbox: mergedOutbox,
+      sent: mergedSent,
+      invalid: unionByTokenIdOrJson(currentOp.invalid, previousOp.invalid),
+      history: unionByTokenIdOrJson(currentOp.history, previousOp.history),
+      mintOutbox: unionByTokenIdOrJson(currentOp.mintOutbox, previousOp.mintOutbox),
+      invalidatedNametags: unionByTokenIdOrJson(
+        currentOp.invalidatedNametags,
+        previousOp.invalidatedNametags
+      ),
+      audit: mergedAudit,
+      finalizationQueue: mergedFinalizationQueue
+    },
+    droppedOutboxIds
+  };
+}
 var FlushScheduler = class {
   constructor(host, bundleIndex) {
     this.host = host;
@@ -20475,7 +21255,7 @@ var FlushScheduler = class {
     }
     try {
       let tokens = this.host.extractTokensFromTxfData(data);
-      const opState = this.host.extractOperationalState(data);
+      let opState = this.host.extractOperationalState(data);
       const { UxfPackage: UxfPackage2 } = await Promise.resolve().then(() => (init_UxfPackage(), UxfPackage_exports));
       const pkg = UxfPackage2.create();
       let tokenValues = [...tokens.values()];
@@ -20561,8 +21341,8 @@ var FlushScheduler = class {
           );
         }
       }
+      const bundlesMergedInline = [];
       if (unknownBundleCids.length > 0) {
-        const mergedCids = [];
         const stillUnknown = [];
         for (const cid2 of unknownBundleCids) {
           try {
@@ -20575,57 +21355,99 @@ var FlushScheduler = class {
             );
             const foreignPkg = await UxfPackage2.fromCar(foreignCarBytes);
             pkg.merge(foreignPkg);
-            mergedCids.push(cid2);
+            bundlesMergedInline.push(cid2);
             if (loadedBundleCids !== null) {
               loadedBundleCids.add(cid2);
             }
           } catch (err) {
             stillUnknown.push(cid2);
             this.host.log(
-              `In-place merge failed for unknown bundle ${cid2} (falling back to violation throw): ${err instanceof Error ? err.message : String(err)}`
+              `In-place merge failed for unknown bundle ${cid2} (residual after auto-merge \u2014 flush continues): ${err instanceof Error ? err.message : String(err)}`
             );
           }
         }
-        if (mergedCids.length > 0) {
+        if (bundlesMergedInline.length > 0) {
           tokens = pkg.assembleAll();
           tokenValues = [...tokens.values()];
           carBytes = await pkg.toCar();
           this.host.log(
-            `In-place monotonicity recovery: merged ${mergedCids.length} foreign bundle(s) into in-flight CAR (${mergedCids.slice(0, 5).join(", ")}${mergedCids.length > 5 ? ", ..." : ""}) \u2014 pkg now has ${tokens.size} token(s)`
+            `In-place monotonicity recovery: merged ${bundlesMergedInline.length} foreign bundle(s) into in-flight CAR (${bundlesMergedInline.slice(0, 5).join(", ")}${bundlesMergedInline.length > 5 ? ", ..." : ""}) \u2014 pkg now has ${tokens.size} token(s)`
           );
         }
         unknownBundleCids = stillUnknown;
       }
-      if (tokenMissing.length > 0 || unknownBundleCids.length > 0) {
-        const reasonParts = [];
-        if (tokenMissing.length > 0) {
-          reasonParts.push(
-            `would drop ${tokenMissing.length} token(s) from baseline (${tokenMissing.slice(0, 10).join(", ")}${tokenMissing.length > 10 ? ", ..." : ""})`
+      const recoveredTokenIds = [];
+      let droppedOutboxIdsAsSent = [];
+      if (tokenMissing.length > 0 && previousData) {
+        const previousTokens = this.host.extractTokensFromTxfData(previousData);
+        const toReingest = [];
+        for (const tokenId of tokenMissing) {
+          const txfEntry = previousTokens.get(tokenId);
+          if (txfEntry !== void 0) {
+            toReingest.push(txfEntry);
+            recoveredTokenIds.push(tokenId);
+          }
+        }
+        if (toReingest.length > 0) {
+          pkg.ingestAll(toReingest);
+          tokens = pkg.assembleAll();
+          tokenValues = [...tokens.values()];
+          const previousOpState = this.host.extractOperationalState(previousData);
+          const { merged: mergedOp, droppedOutboxIds } = unionOpStateWithSentWins(
+            opState,
+            previousOpState
+          );
+          opState = mergedOp;
+          droppedOutboxIdsAsSent = droppedOutboxIds;
+          carBytes = await pkg.toCar();
+          this.host.log(
+            `In-place monotonicity recovery: re-merged ${recoveredTokenIds.length} missing token(s) from previous baseline (${recoveredTokenIds.slice(0, 5).join(", ")}${recoveredTokenIds.length > 5 ? ", ..." : ""}); opState union dropped ${droppedOutboxIdsAsSent.length} OUTBOX id(s) superseded by SENT \u2014 pkg now has ${tokens.size} token(s)`
           );
         }
-        if (unknownBundleCids.length > 0) {
+      }
+      const residualTokenMissing = tokenMissing.filter(
+        (id) => !recoveredTokenIds.includes(id)
+      );
+      const residualUnknownBundleCids = unknownBundleCids;
+      const mergedUnknownBundleCids = bundlesMergedInline;
+      if (recoveredTokenIds.length > 0 || droppedOutboxIdsAsSent.length > 0 || residualTokenMissing.length > 0 || residualUnknownBundleCids.length > 0) {
+        this.host.emitEvent({
+          type: "storage:monotonicity-recovered",
+          timestamp: Date.now(),
+          code: POINTER_MONOTONICITY_RECOVERED,
+          data: {
+            recoveredTokenIds: recoveredTokenIds.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            recoveredTokenCount: recoveredTokenIds.length,
+            mergedUnknownBundleCids: mergedUnknownBundleCids.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            mergedUnknownBundleCount: mergedUnknownBundleCids.length,
+            residualUnknownBundleCids: residualUnknownBundleCids.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            residualUnknownBundleCount: residualUnknownBundleCids.length,
+            residualTokenMissingIds: residualTokenMissing.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            residualTokenMissingCount: residualTokenMissing.length,
+            recoveredOutboxIdsDroppedAsSent: droppedOutboxIdsAsSent.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            recoveredOutboxIdsDroppedAsSentCount: droppedOutboxIdsAsSent.length,
+            truncated: recoveredTokenIds.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP || residualUnknownBundleCids.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP || residualTokenMissing.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP || droppedOutboxIdsAsSent.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP
+          }
+        });
+      }
+      if (residualTokenMissing.length > 0 || residualUnknownBundleCids.length > 0) {
+        const reasonParts = [];
+        if (residualTokenMissing.length > 0) {
           reasonParts.push(
-            `${unknownBundleCids.length} unknown bundle(s) in OrbitDB not in baseline (${unknownBundleCids.slice(0, 5).join(", ")}${unknownBundleCids.length > 5 ? ", ..." : ""})`
+            `could not recover ${residualTokenMissing.length} token(s) from baseline (${residualTokenMissing.slice(0, 10).join(", ")}${residualTokenMissing.length > 10 ? ", ..." : ""})`
+          );
+        }
+        if (residualUnknownBundleCids.length > 0) {
+          reasonParts.push(
+            `${residualUnknownBundleCids.length} unknown bundle(s) inline fetch failed (${residualUnknownBundleCids.slice(0, 5).join(", ")}${residualUnknownBundleCids.length > 5 ? ", ..." : ""})`
           );
         }
         const violation = new Error(
-          `Pointer monotonicity violation: ${reasonParts.join("; ")}. Aborting publish to prevent silent token loss across cross-device sync.`
+          `Pointer monotonicity auto-merge residuals: ${reasonParts.join("; ")}. Publishing best-effort superset; subsequent cross-device syncs will retry.`
         );
         violation.code = POINTER_MONOTONICITY_VIOLATION;
-        this.host.log(`[POINTER_MONOTONICITY_VIOLATION] aborting publish: ${reasonParts.join("; ")}`);
-        queueMicrotask(() => {
-          this.host.refreshBaselineForMonotonicity().catch((err) => {
-            this.host.log(
-              `Baseline-refresh recovery threw (best-effort): ${err instanceof Error ? err.message : String(err)}`
-            );
-          });
-        });
-        this.host.emitEvent(
-          this.host.buildErrorEvent(
-            "storage:error",
-            violation,
-            POINTER_MONOTONICITY_VIOLATION
-          )
+        this.host.log(
+          `[POINTER_MONOTONICITY_VIOLATION] residual after auto-merge (continuing): ${reasonParts.join("; ")}`
         );
         this.host.emitEvent({
           type: "storage:error",
@@ -20633,15 +21455,14 @@ var FlushScheduler = class {
           code: POINTER_MONOTONICITY_VIOLATION,
           error: violation.message,
           data: {
-            alert: "transfer:operator-alert",
-            missingTokenIds: tokenMissing.slice(0, 100),
-            missingTokenCount: tokenMissing.length,
-            unknownBundleCids: unknownBundleCids.slice(0, 100),
-            unknownBundleCount: unknownBundleCids.length,
-            truncated: tokenMissing.length > 100 || unknownBundleCids.length > 100
+            missingTokenIds: residualTokenMissing.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            missingTokenCount: residualTokenMissing.length,
+            unknownBundleCids: residualUnknownBundleCids.slice(0, MONOTONICITY_RECOVERY_PAYLOAD_CAP),
+            unknownBundleCount: residualUnknownBundleCids.length,
+            autoMergeResidual: true,
+            truncated: residualTokenMissing.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP || residualUnknownBundleCids.length > MONOTONICITY_RECOVERY_PAYLOAD_CAP
           }
         });
-        throw violation;
       }
       let cid;
       const cachedCid = this.host.getLastPinnedCid();
@@ -20760,7 +21581,7 @@ var FlushScheduler = class {
       if (shouldVerify) {
         const freshSnapshotPublished = publishResult !== null && publishResult.ok;
         const snapshotCid = freshSnapshotPublished ? this.host.getLastDiscoveredPointerCid() : null;
-        await this.host.verifyFlushDurability(cid, snapshotCid, verifyDeadlineMs);
+        this.startBackgroundDurabilityVerify(cid, snapshotCid, verifyDeadlineMs);
       }
     } catch (err) {
       if (!this.host.getPendingData()) {
@@ -20775,6 +21596,46 @@ var FlushScheduler = class {
    * `lastLoadedData`) bookkeeping happens on the facade so byte-
    * identical fields stay in their original location.
    */
+  /**
+   * Issue #272 — fire-and-forget background HEAD-verify of just-pinned
+   * CIDs against the operator IPFS gateway. Detached from the
+   * synchronous flush completion path so a gateway propagation lag
+   * does NOT close the at-least-once Nostr ack gate. See the long
+   * comment block at the {@link flushToIpfs} verification call site
+   * for the design rationale.
+   *
+   * On failure, emits `storage:durability-deferred` with structured
+   * detail. The shutdown gate's own remote-durability verification
+   * (`LifecycleManager.awaitRemoteDurability`) runs independently
+   * with its own deadline; if THIS background verify is still in
+   * flight at shutdown time, the shutdown gate may run a redundant
+   * HEAD-verify, which is bounded by its own configured deadline
+   * (acceptable cost — shutdown is rare and operator-triggered).
+   *
+   * Never throws; never rejects. The returned Promise is intentionally
+   * unawaited and any error is routed through `emitEvent` only.
+   */
+  startBackgroundDurabilityVerify(cid, snapshotCid, verifyDeadlineMs) {
+    void (async () => {
+      try {
+        await this.host.verifyFlushDurability(cid, snapshotCid, verifyDeadlineMs);
+      } catch (err) {
+        const code2 = err.code;
+        const details = err.details;
+        this.host.emitEvent({
+          type: "storage:durability-deferred",
+          timestamp: Date.now(),
+          data: { cid, snapshotCid, code: code2, details },
+          error: err instanceof Error ? err.message : String(err),
+          code: code2,
+          cause: err
+        });
+        this.host.log(
+          `Profile durability: background verify deferred for bundle=${cid}` + (snapshotCid ? ` snapshot=${snapshotCid}` : "") + ` \u2014 code=${code2 ?? "unknown"}. Local state remains durable; gateway propagation may still be in progress.`
+        );
+      }
+    })();
+  }
   enqueueSave(data) {
     this.host.setLastPinnedCid(null);
     this.host.setPendingData(data);
@@ -21337,6 +22198,16 @@ var LifecycleManager = class {
    *         leg(s) failed.
    */
   async verifyFlushDurability(bundleCid, snapshotCid, deadlineMs) {
+    const verifiedBundle = this.host.getLastVerifiedBundleCid();
+    const verifiedSnapshot = this.host.getLastVerifiedSnapshotCid();
+    const bundleMatches = bundleCid === verifiedBundle;
+    const snapshotMatches = snapshotCid === null || snapshotCid === verifiedSnapshot;
+    if (bundleMatches && snapshotMatches) {
+      this.host.log(
+        `Profile durability: ${bundleCid} HEAD-verify short-circuited (already verified this lifetime)`
+      );
+      return;
+    }
     const deadline = Date.now() + Math.max(0, deadlineMs);
     const noAbort = new AbortController();
     const signal = noAbort.signal;
@@ -21587,32 +22458,58 @@ var LifecycleManager = class {
         this.host.log(
           `Pointer publish ok: cid=${cidString} version=${result.version} attempts=${result.attemptsUsed}`
         );
+        let winBroadcastsOn = false;
         try {
-          const signerHandle = pointer.getSignerForWinBroadcast();
-          const signed = await signWinBroadcastPayload(signerHandle.signer, {
-            _kind: WIN_BROADCAST_KIND_MARKER,
-            v: WIN_BROADCAST_SCHEMA_VERSION,
-            version: result.version,
-            cid: cidString,
-            signingPubKey: signerHandle.signingPubKeyHex,
-            ts: Date.now()
-          });
-          this.host.emitEvent({
-            type: "storage:pointer-published",
-            timestamp: Date.now(),
-            data: {
-              cid: cidString,
-              version: result.version,
-              attemptsUsed: result.attemptsUsed,
-              signedPayloadJson: JSON.stringify(signed),
-              broadcastTag: buildWinBroadcastTag(signerHandle.signingPubKeyHex)
-            }
-          });
-        } catch (broadcastErr) {
-          const errMsg = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
+          winBroadcastsOn = typeof pointer.winBroadcastsEnabled === "function" && // Strict `=== true` to mirror the production
+          // ProfilePointerLayer constructor's normalization (which
+          // freezes the snapshot as `=== true`). A test stub that
+          // returns a truthy non-boolean (`1`, `'yes'`, `{}`) MUST be
+          // treated as flag=false — same fail-closed policy as
+          // production config. Symmetric with the Sphere subscriber
+          // guard in `core/Sphere.ts:maybeInstallPointerWinSubscription`.
+          pointer.winBroadcastsEnabled() === true && // Symmetric with the new accessor: stubs lacking the signer
+          // helper fall through cleanly (fail-closed) rather than
+          // surfacing a TypeError caught only by the broad catch arm
+          // below. The two accessors are added together on real
+          // ProfilePointerLayer instances; a stub omitting one but
+          // not the other is a test-harness shape, not a production
+          // path.
+          typeof pointer.getSignerForWinBroadcast === "function";
+        } catch (accessorErr) {
+          const msg = accessorErr instanceof Error ? accessorErr.message : String(accessorErr);
           this.host.log(
-            `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg}`
+            `Pointer publish: winBroadcastsEnabled() threw (accessor contract violation, treating as flag=false): ${msg}`
           );
+          winBroadcastsOn = false;
+        }
+        if (winBroadcastsOn) {
+          try {
+            const signerHandle = pointer.getSignerForWinBroadcast();
+            const signed = await signWinBroadcastPayload(signerHandle.signer, {
+              _kind: WIN_BROADCAST_KIND_MARKER,
+              v: WIN_BROADCAST_SCHEMA_VERSION,
+              version: result.version,
+              cid: cidString,
+              signingPubKey: signerHandle.signingPubKeyHex,
+              ts: Date.now()
+            });
+            this.host.emitEvent({
+              type: "storage:pointer-published",
+              timestamp: Date.now(),
+              data: {
+                cid: cidString,
+                version: result.version,
+                attemptsUsed: result.attemptsUsed,
+                signedPayloadJson: JSON.stringify(signed),
+                broadcastTag: buildWinBroadcastTag(signerHandle.signingPubKeyHex)
+              }
+            });
+          } catch (broadcastErr) {
+            const errMsg = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
+            this.host.log(
+              `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg}`
+            );
+          }
         }
         return { ok: true, transient: false };
       } catch (err) {
@@ -22731,6 +23628,11 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
    */
   async awaitNextFlush(timeoutMs = 3e4) {
     if (!this.initialized || !this.encryptionKey) return;
+    logger.debug(
+      "profile:flush",
+      "awaitNextFlush enter",
+      { timeoutMs }
+    );
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(0, deadline - Date.now());
     let monotonicityRetried = false;
@@ -22742,11 +23644,12 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       }
       if (this.pendingData === null && this.flushPromise === null) return;
       const chained = this.flushScheduler.forceFlushSerialized();
+      let timeoutHandle;
       try {
         await Promise.race([
           chained,
-          new Promise(
-            (_, reject) => setTimeout(
+          new Promise((_, reject) => {
+            timeoutHandle = setTimeout(
               () => reject(
                 new SphereError(
                   "awaitNextFlush: timeout awaiting serialized flush",
@@ -22754,8 +23657,8 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
                 )
               ),
               remainingMs()
-            )
-          )
+            );
+          })
         ]);
       } catch (err) {
         if (err instanceof SphereError && err.code === "TIMEOUT") throw err;
@@ -22775,6 +23678,10 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
           continue;
         }
         throw err;
+      } finally {
+        if (timeoutHandle !== void 0) {
+          clearTimeout(timeoutHandle);
+        }
       }
       if (this.pendingData === null) return;
     }
@@ -23262,7 +24169,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
    */
   async writeOrbitOperationalStatePerEntry(opState, addr) {
     const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
-    const now = Date.now();
+    const now2 = Date.now();
     const liveOutbox = /* @__PURE__ */ new Map();
     for (const e of opState.outbox) {
       const id = e.id;
@@ -23318,7 +24225,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       `${addr}.outbox.`,
       liveOutbox,
       existingOutboxKeys,
-      now,
+      now2,
       TOMBSTONE_RETENTION_MS,
       /* skipForeignSchema */
       true
@@ -23327,7 +24234,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       `${addr}.invalid.`,
       liveInvalid,
       existingInvalidKeys,
-      now,
+      now2,
       TOMBSTONE_RETENTION_MS,
       // G2 — DispositionWriter owns `_invalid` records under the same
       // prefix and stamps `_schemaVersion: 'uxf-1'` on every write. The
@@ -23342,14 +24249,14 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       `${addr}.mintOutbox.`,
       liveMint,
       existingMintKeys,
-      now,
+      now2,
       TOMBSTONE_RETENTION_MS
     );
     await this.applyPerEntryDiff(
       `${addr}.audit.`,
       liveAudit,
       existingAuditKeys,
-      now,
+      now2,
       TOMBSTONE_RETENTION_MS,
       // G1 — DispositionWriter owns `_audit` records under the same
       // prefix. See the `${addr}.invalid.` call above for full
@@ -23361,7 +24268,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       `${addr}.finalizationQueue.`,
       liveFinalization,
       existingFinalizationKeys,
-      now,
+      now2,
       TOMBSTONE_RETENTION_MS,
       // G3 — recipient FinalizationQueue records (when persisted via
       // the OrbitDb-backed adapter) carry `_schemaVersion: 'uxf-1'`.
@@ -23434,7 +24341,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
    * — it is owned by `OutboxWriter` and shares the same prefix. Used by
    * the outbox slot only; other slots pass `false` (the default).
    */
-  async applyPerEntryDiff(prefix, liveById, existingKeys, now, retentionMs, skipForeignSchema = false) {
+  async applyPerEntryDiff(prefix, liveById, existingKeys, now2, retentionMs, skipForeignSchema = false) {
     for (const [id, entry] of liveById) {
       const key = `${prefix}${id}`;
       try {
@@ -23472,7 +24379,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
         continue;
       }
       if (isTombstone3) {
-        if (deletedAt > 0 && now - deletedAt > retentionMs) {
+        if (deletedAt > 0 && now2 - deletedAt > retentionMs) {
           try {
             await this.db.del(key);
           } catch {
@@ -23483,7 +24390,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       try {
         await this.writeProfileKey(
           key,
-          JSON.stringify({ tombstoned: true, deletedAt: now })
+          JSON.stringify({ tombstoned: true, deletedAt: now2 })
         );
       } catch (err) {
         this.log(`per-entry tombstone ${key} failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -25920,10 +26827,10 @@ var DispositionWriter = class {
     });
   }
 };
-function mergeAuditEntry(existing, incoming, now) {
+function mergeAuditEntry(existing, incoming, now2) {
   const auditStatus = existing?.auditStatus === "audit-promoted" ? "audit-promoted" : incoming.auditStatus;
   const reason = existing?.reason ?? incoming.reason;
-  const recordedAt = existing?.recordedAt ?? now;
+  const recordedAt = existing?.recordedAt ?? now2;
   const bundleCidsObserved = unionBundleCids(
     existing?.bundleCidsObserved,
     [incoming.bundleCid]

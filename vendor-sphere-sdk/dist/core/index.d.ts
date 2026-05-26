@@ -452,7 +452,81 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * converge via the existing WALKBACK_FLOOR + reconcile path
  * (just slower, ~60-90 s vs ~1 s).
  */
- | 'storage:pointer-published';
+ | 'storage:pointer-published'
+/**
+ * Issue #264 — emitted by the flush scheduler when it auto-merges
+ * a detected monotonicity gap in place (previously this fired
+ * POINTER_MONOTONICITY_VIOLATION on `storage:error` and aborted
+ * the flush). Distinct from `storage:error` so operators see
+ * auto-merges as routine convergence work, not alarms.
+ *
+ * `data` payload (see flush-scheduler.ts for the canonical shape):
+ *   - `recoveredTokenIds: string[]`   token ids re-merged from
+ *     `previousData` to satisfy the token-set invariant.
+ *   - `recoveredTokenCount: number`
+ *   - `mergedUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     inline-fetched and merged into the in-flight UXF package.
+ *   - `mergedUnknownBundleCount: number`
+ *   - `residualUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     that could not be fetched (network down, malformed CAR,
+ *     etc.) — the flush continued without them; downstream
+ *     convergence retries on the next flush.
+ *   - `residualUnknownBundleCount: number`
+ *   - `residualTokenMissingIds: string[]`   token ids the token-set
+ *     check flagged but `previousData` could not provide (only
+ *     possible when `previousData === null`).
+ *   - `residualTokenMissingCount: number`
+ *   - `recoveredOutboxIdsDroppedAsSent: string[]`   outbox-entry
+ *     ids that the SENT-wins dedup removed during the
+ *     `OperationalState` union — surfaced for operator audit.
+ *   - `recoveredOutboxIdsDroppedAsSentCount: number`
+ *   - `truncated: boolean`   true when any of the listed arrays
+ *     were capped at 100 entries for log-volume control.
+ *
+ * Informational only. The flush continues to publish the
+ * best-effort superset CAR regardless; residuals are addressed by
+ * subsequent cross-device syncs detecting the same gap and
+ * re-attempting the inline merge.
+ */
+ | 'storage:monotonicity-recovered'
+/**
+ * Issue #272 — emitted when the per-flush remote-durability
+ * HEAD-verify leg (`verifyFlushDurability`), now run as a background
+ * task detached from the synchronous flush completion path, fails
+ * for a just-pinned bundle CID and/or snapshot CID.
+ *
+ * Local-durability is unaffected: the bundle CAR pin POST returned
+ * 200, the OrbitDB bundle ref is written, and (when wired) the
+ * snapshot publish call returned ok. What this event signals is that
+ * the operator's IPFS gateway has not yet served the just-pinned
+ * CID back via HEAD within the configured deadline (default 30s).
+ * This is a gateway propagation property — not a receiver crash-
+ * safety property — and does NOT close the at-least-once Nostr ack
+ * gate. Distinct from `storage:error` (terminal fatal class).
+ *
+ * `data` carries `{ cid, snapshotCid?, code?, details? }`:
+ *   - `cid`         the bundle CID whose HEAD-verify failed
+ *   - `snapshotCid` the snapshot CID (when also verified)
+ *   - `code`        the structured error code (e.g.,
+ *                   `FLUSH_DURABILITY_TIMEOUT`)
+ *   - `details`     the failed-leg detail array from
+ *                   `verifyFlushDurability`
+ *
+ * Operator action: investigate operator Kubo gateway propagation
+ * lag if this fires repeatedly for distinct CIDs. Single-shot fires
+ * (a CID that eventually does propagate) are expected under normal
+ * testnet contention and require no action.
+ *
+ * Before #272: this same failure threw inline and forced the
+ * at-least-once gate's `awaitNextFlush` to reject, causing the
+ * Nostr `since` cursor to refuse to advance and the inbound
+ * TOKEN_TRANSFER event to replay on every reconnect. Each replay
+ * triggered another flush, each flush re-hit the same HEAD-verify
+ * timeout, producing a sustained busy-spin (134 replays for 14
+ * unique event IDs in the §C.2 soak failure observed at
+ * `integration/all-fixes` HEAD `6102d59`).
+ */
+ | 'storage:durability-deferred';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -1857,6 +1931,12 @@ declare class MultiAddressTransportMux {
     private chatEoseHandlers;
     private processedEventIds;
     private static readonly MAX_PROCESSED_IDS;
+    /** Debounce timer for persisted dedup writes (#275). */
+    private persistDedupTimer;
+    /** Serialize concurrent persistDedupNow calls (#275). */
+    private persistDedupInFlight;
+    /** Gates re-hydration; true after the first successful load (#275). */
+    private dedupHydrated;
     private eventCallbacks;
     private readonly identityPrivateKey;
     private readonly sharedNostrClientGetter;
@@ -2041,9 +2121,43 @@ declare class MultiAddressTransportMux {
     onChatReady(handler: () => void): () => void;
     private emitEvent;
     /**
-     * Clear processed event IDs (e.g., on address change or periodic cleanup).
+     * Clear processed event IDs.
+     *
+     * Currently unused — kept as part of the public surface for future
+     * forced-reset scenarios (e.g., a hypothetical "wipe dedup but keep
+     * connection" path). The Mux's dedup set is shared across all
+     * addresses, so address add/remove does NOT need to clear it — they
+     * legitimately share the same relay event stream. `Sphere.clear()`
+     * handles the full-wipe case via `storage.clear()`, which
+     * implicitly removes the persisted `MUX_PROCESSED_EVENT_IDS` key.
+     *
+     * Issue #275: when called, also cancels any pending persist timer
+     * and resets `dedupHydrated` so a follow-up `updateSubscriptions`
+     * re-hydrates from storage.
      */
     clearProcessedEvents(): void;
+    /**
+     * Issue #275 — hydrate `processedEventIds` from storage. Idempotent;
+     * subsequent calls are no-ops once `dedupHydrated` is true. Failure
+     * modes (storage throw, JSON parse error, non-array) degrade to
+     * "start fresh" — the Mux still functions, just pays the legacy
+     * re-dispatch cost once until the next debounce flush repopulates.
+     */
+    private hydrateProcessedDedup;
+    /**
+     * Issue #275 — schedule a debounced write of `processedEventIds`.
+     * Coalesces a burst of EOSE-replay arrivals into a single storage
+     * transaction. Subsequent calls within the debounce window are
+     * no-ops (timer already armed).
+     */
+    private schedulePersistDedup;
+    /**
+     * Issue #275 — write the persistent dedup set to storage. Serialized
+     * via `persistDedupInFlight` so concurrent timer fires and the
+     * disconnect-flush don't race on the underlying KV write.
+     */
+    private persistDedupNow;
+    private doPersistDedup;
     /**
      * Get the storage adapter (for adapters that need it).
      */
@@ -5376,7 +5490,24 @@ interface TrackedAddress extends TrackedAddressEntry {
     /** Primary nametag (from nametag cache, without @ prefix) */
     readonly nametag?: string;
 }
-type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received';
+type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update'
+/**
+ * Issue #264 — Sphere bridge of the provider-level
+ * `storage:monotonicity-recovered` event. Fires when the
+ * flush-scheduler auto-merges a detected monotonicity gap in
+ * place: tokens re-merged from the previously-loaded baseline,
+ * unknown bundle CIDs inline-fetched + merged, OUTBOX entries
+ * dropped by SENT-wins dedup, or residuals surfaced for
+ * subsequent retries. See `StorageEventType` for the full payload
+ * shape — Sphere forwards the provider event's `data` verbatim
+ * with an added `providerId` field.
+ *
+ * Informational. Distinct from `transfer:operator-alert` /
+ * `storage:error`: auto-merges are routine convergence work, not
+ * alarms. Observability hook for dashboards plotting recovery rates,
+ * not a paging signal.
+ */
+ | 'storage:monotonicity-recovered' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received';
 interface SphereEventMap {
     'transfer:incoming': IncomingTransfer;
     'transfer:confirmed': TransferResult;
@@ -6153,6 +6284,20 @@ interface SphereEventMap {
         cid: string;
         added: number;
         removed: number;
+    };
+    'storage:monotonicity-recovered': {
+        providerId: string;
+        recoveredTokenIds: string[];
+        recoveredTokenCount: number;
+        mergedUnknownBundleCids: string[];
+        mergedUnknownBundleCount: number;
+        residualUnknownBundleCids: string[];
+        residualUnknownBundleCount: number;
+        residualTokenMissingIds: string[];
+        residualTokenMissingCount: number;
+        recoveredOutboxIdsDroppedAsSent: string[];
+        recoveredOutboxIdsDroppedAsSentCount: number;
+        truncated: boolean;
     };
     'groupchat:message': GroupMessageData;
     'groupchat:joined': {
@@ -15662,6 +15807,32 @@ interface UxfTransferFeatures {
      */
     readonly spentStateRescan?: boolean;
     /**
+     * Issue #280 — when `true` (default ON), trigger an immediate
+     * aggregator-spent rescan cycle synchronously after `load()`
+     * populates the token map. Defense-in-depth: catches tokens whose
+     * SENT/OUTBOX local records were missing (corrupt, lost, or never
+     * present — e.g. on cross-device recovery) by asking the aggregator
+     * whether each `'confirmed'` token's current destination state has
+     * been superseded. Superseded tokens are routed through the same
+     * disposition path as the periodic worker (`reason:
+     * 'off-record-spend'`).
+     *
+     * Without this flag, the SDK's periodic `SpentStateRescanWorker`
+     * eventually catches the divergence (default 5-minute interval) —
+     * but the user can attempt a double-spend in the interim. The
+     * recovery-time trigger closes that window for the high-risk
+     * post-recovery period.
+     *
+     * Requires `features.spentStateRescan === true` (the worker must
+     * be installed). When the worker is absent, this flag is a no-op.
+     * Bounded concurrency (8 by default, matches the worker's
+     * `MAX_CONCURRENT_SPENT_RESCANS`); large wallets do not serialize.
+     *
+     * Set `false` to suppress (e.g. cost-sensitive deployments accepting
+     * the periodic-sweep window, or tests that mock the aggregator).
+     */
+    readonly recoveryAggregatorCheck?: boolean;
+    /**
      * Phase 9.6.D — when `true` (default when `senderUxf` is on),
      * auto-install and start a {@link FinalizationWorkerSender} in
      * {@link PaymentsModule.initialize} so instant-mode sends drive the
@@ -17254,8 +17425,25 @@ declare class PaymentsModule {
     getAssets(coinId?: string): Promise<Asset[]>;
     /**
      * Aggregate tokens by coinId with confirmed/unconfirmed breakdown.
-     * Excludes tokens with status 'spent' or 'invalid'.
-     * Tokens with status 'transferring' are counted as unconfirmed (visible in UI as "Sending").
+     *
+     * Excludes:
+     *   - tokens with status `'spent'` or `'invalid'`;
+     *   - invoice tokens (`coinId === INVOICE_TOKEN_TYPE_HEX`) — they carry
+     *     no monetary value and only exist as ledger anchors; surfacing them
+     *     produced the phantom `: 0 (1 token)` entry in #282 on the
+     *     IPFS-recovery side, where `txfToToken` had no invoice branch and
+     *     left coinId/symbol empty;
+     *   - defensive: any residual token with empty `coinId` (catch-all for
+     *     future shapes that slip past `txfToToken`'s typed branches).
+     *
+     * Tokens with status `'transferring'` are counted as unconfirmed
+     * (visible in UI as "Sending").
+     *
+     * The returned array is sorted deterministically by symbol (ASCII
+     * case-insensitive) with coinId as the tie-breaker. Without this sort,
+     * multi-device wallets render the same asset set in different orders
+     * because the underlying `this.tokens` Map iterates in insertion order
+     * — which depends on snapshot replay sequence (#282 Residual #1).
      */
     private aggregateTokens;
     /**
@@ -22644,78 +22832,159 @@ declare function randomUUID(): string;
 /**
  * Centralized SDK Logger
  *
- * A lightweight singleton logger that works across all tsup bundles
- * by storing state on globalThis. Supports three log levels:
- * - debug: detailed messages (only shown when debug=true)
- * - warn: important warnings (ALWAYS shown regardless of debug flag)
- * - error: critical errors (ALWAYS shown regardless of debug flag)
+ * Lightweight singleton logger that works across all tsup bundles by storing
+ * state on globalThis. Issue #274 extends the original three-level logger
+ * (`debug | warn | error`) with timestamps, env/localStorage bootstrap,
+ * namespace globs, level qualifiers, lazy message builders, timing spans,
+ * secret redaction, and pluggable sinks.
  *
- * Global debug flag enables all logging. Per-tag overrides allow
- * granular control (e.g., only transport debug).
+ * Back-compat: the legacy call shapes still work unchanged.
  *
- * @example
  * ```ts
- * import { logger } from '@unicitylabs/sphere-sdk';
+ * logger.configure({ debug: true });        // existing
+ * logger.setTagDebug('Nostr', true);        // existing
+ * logger.debug('Payments', 'sent', { id }); // existing — single-tag
+ * logger.warn('Sphere', 'degraded');        // existing
+ * ```
  *
- * // Enable all debug logging
- * logger.configure({ debug: true });
+ * New surface:
  *
- * // Enable only specific tags
- * logger.setTagDebug('Nostr', true);
+ * ```ts
+ * // Per-namespace toggle via env: SPHERE_DEBUG=payments:*,transport:nostr=trace
+ * // Per-namespace toggle via localStorage in browsers.
+ * // Runtime toggle:
+ * setDebug('payments:*,transport:nostr=trace');
+ * disableDebug();
+ * listDebug();
  *
- * // Usage in SDK classes
- * logger.debug('Payments', 'Transfer started', { amount, recipient });
- * logger.warn('Nostr', 'queryEvents timed out after 5s');
- * logger.error('Sphere', 'Critical failure', error);
+ * const span = logger.time('Payments', 'send', { recipient: '@bob' });
+ * span.mark('split-planned', { sources: 4 });
+ * span.end({ ok: true });   // -> one debug line with durationMs + marks
+ *
+ * // Pluggable sinks (default = console). Multiple sinks allowed; ring buffer
+ * // included for `sphere debug timings`-style summaries.
+ * const buf = createRingBufferSink(1024);
+ * const remove = addSink(buf);
  * ```
  */
-type LogLevel = 'debug' | 'warn' | 'error';
-type LogHandler = (level: LogLevel, tag: string, message: string, ...args: unknown[]) => void;
+type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+/**
+ * Legacy handler signature. Pre-existing consumers receive 'debug'|'warn'|'error'
+ * only — the new `trace`/`info` levels are downgraded to 'debug' before being
+ * passed to a legacy handler to keep its switch-statement exhaustive.
+ */
+type LogHandler = (level: 'debug' | 'warn' | 'error', tag: string, message: string, ...args: unknown[]) => void;
 interface LoggerConfig {
-    /** Enable debug logging globally (default: false). When false, only warn and error messages are shown. */
+    /** Global debug toggle (legacy). Enables `debug` level for all tags lacking an override. */
     debug?: boolean;
-    /** Custom log handler. If provided, replaces console output. Useful for tests or custom log sinks. */
+    /** Legacy single-sink shim. Setting `handler` removes all sinks except this one. */
     handler?: LogHandler | null;
+    /**
+     * Prepend ISO-8601 ms timestamp + level + namespace to each line. Defaults
+     * to true once any namespace is enabled at debug-or-lower; false otherwise.
+     * Pass explicit boolean to override.
+     */
+    timestamps?: boolean;
+    /** Honour the redaction denylist on `fields` / args (default true). */
+    redaction?: boolean;
 }
+interface LogRecord {
+    ts: number;
+    level: LogLevel;
+    namespace: string;
+    message: string;
+    fields?: Record<string, unknown>;
+    /** Extra positional args from the legacy `logger.debug(tag, msg, ...args)` signature. */
+    args?: unknown[];
+}
+interface LogSink {
+    /**
+     * `formatted` is the default-formatted single-line string the console sink
+     * would emit. Custom sinks can ignore it and re-render from the record.
+     */
+    write(record: LogRecord, formatted: string): void;
+    flush?(): Promise<void> | void;
+    close?(): Promise<void> | void;
+}
+interface Span {
+    /** Record a checkpoint with elapsed-ms-from-start. Buffered into the span. */
+    mark(label: string, fields?: Record<string, unknown>): void;
+    /** Elapsed ms since the span was created. */
+    elapsed(): number;
+    /**
+     * End the span successfully. Emits ONE `debug`-level record carrying
+     * `{ spanName, durationMs, marks: [...] }`. Returns durationMs.
+     */
+    end(extraFields?: Record<string, unknown>): number;
+    /**
+     * End the span with error. Emits ONE `warn`-level record carrying the err
+     * message + marks. Returns durationMs.
+     */
+    endWithError(err: unknown, extraFields?: Record<string, unknown>): number;
+}
+interface NamespacedLogger {
+    readonly namespace: string;
+    isEnabled(level: LogLevel): boolean;
+    trace(message: string, fields?: Record<string, unknown>): void;
+    debug(message: string, fields?: Record<string, unknown>): void;
+    info(message: string, fields?: Record<string, unknown>): void;
+    warn(message: string, fields?: Record<string, unknown>): void;
+    error(message: string, fields?: Record<string, unknown> | Error): void;
+    /** Lazy form — `build()` is only invoked when the level passes the gate. */
+    traceLazy(build: () => [string, Record<string, unknown>?]): void;
+    debugLazy(build: () => [string, Record<string, unknown>?]): void;
+    /** Child logger with appended namespace segment, e.g. 'payments' -> 'payments:send'. */
+    child(suffix: string): NamespacedLogger;
+    /** Timing span helper — emits one line at .end() / .endWithError(). */
+    time(spanName: string, initialFields?: Record<string, unknown>): Span;
+}
+interface RingBufferSink extends LogSink {
+    getRecords(): LogRecord[];
+    clear(): void;
+    capacity: number;
+}
+declare function createRingBufferSink(capacity: number): RingBufferSink;
+declare function getLogger(namespace: string): NamespacedLogger;
+/**
+ * Helper for instrumenting a function body with a single timing span. The span
+ * is ended on resolve and endWithError'd on reject — so the caller always sees
+ * exactly one log line per invocation. Use sparingly on hot paths; spans
+ * allocate a marks array even when the namespace is disabled.
+ *
+ * ```ts
+ * const result = await withSpan('payments:receive', 'receive',
+ *   { finalize: !!opts?.finalize },
+ *   async (span) => {
+ *     // body — may call span.mark('events-fetched', { count })
+ *     return result;
+ *   });
+ * ```
+ */
+declare function withSpan<T>(namespace: string, spanName: string, initialFields: Record<string, unknown> | undefined, fn: (span: Span) => Promise<T>): Promise<T>;
+declare function setDebug(spec: string | boolean): void;
+declare function disableDebug(): void;
+declare function listDebug(): {
+    namespace: string;
+    level: LogLevel;
+}[];
+declare function addSink(sink: LogSink): () => void;
+declare function clearSinks(): void;
 declare const logger: {
-    /**
-     * Configure the logger. Can be called multiple times (last write wins).
-     * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
-     */
     configure(config: LoggerConfig): void;
-    /**
-     * Enable/disable debug logging for a specific tag.
-     * Per-tag setting overrides the global debug flag.
-     *
-     * @example
-     * ```ts
-     * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
-     * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
-     * ```
-     */
     setTagDebug(tag: string, enabled: boolean): void;
-    /**
-     * Clear per-tag override, falling back to global debug flag.
-     */
     clearTagDebug(tag: string): void;
-    /** Returns true if debug mode is enabled for the given tag (or globally). */
     isDebugEnabled(tag?: string): boolean;
-    /**
-     * Debug-level log. Only shown when debug is enabled (globally or for this tag).
-     * Use for detailed operational information.
-     */
+    /** Legacy single-tag debug. Keeps the `tag, message, ...args` signature. */
     debug(tag: string, message: string, ...args: unknown[]): void;
-    /**
-     * Warning-level log. ALWAYS shown regardless of debug flag.
-     * Use for important but non-critical issues (timeouts, retries, degraded state).
-     */
+    /** Legacy single-tag info — promoted alias for `debug`. */
+    info(tag: string, message: string, ...args: unknown[]): void;
+    /** Legacy single-tag trace — gated by trace-or-lower namespace level. */
+    trace(tag: string, message: string, ...args: unknown[]): void;
     warn(tag: string, message: string, ...args: unknown[]): void;
-    /**
-     * Error-level log. ALWAYS shown regardless of debug flag.
-     * Use for critical failures that should never be silenced.
-     */
     error(tag: string, message: string, ...args: unknown[]): void;
-    /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+    /** Per-tag span helper — same as `getLogger(tag).time(...)`. */
+    time(tag: string, spanName: string, initialFields?: Record<string, unknown>): Span;
+    /** Reset all logger state. Primarily for tests. */
     reset(): void;
 };
 
@@ -22816,4 +23085,4 @@ interface CheckNetworkHealthOptions {
  */
 declare function checkNetworkHealth(network?: NetworkType, options?: CheckNetworkHealthOptions): Promise<NetworkHealthResult>;
 
-export { type AddressInfo, type AddressModuleSet, CHARSET, type CheckNetworkHealthOptions, CurrencyUtils, DEFAULT_DERIVATION_PATH, DEFAULT_TOKEN_DECIMALS, type DerivedKey, type DestroyOptions, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type EncryptedData, type EncryptionOptions, type InitProgress, type InitProgressCallback, type InitProgressStep, type KeyPair, type L1Config, type LogHandler, type LogLevel, type LoggerConfig, type MasterKey, SIGN_MESSAGE_PREFIX, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, Sphere, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, base58Decode, base58Encode, bytesToHex, checkNetworkHealth, computeHash160, convertBits, createAddress, createBech32, createKeyPair, createSphere, decodeBech32, decrypt, decryptJson, decryptMnemonic, decryptSimple, decryptWithSalt, deriveAddressInfo, deriveChildKey, deriveKeyAtPath, deserializeEncrypted, discoverAddressesImpl, doubleSha256, ec, encodeBech32, encrypt, encryptMnemonic, encryptSimple, entropyToMnemonic, extractFromText, findPattern, formatAmount, generateAddressInfo, generateMasterKey, generateMnemonic, generateRandomKey, getAddressHrp, getPublicKey, getSphere, hash160, hash160ToBytes, hashSignMessage, hexToBytes, identityFromMnemonic, identityFromMnemonicSync, importSphere, initSphere, isEncryptedData, isSphereError, isValidBech32, isValidNametag, isValidPrivateKey, loadSphere, logger, mnemonicToEntropy, mnemonicToSeed, mnemonicToSeedSync, privateKeyToAddressInfo, publicKeyToAddress, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, scanAddressesImpl, serializeEncrypted, sha256, signMessage, sleep, sphereExists, toHumanReadable, toSmallestUnit, validateMnemonic, verifySignedMessage };
+export { type AddressInfo, type AddressModuleSet, CHARSET, type CheckNetworkHealthOptions, CurrencyUtils, DEFAULT_DERIVATION_PATH, DEFAULT_TOKEN_DECIMALS, type DerivedKey, type DestroyOptions, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type EncryptedData, type EncryptionOptions, type InitProgress, type InitProgressCallback, type InitProgressStep, type KeyPair, type L1Config, type LogHandler, type LogLevel, type LogRecord, type LogSink, type LoggerConfig, type MasterKey, type NamespacedLogger, type RingBufferSink, SIGN_MESSAGE_PREFIX, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type Span, Sphere, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, addSink, base58Decode, base58Encode, bytesToHex, checkNetworkHealth, clearSinks, computeHash160, convertBits, createAddress, createBech32, createKeyPair, createRingBufferSink, createSphere, decodeBech32, decrypt, decryptJson, decryptMnemonic, decryptSimple, decryptWithSalt, deriveAddressInfo, deriveChildKey, deriveKeyAtPath, deserializeEncrypted, disableDebug, discoverAddressesImpl, doubleSha256, ec, encodeBech32, encrypt, encryptMnemonic, encryptSimple, entropyToMnemonic, extractFromText, findPattern, formatAmount, generateAddressInfo, generateMasterKey, generateMnemonic, generateRandomKey, getAddressHrp, getLogger, getPublicKey, getSphere, hash160, hash160ToBytes, hashSignMessage, hexToBytes, identityFromMnemonic, identityFromMnemonicSync, importSphere, initSphere, isEncryptedData, isSphereError, isValidBech32, isValidNametag, isValidPrivateKey, listDebug, loadSphere, logger, mnemonicToEntropy, mnemonicToSeed, mnemonicToSeedSync, privateKeyToAddressInfo, publicKeyToAddress, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, scanAddressesImpl, serializeEncrypted, setDebug, sha256, signMessage, sleep, sphereExists, toHumanReadable, toSmallestUnit, validateMnemonic, verifySignedMessage, withSpan };

@@ -407,91 +407,472 @@ var init_sha2 = __esm({
 import { Buffer as Buffer4 } from "buffer";
 
 // core/logger.ts
+var LEVEL_RANK = {
+  trace: 0,
+  debug: 1,
+  info: 2,
+  warn: 3,
+  error: 4
+};
+var ALWAYS_LEVEL_RANK = LEVEL_RANK.warn;
 var LOGGER_KEY = "__sphere_sdk_logger__";
 function getState() {
   const g = globalThis;
-  if (!g[LOGGER_KEY]) {
-    g[LOGGER_KEY] = { debug: false, tags: {}, handler: null };
+  const existing = g[LOGGER_KEY];
+  if (!existing) {
+    const fresh = {
+      debug: false,
+      tags: {},
+      levels: {},
+      handler: null,
+      sinks: [],
+      timestamps: false,
+      redaction: true,
+      envBootstrapped: false
+    };
+    g[LOGGER_KEY] = fresh;
+    bootstrapFromEnv(fresh);
+    return fresh;
   }
-  return g[LOGGER_KEY];
+  if (existing.levels === void 0) existing.levels = {};
+  if (existing.sinks === void 0) existing.sinks = [];
+  if (existing.timestamps === void 0) existing.timestamps = false;
+  if (existing.redaction === void 0) existing.redaction = true;
+  if (existing.envBootstrapped === void 0) {
+    existing.envBootstrapped = false;
+    bootstrapFromEnv(existing);
+  }
+  return existing;
 }
-function isEnabled(tag) {
-  const state = getState();
-  if (tag in state.tags) return state.tags[tag];
-  return state.debug;
+function readEnvSpec() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      const v = process.env.SPHERE_DEBUG ?? process.env.SPHERE_LOG;
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      const v = localStorage.getItem("SPHERE_DEBUG");
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  return null;
+}
+function bootstrapFromEnv(state) {
+  if (state.envBootstrapped) return;
+  state.envBootstrapped = true;
+  const spec = readEnvSpec();
+  if (spec) applySpec(state, spec);
+}
+var VALID_LEVELS = /* @__PURE__ */ new Set(["trace", "debug", "info", "warn", "error"]);
+var SPEC_MAX_LENGTH = 8 * 1024;
+var SPEC_MAX_ENTRIES = 256;
+var SPEC_PATTERN_RE = /^[A-Za-z0-9:_*\-]{1,128}$/;
+function parseSpec(spec) {
+  const out = [];
+  if (spec.length > SPEC_MAX_LENGTH) {
+    try {
+      console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_LENGTH} bytes \u2014 rejecting`);
+    } catch {
+    }
+    return out;
+  }
+  let processed = 0;
+  for (const rawEntry of spec.split(",")) {
+    if (processed >= SPEC_MAX_ENTRIES) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_ENTRIES} entries \u2014 truncating`);
+      } catch {
+      }
+      break;
+    }
+    processed += 1;
+    const trimmed = rawEntry.trim();
+    if (!trimmed) continue;
+    let pattern = trimmed;
+    let level = "debug";
+    const negate = pattern.startsWith("-") || pattern.startsWith("!");
+    if (negate) pattern = pattern.slice(1).trim();
+    const eq = pattern.indexOf("=");
+    if (eq >= 0) {
+      const levelPart = pattern.slice(eq + 1).trim().toLowerCase();
+      pattern = pattern.slice(0, eq).trim();
+      if (VALID_LEVELS.has(levelPart)) {
+        level = levelPart;
+      } else if (levelPart.length > 0) {
+        try {
+          console.warn(
+            `[logger] SPHERE_DEBUG entry "${rawEntry.trim()}": unknown level "${levelPart}" \u2014 falling back to "debug". Valid: trace, debug, info, warn, error.`
+          );
+        } catch {
+        }
+      }
+    }
+    if (!pattern) continue;
+    if (!SPEC_PATTERN_RE.test(pattern)) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG entry has invalid pattern "${pattern}" \u2014 skipping`);
+      } catch {
+      }
+      continue;
+    }
+    out.push({ pattern, level, negate });
+  }
+  return out;
+}
+function applySpec(state, spec) {
+  const entries = parseSpec(spec);
+  if (entries.length === 0) return;
+  for (const entry of entries) {
+    if (entry.pattern === "*" && !entry.negate) {
+      state.debug = LEVEL_RANK[entry.level] <= LEVEL_RANK.debug;
+      state.levels["*"] = entry.level;
+      continue;
+    }
+    if (entry.negate) {
+      state.levels[entry.pattern] = "warn";
+    } else {
+      state.levels[entry.pattern] = entry.level;
+    }
+  }
+  state.timestamps = true;
+}
+function* namespaceAncestors(ns) {
+  if (!ns) {
+    yield "*";
+    return;
+  }
+  let cursor = ns;
+  while (true) {
+    yield cursor;
+    yield `${cursor}:*`;
+    const idx = cursor.lastIndexOf(":");
+    if (idx <= 0) break;
+    cursor = cursor.slice(0, idx);
+  }
+  yield "*";
+}
+function resolveMinLevel(state, namespace) {
+  for (const candidate of namespaceAncestors(namespace)) {
+    const lvl = state.levels[candidate];
+    if (lvl) return lvl;
+  }
+  if (namespace in state.tags) {
+    return state.tags[namespace] ? "debug" : "warn";
+  }
+  return state.debug ? "debug" : "warn";
+}
+function isLevelEnabled(state, namespace, level) {
+  if (LEVEL_RANK[level] >= ALWAYS_LEVEL_RANK) return true;
+  const min = resolveMinLevel(state, namespace);
+  return LEVEL_RANK[level] >= LEVEL_RANK[min];
+}
+var REDACT_KEYS = /* @__PURE__ */ new Set([
+  // BIP-32 / BIP-39 / wallet secrets
+  "privatekey",
+  "private_key",
+  "priv",
+  "privkey",
+  "priv_key",
+  "masterkey",
+  "master_key",
+  "chaincode",
+  "chain_code",
+  "mnemonic",
+  "seed",
+  "seedphrase",
+  "seed_phrase",
+  "recoveryphrase",
+  "recovery_phrase",
+  "wif",
+  "xpriv",
+  "xprv",
+  // Nostr / transport secrets
+  "nsec",
+  "nsechex",
+  "nsec_hex",
+  // Crypto material
+  "keymaterial",
+  "key_material",
+  "rawkey",
+  "raw_key",
+  "keyhex",
+  "key_hex",
+  "signingkey",
+  "signing_key",
+  "attestkey",
+  "attest_key",
+  "hmackey",
+  "hmac_key",
+  "encryptionkey",
+  "encryption_key",
+  "ciphertext",
+  "iv",
+  "salt",
+  "nonce",
+  // IPFS / libp2p
+  "peerid",
+  "peer_id",
+  "ipnskey",
+  "ipns_key",
+  "ipns_private_key",
+  // Auth tokens
+  "secret",
+  "apikey",
+  "api_key",
+  "accesstoken",
+  "access_token",
+  "refreshtoken",
+  "refresh_token",
+  "sessiontoken",
+  "session_token",
+  "bearer",
+  "authorization",
+  "auth",
+  "token",
+  // Generic password
+  "password",
+  "passphrase"
+]);
+var REDACT_KEY_RE = new RegExp(
+  "(?:^|[._-])(?:secret|priv|private|nsec|mnemonic|seed|password|passphrase|apikey|api_key|bearer|authorization|token|wif|xpriv|xprv|chaincode|masterkey|encryptionkey|hmackey|attestkey|peerid|ipnskey)(?:[._-]|$)|(?:^|[a-zA-Z])(?:Secret|Priv|Private|Nsec|Mnemonic|Seed|Password|Passphrase|ApiKey|Bearer|Authorization|Token|Wif|Xpriv|Xprv|ChainCode|MasterKey|EncryptionKey|HmacKey|AttestKey|PeerId|IpnsKey)|(?:^|[a-z])(?:priv|seed|nsec|mnemonic|password|secret|wallet|signing|encryption|chain|master|hmac|attest|peer|ipns|cipher|access|refresh|session|api|raw)(?:[A-Z][a-zA-Z]*)?(?:Key|Phrase|Token|Hex|Code|Text|Material)(?:[A-Z]|$|[._-])"
+);
+function shouldRedactKey(key) {
+  const k = key.toLowerCase();
+  if (REDACT_KEYS.has(k)) return true;
+  return REDACT_KEY_RE.test(key);
+}
+var REDACTED = "[REDACTED]";
+var REDACT_MAX_DEPTH = 8;
+var REDACT_TRUNCATED = "[REDACTED:depth-exceeded]";
+function redactFields(input) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  return redactValue(input, 0, seen);
+}
+function redactValue(value, depth, seen) {
+  if (value == null) return value;
+  if (depth >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return REDACT_TRUNCATED;
+    seen.add(value);
+    return value.map((el) => redactValue(el, depth + 1, seen));
+  }
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    if (seen.has(obj)) return REDACT_TRUNCATED;
+    seen.add(obj);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (shouldRedactKey(k)) {
+        out[k] = REDACTED;
+      } else {
+        out[k] = redactValue(v, depth + 1, seen);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function redactArgs(args) {
+  if (args.length === 0) return args;
+  const seen = /* @__PURE__ */ new WeakSet();
+  return args.map((a) => redactValue(a, 0, seen));
+}
+function pad(level) {
+  switch (level) {
+    case "trace":
+      return "TRACE";
+    case "debug":
+      return "DEBUG";
+    case "info":
+      return "INFO ";
+    case "warn":
+      return "WARN ";
+    case "error":
+      return "ERROR";
+  }
+}
+function escapeControlChars(s) {
+  if (typeof s !== "string") return String(s);
+  if (!/[\x00-\x1f\x7f]/.test(s)) return s;
+  return s.replace(/[\x00-\x1f\x7f]/g, (c) => {
+    const code2 = c.charCodeAt(0);
+    if (code2 === 10) return "\\n";
+    if (code2 === 13) return "\\r";
+    if (code2 === 9) return "\\t";
+    if (code2 === 27) return "\\x1b";
+    return `\\x${code2.toString(16).padStart(2, "0")}`;
+  });
+}
+function formatRecord(state, record) {
+  const wantTs = state.timestamps === true;
+  const ts = wantTs ? `[${new Date(record.ts).toISOString()}] ` : "";
+  const level = wantTs ? `[${pad(record.level)}] ` : "";
+  const ns = `[${escapeControlChars(record.namespace)}]`;
+  const safeMessage = escapeControlChars(record.message);
+  let msg = `${ts}${level}${ns} ${safeMessage}`;
+  if (record.fields && Object.keys(record.fields).length > 0) {
+    try {
+      msg += ` ${JSON.stringify(record.fields)}`;
+    } catch {
+      msg += " [unserializable fields]";
+    }
+  }
+  return msg;
+}
+var CONSOLE_SINK = {
+  write(record, formatted) {
+    const state = getState();
+    const legacy = record.fields === void 0 && state.timestamps !== true;
+    const target = record.level === "error" ? console.error : record.level === "warn" ? console.warn : console.log;
+    if (legacy) {
+      const prefix = `[${record.namespace}]`;
+      if (record.args && record.args.length > 0) target(prefix, record.message, ...record.args);
+      else target(prefix, record.message);
+    } else {
+      if (record.args && record.args.length > 0) target(formatted, ...record.args);
+      else target(formatted);
+    }
+  }
+};
+function emit(state, level, namespace, message, fields, args) {
+  const safeFields = fields && state.redaction ? redactFields(fields) : fields;
+  const safeArgs = args.length && state.redaction ? redactArgs(args) : args;
+  const record = {
+    ts: Date.now(),
+    level,
+    namespace,
+    message,
+    fields: safeFields,
+    args: safeArgs.length > 0 ? safeArgs : void 0
+  };
+  if (state.handler) {
+    const downgraded = level === "warn" || level === "error" ? level : "debug";
+    state.handler(downgraded, namespace, message, ...record.args ?? []);
+    return;
+  }
+  const sinks = state.sinks.length > 0 ? state.sinks : [CONSOLE_SINK];
+  const formatted = formatRecord(state, record);
+  for (const sink of sinks) {
+    try {
+      sink.write(record, formatted);
+    } catch (err) {
+      try {
+        console.error("[logger] sink threw", err);
+      } catch {
+      }
+    }
+  }
+}
+function now() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch {
+  }
+  return Date.now();
+}
+function makeSpan(state, namespace, spanName, initialFields) {
+  const start = now();
+  const marks = [];
+  let ended = false;
+  return {
+    mark(label, fields) {
+      if (ended) return;
+      marks.push({ label, elapsedMs: Math.round((now() - start) * 1e3) / 1e3, fields });
+    },
+    elapsed() {
+      return Math.round((now() - start) * 1e3) / 1e3;
+    },
+    end(extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      if (!isLevelEnabled(state, namespace, "debug")) return dur;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "debug", namespace, `span.end ${spanName}`, fields, []);
+      return dur;
+    },
+    endWithError(err, extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur,
+        err: err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "warn", namespace, `span.error ${spanName}`, fields, []);
+      return dur;
+    }
+  };
 }
 var logger = {
-  /**
-   * Configure the logger. Can be called multiple times (last write wins).
-   * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
-   */
   configure(config) {
     const state = getState();
-    if (config.debug !== void 0) state.debug = config.debug;
+    if (config.debug !== void 0) {
+      state.debug = config.debug;
+    }
     if (config.handler !== void 0) state.handler = config.handler;
+    if (config.timestamps !== void 0) state.timestamps = config.timestamps;
+    if (config.redaction !== void 0) state.redaction = config.redaction;
   },
-  /**
-   * Enable/disable debug logging for a specific tag.
-   * Per-tag setting overrides the global debug flag.
-   *
-   * @example
-   * ```ts
-   * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
-   * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
-   * ```
-   */
   setTagDebug(tag, enabled) {
     getState().tags[tag] = enabled;
   },
-  /**
-   * Clear per-tag override, falling back to global debug flag.
-   */
   clearTagDebug(tag) {
     delete getState().tags[tag];
   },
-  /** Returns true if debug mode is enabled for the given tag (or globally). */
   isDebugEnabled(tag) {
-    if (tag) return isEnabled(tag);
-    return getState().debug;
+    const state = getState();
+    if (tag) return isLevelEnabled(state, tag, "debug");
+    return state.debug || Object.values(state.levels).some((l) => LEVEL_RANK[l] <= LEVEL_RANK.debug);
   },
-  /**
-   * Debug-level log. Only shown when debug is enabled (globally or for this tag).
-   * Use for detailed operational information.
-   */
+  /** Legacy single-tag debug. Keeps the `tag, message, ...args` signature. */
   debug(tag, message, ...args) {
-    if (!isEnabled(tag)) return;
     const state = getState();
-    if (state.handler) {
-      state.handler("debug", tag, message, ...args);
-    } else {
-      console.log(`[${tag}]`, message, ...args);
-    }
+    if (!isLevelEnabled(state, tag, "debug")) return;
+    emit(state, "debug", tag, message, void 0, args);
   },
-  /**
-   * Warning-level log. ALWAYS shown regardless of debug flag.
-   * Use for important but non-critical issues (timeouts, retries, degraded state).
-   */
+  /** Legacy single-tag info — promoted alias for `debug`. */
+  info(tag, message, ...args) {
+    const state = getState();
+    if (!isLevelEnabled(state, tag, "info")) return;
+    emit(state, "info", tag, message, void 0, args);
+  },
+  /** Legacy single-tag trace — gated by trace-or-lower namespace level. */
+  trace(tag, message, ...args) {
+    const state = getState();
+    if (!isLevelEnabled(state, tag, "trace")) return;
+    emit(state, "trace", tag, message, void 0, args);
+  },
   warn(tag, message, ...args) {
-    const state = getState();
-    if (state.handler) {
-      state.handler("warn", tag, message, ...args);
-    } else {
-      console.warn(`[${tag}]`, message, ...args);
-    }
+    emit(getState(), "warn", tag, message, void 0, args);
   },
-  /**
-   * Error-level log. ALWAYS shown regardless of debug flag.
-   * Use for critical failures that should never be silenced.
-   */
   error(tag, message, ...args) {
-    const state = getState();
-    if (state.handler) {
-      state.handler("error", tag, message, ...args);
-    } else {
-      console.error(`[${tag}]`, message, ...args);
-    }
+    emit(getState(), "error", tag, message, void 0, args);
   },
-  /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+  /** Per-tag span helper — same as `getLogger(tag).time(...)`. */
+  time(tag, spanName, initialFields) {
+    return makeSpan(getState(), tag, spanName, initialFields);
+  },
+  /** Reset all logger state. Primarily for tests. */
   reset() {
     const g = globalThis;
     delete g[LOGGER_KEY];
@@ -530,7 +911,7 @@ function redactionMarkerFor(field, value) {
   }
   return `[REDACTED: ${field}]`;
 }
-function redactValue(value, visited, depth) {
+function redactValue2(value, visited, depth) {
   if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
   if (value === null || value === void 0) return value;
   const t = typeof value;
@@ -581,7 +962,7 @@ function redactValue(value, visited, depth) {
       errCause = "[REDACTED: getter-threw]";
     }
     if (errCause !== void 0) {
-      clone.cause = redactValue(errCause, visited, depth + 1);
+      clone.cause = redactValue2(errCause, visited, depth + 1);
     }
     let keys;
     try {
@@ -603,7 +984,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         clone[key] = redactionMarkerFor(key, v);
       } else {
-        clone[key] = redactValue(v, visited, depth + 1);
+        clone[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return clone;
@@ -642,7 +1023,7 @@ function redactValue(value, visited, depth) {
         } catch {
           item = "[REDACTED: getter-threw]";
         }
-        out2.push(redactValue(item, visited, depth + 1));
+        out2.push(redactValue2(item, visited, depth + 1));
       }
       return out2;
     }
@@ -665,7 +1046,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         out[key] = redactionMarkerFor(key, v);
       } else {
-        out[key] = redactValue(v, visited, depth + 1);
+        out[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return out;
@@ -674,7 +1055,7 @@ function redactValue(value, visited, depth) {
 }
 function redactCause(cause) {
   if (cause === void 0) return void 0;
-  return redactValue(cause, /* @__PURE__ */ new WeakMap(), 0);
+  return redactValue2(cause, /* @__PURE__ */ new WeakMap(), 0);
 }
 var SphereError = class extends Error {
   code;
@@ -726,6 +1107,40 @@ var STORAGE_KEYS_GLOBAL = {
   LAST_WALLET_EVENT_TS: "last_wallet_event_ts",
   /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
   LAST_DM_EVENT_TS: "last_dm_event_ts",
+  /**
+   * Issue #275 — persistent dedup for Nostr wallet event IDs that have
+   * been SUCCESSFULLY processed (cursor advanced). Keyed per pubkey;
+   * stored as a JSON string array bounded by
+   * `LIMITS.PROCESSED_EVENT_IDS_CAP` (FIFO eviction).
+   *
+   * Distinct from in-memory `inFlightEventIds`: this set persists across
+   * process restarts so cross-process CLI invocations don't re-walk the
+   * full relay backlog. At-least-once is preserved because we ONLY add
+   * to this set after the event's cursor was advanced (durability ok
+   * or replay budget exhausted), never after a transient failure.
+   */
+  PROCESSED_WALLET_EVENT_IDS: "processed_wallet_event_ids",
+  /**
+   * Issue #275 — persistent durability-cooldown ledger for
+   * TOKEN_TRANSFER events. Tracks `attempts` and `nextRetryAt` across
+   * process restarts so the bounded replay budget
+   * (`DURABILITY_MAX_REPLAY_ATTEMPTS = 3`) accumulates across CLI
+   * invocations rather than resetting per-process.
+   */
+  FAILED_EVENT_COOLDOWNS: "failed_event_cooldowns",
+  /**
+   * Issue #275 — persistent dedup set for the MultiAddressTransportMux
+   * level. The Mux maintains its own `processedEventIds` (independent
+   * of NostrTransportProvider's set) and dispatches to per-address
+   * adapters. Without persistence, every fresh CLI invocation
+   * re-walked the relay backlog through the Mux path as well as the
+   * outer-provider path. Bounded by `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+   * Per-wallet storage scope: each Sphere instance has its own
+   * `storage` provider, so a bare global key is sufficient (no
+   * per-pubkey suffix needed because the Mux spans all per-wallet
+   * addresses).
+   */
+  MUX_PROCESSED_EVENT_IDS: "mux_processed_event_ids",
   /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
   GROUP_CHAT_RELAY_URL: "group_chat_relay_url",
   /** Cached token registry JSON (fetched from remote) */
@@ -937,6 +1352,31 @@ var TIMEOUTS = {
   PROOF_POLL_INTERVAL: 1e3,
   /** Sync interval */
   SYNC_INTERVAL: 6e4
+};
+var LIMITS = {
+  /** Min nametag length */
+  NAMETAG_MIN_LENGTH: 3,
+  /** Max nametag length */
+  NAMETAG_MAX_LENGTH: 20,
+  /** Max memo length */
+  MEMO_MAX_LENGTH: 500,
+  /** Max message length */
+  MESSAGE_MAX_LENGTH: 1e4,
+  /**
+   * Issue #275 — FIFO cap for persisted dedup IDs in
+   * `STORAGE_KEYS_GLOBAL.PROCESSED_WALLET_EVENT_IDS`. Sized for several
+   * days of Nostr relay retention (typical relay holds 1-7 days). A
+   * 10k cap at ~70 bytes per id is ~700KB serialized — well under
+   * IndexedDB / file storage budgets.
+   */
+  PROCESSED_EVENT_IDS_CAP: 1e4,
+  /**
+   * Issue #275 — debounce interval for persisted dedup-set flushes.
+   * Coalesces rapid arrivals (e.g., EOSE replay burst of N events) into
+   * a single storage write rather than N writes. 200ms matches the
+   * proven pattern in `GroupChatModule.persistProcessedEvents`.
+   */
+  PROCESSED_EVENT_IDS_FLUSH_MS: 200
 };
 
 // impl/browser/storage/LocalStorageProvider.ts
@@ -1271,7 +1711,7 @@ var WEAK_KEY_DENYLIST_FINGERPRINT = Object.freeze(
 );
 
 // profile/aggregator-pointer/secret-key.ts
-var REDACTED = "[REDACTED SecretKey]";
+var REDACTED2 = "[REDACTED SecretKey]";
 var UINT8_ARRAY_CTOR = Uint8Array;
 var SecretKey = class {
   #bytes;
@@ -1301,19 +1741,19 @@ var SecretKey = class {
     return this.#label;
   }
   toString() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   toJSON() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   // Node.js util.inspect customization — same redaction.
   // The symbol lookup is string-based to avoid a hard 'util' import in browser.
   [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   // Browser devtools / template-literal coercion fallback.
   [Symbol.toPrimitive](_hint) {
-    return `${REDACTED} <${this.#label}>`;
+    return `${REDACTED2} <${this.#label}>`;
   }
   /**
    * Best-effort zeroization: overwrites the underlying buffer with zeros
@@ -1347,16 +1787,16 @@ var _HMAC = class {
     this.blockLen = this.iHash.blockLen;
     this.outputLen = this.iHash.outputLen;
     const blockLen = this.blockLen;
-    const pad = new Uint8Array(blockLen);
-    pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54;
-    this.iHash.update(pad);
+    const pad2 = new Uint8Array(blockLen);
+    pad2.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+    for (let i = 0; i < pad2.length; i++)
+      pad2[i] ^= 54;
+    this.iHash.update(pad2);
     this.oHash = hash.create();
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54 ^ 92;
-    this.oHash.update(pad);
-    clean(pad);
+    for (let i = 0; i < pad2.length; i++)
+      pad2[i] ^= 54 ^ 92;
+    this.oHash.update(pad2);
+    clean(pad2);
   }
   update(buf) {
     aexists(this);
@@ -2644,8 +3084,79 @@ var NostrTransportProvider = class _NostrTransportProvider {
   // keepalive pings, reconnection, and NIP-42 authentication
   nostrClient = null;
   mainSubscriptionId = null;
-  // Event handlers
+  // Event handlers — two-tier dedup (issue #275).
+  //
+  // `processedEventIds` is the PERSISTED set of event IDs that we have
+  // successfully processed (i.e., the wallet cursor advanced past them).
+  // It is hydrated from KV storage on connect/fetchPendingEvents so
+  // cross-process CLI invocations do not re-walk the relay backlog. The
+  // §C soak forensics in issue #275 showed 169 dispatches across 15
+  // unique event IDs because this set previously lived in-process only
+  // — 71.5% of §C wall-clock was wasted on duplicate dispatch.
+  //
+  // We MUST NOT add to this set before the event handler completes
+  // successfully: doing so would mask the at-least-once retry that
+  // TOKEN_TRANSFER's durability gate depends on (a failed event would
+  // be persisted as "processed" and never re-tried across restarts).
+  //
+  // `inFlightEventIds` is the IN-MEMORY set used for concurrent-arrival
+  // dedup: the same relay event may be delivered via multiple
+  // subscriptions (wallet sub + chat sub) within the same process. It
+  // is never persisted; entries are removed in the `finally` block of
+  // `handleEvent` so the second arrival short-circuits while the first
+  // is still in flight.
   processedEventIds = /* @__PURE__ */ new Set();
+  inFlightEventIds = /* @__PURE__ */ new Set();
+  /**
+   * Issue #275 — debounce timer for persisting `processedEventIds` and
+   * `failedEventCooldowns`. Coalesces a burst of EOSE-replay arrivals
+   * into a single storage write. Set to `LIMITS.PROCESSED_EVENT_IDS_FLUSH_MS`.
+   */
+  persistDedupTimer = null;
+  /** Reentrancy guard so concurrent schedules don't race the in-flight write. */
+  persistDedupInFlight = null;
+  /** True once dedup state has been hydrated from storage; gates re-hydration. */
+  dedupHydrated = false;
+  /**
+   * Issue #272 + #275 — per-event failure cooldown ledger for TOKEN_TRANSFER
+   * replays. When `handleIncomingTransfer` returns `false` (the at-
+   * least-once gate refused the ack), we record an exponential cool-
+   * down so the relay-paced replay storm cannot busy-spin the
+   * receive pipeline (parse → crypto verify → flush → HEAD-verify)
+   * for the same event on every reconnect cycle.
+   *
+   * Semantics:
+   *   - `attempts` counts consecutive durability misses. Cleared on
+   *     success (advance happens) or when the bounded budget exhausts.
+   *   - `nextRetryAt` is `Date.now() + min(COOLDOWN_BASE_MS * 2^(n-1),
+   *     COOLDOWN_MAX_MS)`. Events arriving inside the cooldown window
+   *     are skipped without entering the gate.
+   *   - After `MAX_REPLAY_ATTEMPTS` consecutive misses, we ADVANCE the
+   *     cursor anyway and emit an operator alert. This matches the
+   *     acceptance criterion in issue #272: "`[AT-LEAST-ONCE] not
+   *     durable` count per token bounded by a small constant (≤3)
+   *     rather than unbounded replay." Local-durability is intact
+   *     (issue #272 also decoupled the per-flush HEAD-verify from
+   *     the gate, so persistent durability=false now strictly
+   *     indicates an underlying OrbitDB/pin POST/publish failure that
+   *     replay alone won't fix — operator intervention is the right
+   *     escalation).
+   *   - The map is LRU-capped to bound memory under pathological
+   *     replay floods. Eviction is single-victim per insert when at
+   *     capacity (cheap; no full sort).
+   *
+   * Issue #275: this map is now PERSISTED across process restarts so
+   * the bounded replay budget accumulates across CLI invocations
+   * instead of resetting to zero per-process. Without persistence, a
+   * persistently-failing TOKEN_TRANSFER could replay across CLI
+   * sessions indefinitely because every fresh process saw `attempts=1`
+   * and never reached the budget exhaustion threshold.
+   */
+  failedEventCooldowns = /* @__PURE__ */ new Map();
+  static DURABILITY_COOLDOWN_BASE_MS = 3e4;
+  static DURABILITY_COOLDOWN_MAX_MS = 12e4;
+  static DURABILITY_MAX_REPLAY_ATTEMPTS = 3;
+  static DURABILITY_COOLDOWN_MAP_CAP = 256;
   messageHandlers = /* @__PURE__ */ new Set();
   transferHandlers = /* @__PURE__ */ new Set();
   paymentRequestHandlers = /* @__PURE__ */ new Set();
@@ -2852,6 +3363,17 @@ var NostrTransportProvider = class _NostrTransportProvider {
     }
   }
   async disconnect() {
+    if (this.persistDedupTimer) {
+      clearTimeout(this.persistDedupTimer);
+      this.persistDedupTimer = null;
+    }
+    if (this.storage && this.keyManager) {
+      try {
+        await this.persistDedupNow();
+      } catch (err) {
+        logger.debug("Nostr", "disconnect: flush of persisted dedup failed:", err);
+      }
+    }
     if (this.nostrClient) {
       this.nostrClient.disconnect();
       this.nostrClient = null;
@@ -2971,9 +3493,16 @@ var NostrTransportProvider = class _NostrTransportProvider {
   async setIdentity(identity) {
     this.identity = identity;
     this.processedEventIds.clear();
+    this.inFlightEventIds.clear();
+    this.failedEventCooldowns.clear();
+    this.dedupHydrated = false;
     this.lastEventTs = 0;
     this.lastDmEventTs = 0;
     this.fallbackDmSince = null;
+    if (this.persistDedupTimer) {
+      clearTimeout(this.persistDedupTimer);
+      this.persistDedupTimer = null;
+    }
     const secretKey = hexToBytes2(identity.privateKey);
     this.keyManager = NostrKeyManager.fromPrivateKey(secretKey);
     const nostrPubkey = this.keyManager.getPublicKeyHex();
@@ -3119,6 +3648,7 @@ var NostrTransportProvider = class _NostrTransportProvider {
             const result = await handler(transfer);
             if (result !== false) {
               this.updateLastEventTimestamp(createdAtSec);
+              this.markEventProcessed(transfer.id);
             } else {
               logger.debug(
                 "Nostr",
@@ -3669,8 +4199,11 @@ var NostrTransportProvider = class _NostrTransportProvider {
     if (event.id && this.processedEventIds.has(event.id)) {
       return;
     }
+    if (event.id && this.inFlightEventIds.has(event.id)) {
+      return;
+    }
     if (event.id) {
-      this.processedEventIds.add(event.id);
+      this.inFlightEventIds.add(event.id);
     }
     logger.debug("Nostr", "Processing event kind:", event.kind, "id:", event.id?.slice(0, 12));
     try {
@@ -3684,6 +4217,13 @@ var NostrTransportProvider = class _NostrTransportProvider {
           await this.handleGiftWrap(event);
           break;
         case EVENT_KINDS.TOKEN_TRANSFER:
+          if (event.id && this.isInDurabilityCooldown(event.id)) {
+            logger.debug(
+              "Nostr",
+              `[AT-LEAST-ONCE] TOKEN_TRANSFER ${event.id.slice(0, 12)} in durability cooldown \u2014 skipping replay`
+            );
+            return;
+          }
           tokenTransferDurable = await this.handleTokenTransfer(event);
           break;
         case EVENT_KINDS.PAYMENT_REQUEST:
@@ -3700,20 +4240,194 @@ var NostrTransportProvider = class _NostrTransportProvider {
         const kind = event.kind;
         if (kind === EVENT_KINDS.DIRECT_MESSAGE || kind === EVENT_KINDS.PAYMENT_REQUEST || kind === EVENT_KINDS.PAYMENT_REQUEST_RESPONSE) {
           this.updateLastEventTimestamp(event.created_at);
+          this.markEventProcessed(event.id);
         } else if (kind === EVENT_KINDS.TOKEN_TRANSFER) {
           if (tokenTransferDurable) {
+            if (event.id) this.failedEventCooldowns.delete(event.id);
             this.updateLastEventTimestamp(event.created_at);
+            this.markEventProcessed(event.id);
+          } else if (event.id) {
+            const shouldAdvance = this.recordDurabilityMiss(event.id);
+            if (shouldAdvance) {
+              logger.warn(
+                "Nostr",
+                `[AT-LEAST-ONCE] TOKEN_TRANSFER ${event.id.slice(0, 12)} exhausted ${_NostrTransportProvider.DURABILITY_MAX_REPLAY_ATTEMPTS} durability replay attempts \u2014 advancing cursor; operator should investigate local OrbitDB/IPFS-pin/publish failures.`
+              );
+              this.updateLastEventTimestamp(event.created_at);
+              this.markEventProcessed(event.id);
+            } else {
+              const entry = this.failedEventCooldowns.get(event.id);
+              const cooldownMs = entry ? Math.max(0, entry.nextRetryAt - Date.now()) : 0;
+              logger.warn(
+                "Nostr",
+                `[AT-LEAST-ONCE] TOKEN_TRANSFER ${event.id.slice(0, 12)} not durable \u2014 leaving 'since' at ${this.lastEventTs}; cooldown ${cooldownMs}ms (attempt ${entry?.attempts ?? "?"}/${_NostrTransportProvider.DURABILITY_MAX_REPLAY_ATTEMPTS}).`
+              );
+              this.schedulePersistDedup();
+            }
           } else {
             logger.warn(
               "Nostr",
-              `[AT-LEAST-ONCE] TOKEN_TRANSFER ${event.id?.slice(0, 12)} not durable \u2014 leaving 'since' at ${this.lastEventTs}; event will replay on next reconnect`
+              `[AT-LEAST-ONCE] TOKEN_TRANSFER (no id) not durable \u2014 leaving 'since' at ${this.lastEventTs}; event will replay on next reconnect`
             );
           }
+        } else {
+          this.markEventProcessed(event.id);
         }
+      } else {
+        this.markEventProcessed(event.id);
       }
     } catch (error) {
       logger.debug("Nostr", "Failed to handle event:", error);
+    } finally {
+      if (event.id) {
+        this.inFlightEventIds.delete(event.id);
+      }
     }
+  }
+  /**
+   * Issue #275 — add an event ID to the persistent dedup set and
+   * schedule a debounced write. FIFO-eviction keeps the set bounded
+   * at `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+   */
+  markEventProcessed(eventId) {
+    if (!eventId) return;
+    if (this.processedEventIds.has(eventId)) return;
+    this.processedEventIds.add(eventId);
+    while (this.processedEventIds.size > LIMITS.PROCESSED_EVENT_IDS_CAP) {
+      const oldest = this.processedEventIds.keys().next().value;
+      if (oldest === void 0) break;
+      this.processedEventIds.delete(oldest);
+    }
+    this.schedulePersistDedup();
+  }
+  /**
+   * Issue #275 — schedule a debounced write of the persistent dedup
+   * sets to storage. Coalesces a burst of EOSE-replay arrivals into a
+   * single storage transaction. Subsequent calls within the debounce
+   * window are no-ops (timer already armed).
+   */
+  schedulePersistDedup() {
+    if (!this.storage || !this.keyManager) return;
+    if (this.persistDedupTimer) return;
+    this.persistDedupTimer = setTimeout(() => {
+      this.persistDedupTimer = null;
+      this.persistDedupNow().catch((err) => {
+        logger.debug("Nostr", "Persisted dedup write failed (will retry on next mark):", err);
+      });
+    }, LIMITS.PROCESSED_EVENT_IDS_FLUSH_MS);
+  }
+  /**
+   * Issue #275 — write the persistent dedup sets to storage. Serialized
+   * via `persistDedupInFlight` so concurrent timer fires (debounce + a
+   * forced flush) don't race on the underlying KV write.
+   */
+  async persistDedupNow() {
+    if (!this.storage || !this.keyManager) return;
+    if (this.persistDedupInFlight) {
+      await this.persistDedupInFlight.catch(() => void 0);
+    }
+    const inFlight = this.doPersistDedup();
+    this.persistDedupInFlight = inFlight;
+    try {
+      await inFlight;
+    } finally {
+      if (this.persistDedupInFlight === inFlight) {
+        this.persistDedupInFlight = null;
+      }
+    }
+  }
+  async doPersistDedup() {
+    if (!this.storage || !this.keyManager) return;
+    const pubkey = this.keyManager.getPublicKeyHex();
+    const prefix = pubkey.slice(0, 16);
+    const eventsKey = `${STORAGE_KEYS_GLOBAL.PROCESSED_WALLET_EVENT_IDS}_${prefix}`;
+    const cooldownsKey = `${STORAGE_KEYS_GLOBAL.FAILED_EVENT_COOLDOWNS}_${prefix}`;
+    const ids = Array.from(this.processedEventIds);
+    const cooldownsArr = Array.from(
+      this.failedEventCooldowns.entries()
+    );
+    try {
+      await this.storage.set(eventsKey, JSON.stringify(ids));
+    } catch (err) {
+      logger.debug("Nostr", "Persisted dedup: events write failed:", err);
+    }
+    try {
+      await this.storage.set(cooldownsKey, JSON.stringify(cooldownsArr));
+    } catch (err) {
+      logger.debug("Nostr", "Persisted dedup: cooldowns write failed:", err);
+    }
+  }
+  /**
+   * Issue #275 — hydrate the persistent dedup sets from storage on the
+   * first connect/fetchPendingEvents per identity. Idempotent: subsequent
+   * calls are no-ops once `dedupHydrated` is true.
+   *
+   * Failure modes (storage read throw, JSON parse error, malformed
+   * data) all degrade to "start fresh" — the wallet still works, just
+   * pays the cross-process re-dispatch tax once until the next write
+   * cycle repopulates the disk.
+   */
+  async hydrateProcessedDedup() {
+    if (this.dedupHydrated) return;
+    if (!this.storage || !this.keyManager) {
+      this.dedupHydrated = true;
+      return;
+    }
+    const pubkey = this.keyManager.getPublicKeyHex();
+    const prefix = pubkey.slice(0, 16);
+    const eventsKey = `${STORAGE_KEYS_GLOBAL.PROCESSED_WALLET_EVENT_IDS}_${prefix}`;
+    const cooldownsKey = `${STORAGE_KEYS_GLOBAL.FAILED_EVENT_COOLDOWNS}_${prefix}`;
+    try {
+      const raw2 = await this.storage.get(eventsKey);
+      if (raw2) {
+        const parsed = JSON.parse(raw2);
+        if (Array.isArray(parsed)) {
+          for (const id of parsed) {
+            if (typeof id === "string" && id.length > 0) {
+              this.processedEventIds.add(id);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.debug("Nostr", "hydrateProcessedDedup events parse/read failed:", err);
+    }
+    try {
+      const raw2 = await this.storage.get(cooldownsKey);
+      if (raw2) {
+        const parsed = JSON.parse(raw2);
+        if (Array.isArray(parsed)) {
+          const now2 = Date.now();
+          let dropped = 0;
+          for (const entry of parsed) {
+            if (Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && entry[1] !== null && typeof entry[1] === "object") {
+              const [eventId, meta] = entry;
+              const m = meta;
+              const nextRetryAt = typeof m.nextRetryAt === "number" ? m.nextRetryAt : NaN;
+              const attempts = typeof m.attempts === "number" ? m.attempts : NaN;
+              if (Number.isFinite(nextRetryAt) && Number.isFinite(attempts) && attempts >= 1 && attempts < _NostrTransportProvider.DURABILITY_MAX_REPLAY_ATTEMPTS) {
+                const elapsed = now2 - nextRetryAt;
+                if (elapsed > _NostrTransportProvider.DURABILITY_COOLDOWN_MAX_MS * 2) {
+                  dropped++;
+                  continue;
+                }
+                this.failedEventCooldowns.set(eventId, { nextRetryAt, attempts });
+              }
+            }
+          }
+          if (dropped > 0) {
+            logger.debug("Nostr", `hydrateProcessedDedup: dropped ${dropped} stale cooldown entries`);
+          }
+        }
+      }
+    } catch (err) {
+      logger.debug("Nostr", "hydrateProcessedDedup cooldowns parse/read failed:", err);
+    }
+    this.dedupHydrated = true;
+    logger.debug(
+      "Nostr",
+      `[#275] Persisted dedup hydrated: ${this.processedEventIds.size} event IDs, ${this.failedEventCooldowns.size} cooldown entries`
+    );
   }
   /**
    * Save the max event timestamp to storage (fire-and-forget, no await needed by caller).
@@ -3729,6 +4443,55 @@ var NostrTransportProvider = class _NostrTransportProvider {
     this.storage.set(storageKey, createdAt.toString()).catch((err) => {
       logger.debug("Nostr", "Failed to save last event timestamp:", err);
     });
+  }
+  /**
+   * Issue #272 — return true iff this event ID has a live durability
+   * cooldown. Cleans up the entry when the cooldown has expired so the
+   * map doesn't accumulate stale entries on the read path.
+   */
+  isInDurabilityCooldown(eventId) {
+    const entry = this.failedEventCooldowns.get(eventId);
+    if (!entry) return false;
+    if (Date.now() >= entry.nextRetryAt) {
+      return false;
+    }
+    return true;
+  }
+  /**
+   * Issue #272 — record a durability miss for this event ID and arm
+   * an exponential cooldown. Returns `true` when the per-event replay
+   * budget (`DURABILITY_MAX_REPLAY_ATTEMPTS`) is exhausted — in that
+   * case the caller should advance the `since` cursor (the entry is
+   * deleted by this method to free the slot) so subsequent events
+   * are not blocked indefinitely behind one persistently-failing one.
+   * Local-durability is decoupled from this gate (issue #272 background-
+   * verify patch in `flush-scheduler.ts`), so a persistent miss after
+   * the budget exhausts indicates a genuine local persistence failure
+   * (OrbitDB write timeout / pin POST != 200 / monotonicity violation)
+   * that re-replay alone cannot resolve.
+   */
+  recordDurabilityMiss(eventId) {
+    const prior = this.failedEventCooldowns.get(eventId);
+    const attempts = (prior?.attempts ?? 0) + 1;
+    if (attempts >= _NostrTransportProvider.DURABILITY_MAX_REPLAY_ATTEMPTS) {
+      this.failedEventCooldowns.delete(eventId);
+      return true;
+    }
+    if (this.failedEventCooldowns.size >= _NostrTransportProvider.DURABILITY_COOLDOWN_MAP_CAP) {
+      const oldestKey = this.failedEventCooldowns.keys().next().value;
+      if (oldestKey !== void 0) {
+        this.failedEventCooldowns.delete(oldestKey);
+      }
+    }
+    const delayMs = Math.min(
+      _NostrTransportProvider.DURABILITY_COOLDOWN_BASE_MS * Math.pow(2, attempts - 1),
+      _NostrTransportProvider.DURABILITY_COOLDOWN_MAX_MS
+    );
+    this.failedEventCooldowns.set(eventId, {
+      nextRetryAt: Date.now() + delayMs,
+      attempts
+    });
+    return false;
   }
   /** Persist the max DM (gift-wrap) event timestamp for the since filter on next connect. */
   updateLastDmEventTimestamp(createdAt) {
@@ -4159,6 +4922,8 @@ var NostrTransportProvider = class _NostrTransportProvider {
     if (!this.nostrClient?.isConnected() || !this.keyManager) {
       throw new SphereError("Transport not connected", "TRANSPORT_ERROR");
     }
+    await this.hydrateProcessedDedup();
+    const __span = logger.time("transport:nostr", "fetchPendingEvents", {});
     const nostrPubkey = this.keyManager.getPublicKeyHex();
     const walletFilter = new Filter();
     walletFilter.kinds = [
@@ -4212,9 +4977,15 @@ var NostrTransportProvider = class _NostrTransportProvider {
       } catch {
       }
     }
+    __span.mark("eose", { eventCount: events.length });
+    const __dispatchT0 = Date.now();
     for (const event of events) {
       await this.handleEvent(event);
     }
+    __span.end({
+      eventCount: events.length,
+      dispatchDurationMs: Date.now() - __dispatchT0
+    });
   }
   /**
    * Default upper bound for `queryEvents` REQ→EOSE wait. Was 15 s historically
@@ -4314,6 +5085,7 @@ var NostrTransportProvider = class _NostrTransportProvider {
     }
     const nostrPubkey = this.keyManager.getPublicKeyHex();
     logger.debug("Nostr", "Subscribing with Nostr pubkey:", nostrPubkey);
+    await this.hydrateProcessedDedup();
     let since;
     if (this.storage) {
       const storageKey = `${STORAGE_KEYS_GLOBAL.LAST_WALLET_EVENT_TS}_${nostrPubkey.slice(0, 16)}`;
@@ -4563,14 +5335,14 @@ var NostrTransportProvider = class _NostrTransportProvider {
    */
   static createCustomKindGiftWrap(keyManager, recipientPubkeyHex, content, rumorKind) {
     const senderPubkey = keyManager.getPublicKeyHex();
-    const now = Math.floor(Date.now() / 1e3);
+    const now2 = Math.floor(Date.now() / 1e3);
     const rumorTags = [["p", recipientPubkeyHex]];
-    const rumorSerialized = JSON.stringify([0, senderPubkey, now, rumorKind, rumorTags, content]);
+    const rumorSerialized = JSON.stringify([0, senderPubkey, now2, rumorKind, rumorTags, content]);
     const rumorId = bytesToHex(sha256(new TextEncoder().encode(rumorSerialized)));
-    const rumor = { id: rumorId, pubkey: senderPubkey, created_at: now, kind: rumorKind, tags: rumorTags, content };
+    const rumor = { id: rumorId, pubkey: senderPubkey, created_at: now2, kind: rumorKind, tags: rumorTags, content };
     const recipientPubkeyBytes = hexToBytes(recipientPubkeyHex);
     const encryptedRumor = NIP44.encrypt(JSON.stringify(rumor), keyManager.getPrivateKey(), recipientPubkeyBytes);
-    const sealTimestamp = now + Math.floor(Math.random() * 2 * TIMESTAMP_RANDOMIZATION) - TIMESTAMP_RANDOMIZATION;
+    const sealTimestamp = now2 + Math.floor(Math.random() * 2 * TIMESTAMP_RANDOMIZATION) - TIMESTAMP_RANDOMIZATION;
     const seal = NostrEventClass.create(keyManager, {
       kind: EventKinds.SEAL,
       tags: [],
@@ -4579,7 +5351,7 @@ var NostrTransportProvider = class _NostrTransportProvider {
     });
     const ephemeralKeys = NostrKeyManager.generate();
     const encryptedSeal = NIP44.encrypt(JSON.stringify(seal.toJSON()), ephemeralKeys.getPrivateKey(), recipientPubkeyBytes);
-    const wrapTimestamp = now + Math.floor(Math.random() * 2 * TIMESTAMP_RANDOMIZATION) - TIMESTAMP_RANDOMIZATION;
+    const wrapTimestamp = now2 + Math.floor(Math.random() * 2 * TIMESTAMP_RANDOMIZATION) - TIMESTAMP_RANDOMIZATION;
     const giftWrap = NostrEventClass.create(ephemeralKeys, {
       kind: EventKinds.GIFT_WRAP,
       tags: [["p", recipientPubkeyHex]],
@@ -7358,12 +8130,12 @@ var CoinGeckoPriceProvider = class {
     if (!this.persistentCacheLoaded && this.storage) {
       await this.loadFromStorage();
     }
-    const now = Date.now();
+    const now2 = Date.now();
     const result = /* @__PURE__ */ new Map();
     const uncachedNames = [];
     for (const name of tokenNames) {
       const cached = this.cache.get(name);
-      if (cached && cached.expiresAt > now) {
+      if (cached && cached.expiresAt > now2) {
         result.set(name, cached.price);
       } else {
         uncachedNames.push(name);
@@ -7406,7 +8178,7 @@ var CoinGeckoPriceProvider = class {
   }
   async doFetch(uncachedNames) {
     const result = /* @__PURE__ */ new Map();
-    const now = Date.now();
+    const now2 = Date.now();
     try {
       const ids = uncachedNames.join(",");
       const url = `${this.baseUrl}/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd,eur&include_24hr_change=true`;
@@ -7435,9 +8207,9 @@ var CoinGeckoPriceProvider = class {
             priceUsd: values.usd ?? 0,
             priceEur: values.eur,
             change24h: values.usd_24h_change,
-            timestamp: now
+            timestamp: now2
           };
-          this.cache.set(name, { price, expiresAt: now + this.cacheTtlMs });
+          this.cache.set(name, { price, expiresAt: now2 + this.cacheTtlMs });
           result.set(name, price);
         }
       }
@@ -7448,9 +8220,9 @@ var CoinGeckoPriceProvider = class {
             priceUsd: 0,
             priceEur: 0,
             change24h: 0,
-            timestamp: now
+            timestamp: now2
           };
-          this.cache.set(name, { price: zeroPrice, expiresAt: now + this.cacheTtlMs });
+          this.cache.set(name, { price: zeroPrice, expiresAt: now2 + this.cacheTtlMs });
           result.set(name, zeroPrice);
         }
       }

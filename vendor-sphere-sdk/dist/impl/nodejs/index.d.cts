@@ -1178,6 +1178,57 @@ declare class NostrTransportProvider implements TransportProvider {
     private nostrClient;
     private mainSubscriptionId;
     private processedEventIds;
+    private inFlightEventIds;
+    /**
+     * Issue #275 — debounce timer for persisting `processedEventIds` and
+     * `failedEventCooldowns`. Coalesces a burst of EOSE-replay arrivals
+     * into a single storage write. Set to `LIMITS.PROCESSED_EVENT_IDS_FLUSH_MS`.
+     */
+    private persistDedupTimer;
+    /** Reentrancy guard so concurrent schedules don't race the in-flight write. */
+    private persistDedupInFlight;
+    /** True once dedup state has been hydrated from storage; gates re-hydration. */
+    private dedupHydrated;
+    /**
+     * Issue #272 + #275 — per-event failure cooldown ledger for TOKEN_TRANSFER
+     * replays. When `handleIncomingTransfer` returns `false` (the at-
+     * least-once gate refused the ack), we record an exponential cool-
+     * down so the relay-paced replay storm cannot busy-spin the
+     * receive pipeline (parse → crypto verify → flush → HEAD-verify)
+     * for the same event on every reconnect cycle.
+     *
+     * Semantics:
+     *   - `attempts` counts consecutive durability misses. Cleared on
+     *     success (advance happens) or when the bounded budget exhausts.
+     *   - `nextRetryAt` is `Date.now() + min(COOLDOWN_BASE_MS * 2^(n-1),
+     *     COOLDOWN_MAX_MS)`. Events arriving inside the cooldown window
+     *     are skipped without entering the gate.
+     *   - After `MAX_REPLAY_ATTEMPTS` consecutive misses, we ADVANCE the
+     *     cursor anyway and emit an operator alert. This matches the
+     *     acceptance criterion in issue #272: "`[AT-LEAST-ONCE] not
+     *     durable` count per token bounded by a small constant (≤3)
+     *     rather than unbounded replay." Local-durability is intact
+     *     (issue #272 also decoupled the per-flush HEAD-verify from
+     *     the gate, so persistent durability=false now strictly
+     *     indicates an underlying OrbitDB/pin POST/publish failure that
+     *     replay alone won't fix — operator intervention is the right
+     *     escalation).
+     *   - The map is LRU-capped to bound memory under pathological
+     *     replay floods. Eviction is single-victim per insert when at
+     *     capacity (cheap; no full sort).
+     *
+     * Issue #275: this map is now PERSISTED across process restarts so
+     * the bounded replay budget accumulates across CLI invocations
+     * instead of resetting to zero per-process. Without persistence, a
+     * persistently-failing TOKEN_TRANSFER could replay across CLI
+     * sessions indefinitely because every fresh process saw `attempts=1`
+     * and never reached the budget exhaustion threshold.
+     */
+    private failedEventCooldowns;
+    private static readonly DURABILITY_COOLDOWN_BASE_MS;
+    private static readonly DURABILITY_COOLDOWN_MAX_MS;
+    private static readonly DURABILITY_MAX_REPLAY_ATTEMPTS;
+    private static readonly DURABILITY_COOLDOWN_MAP_CAP;
     private messageHandlers;
     private transferHandlers;
     private paymentRequestHandlers;
@@ -1405,11 +1456,62 @@ declare class NostrTransportProvider implements TransportProvider {
     onEvent(callback: TransportEventCallback): () => void;
     private handleEvent;
     /**
+     * Issue #275 — add an event ID to the persistent dedup set and
+     * schedule a debounced write. FIFO-eviction keeps the set bounded
+     * at `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+     */
+    private markEventProcessed;
+    /**
+     * Issue #275 — schedule a debounced write of the persistent dedup
+     * sets to storage. Coalesces a burst of EOSE-replay arrivals into a
+     * single storage transaction. Subsequent calls within the debounce
+     * window are no-ops (timer already armed).
+     */
+    private schedulePersistDedup;
+    /**
+     * Issue #275 — write the persistent dedup sets to storage. Serialized
+     * via `persistDedupInFlight` so concurrent timer fires (debounce + a
+     * forced flush) don't race on the underlying KV write.
+     */
+    private persistDedupNow;
+    private doPersistDedup;
+    /**
+     * Issue #275 — hydrate the persistent dedup sets from storage on the
+     * first connect/fetchPendingEvents per identity. Idempotent: subsequent
+     * calls are no-ops once `dedupHydrated` is true.
+     *
+     * Failure modes (storage read throw, JSON parse error, malformed
+     * data) all degrade to "start fresh" — the wallet still works, just
+     * pays the cross-process re-dispatch tax once until the next write
+     * cycle repopulates the disk.
+     */
+    private hydrateProcessedDedup;
+    /**
      * Save the max event timestamp to storage (fire-and-forget, no await needed by caller).
      * Uses in-memory `lastEventTs` to avoid read-before-write race conditions
      * when multiple events arrive in quick succession.
      */
     private updateLastEventTimestamp;
+    /**
+     * Issue #272 — return true iff this event ID has a live durability
+     * cooldown. Cleans up the entry when the cooldown has expired so the
+     * map doesn't accumulate stale entries on the read path.
+     */
+    private isInDurabilityCooldown;
+    /**
+     * Issue #272 — record a durability miss for this event ID and arm
+     * an exponential cooldown. Returns `true` when the per-event replay
+     * budget (`DURABILITY_MAX_REPLAY_ATTEMPTS`) is exhausted — in that
+     * case the caller should advance the `since` cursor (the entry is
+     * deleted by this method to free the slot) so subsequent events
+     * are not blocked indefinitely behind one persistently-failing one.
+     * Local-durability is decoupled from this gate (issue #272 background-
+     * verify patch in `flush-scheduler.ts`), so a persistent miss after
+     * the budget exhausts indicates a genuine local persistence failure
+     * (OrbitDB write timeout / pin POST != 200 / monotonicity violation)
+     * that re-replay alone cannot resolve.
+     */
+    private recordDurabilityMiss;
     /** Persist the max DM (gift-wrap) event timestamp for the since filter on next connect. */
     private updateLastDmEventTimestamp;
     private handleDirectMessage;
@@ -2004,7 +2106,81 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * converge via the existing WALKBACK_FLOOR + reconcile path
  * (just slower, ~60-90 s vs ~1 s).
  */
- | 'storage:pointer-published';
+ | 'storage:pointer-published'
+/**
+ * Issue #264 — emitted by the flush scheduler when it auto-merges
+ * a detected monotonicity gap in place (previously this fired
+ * POINTER_MONOTONICITY_VIOLATION on `storage:error` and aborted
+ * the flush). Distinct from `storage:error` so operators see
+ * auto-merges as routine convergence work, not alarms.
+ *
+ * `data` payload (see flush-scheduler.ts for the canonical shape):
+ *   - `recoveredTokenIds: string[]`   token ids re-merged from
+ *     `previousData` to satisfy the token-set invariant.
+ *   - `recoveredTokenCount: number`
+ *   - `mergedUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     inline-fetched and merged into the in-flight UXF package.
+ *   - `mergedUnknownBundleCount: number`
+ *   - `residualUnknownBundleCids: string[]`   foreign bundle CIDs
+ *     that could not be fetched (network down, malformed CAR,
+ *     etc.) — the flush continued without them; downstream
+ *     convergence retries on the next flush.
+ *   - `residualUnknownBundleCount: number`
+ *   - `residualTokenMissingIds: string[]`   token ids the token-set
+ *     check flagged but `previousData` could not provide (only
+ *     possible when `previousData === null`).
+ *   - `residualTokenMissingCount: number`
+ *   - `recoveredOutboxIdsDroppedAsSent: string[]`   outbox-entry
+ *     ids that the SENT-wins dedup removed during the
+ *     `OperationalState` union — surfaced for operator audit.
+ *   - `recoveredOutboxIdsDroppedAsSentCount: number`
+ *   - `truncated: boolean`   true when any of the listed arrays
+ *     were capped at 100 entries for log-volume control.
+ *
+ * Informational only. The flush continues to publish the
+ * best-effort superset CAR regardless; residuals are addressed by
+ * subsequent cross-device syncs detecting the same gap and
+ * re-attempting the inline merge.
+ */
+ | 'storage:monotonicity-recovered'
+/**
+ * Issue #272 — emitted when the per-flush remote-durability
+ * HEAD-verify leg (`verifyFlushDurability`), now run as a background
+ * task detached from the synchronous flush completion path, fails
+ * for a just-pinned bundle CID and/or snapshot CID.
+ *
+ * Local-durability is unaffected: the bundle CAR pin POST returned
+ * 200, the OrbitDB bundle ref is written, and (when wired) the
+ * snapshot publish call returned ok. What this event signals is that
+ * the operator's IPFS gateway has not yet served the just-pinned
+ * CID back via HEAD within the configured deadline (default 30s).
+ * This is a gateway propagation property — not a receiver crash-
+ * safety property — and does NOT close the at-least-once Nostr ack
+ * gate. Distinct from `storage:error` (terminal fatal class).
+ *
+ * `data` carries `{ cid, snapshotCid?, code?, details? }`:
+ *   - `cid`         the bundle CID whose HEAD-verify failed
+ *   - `snapshotCid` the snapshot CID (when also verified)
+ *   - `code`        the structured error code (e.g.,
+ *                   `FLUSH_DURABILITY_TIMEOUT`)
+ *   - `details`     the failed-leg detail array from
+ *                   `verifyFlushDurability`
+ *
+ * Operator action: investigate operator Kubo gateway propagation
+ * lag if this fires repeatedly for distinct CIDs. Single-shot fires
+ * (a CID that eventually does propagate) are expected under normal
+ * testnet contention and require no action.
+ *
+ * Before #272: this same failure threw inline and forced the
+ * at-least-once gate's `awaitNextFlush` to reject, causing the
+ * Nostr `since` cursor to refuse to advance and the inbound
+ * TOKEN_TRANSFER event to replay on every reconnect. Each replay
+ * triggered another flush, each flush re-hit the same HEAD-verify
+ * timeout, producing a sustained busy-spin (134 replays for 14
+ * unique event IDs in the §C.2 soak failure observed at
+ * `integration/all-fixes` HEAD `6102d59`).
+ */
+ | 'storage:durability-deferred';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;

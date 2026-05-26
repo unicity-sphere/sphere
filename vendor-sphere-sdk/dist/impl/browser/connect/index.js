@@ -1,89 +1,470 @@
 // core/logger.ts
+var LEVEL_RANK = {
+  trace: 0,
+  debug: 1,
+  info: 2,
+  warn: 3,
+  error: 4
+};
+var ALWAYS_LEVEL_RANK = LEVEL_RANK.warn;
 var LOGGER_KEY = "__sphere_sdk_logger__";
 function getState() {
   const g = globalThis;
-  if (!g[LOGGER_KEY]) {
-    g[LOGGER_KEY] = { debug: false, tags: {}, handler: null };
+  const existing = g[LOGGER_KEY];
+  if (!existing) {
+    const fresh = {
+      debug: false,
+      tags: {},
+      levels: {},
+      handler: null,
+      sinks: [],
+      timestamps: false,
+      redaction: true,
+      envBootstrapped: false
+    };
+    g[LOGGER_KEY] = fresh;
+    bootstrapFromEnv(fresh);
+    return fresh;
   }
-  return g[LOGGER_KEY];
+  if (existing.levels === void 0) existing.levels = {};
+  if (existing.sinks === void 0) existing.sinks = [];
+  if (existing.timestamps === void 0) existing.timestamps = false;
+  if (existing.redaction === void 0) existing.redaction = true;
+  if (existing.envBootstrapped === void 0) {
+    existing.envBootstrapped = false;
+    bootstrapFromEnv(existing);
+  }
+  return existing;
 }
-function isEnabled(tag) {
-  const state = getState();
-  if (tag in state.tags) return state.tags[tag];
-  return state.debug;
+function readEnvSpec() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      const v = process.env.SPHERE_DEBUG ?? process.env.SPHERE_LOG;
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      const v = localStorage.getItem("SPHERE_DEBUG");
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  } catch {
+  }
+  return null;
+}
+function bootstrapFromEnv(state) {
+  if (state.envBootstrapped) return;
+  state.envBootstrapped = true;
+  const spec = readEnvSpec();
+  if (spec) applySpec(state, spec);
+}
+var VALID_LEVELS = /* @__PURE__ */ new Set(["trace", "debug", "info", "warn", "error"]);
+var SPEC_MAX_LENGTH = 8 * 1024;
+var SPEC_MAX_ENTRIES = 256;
+var SPEC_PATTERN_RE = /^[A-Za-z0-9:_*\-]{1,128}$/;
+function parseSpec(spec) {
+  const out = [];
+  if (spec.length > SPEC_MAX_LENGTH) {
+    try {
+      console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_LENGTH} bytes \u2014 rejecting`);
+    } catch {
+    }
+    return out;
+  }
+  let processed = 0;
+  for (const rawEntry of spec.split(",")) {
+    if (processed >= SPEC_MAX_ENTRIES) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG spec exceeds ${SPEC_MAX_ENTRIES} entries \u2014 truncating`);
+      } catch {
+      }
+      break;
+    }
+    processed += 1;
+    const trimmed = rawEntry.trim();
+    if (!trimmed) continue;
+    let pattern = trimmed;
+    let level = "debug";
+    const negate = pattern.startsWith("-") || pattern.startsWith("!");
+    if (negate) pattern = pattern.slice(1).trim();
+    const eq = pattern.indexOf("=");
+    if (eq >= 0) {
+      const levelPart = pattern.slice(eq + 1).trim().toLowerCase();
+      pattern = pattern.slice(0, eq).trim();
+      if (VALID_LEVELS.has(levelPart)) {
+        level = levelPart;
+      } else if (levelPart.length > 0) {
+        try {
+          console.warn(
+            `[logger] SPHERE_DEBUG entry "${rawEntry.trim()}": unknown level "${levelPart}" \u2014 falling back to "debug". Valid: trace, debug, info, warn, error.`
+          );
+        } catch {
+        }
+      }
+    }
+    if (!pattern) continue;
+    if (!SPEC_PATTERN_RE.test(pattern)) {
+      try {
+        console.warn(`[logger] SPHERE_DEBUG entry has invalid pattern "${pattern}" \u2014 skipping`);
+      } catch {
+      }
+      continue;
+    }
+    out.push({ pattern, level, negate });
+  }
+  return out;
+}
+function applySpec(state, spec) {
+  const entries = parseSpec(spec);
+  if (entries.length === 0) return;
+  for (const entry of entries) {
+    if (entry.pattern === "*" && !entry.negate) {
+      state.debug = LEVEL_RANK[entry.level] <= LEVEL_RANK.debug;
+      state.levels["*"] = entry.level;
+      continue;
+    }
+    if (entry.negate) {
+      state.levels[entry.pattern] = "warn";
+    } else {
+      state.levels[entry.pattern] = entry.level;
+    }
+  }
+  state.timestamps = true;
+}
+function* namespaceAncestors(ns) {
+  if (!ns) {
+    yield "*";
+    return;
+  }
+  let cursor = ns;
+  while (true) {
+    yield cursor;
+    yield `${cursor}:*`;
+    const idx = cursor.lastIndexOf(":");
+    if (idx <= 0) break;
+    cursor = cursor.slice(0, idx);
+  }
+  yield "*";
+}
+function resolveMinLevel(state, namespace) {
+  for (const candidate of namespaceAncestors(namespace)) {
+    const lvl = state.levels[candidate];
+    if (lvl) return lvl;
+  }
+  if (namespace in state.tags) {
+    return state.tags[namespace] ? "debug" : "warn";
+  }
+  return state.debug ? "debug" : "warn";
+}
+function isLevelEnabled(state, namespace, level) {
+  if (LEVEL_RANK[level] >= ALWAYS_LEVEL_RANK) return true;
+  const min = resolveMinLevel(state, namespace);
+  return LEVEL_RANK[level] >= LEVEL_RANK[min];
+}
+var REDACT_KEYS = /* @__PURE__ */ new Set([
+  // BIP-32 / BIP-39 / wallet secrets
+  "privatekey",
+  "private_key",
+  "priv",
+  "privkey",
+  "priv_key",
+  "masterkey",
+  "master_key",
+  "chaincode",
+  "chain_code",
+  "mnemonic",
+  "seed",
+  "seedphrase",
+  "seed_phrase",
+  "recoveryphrase",
+  "recovery_phrase",
+  "wif",
+  "xpriv",
+  "xprv",
+  // Nostr / transport secrets
+  "nsec",
+  "nsechex",
+  "nsec_hex",
+  // Crypto material
+  "keymaterial",
+  "key_material",
+  "rawkey",
+  "raw_key",
+  "keyhex",
+  "key_hex",
+  "signingkey",
+  "signing_key",
+  "attestkey",
+  "attest_key",
+  "hmackey",
+  "hmac_key",
+  "encryptionkey",
+  "encryption_key",
+  "ciphertext",
+  "iv",
+  "salt",
+  "nonce",
+  // IPFS / libp2p
+  "peerid",
+  "peer_id",
+  "ipnskey",
+  "ipns_key",
+  "ipns_private_key",
+  // Auth tokens
+  "secret",
+  "apikey",
+  "api_key",
+  "accesstoken",
+  "access_token",
+  "refreshtoken",
+  "refresh_token",
+  "sessiontoken",
+  "session_token",
+  "bearer",
+  "authorization",
+  "auth",
+  "token",
+  // Generic password
+  "password",
+  "passphrase"
+]);
+var REDACT_KEY_RE = new RegExp(
+  "(?:^|[._-])(?:secret|priv|private|nsec|mnemonic|seed|password|passphrase|apikey|api_key|bearer|authorization|token|wif|xpriv|xprv|chaincode|masterkey|encryptionkey|hmackey|attestkey|peerid|ipnskey)(?:[._-]|$)|(?:^|[a-zA-Z])(?:Secret|Priv|Private|Nsec|Mnemonic|Seed|Password|Passphrase|ApiKey|Bearer|Authorization|Token|Wif|Xpriv|Xprv|ChainCode|MasterKey|EncryptionKey|HmacKey|AttestKey|PeerId|IpnsKey)|(?:^|[a-z])(?:priv|seed|nsec|mnemonic|password|secret|wallet|signing|encryption|chain|master|hmac|attest|peer|ipns|cipher|access|refresh|session|api|raw)(?:[A-Z][a-zA-Z]*)?(?:Key|Phrase|Token|Hex|Code|Text|Material)(?:[A-Z]|$|[._-])"
+);
+function shouldRedactKey(key) {
+  const k = key.toLowerCase();
+  if (REDACT_KEYS.has(k)) return true;
+  return REDACT_KEY_RE.test(key);
+}
+var REDACTED = "[REDACTED]";
+var REDACT_MAX_DEPTH = 8;
+var REDACT_TRUNCATED = "[REDACTED:depth-exceeded]";
+function redactFields(input) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  return redactValue(input, 0, seen);
+}
+function redactValue(value, depth, seen) {
+  if (value == null) return value;
+  if (depth >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return REDACT_TRUNCATED;
+    seen.add(value);
+    return value.map((el) => redactValue(el, depth + 1, seen));
+  }
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    if (seen.has(obj)) return REDACT_TRUNCATED;
+    seen.add(obj);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (shouldRedactKey(k)) {
+        out[k] = REDACTED;
+      } else {
+        out[k] = redactValue(v, depth + 1, seen);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function redactArgs(args) {
+  if (args.length === 0) return args;
+  const seen = /* @__PURE__ */ new WeakSet();
+  return args.map((a) => redactValue(a, 0, seen));
+}
+function pad(level) {
+  switch (level) {
+    case "trace":
+      return "TRACE";
+    case "debug":
+      return "DEBUG";
+    case "info":
+      return "INFO ";
+    case "warn":
+      return "WARN ";
+    case "error":
+      return "ERROR";
+  }
+}
+function escapeControlChars(s) {
+  if (typeof s !== "string") return String(s);
+  if (!/[\x00-\x1f\x7f]/.test(s)) return s;
+  return s.replace(/[\x00-\x1f\x7f]/g, (c) => {
+    const code = c.charCodeAt(0);
+    if (code === 10) return "\\n";
+    if (code === 13) return "\\r";
+    if (code === 9) return "\\t";
+    if (code === 27) return "\\x1b";
+    return `\\x${code.toString(16).padStart(2, "0")}`;
+  });
+}
+function formatRecord(state, record) {
+  const wantTs = state.timestamps === true;
+  const ts = wantTs ? `[${new Date(record.ts).toISOString()}] ` : "";
+  const level = wantTs ? `[${pad(record.level)}] ` : "";
+  const ns = `[${escapeControlChars(record.namespace)}]`;
+  const safeMessage = escapeControlChars(record.message);
+  let msg = `${ts}${level}${ns} ${safeMessage}`;
+  if (record.fields && Object.keys(record.fields).length > 0) {
+    try {
+      msg += ` ${JSON.stringify(record.fields)}`;
+    } catch {
+      msg += " [unserializable fields]";
+    }
+  }
+  return msg;
+}
+var CONSOLE_SINK = {
+  write(record, formatted) {
+    const state = getState();
+    const legacy = record.fields === void 0 && state.timestamps !== true;
+    const target = record.level === "error" ? console.error : record.level === "warn" ? console.warn : console.log;
+    if (legacy) {
+      const prefix = `[${record.namespace}]`;
+      if (record.args && record.args.length > 0) target(prefix, record.message, ...record.args);
+      else target(prefix, record.message);
+    } else {
+      if (record.args && record.args.length > 0) target(formatted, ...record.args);
+      else target(formatted);
+    }
+  }
+};
+function emit(state, level, namespace, message, fields, args) {
+  const safeFields = fields && state.redaction ? redactFields(fields) : fields;
+  const safeArgs = args.length && state.redaction ? redactArgs(args) : args;
+  const record = {
+    ts: Date.now(),
+    level,
+    namespace,
+    message,
+    fields: safeFields,
+    args: safeArgs.length > 0 ? safeArgs : void 0
+  };
+  if (state.handler) {
+    const downgraded = level === "warn" || level === "error" ? level : "debug";
+    state.handler(downgraded, namespace, message, ...record.args ?? []);
+    return;
+  }
+  const sinks = state.sinks.length > 0 ? state.sinks : [CONSOLE_SINK];
+  const formatted = formatRecord(state, record);
+  for (const sink of sinks) {
+    try {
+      sink.write(record, formatted);
+    } catch (err) {
+      try {
+        console.error("[logger] sink threw", err);
+      } catch {
+      }
+    }
+  }
+}
+function now() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch {
+  }
+  return Date.now();
+}
+function makeSpan(state, namespace, spanName, initialFields) {
+  const start = now();
+  const marks = [];
+  let ended = false;
+  return {
+    mark(label, fields) {
+      if (ended) return;
+      marks.push({ label, elapsedMs: Math.round((now() - start) * 1e3) / 1e3, fields });
+    },
+    elapsed() {
+      return Math.round((now() - start) * 1e3) / 1e3;
+    },
+    end(extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      if (!isLevelEnabled(state, namespace, "debug")) return dur;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "debug", namespace, `span.end ${spanName}`, fields, []);
+      return dur;
+    },
+    endWithError(err, extraFields) {
+      if (ended) return 0;
+      ended = true;
+      const dur = Math.round((now() - start) * 1e3) / 1e3;
+      const fields = {
+        ...initialFields ?? {},
+        ...extraFields ?? {},
+        spanName,
+        durationMs: dur,
+        err: err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      };
+      if (marks.length > 0) fields.marks = marks;
+      emit(state, "warn", namespace, `span.error ${spanName}`, fields, []);
+      return dur;
+    }
+  };
 }
 var logger = {
-  /**
-   * Configure the logger. Can be called multiple times (last write wins).
-   * Typically called by createBrowserProviders(), createNodeProviders(), or Sphere.init().
-   */
   configure(config) {
     const state = getState();
-    if (config.debug !== void 0) state.debug = config.debug;
+    if (config.debug !== void 0) {
+      state.debug = config.debug;
+    }
     if (config.handler !== void 0) state.handler = config.handler;
+    if (config.timestamps !== void 0) state.timestamps = config.timestamps;
+    if (config.redaction !== void 0) state.redaction = config.redaction;
   },
-  /**
-   * Enable/disable debug logging for a specific tag.
-   * Per-tag setting overrides the global debug flag.
-   *
-   * @example
-   * ```ts
-   * logger.setTagDebug('Nostr', true);  // enable only Nostr logs
-   * logger.setTagDebug('Nostr', false); // disable Nostr logs even if global debug=true
-   * ```
-   */
   setTagDebug(tag, enabled) {
     getState().tags[tag] = enabled;
   },
-  /**
-   * Clear per-tag override, falling back to global debug flag.
-   */
   clearTagDebug(tag) {
     delete getState().tags[tag];
   },
-  /** Returns true if debug mode is enabled for the given tag (or globally). */
   isDebugEnabled(tag) {
-    if (tag) return isEnabled(tag);
-    return getState().debug;
+    const state = getState();
+    if (tag) return isLevelEnabled(state, tag, "debug");
+    return state.debug || Object.values(state.levels).some((l) => LEVEL_RANK[l] <= LEVEL_RANK.debug);
   },
-  /**
-   * Debug-level log. Only shown when debug is enabled (globally or for this tag).
-   * Use for detailed operational information.
-   */
+  /** Legacy single-tag debug. Keeps the `tag, message, ...args` signature. */
   debug(tag, message, ...args) {
-    if (!isEnabled(tag)) return;
     const state = getState();
-    if (state.handler) {
-      state.handler("debug", tag, message, ...args);
-    } else {
-      console.log(`[${tag}]`, message, ...args);
-    }
+    if (!isLevelEnabled(state, tag, "debug")) return;
+    emit(state, "debug", tag, message, void 0, args);
   },
-  /**
-   * Warning-level log. ALWAYS shown regardless of debug flag.
-   * Use for important but non-critical issues (timeouts, retries, degraded state).
-   */
+  /** Legacy single-tag info — promoted alias for `debug`. */
+  info(tag, message, ...args) {
+    const state = getState();
+    if (!isLevelEnabled(state, tag, "info")) return;
+    emit(state, "info", tag, message, void 0, args);
+  },
+  /** Legacy single-tag trace — gated by trace-or-lower namespace level. */
+  trace(tag, message, ...args) {
+    const state = getState();
+    if (!isLevelEnabled(state, tag, "trace")) return;
+    emit(state, "trace", tag, message, void 0, args);
+  },
   warn(tag, message, ...args) {
-    const state = getState();
-    if (state.handler) {
-      state.handler("warn", tag, message, ...args);
-    } else {
-      console.warn(`[${tag}]`, message, ...args);
-    }
+    emit(getState(), "warn", tag, message, void 0, args);
   },
-  /**
-   * Error-level log. ALWAYS shown regardless of debug flag.
-   * Use for critical failures that should never be silenced.
-   */
   error(tag, message, ...args) {
-    const state = getState();
-    if (state.handler) {
-      state.handler("error", tag, message, ...args);
-    } else {
-      console.error(`[${tag}]`, message, ...args);
-    }
+    emit(getState(), "error", tag, message, void 0, args);
   },
-  /** Reset all logger state (debug flag, tags, handler). Primarily for tests. */
+  /** Per-tag span helper — same as `getLogger(tag).time(...)`. */
+  time(tag, spanName, initialFields) {
+    return makeSpan(getState(), tag, spanName, initialFields);
+  },
+  /** Reset all logger state. Primarily for tests. */
   reset() {
     const g = globalThis;
     delete g[LOGGER_KEY];
@@ -122,7 +503,7 @@ function redactionMarkerFor(field, value) {
   }
   return `[REDACTED: ${field}]`;
 }
-function redactValue(value, visited, depth) {
+function redactValue2(value, visited, depth) {
   if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
   if (value === null || value === void 0) return value;
   const t = typeof value;
@@ -173,7 +554,7 @@ function redactValue(value, visited, depth) {
       errCause = "[REDACTED: getter-threw]";
     }
     if (errCause !== void 0) {
-      clone.cause = redactValue(errCause, visited, depth + 1);
+      clone.cause = redactValue2(errCause, visited, depth + 1);
     }
     let keys;
     try {
@@ -195,7 +576,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         clone[key] = redactionMarkerFor(key, v);
       } else {
-        clone[key] = redactValue(v, visited, depth + 1);
+        clone[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return clone;
@@ -234,7 +615,7 @@ function redactValue(value, visited, depth) {
         } catch {
           item = "[REDACTED: getter-threw]";
         }
-        out2.push(redactValue(item, visited, depth + 1));
+        out2.push(redactValue2(item, visited, depth + 1));
       }
       return out2;
     }
@@ -257,7 +638,7 @@ function redactValue(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         out[key] = redactionMarkerFor(key, v);
       } else {
-        out[key] = redactValue(v, visited, depth + 1);
+        out[key] = redactValue2(v, visited, depth + 1);
       }
     }
     return out;
@@ -266,7 +647,7 @@ function redactValue(value, visited, depth) {
 }
 function redactCause(cause) {
   if (cause === void 0) return void 0;
-  return redactValue(cause, /* @__PURE__ */ new WeakMap(), 0);
+  return redactValue2(cause, /* @__PURE__ */ new WeakMap(), 0);
 }
 var SphereError = class extends Error {
   code;
@@ -318,6 +699,40 @@ var STORAGE_KEYS_GLOBAL = {
   LAST_WALLET_EVENT_TS: "last_wallet_event_ts",
   /** Last processed Nostr DM (gift-wrap) event timestamp (unix seconds), keyed per pubkey */
   LAST_DM_EVENT_TS: "last_dm_event_ts",
+  /**
+   * Issue #275 — persistent dedup for Nostr wallet event IDs that have
+   * been SUCCESSFULLY processed (cursor advanced). Keyed per pubkey;
+   * stored as a JSON string array bounded by
+   * `LIMITS.PROCESSED_EVENT_IDS_CAP` (FIFO eviction).
+   *
+   * Distinct from in-memory `inFlightEventIds`: this set persists across
+   * process restarts so cross-process CLI invocations don't re-walk the
+   * full relay backlog. At-least-once is preserved because we ONLY add
+   * to this set after the event's cursor was advanced (durability ok
+   * or replay budget exhausted), never after a transient failure.
+   */
+  PROCESSED_WALLET_EVENT_IDS: "processed_wallet_event_ids",
+  /**
+   * Issue #275 — persistent durability-cooldown ledger for
+   * TOKEN_TRANSFER events. Tracks `attempts` and `nextRetryAt` across
+   * process restarts so the bounded replay budget
+   * (`DURABILITY_MAX_REPLAY_ATTEMPTS = 3`) accumulates across CLI
+   * invocations rather than resetting per-process.
+   */
+  FAILED_EVENT_COOLDOWNS: "failed_event_cooldowns",
+  /**
+   * Issue #275 — persistent dedup set for the MultiAddressTransportMux
+   * level. The Mux maintains its own `processedEventIds` (independent
+   * of NostrTransportProvider's set) and dispatches to per-address
+   * adapters. Without persistence, every fresh CLI invocation
+   * re-walked the relay backlog through the Mux path as well as the
+   * outer-provider path. Bounded by `LIMITS.PROCESSED_EVENT_IDS_CAP`.
+   * Per-wallet storage scope: each Sphere instance has its own
+   * `storage` provider, so a bare global key is sufficient (no
+   * per-pubkey suffix needed because the Mux spans all per-wallet
+   * addresses).
+   */
+  MUX_PROCESSED_EVENT_IDS: "mux_processed_event_ids",
   /** Group chat: last used relay URL (stale data detection) — global, same relay for all addresses */
   GROUP_CHAT_RELAY_URL: "group_chat_relay_url",
   /** Cached token registry JSON (fetched from remote) */
