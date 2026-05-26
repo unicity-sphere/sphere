@@ -27,6 +27,14 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       nodePolyfills({
         protocolImports: true,
+        // Explicitly polyfill `fs` (covers `fs/promises`) so that
+        // unreachable Node-only branches inside sphere-sdk's Profile
+        // bundle (e.g. defaultNodeLockPrimitives, which is wrapped in a
+        // never-called-in-browser code path but contains a static
+        // `await import("fs/promises")` Vite resolves at build time)
+        // don't break the production build. The polyfill resolves to an
+        // empty module in the browser; the code path is never executed.
+        include: ['fs'],
         globals: {
           Buffer: 'build',
         },
@@ -103,6 +111,25 @@ export default defineConfig(({ mode }) => {
         'vite-plugin-node-polyfills/shims/buffer': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/buffer'),
         'vite-plugin-node-polyfills/shims/process': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/process'),
         'vite-plugin-node-polyfills/shims/global': path.resolve(__dirname, 'node_modules/vite-plugin-node-polyfills/shims/global'),
+        // sphere-sdk's Profile browser bundle (vendor-sphere-sdk/dist/profile/browser.js)
+        // contains unreachable Node-only branches (defaultNodeLockPrimitives,
+        // FsBlockstore fallback inside the Helia constructor) that do static
+        // `await import("fs/promises" | "blockstore-fs" | "proper-lockfile")`.
+        // Vite's static analyzer resolves those strings at BUILD time even
+        // though the branches never execute in the browser. Without the
+        // aliases below, Vite either:
+        //   1. chases `node-stdlib-browser/.../empty.js/promises` (treats the
+        //      empty mock file as a directory and aborts), or
+        //   2. resolves to the real npm packages, which themselves `import "node:fs"`
+        //      (e.g., blockstore-fs, proper-lockfile).
+        // Mapping every Node-only target to an empty mock makes the build
+        // succeed; runtime never actually executes these branches.
+        'fs/promises': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'node:fs/promises': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'node:fs': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        fs: path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'blockstore-fs': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
+        'proper-lockfile': path.resolve(__dirname, 'node_modules/node-stdlib-browser/esm/mock/empty.js'),
       },
     },
     build: {
