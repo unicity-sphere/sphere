@@ -409,6 +409,73 @@ describe('runProfileMigration', () => {
     expect(result?.skippedDueToMarker).toBe(false);
   });
 
+  // ── force: true (user-initiated "Merge Legacy → UXF (overwrite)") ──
+  describe('force: true (merge-overwrite path)', () => {
+    it('bypasses the Profile-already-populated guard AND passes `force` through to the SDK helper', async () => {
+      // Profile target IS populated (would normally short-circuit) —
+      // but `force: true` means the user has explicitly opted in to
+      // overwriting Profile with legacy data.
+      const profile = makeFakeProfileProviders({
+        loadResult: {
+          success: true,
+          data: {
+            _meta: { version: 1, address: '', formatVersion: '2.0', updatedAt: 0 },
+            _abc123: { genesis: { tokenId: 'abc123' } },
+            _outbox: [{ id: 'outbox-existing' }],
+          },
+        },
+      });
+      const createProfileProviders = vi.fn().mockReturnValue(profile);
+      const migrate = vi.fn().mockResolvedValue(baseMigrationResult);
+
+      const result = await runProfileMigration({
+        legacyProviders: makeFakeLegacyProviders(),
+        sphere: makeFakeSphere(),
+        network: 'testnet',
+        setInitProgress,
+        createProfileProviders: createProfileProviders as never,
+        migrate: migrate as never,
+        force: true,
+      });
+
+      // The Profile load() probe should NOT have been called when
+      // force:true (because we don't even check — we WANT to overwrite).
+      expect(profile.tokenStorage.load).not.toHaveBeenCalled();
+      // Helper IS called even though target has data
+      expect(migrate).toHaveBeenCalledOnce();
+      // `force: true` is forwarded to the SDK helper so its own marker
+      // check is bypassed.
+      const args = migrate.mock.calls[0][0];
+      expect(args.force).toBe(true);
+
+      expect(result).not.toBeNull();
+      expect(result!.skippedDueToMarker).toBe(false);
+      expect(result!.migrationCounts.tokensMigrated).toBe(5);
+    });
+
+    it('defaults to force: false (boot-time path) when the option is omitted', async () => {
+      const profile = makeFakeProfileProviders();
+      const createProfileProviders = vi.fn().mockReturnValue(profile);
+      const migrate = vi.fn().mockResolvedValue(baseMigrationResult);
+
+      await runProfileMigration({
+        legacyProviders: makeFakeLegacyProviders(),
+        sphere: makeFakeSphere(),
+        network: 'testnet',
+        setInitProgress,
+        createProfileProviders: createProfileProviders as never,
+        migrate: migrate as never,
+        // No `force` — default path
+      });
+
+      // Probe RAN (force:false means we check Profile target first).
+      expect(profile.tokenStorage.load).toHaveBeenCalled();
+      // And the SDK helper got `force: false`.
+      const args = migrate.mock.calls[0][0];
+      expect(args.force).toBe(false);
+    });
+  });
+
   it('forwards every onProgress phase as a syncing_tokens step', async () => {
     const profile = makeFakeProfileProviders();
     const createProfileProviders = vi.fn().mockReturnValue(profile);

@@ -46,4 +46,35 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
   export function createBrowserProviders(
     config?: BrowserProvidersConfig,
   ): BrowserProviders;
+
+  /**
+   * Subset of {@link IndexedDBTokenStorageProvider} we use in
+   * sphere.telco for cross-mode data-presence probing. The SDK class
+   * has a wider surface — we only declare the bits we touch here.
+   */
+  export interface IndexedDBTokenStorageProviderConfig {
+    readonly dbNamePrefix?: string;
+    readonly debug?: boolean;
+  }
+  export class IndexedDBTokenStorageProvider
+    implements TokenStorageProvider<TxfStorageDataBase>
+  {
+    constructor(config?: IndexedDBTokenStorageProviderConfig);
+    readonly id: string;
+    readonly name: string;
+    readonly type: string;
+    setIdentity(identity: { directAddress?: string; l1Address: string; chainPubkey: string; privateKey?: string }): void;
+    initialize(): Promise<boolean>;
+    connect(): Promise<void>;
+    disconnect(): Promise<void>;
+    shutdown(opts?: Record<string, unknown>): Promise<void>;
+    isConnected(): boolean;
+    getStatus(): string;
+    sync?(other: TokenStorageProvider<TxfStorageDataBase>): Promise<unknown>;
+    load(): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string; source?: string; timestamp?: number }>;
+    save(data: Record<string, unknown>): Promise<{ success: boolean; error?: string; timestamp?: number }>;
+  }
+  export function createIndexedDBTokenStorageProvider(
+    config?: IndexedDBTokenStorageProviderConfig,
+  ): IndexedDBTokenStorageProvider;
 }
