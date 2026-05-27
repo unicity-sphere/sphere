@@ -17764,7 +17764,31 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * unique event IDs in the §C.2 soak failure observed at
  * `integration/all-fixes` HEAD `6102d59`).
  */
- | 'storage:durability-deferred';
+ | 'storage:durability-deferred'
+/**
+ * PR #302 (issue #???): emitted by the pointer-layer lifecycle when
+ * Phase 3 walkback skipped past one or more `CAR_TRANSIENT` versions
+ * (slot EXISTS on-chain — proof verified + CID decoded — but no IPFS
+ * gateway could serve the CAR bytes).
+ *
+ * Fired on both the recover path (cold-start / periodic poll
+ * `recoverLatest()`) and the publish path (conflict-driven rediscovery
+ * in `reconcileAndPublish()`). Also fired when ALL known anchor versions
+ * are CAR_TRANSIENT and no VALID predecessor was found (the
+ * `RecoverAllUnfetchableResult` case).
+ *
+ * `data` carries:
+ *   - `skippedVersions: number[]`   versions walked past
+ *   - `recoveredVersion?: number`   the VALID predecessor found
+ *                                   (absent when all anchors unfetchable)
+ *   - `path: 'recover' | 'publish'` the code path that fired the event
+ *
+ * Not a fatal alarm (`storage:error`). Operators should investigate
+ * IPFS gateway health for the wallet's IPNS CIDs and consider
+ * re-pinning the missing CARs from a backup or invoking
+ * `acceptCarLoss(version)` to permanently acknowledge the data loss.
+ */
+ | 'storage:pointer-version-skipped-unfetchable';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -18364,7 +18388,7 @@ interface ProfileTokenStorageHost {
     getAddressId(): string;
     log(message: string): void;
     emitEvent(event: StorageEvent): void;
-    buildErrorEvent(type: 'storage:error' | 'sync:error', err: unknown, overrideCode?: string): StorageEvent;
+    buildErrorEvent(type: 'storage:error' | 'sync:error' | 'storage:pointer-version-skipped-unfetchable', err: unknown, overrideCode?: string): StorageEvent;
     writeProfileKey(key: string, value: string): Promise<void>;
     readProfileKey(key: string): Promise<string | null>;
     readProfileKeyJson<T>(key: string): Promise<T | null>;
@@ -19758,10 +19782,10 @@ interface PointerMutex {
  *     Trust-base rotation is detected on verify failure (§8.4.1).
  *
  *   classifyVersion(v, ...)
- *     H1 three-way classifier. Returns VALID | SEMANTICALLY_INVALID |
- *     TRANSIENT_UNAVAILABLE. Used by Phase-3 walkback. Requires an
- *     injected IPFS/CAR fetcher (the pointer layer does not own IPFS
- *     itself — that stays in profile/ipfs-client.ts).
+ *     H1 four-way classifier. Returns VALID | SEMANTICALLY_INVALID |
+ *     PROOF_TRANSIENT | CAR_TRANSIENT. Used by Phase-3 walkback.
+ *     Requires an injected IPFS/CAR fetcher (the pointer layer does
+ *     not own IPFS itself — that stays in profile/ipfs-client.ts).
  *
  *   isReachable(signingPubKey)
  *     Health check. Issues a getInclusionProof for the wallet's HEALTH_CHECK
@@ -19818,18 +19842,113 @@ type CidDecoder = (full: Uint8Array) => CidDecodeResult;
  *             excluded) → converges to includedV = latest-included version.
  *
  *   Phase 3 — walk back through SEMANTICALLY_INVALID versions via
- *             classifyVersion (H1 three-way). TRANSIENT_UNAVAILABLE
- *             versions propagate as CAR_UNAVAILABLE — we do NOT skip
- *             past them because tokens may still exist. Bail after
- *             DISCOVERY_CORRUPT_WALKBACK consecutive invalid versions
- *             (→ CORRUPT_STREAK).
+ *             classifyVersion (H1 four-way). CAR_TRANSIENT versions
+ *             (slot EXISTS on-chain but CAR unreachable) are SKIPPED
+ *             PAST by default (`skipUnfetchableInWalkback`):
+ *             a slot whose proof is authentic but whose CAR cannot be
+ *             fetched (404 / network failure / persistent-unavailable)
+ *             is treated as walked-past, indistinguishable from
+ *             SEMANTICALLY_INVALID for the purpose of finding the
+ *             latest VALID predecessor. The skipped versions are
+ *             recorded in `walkbackUnfetchableSkipped` for operator
+ *             observability — the lifecycle layer emits a typed event
+ *             when `recoverLatest()` surfaces them, so monitoring can
+ *             surface the data-loss window without requiring the wallet
+ *             to be blocked.
  *
- * Returns { validV, includedV } (H4 return shape).
+ *             PROOF_TRANSIENT versions (aggregator proof RPC failed —
+ *             slot existence UNKNOWN) are NEVER skipped-past regardless
+ *             of `skipUnfetchableInWalkback`. Walking past a slot whose
+ *             existence we haven't verified would silently corrupt the
+ *             walkback. Phase 3 treats PROOF_TRANSIENT as a hard stop
+ *             and throws CAR_UNAVAILABLE (same as the SPEC-strict path).
+ *
+ *             SPEC-strict mode (legacy / strict consumers): pass
+ *             `skipUnfetchableInWalkback: false` to restore the
+ *             SPEC §13 / §10.7 behavior — CAR_TRANSIENT in Phase 3
+ *             also throws CAR_UNAVAILABLE so the caller can invoke
+ *             the operator-driven `acceptCarLoss(version)` flow after
+ *             the persistent-retry window.
+ *
+ *             Bail after DISCOVERY_CORRUPT_WALKBACK consecutive
+ *             non-VALID versions (→ CORRUPT_STREAK), counting both
+ *             SEMANTICALLY_INVALID and (when skipped) UNFETCHABLE.
+ *
+ * Returns { validV, includedV, probeVersions, walkbackUnfetchableSkipped }.
  *
  * W7 walkback floor: when an `acceptCorruptStreak(walkbackLimit)` override
  * raises the walkback ceiling, the effective floor MUST NOT cross below
  * localVersion — crossing below would walk past versions this wallet has
  * already confirmed as its own.
+ *
+ * ## Why `skipUnfetchableInWalkback` defaults to `true`
+ *
+ * A pointer slot that EXISTS (proof-included on the aggregator) but whose
+ * snapshot CID is unreachable on every configured IPFS gateway represents
+ * a real failure mode in production wallets:
+ *
+ *   - A prior publish landed the proof but the IPFS pin was lost
+ *     (operator gateway pruned the bundle, gateway DNS migration left
+ *     orphan content, gateway operator decommissioned).
+ *   - The 404 is durable — every retry of every gateway returns the
+ *     same 404; no amount of "retry later" rescues it.
+ *
+ * Under the legacy SPEC-strict semantic, `recoverLatest()` THROWS
+ * CAR_UNAVAILABLE at the broken version and the wallet has no recovery
+ * surface short of operator intervention. The publish path also fails on
+ * conflict-driven rediscovery for the same reason. The wallet becomes
+ * effectively bricked even though the on-aggregator proof history is
+ * intact and the wallet's PRIOR versions are still fetchable.
+ *
+ * The skip-past semantic preserves the distinction between:
+ *   - ABSENT (no probe match)            — true gap, walkback continues
+ *                                          past this slot only if Phase 2
+ *                                          located includedV above it
+ *   - SEMANTICALLY_INVALID (corrupt)     — walked past, counts toward
+ *                                          DISCOVERY_CORRUPT_WALKBACK
+ *   - CAR_TRANSIENT (EXISTS-BUT-UNFETCHABLE)
+ *                                        — walked past (same as
+ *                                          SEMANTICALLY_INVALID for
+ *                                          discovery purposes), counts
+ *                                          toward walkback budget, AND
+ *                                          recorded in
+ *                                          walkbackUnfetchableSkipped so
+ *                                          the caller emits an event for
+ *                                          monitoring
+ *   - PROOF_TRANSIENT (proof RPC failed) — HARD STOP regardless of
+ *                                          skipUnfetchableInWalkback;
+ *                                          slot existence UNKNOWN, must
+ *                                          not be skipped
+ *
+ * For PUBLISH `nextV` computation:
+ * - `includedV` (the highest INCLUDED slot from Phase 2) is unchanged
+ *   by the skip-past behavior. Phase 2 uses `probeVersion` (H2
+ *   OR-predicate) which does NOT fetch CARs — only proofs. So even an
+ *   UNFETCHABLE slot is correctly counted as "included" for the purpose
+ *   of computing `nextV = max(validV, includedV) + 1`.
+ * - The skip-past therefore does NOT cause a new publish to overwrite or
+ *   collide with the broken prior slot. The new publish supersedes
+ *   normally at the next available version.
+ *
+ * For FETCH-AND-JOIN (cold-start recovery, periodic poll):
+ * - `recoverLatest()` returns the latest VALID — the skip-past gives the
+ *   wallet a fetchable predecessor instead of blocking entirely.
+ * - The fetch-and-join applier (factory closure) fetches the snapshot
+ *   CAR at the recovered version's CID. Because the recovered version
+ *   is the latest VALID predecessor (CAR was content-address verified
+ *   during Phase 3 classify), this fetch SHOULD succeed — but the
+ *   applier itself is already best-effort in the lifecycle layer
+ *   (`recoverFromAggregatorPointerBestEffort` logs + returns true on
+ *   apply failure, so the next periodic poll retries). The data-loss
+ *   window is the entries that lived ONLY in the unfetchable slot(s);
+ *   the wallet retains everything that survived in the recovered
+ *   predecessor and in the OrbitDB peer-to-peer log.
+ *
+ * Security model: pointer slots are signed by the wallet's own pointer
+ * key. A malicious aggregator cannot forge proofs at versions we have
+ * not authored. A malicious gateway can already serve a 404. The new
+ * semantic does not expand the attacker surface — it expands the
+ * recovery surface for the wallet user.
  */
 
 interface DiscoverResult {
@@ -19843,6 +19962,34 @@ interface DiscoverResult {
      * Used by getProbeFingerprint() for UI clustering signal.
      */
     readonly probeVersions: readonly PointerVersion[];
+    /**
+     * Versions visited during Phase 3 walkback whose `classifyVersion`
+     * returned `CAR_TRANSIENT` and were skipped past (only when
+     * `skipUnfetchableInWalkback !== false`). Empty when no such versions
+     * were walked, when SPEC-strict mode was requested, or when Phase 3
+     * never ran.
+     *
+     * Note: `PROOF_TRANSIENT` versions (aggregator proof RPC failed —
+     * slot existence UNKNOWN) are NEVER skipped; they halt the walkback
+     * with CAR_UNAVAILABLE even in default mode. Only `CAR_TRANSIENT`
+     * versions (proof verified, CID decoded, CAR unreachable) appear here.
+     *
+     * Surfaced to callers so they can emit a typed event
+     * (`storage:pointer-version-skipped-unfetchable`) for monitoring,
+     * even though discovery itself proceeds without blocking.
+     *
+     * A version listed here has these properties:
+     *   - Inclusion proof was authentic (proof verify OK).
+     *   - XOR-decode produced a parseable CID.
+     *   - The CAR at that CID was NOT fetchable from any gateway
+     *     (transient or persistent — Phase 3 treats them identically
+     *     under the skip-past policy).
+     *
+     * Versions listed here are NOT VALID for `recoverLatest()` purposes;
+     * the wallet will receive a strictly-older VALID predecessor (or null)
+     * if such a version exists.
+     */
+    readonly walkbackUnfetchableSkipped: readonly PointerVersion[];
 }
 
 /**
@@ -20014,10 +20161,65 @@ interface ProfilePointerLayerInit {
 interface PublishResult {
     readonly version: PointerVersion;
     readonly attemptsUsed: number;
+    /**
+     * Versions skipped past during Phase 3 walkback within this publish
+     * session (conflict-driven rediscovery only — the fast-path attempt 0
+     * does no walkback and produces an empty list).
+     *
+     * Mirrors `RecoverResult.walkbackUnfetchableSkipped`. Surfaced so
+     * `publishAggregatorPointerBestEffort` can emit the same
+     * `storage:pointer-version-skipped-unfetchable` event on the publish
+     * path as on the recover path.
+     *
+     * Empty when no CAR_TRANSIENT skip-past occurred or when publish
+     * succeeded on the fast-path (no walkback).
+     */
+    readonly walkbackUnfetchableSkipped: readonly PointerVersion[];
 }
 interface RecoverResult {
     readonly cid: Uint8Array;
     readonly version: PointerVersion;
+    /**
+     * Versions walked past during Phase 3 walkback whose CAR was
+     * EXISTS-BUT-UNFETCHABLE (proof authentic, CID decoded, but no
+     * gateway could serve the bytes). Empty when no such versions were
+     * encountered or when the wallet ran in SPEC-strict
+     * `skipUnfetchableInWalkback: false` mode.
+     *
+     * The wallet's `version` field is the latest VALID predecessor — older
+     * than every entry in this list. Surfaced so the lifecycle layer can
+     * emit a typed `storage:pointer-version-skipped-unfetchable` event for
+     * operator monitoring.
+     *
+     * See `discover-algorithm.ts` for the full design rationale.
+     */
+    readonly walkbackUnfetchableSkipped?: readonly PointerVersion[];
+}
+/**
+ * Returned by `recoverLatest()` when the discovery walkback found at
+ * least one anchor (includedV > 0) but EVERY visited slot returned
+ * `CAR_TRANSIENT` — i.e. the pointer history EXISTS on-chain but not
+ * a single CAR is fetchable from any configured gateway.
+ *
+ * This is distinct from `recoverLatest() === null` (fresh wallet — no
+ * pointer ever published). Callers MUST NOT fall through to legacy IPNS
+ * migration on this result: the pointer chain exists; the gateways are
+ * the problem. The wallet should retry on the next poll cycle.
+ *
+ * Lifecycle-layer handling:
+ *   - Do NOT stamp the legacy migration-done marker.
+ *   - Do NOT import IPNS bundles.
+ *   - Emit `storage:pointer-version-skipped-unfetchable` event (carried
+ *     in `walkbackUnfetchableSkipped`) so operators know the outage depth.
+ *   - Return `true` (pointer path was chosen) so the caller skips legacy.
+ */
+interface RecoverAllUnfetchableResult {
+    readonly kind: 'all-unfetchable';
+    /**
+     * Every version that was walked but whose CAR was unreachable.
+     * Non-empty by definition (at least one slot existed and was skipped).
+     */
+    readonly walkbackUnfetchableSkipped: readonly PointerVersion[];
 }
 /**
  * Issue #247 — outcome of `reconcileLocalVersionDownward`.
@@ -20179,15 +20381,35 @@ declare class ProfilePointerLayer {
     }): Promise<PublishResult>;
     /**
      * Discover + recover the latest VALID pointer.
-     * Returns null when no pointer has ever been published (validV == 0).
      *
-     * SPEC §13 recoverLatest semantics: returns `{ cid, version }` for the
-     * latest valid version (Phase 3 winner), having classified + fetched the
-     * CAR successfully.
+     * Return value semantics (three distinct cases):
+     *
+     *   `RecoverResult`              — VALID version found; `cid` and `version`
+     *                                  are the latest fetchable snapshot.
+     *                                  `walkbackUnfetchableSkipped` lists any
+     *                                  CAR_TRANSIENT slots walked past.
+     *
+     *   `null`                       — Fresh wallet: no pointer has ever been
+     *                                  published (validV === 0 AND no
+     *                                  walkbackUnfetchableSkipped). The
+     *                                  lifecycle layer may fall through to
+     *                                  legacy IPNS migration or skip it for
+     *                                  a truly new wallet.
+     *
+     *   `RecoverAllUnfetchableResult` — Anchors EXIST on-chain (validV === 0
+     *                                   because every slot returned CAR_TRANSIENT)
+     *                                   but NOT a single CAR is reachable.
+     *                                   Callers MUST NOT fall through to legacy
+     *                                   IPNS migration — the pointer chain is
+     *                                   intact; only the gateways are down.
+     *                                   Retry on the next poll cycle.
+     *
+     * SPEC §13 recoverLatest semantics are extended: the three-case return
+     * disambiguates "no pointer" from "pointer exists but gateways are down".
      */
     recoverLatest(opts?: {
         abortSignal?: AbortSignal;
-    }): Promise<RecoverResult | null>;
+    }): Promise<RecoverResult | RecoverAllUnfetchableResult | null>;
     /**
      * Issue #247 — adopt a strictly-lower aggregator-visible version as
      * the wallet's local baseline. Solves the same-identity cross-device
@@ -20341,7 +20563,7 @@ declare class ProfilePointerLayer {
     /** Low-level probe for a single version — H2 OR-predicate. */
     probe(v: PointerVersion): Promise<boolean>;
     /** Low-level classifyVersion. */
-    classify(v: PointerVersion): Promise<'VALID' | 'SEMANTICALLY_INVALID' | 'TRANSIENT_UNAVAILABLE'>;
+    classify(v: PointerVersion): Promise<'VALID' | 'SEMANTICALLY_INVALID' | 'PROOF_TRANSIENT' | 'CAR_TRANSIENT'>;
 }
 
 /**

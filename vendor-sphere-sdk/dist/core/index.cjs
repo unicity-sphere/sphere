@@ -58539,7 +58539,7 @@ var Sphere = class _Sphere {
         `pointer-win broadcast received: version=${payload.version} cid=${payload.cid} \u2014 triggering early reconcile`
       );
       const recovered = await pointer.recoverLatest();
-      if (recovered) {
+      if (recovered && "cid" in recovered) {
         const outcome = await pointer.reconcileLocalVersionDownward(recovered);
         logger.debug(
           "Sphere",

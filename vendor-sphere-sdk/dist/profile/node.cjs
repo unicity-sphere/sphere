@@ -16249,7 +16249,7 @@ async function classifyVersion(input) {
     timeoutMs,
     input.abortSignal
   );
-  if (phase12.ok === "transient") return "TRANSIENT_UNAVAILABLE";
+  if (phase12.ok === "transient") return "PROOF_TRANSIENT";
   if (phase12.ok === "semantic") return "SEMANTICALLY_INVALID";
   const carResult = await fetchCar(phase12.cidBytes);
   if (carResult.ok) {
@@ -16257,7 +16257,7 @@ async function classifyVersion(input) {
   }
   switch (carResult.kind) {
     case "transient_unavailable":
-      return "TRANSIENT_UNAVAILABLE";
+      return "CAR_TRANSIENT";
     case "content_mismatch":
     case "car_parse_failed":
     default:
@@ -17033,6 +17033,8 @@ async function findLatestValidVersionInner(input, registerCleanup) {
     }
   };
   const probeVersions = [];
+  const walkbackUnfetchableSkipped = [];
+  const skipUnfetchable = input.skipUnfetchableInWalkback !== false;
   const probeAndRecord = async (v) => {
     checkDeadline();
     probeVersions.push(v);
@@ -17098,26 +17100,54 @@ async function findLatestValidVersionInner(input, registerCleanup) {
       abortSignal: discoveryAbort.signal
     });
     if (status === "VALID") {
-      return { validV: candidate, includedV, probeVersions };
+      return {
+        validV: candidate,
+        includedV,
+        probeVersions,
+        walkbackUnfetchableSkipped
+      };
     }
     if (status === "SEMANTICALLY_INVALID") {
       candidate = candidate - 1;
       walked += 1;
       continue;
     }
+    if (status === "PROOF_TRANSIENT") {
+      throw new AggregatorPointerError(
+        AggregatorPointerErrorCode.CAR_UNAVAILABLE,
+        `Phase 3 walkback: version=${candidate} is PROOF_TRANSIENT \u2014 aggregator proof RPC failed, slot existence unknown. Cannot skip past an unexamined slot (retry when aggregator is reachable).`,
+        { version: candidate, includedV }
+      );
+    }
+    if (skipUnfetchable) {
+      walkbackUnfetchableSkipped.push(candidate);
+      candidate = candidate - 1;
+      walked += 1;
+      continue;
+    }
     throw new AggregatorPointerError(
       AggregatorPointerErrorCode.CAR_UNAVAILABLE,
-      `Phase 3 walkback: version=${candidate} is TRANSIENT_UNAVAILABLE. Tokens may still exist; refusing to skip past.`,
+      `Phase 3 walkback: version=${candidate} is CAR_TRANSIENT \u2014 proof verified but CAR unreachable; refusing to skip past (use skipUnfetchableInWalkback: true or acceptCarLoss).`,
       { version: candidate, includedV }
     );
   }
   if (candidate === 0) {
-    return { validV: 0, includedV, probeVersions };
+    return {
+      validV: 0,
+      includedV,
+      probeVersions,
+      walkbackUnfetchableSkipped
+    };
   }
   throw new AggregatorPointerError(
     AggregatorPointerErrorCode.CORRUPT_STREAK,
-    `Phase 3 walkback exhausted walkbackLimit=${walkbackLimit} without finding a VALID version (includedV=${includedV}, candidate=${candidate}). Operator may invoke acceptCorruptStreak(walkbackLimit) to override.`,
-    { includedV, walkbackLimit, walkedSoFar: walked }
+    `Phase 3 walkback exhausted walkbackLimit=${walkbackLimit} without finding a VALID version (includedV=${includedV}, candidate=${candidate}, unfetchableSkipped=${walkbackUnfetchableSkipped.length}). Operator may invoke acceptCorruptStreak(walkbackLimit) to override.`,
+    {
+      includedV,
+      walkbackLimit,
+      walkedSoFar: walked,
+      unfetchableSkippedCount: walkbackUnfetchableSkipped.length
+    }
   );
 }
 async function computeProbeFingerprint(probeVersions) {
@@ -17181,6 +17211,7 @@ async function findLatestValidVersionWithWalkbackFloorRetry(callInput, abortSign
 async function reconcileAndPublish(input) {
   const maxAttempts = input.maxAttempts ?? PUBLISH_RETRY_BUDGET;
   const probeHistory = [];
+  const walkbackUnfetchableSkipped = [];
   let currentLocalVersion = input.currentLocalVersion;
   const RECONCILE_WALL_CLOCK_BUDGET_MS = 5 * 60 * 1e3;
   const reconcileDeadlineMs = Date.now() + RECONCILE_WALL_CLOCK_BUDGET_MS;
@@ -17210,6 +17241,9 @@ async function reconcileAndPublish(input) {
         input.abortSignal
       );
       probeHistory.push(...discovery.probeVersions);
+      if (discovery.walkbackUnfetchableSkipped.length > 0) {
+        walkbackUnfetchableSkipped.push(...discovery.walkbackUnfetchableSkipped);
+      }
       nextV = Math.max(discovery.validV, discovery.includedV) + 1;
     }
     const outcome = await publishOnceAtVersion(
@@ -17232,7 +17266,8 @@ async function reconcileAndPublish(input) {
         kind: "success",
         v: outcome.v,
         attemptsUsed: attempts + 1,
-        probeHistory
+        probeHistory,
+        walkbackUnfetchableSkipped
       };
     }
     const rediscovery = await findLatestValidVersionWithWalkbackFloorRetry(
@@ -17250,6 +17285,9 @@ async function reconcileAndPublish(input) {
       input.abortSignal
     );
     probeHistory.push(...rediscovery.probeVersions);
+    if (rediscovery.walkbackUnfetchableSkipped.length > 0) {
+      walkbackUnfetchableSkipped.push(...rediscovery.walkbackUnfetchableSkipped);
+    }
     if (rediscovery.validV > 0) {
       try {
         const remoteCid = await input.resolveRemoteCid(rediscovery.validV);
@@ -17576,16 +17614,40 @@ var ProfilePointerLayer = class {
     if (result.probeHistory.length > 0) {
       this.#lastProbeVersions = result.probeHistory;
     }
-    return { version: result.v, attemptsUsed: result.attemptsUsed };
+    return {
+      version: result.v,
+      attemptsUsed: result.attemptsUsed,
+      walkbackUnfetchableSkipped: result.walkbackUnfetchableSkipped
+    };
   }
   // ── recoverLatest ────────────────────────────────────────────────────────
   /**
    * Discover + recover the latest VALID pointer.
-   * Returns null when no pointer has ever been published (validV == 0).
    *
-   * SPEC §13 recoverLatest semantics: returns `{ cid, version }` for the
-   * latest valid version (Phase 3 winner), having classified + fetched the
-   * CAR successfully.
+   * Return value semantics (three distinct cases):
+   *
+   *   `RecoverResult`              — VALID version found; `cid` and `version`
+   *                                  are the latest fetchable snapshot.
+   *                                  `walkbackUnfetchableSkipped` lists any
+   *                                  CAR_TRANSIENT slots walked past.
+   *
+   *   `null`                       — Fresh wallet: no pointer has ever been
+   *                                  published (validV === 0 AND no
+   *                                  walkbackUnfetchableSkipped). The
+   *                                  lifecycle layer may fall through to
+   *                                  legacy IPNS migration or skip it for
+   *                                  a truly new wallet.
+   *
+   *   `RecoverAllUnfetchableResult` — Anchors EXIST on-chain (validV === 0
+   *                                   because every slot returned CAR_TRANSIENT)
+   *                                   but NOT a single CAR is reachable.
+   *                                   Callers MUST NOT fall through to legacy
+   *                                   IPNS migration — the pointer chain is
+   *                                   intact; only the gateways are down.
+   *                                   Retry on the next poll cycle.
+   *
+   * SPEC §13 recoverLatest semantics are extended: the three-case return
+   * disambiguates "no pointer" from "pointer exists but gateways are down".
    */
   async recoverLatest(opts) {
     this.#assertNotShuttingDown("recoverLatest");
@@ -17598,9 +17660,20 @@ var ProfilePointerLayer = class {
       throw err;
     }
     const discovery = await this.#discoverLatestVersionInner(void 0, abortSignal);
-    if (discovery.validV === 0) return null;
+    if (discovery.validV === 0) {
+      const skippedOnly = discovery.walkbackUnfetchableSkipped;
+      if (skippedOnly && skippedOnly.length > 0) {
+        return { kind: "all-unfetchable", walkbackUnfetchableSkipped: skippedOnly };
+      }
+      return null;
+    }
     const cid = await this.#init.resolveRemoteCid(discovery.validV);
-    return { cid, version: discovery.validV };
+    const walkbackUnfetchableSkipped = discovery.walkbackUnfetchableSkipped;
+    return {
+      cid,
+      version: discovery.validV,
+      ...walkbackUnfetchableSkipped && walkbackUnfetchableSkipped.length > 0 ? { walkbackUnfetchableSkipped } : {}
+    };
   }
   // ── reconcileLocalVersionDownward ────────────────────────────────────────
   /**
@@ -21840,7 +21913,7 @@ var LifecycleManager = class {
           return;
         }
       }
-      if (recovered) {
+      if (recovered && "cid" in recovered) {
         try {
           const recoveredCidStr = import_cid8.CID.decode(recovered.cid).toString();
           if (recoveredCidStr === snapshotCid) {
@@ -22022,7 +22095,7 @@ var LifecycleManager = class {
           };
         }
       }
-      if (recovered) {
+      if (recovered && "cid" in recovered) {
         try {
           const recoveredStr = import_cid8.CID.decode(recovered.cid).toString();
           if (recoveredStr === snapshotCid) {
@@ -22188,6 +22261,18 @@ var LifecycleManager = class {
         this.host.log(
           `Pointer publish ok: cid=${cidString} version=${result.version} attempts=${result.attemptsUsed}`
         );
+        if (result.walkbackUnfetchableSkipped && result.walkbackUnfetchableSkipped.length > 0) {
+          const publishSkipped = result.walkbackUnfetchableSkipped;
+          this.host.emitEvent(
+            this.host.buildErrorEvent(
+              "storage:pointer-version-skipped-unfetchable",
+              new Error(
+                `Pointer publish (conflict-rediscovery): walkback skipped ${publishSkipped.length} EXISTS-BUT-UNFETCHABLE version(s): [${publishSkipped.join(", ")}]. Published at version=${result.version}; the listed slot(s) had authentic proofs but unreachable CARs.`
+              ),
+              "POINTER_VERSIONS_SKIPPED_UNFETCHABLE"
+            )
+          );
+        }
         let winBroadcastsOn = false;
         try {
           winBroadcastsOn = typeof pointer.winBroadcastsEnabled === "function" && // Strict `=== true` to mirror the production
@@ -22267,7 +22352,7 @@ var LifecycleManager = class {
           let reconciledDownward = false;
           try {
             const recovered = await pointer.recoverLatest();
-            if (recovered) {
+            if (recovered && "cid" in recovered) {
               const outcome = await pointer.reconcileLocalVersionDownward(recovered);
               if (outcome.reconciled) {
                 reconciledDownward = true;
@@ -22394,9 +22479,35 @@ var LifecycleManager = class {
       this.host.log("Pointer recover: no anchor published yet");
       return false;
     }
+    if ("kind" in recovered && recovered.kind === "all-unfetchable") {
+      const allSkipped = recovered.walkbackUnfetchableSkipped;
+      this.host.emitEvent(
+        this.host.buildErrorEvent(
+          "storage:pointer-version-skipped-unfetchable",
+          new Error(
+            `Pointer recover: all ${allSkipped.length} known anchor version(s) EXISTS-BUT-UNFETCHABLE: [${allSkipped.join(", ")}]. No VALID predecessor was found. Refusing legacy IPNS fallback \u2014 the pointer chain is intact; IPFS gateways may be temporarily unreachable. Recovery will be re-attempted on the next pointer poll cycle.`
+          ),
+          "POINTER_VERSIONS_SKIPPED_UNFETCHABLE"
+        )
+      );
+      return true;
+    }
+    const validRecovered = recovered;
+    const skipped = validRecovered.walkbackUnfetchableSkipped;
+    if (skipped && skipped.length > 0) {
+      this.host.emitEvent(
+        this.host.buildErrorEvent(
+          "storage:pointer-version-skipped-unfetchable",
+          new Error(
+            `Pointer recover: walkback skipped ${skipped.length} EXISTS-BUT-UNFETCHABLE version(s): [${skipped.join(", ")}]. Wallet recovered to older predecessor version=${validRecovered.version}; the listed slot(s) had authentic proofs but unreachable CARs. Operator: re-pin the missing CARs from a backup, or invoke acceptCarLoss(version) to permanently acknowledge the data loss.`
+          ),
+          "POINTER_VERSIONS_SKIPPED_UNFETCHABLE"
+        )
+      );
+    }
     let cidString;
     try {
-      cidString = import_cid8.CID.decode(recovered.cid).toString();
+      cidString = import_cid8.CID.decode(validRecovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer recover: failed to decode recovered CID bytes: ${msg}`);
@@ -22412,7 +22523,7 @@ var LifecycleManager = class {
       }
       this.host.setLastDiscoveredPointerCid(cidString);
       this.host.log(
-        `Pointer recover ok: cid=${cidString} version=${recovered.version} joinedAny=${applyResult.joinedAny} addresses=${applyResult.addressesSeen} bundles=${applyResult.bundleEntriesSeen}`
+        `Pointer recover ok: cid=${cidString} version=${validRecovered.version} joinedAny=${applyResult.joinedAny} addresses=${applyResult.addressesSeen} bundles=${applyResult.bundleEntriesSeen}`
       );
       return true;
     } catch (err) {
@@ -22579,9 +22690,36 @@ var LifecycleManager = class {
       this.scheduleNextPointerPoll(nextBackoffMultiplier);
       return;
     }
+    if ("kind" in recovered && recovered.kind === "all-unfetchable") {
+      const allSkipped = recovered.walkbackUnfetchableSkipped;
+      this.host.emitEvent(
+        this.host.buildErrorEvent(
+          "storage:pointer-version-skipped-unfetchable",
+          new Error(
+            `Pointer poll: all ${allSkipped.length} known anchor version(s) EXISTS-BUT-UNFETCHABLE: [${allSkipped.join(", ")}]. No VALID predecessor found; IPFS gateways may be temporarily unreachable. Will retry on next poll cycle.`
+          ),
+          "POINTER_VERSIONS_SKIPPED_UNFETCHABLE"
+        )
+      );
+      this.scheduleNextPointerPoll(nextBackoffMultiplier);
+      return;
+    }
+    const validRecovered = recovered;
+    const skipped = validRecovered.walkbackUnfetchableSkipped;
+    if (skipped && skipped.length > 0) {
+      this.host.emitEvent(
+        this.host.buildErrorEvent(
+          "storage:pointer-version-skipped-unfetchable",
+          new Error(
+            `Pointer poll: walkback skipped ${skipped.length} EXISTS-BUT-UNFETCHABLE version(s): [${skipped.join(", ")}]. Recovered to predecessor version=${validRecovered.version}.`
+          ),
+          "POINTER_VERSIONS_SKIPPED_UNFETCHABLE"
+        )
+      );
+    }
     let cidString;
     try {
-      cidString = import_cid8.CID.decode(recovered.cid).toString();
+      cidString = import_cid8.CID.decode(validRecovered.cid).toString();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer poll: failed to decode recovered CID bytes: ${msg}`);
@@ -22603,7 +22741,7 @@ var LifecycleManager = class {
       }
       this.host.setLastDiscoveredPointerCid(cidString);
       this.host.log(
-        `Pointer poll discovered NEW snapshot CID: cid=${cidString} version=${recovered.version} joinedAny=${applyResult.joinedAny} addresses=${applyResult.addressesSeen} bundles=${applyResult.bundleEntriesSeen}`
+        `Pointer poll discovered NEW snapshot CID: cid=${cidString} version=${validRecovered.version} joinedAny=${applyResult.joinedAny} addresses=${applyResult.addressesSeen} bundles=${applyResult.bundleEntriesSeen}`
       );
       if (this.onPollDiscoveredNewCid) {
         try {
