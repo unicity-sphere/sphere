@@ -21557,7 +21557,21 @@ var LifecycleManager = class {
         this.host.setInitialized(true);
         return true;
       }
-      await this.bundleIndex.refreshKnownBundles();
+      try {
+        await this.bundleIndex.refreshKnownBundles();
+      } catch (err) {
+        this.host.log(
+          `bundleIndex.refreshKnownBundles failed (proceeding with empty bundle set; cold-start recovery may repopulate, but cross-device sync and load() will continue to fail until the corrupt OpLog entry is bypassed): ${err instanceof Error ? err.message : String(err)}`
+        );
+        this.host.emitEvent(
+          this.host.buildErrorEvent(
+            "storage:error",
+            err,
+            "BUNDLE_INDEX_REFRESH_FAILED"
+          )
+        );
+        this.host.setKnownBundleCids(/* @__PURE__ */ new Set());
+      }
       if (this.host.getKnownBundleCids().size === 0) {
         const pointerRecovered = await this.recoverFromAggregatorPointerBestEffort();
         if (!pointerRecovered) {
