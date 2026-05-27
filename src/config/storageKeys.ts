@@ -25,6 +25,13 @@ export const STORAGE_KEYS = {
   // IPFS
   IPFS_ENABLED: 'sphere_ipfs_enabled',
 
+  // Wallet token-storage mode preference ('legacy' | 'profile').
+  // Read at boot to decide which providers to construct. When unset
+  // and IS_UXF_BUILD, the legacy-→Profile boot migration controls
+  // the choice; once a user clicks a switch button we persist their
+  // preference here so reloads honor it.
+  WALLET_MODE_PREFERENCE: 'sphere_wallet_mode_preference',
+
   // Desktop state (open tabs, active tab)
   DESKTOP_STATE: 'sphere_desktop_state',
 
