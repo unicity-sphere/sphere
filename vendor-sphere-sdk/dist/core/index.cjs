@@ -55601,6 +55601,62 @@ var Sphere = class _Sphere {
     return signMessage(this._identity.privateKey, message);
   }
   // ===========================================================================
+  // Internal — Issue #292 (SDK-private; do not call from consumer code)
+  // ===========================================================================
+  /**
+   * Attach this Sphere's internal {@link FullIdentity} (with privateKey) to
+   * a pair of identity-consuming providers WITHOUT exposing the private key
+   * to the caller. Used exclusively by the Sphere-bound Profile factories
+   * in `profile/browser.ts` / `profile/node.ts` and the
+   * `migrateLegacyToProfile({ sphere, ... })` overload in
+   * `profile/token-storage-migration.ts`.
+   *
+   * The `privateKey` field is read from `this._identity` (a private field),
+   * passed directly into `setIdentity` on each provider, and never escapes
+   * the closure. The callback shape is intentionally narrow — only
+   * `setIdentity(FullIdentity): void` is invoked — so the helper cannot
+   * be subverted into leaking the identity through some other provider
+   * method.
+   *
+   * Honors the architectural invariant from the issue #292 owner comment:
+   *
+   * > "Private key material should never leave Sphere SDK itself. However,
+   * > it should be possible to perform all the relevant cryptographic
+   * > operations within Sphere SDK over external materials by means of
+   * > undisclosed respective private key."
+   *
+   * @param applySetIdentity Synchronous callback that receives the live
+   *        `FullIdentity` and calls `setIdentity` on each provider. The
+   *        identity reference MUST NOT be stored, logged, or returned by
+   *        the callback. The helper invokes it once and discards.
+   * @throws {SphereError} `NOT_INITIALIZED` when no identity is bound
+   *        (call this AFTER `Sphere.init` / `Sphere.create` / `Sphere.load`
+   *        resolves). Distinct from the `hexToBytes: empty hex string`
+   *        crash that would have fired inside `Profile*.setIdentity`
+   *        without this guard.
+   *
+   * @internal — sphere-sdk private. Not part of the public API surface.
+   *           Consumers should use `createBrowserProfileProvidersFromSphere`
+   *           or `migrateLegacyToProfile({ sphere, ... })` instead.
+   */
+  _withFullIdentityForProfileFactory(applySetIdentity) {
+    if (!this._identity?.privateKey) {
+      throw new SphereError(
+        "Wallet not initialized \u2014 call Sphere.init/create/load before constructing Sphere-bound Profile providers",
+        "NOT_INITIALIZED"
+      );
+    }
+    const snapshot = {
+      chainPubkey: this._identity.chainPubkey,
+      l1Address: this._identity.l1Address,
+      directAddress: this._identity.directAddress,
+      ipnsName: this._identity.ipnsName,
+      nametag: this._identity.nametag,
+      privateKey: this._identity.privateKey
+    };
+    applySetIdentity(snapshot);
+  }
+  // ===========================================================================
   // Public Methods - Providers Access
   // ===========================================================================
   getStorage() {

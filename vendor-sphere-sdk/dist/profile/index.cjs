@@ -10898,6 +10898,7 @@ __export(profile_exports, {
   NostrReplicationBridge: () => NostrReplicationBridge,
   OrbitDbAdapter: () => OrbitDbAdapter,
   OrbitDbDispositionStorageAdapter: () => OrbitDbDispositionStorageAdapter,
+  PROFILE_CACHE_PURPOSE: () => PROFILE_CACHE_PURPOSE,
   PROFILE_HKDF_INFO: () => PROFILE_HKDF_INFO,
   PROFILE_KEY_MAPPING: () => PROFILE_KEY_MAPPING,
   PerTokenMutex: () => PerTokenMutex,
@@ -26666,6 +26667,9 @@ async function migrateTokenStorage(opts) {
   };
 }
 async function migrateLegacyToProfile(opts) {
+  if (isSphereBoundOptions(opts)) {
+    return migrateLegacyToProfileFromSphereImpl(opts);
+  }
   return migrateTokenStorage({
     source: opts.legacy,
     target: opts.profile,
@@ -26677,6 +26681,49 @@ async function migrateLegacyToProfile(opts) {
     dryRun: opts.dryRun,
     force: opts.force
   });
+}
+function isSphereBoundOptions(opts) {
+  return "sphere" in opts && opts.sphere !== void 0 && opts.sphere !== null;
+}
+async function migrateLegacyToProfileFromSphereImpl(opts) {
+  const profileProviders = await opts.profileFactory(opts.sphere, {
+    network: opts.network,
+    profileConfig: opts.profileConfig,
+    oracle: opts.oracle
+  });
+  const identityForMigration = identityForMigrationFromSphere(opts.sphere);
+  const markerStorage = opts.markerStorage === void 0 ? profileProviders.storage : opts.markerStorage;
+  const result = await migrateTokenStorage({
+    source: opts.legacy,
+    target: profileProviders.tokenStorage,
+    direction: "legacy-to-profile",
+    identity: identityForMigration,
+    oracle: opts.oracle,
+    markerStorage,
+    onProgress: opts.onProgress,
+    dryRun: opts.dryRun,
+    force: opts.force
+  });
+  return { ...result, profileProviders };
+}
+function identityForMigrationFromSphere(sphere) {
+  const publicIdentity = sphere.identity;
+  if (!publicIdentity) {
+    throw new Error(
+      "migrateLegacyToProfile({ sphere }): Sphere has no identity \u2014 call Sphere.init/create/load first"
+    );
+  }
+  return {
+    chainPubkey: publicIdentity.chainPubkey,
+    l1Address: publicIdentity.l1Address,
+    directAddress: publicIdentity.directAddress,
+    ipnsName: publicIdentity.ipnsName,
+    nametag: publicIdentity.nametag,
+    // INTENTIONAL: privateKey stays inside Sphere. The migration body
+    // does not invoke any code path that reads this field; see the
+    // identityForMigrationFromSphere docstring.
+    privateKey: ""
+  };
 }
 async function migrateProfileToLegacy(opts) {
   return migrateTokenStorage({
@@ -26811,6 +26858,9 @@ function failureResult(args) {
     errors: args.errors
   };
 }
+
+// profile/cryptographer.ts
+var PROFILE_CACHE_PURPOSE = "profile-cache";
 
 // profile/per-token-mutex.ts
 init_errors3();
