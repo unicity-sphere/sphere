@@ -20198,6 +20198,9 @@ function isArchivedKey(key) {
 function isForkedKey(key) {
   return key.startsWith(FORKED_PREFIX);
 }
+function archivedKeyFromTokenId(tokenId) {
+  return `${ARCHIVED_PREFIX}${tokenId}`;
+}
 
 // profile/profile-token-storage-provider.ts
 init_oplog_entry();
@@ -22237,9 +22240,9 @@ var LifecycleManager = class {
               }
             });
           } catch (broadcastErr) {
-            const errMsg = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
+            const errMsg2 = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
             this.host.log(
-              `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg}`
+              `Pointer publish: win-broadcast build/sign failed (best-effort, ignored): ${errMsg2}`
             );
           }
         }
@@ -25731,6 +25734,472 @@ function getNetworkConfig(network = "mainnet") {
   return NETWORKS[network];
 }
 
+// profile/attach-identity.ts
+async function attachIdentityToProfileProviders(sphere, providers) {
+  sphere._withFullIdentityForProfileFactory((identity) => {
+    providers.storage.setIdentity(identity);
+    providers.tokenStorage.setIdentity(identity);
+  });
+  await providers.tokenStorage.initialize();
+}
+
+// profile/token-storage-migration.ts
+init_logger();
+var TOKEN_STORAGE_MIGRATION_MARKER_VERSION = 1;
+var MARKER_KEY_PREFIX_LEGACY_TO_PROFILE = "legacy_migration_v1_complete";
+var MARKER_KEY_PREFIX_PROFILE_TO_LEGACY = "profile_migration_v1_complete";
+var RESERVED_KEYS2 = /* @__PURE__ */ new Set([
+  "_meta",
+  "_tombstones",
+  "_outbox",
+  "_sent",
+  "_invalid",
+  "_history",
+  "_integrity",
+  "_audit",
+  "_finalizationQueue",
+  "_nametag",
+  "_nametags",
+  "_invalidatedNametags",
+  "_mintOutbox"
+]);
+async function migrateTokenStorage(opts) {
+  const startTime = Date.now();
+  const errors = [];
+  if (!opts.identity.directAddress) {
+    return failureResult({
+      addressId: "",
+      direction: opts.direction,
+      errors: [{ phase: "check-marker", error: "identity.directAddress is required" }],
+      dryRun: !!opts.dryRun,
+      durationMs: Date.now() - startTime
+    });
+  }
+  const addressId = getAddressId(opts.identity.directAddress);
+  const markerKey = markerKeyFor(opts.direction, addressId);
+  emitProgress(opts.onProgress, addressId, opts.direction, "check-marker", 0, 0);
+  if (!opts.force && opts.markerStorage) {
+    try {
+      const existing = await opts.markerStorage.get(markerKey);
+      if (existing && isHonoredMarkerPayload(existing)) {
+        logger.debug(
+          "TokenStorageMigration",
+          `marker present (${markerKey}); skipping (use force:true to override)`
+        );
+        return {
+          success: true,
+          addressId,
+          direction: opts.direction,
+          skippedDueToMarker: true,
+          dryRun: !!opts.dryRun,
+          tokensMigrated: 0,
+          archivedMigrated: 0,
+          tombstonesMigrated: 0,
+          outboxMigrated: 0,
+          sentMigrated: 0,
+          historyMigrated: 0,
+          auditMigrated: 0,
+          finalizationQueueMigrated: 0,
+          invalidMigrated: 0,
+          forksMigrated: 0,
+          spentTokensArchived: 0,
+          oracleProbeErrors: 0,
+          durationMs: Date.now() - startTime,
+          errors: []
+        };
+      }
+    } catch (err) {
+      errors.push({
+        phase: "check-marker",
+        error: `marker read failed: ${errMsg(err)} (proceeding)`
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "source-load", 0, 0);
+  let sourceData;
+  try {
+    const loaded = await opts.source.load();
+    if (!loaded.success || !loaded.data) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          {
+            phase: "source-load",
+            error: loaded.error ?? "source.load() returned no data"
+          }
+        ],
+        dryRun: !!opts.dryRun,
+        durationMs: Date.now() - startTime
+      });
+    }
+    sourceData = loaded.data;
+  } catch (err) {
+    return failureResult({
+      addressId,
+      direction: opts.direction,
+      errors: [...errors, { phase: "source-load", error: errMsg(err) }],
+      dryRun: !!opts.dryRun,
+      durationMs: Date.now() - startTime
+    });
+  }
+  const buckets = classifyBuckets(sourceData);
+  emitProgress(
+    opts.onProgress,
+    addressId,
+    opts.direction,
+    "oracle-probe",
+    0,
+    buckets.activeTokens.length
+  );
+  let spentTokensArchived = 0;
+  let oracleProbeErrors = 0;
+  const targetData = shallowCopyStorageData(sourceData);
+  if (opts.oracle) {
+    const pubkey = opts.identity.chainPubkey;
+    if (!pubkey) {
+      errors.push({
+        phase: "oracle-probe",
+        error: "oracle provided but identity.chainPubkey is missing \u2014 skipping probe"
+      });
+    } else {
+      const ORACLE_PROBE_CONCURRENCY = 4;
+      const candidates = buckets.activeTokens.map((entry) => ({
+        ...entry,
+        stateHash: extractCurrentStateHashFromTxf(entry.txf)
+      })).filter((c) => c.stateHash.length > 0);
+      for (let i = 0; i < candidates.length; i += ORACLE_PROBE_CONCURRENCY) {
+        const batch = candidates.slice(i, i + ORACLE_PROBE_CONCURRENCY);
+        const outcomes = await Promise.all(
+          batch.map(async (c) => {
+            try {
+              const spent = await opts.oracle.isSpent(pubkey, c.stateHash);
+              return { ok: true, key: c.key, txf: c.txf, spent };
+            } catch (err) {
+              return { ok: false, key: c.key, err };
+            }
+          })
+        );
+        for (const outcome of outcomes) {
+          if (!outcome.ok) {
+            oracleProbeErrors += 1;
+            logger.debug(
+              "TokenStorageMigration",
+              `oracle.isSpent threw for ${outcome.key}: ${errMsg(outcome.err)} (leaving in active slot)`
+            );
+            continue;
+          }
+          if (outcome.spent) {
+            const tokenId = outcome.key.startsWith("_") ? outcome.key.slice(1) : outcome.key;
+            const archivedKey = archivedKeyFromTokenId(tokenId);
+            const slot = targetData;
+            if (slot[archivedKey] !== void 0) {
+              logger.debug(
+                "TokenStorageMigration",
+                `oracle reported ${outcome.key} spent, but target already has ${archivedKey} \u2014 leaving in active slot to avoid clobbering existing archived payload`
+              );
+              continue;
+            }
+            slot[archivedKey] = outcome.txf;
+            delete slot[outcome.key];
+            spentTokensArchived += 1;
+          }
+        }
+      }
+    }
+  }
+  const sourceMeta = targetData._meta ?? {};
+  targetData._meta = {
+    version: sourceMeta.version ?? 1,
+    address: sourceMeta.address ?? (opts.identity.l1Address ?? ""),
+    formatVersion: sourceMeta.formatVersion ?? "2.0",
+    ipnsName: sourceMeta.ipnsName,
+    updatedAt: Date.now()
+  };
+  const finalBuckets = classifyBuckets(targetData);
+  const counts = {
+    tokensMigrated: finalBuckets.activeTokens.length,
+    archivedMigrated: finalBuckets.archivedTokens.length,
+    tombstonesMigrated: targetData._tombstones?.length ?? 0,
+    outboxMigrated: targetData._outbox?.length ?? 0,
+    sentMigrated: targetData._sent?.length ?? 0,
+    historyMigrated: targetData._history?.length ?? 0,
+    auditMigrated: targetData._audit?.length ?? 0,
+    finalizationQueueMigrated: targetData._finalizationQueue?.length ?? 0,
+    invalidMigrated: targetData._invalid?.length ?? 0,
+    forksMigrated: buckets.forksMigrated,
+    spentTokensArchived,
+    oracleProbeErrors
+  };
+  if (opts.dryRun) {
+    emitProgress(opts.onProgress, addressId, opts.direction, "complete", 0, 0);
+    return {
+      success: true,
+      addressId,
+      direction: opts.direction,
+      skippedDueToMarker: false,
+      dryRun: true,
+      ...counts,
+      durationMs: Date.now() - startTime,
+      errors
+    };
+  }
+  emitProgress(
+    opts.onProgress,
+    addressId,
+    opts.direction,
+    "target-save",
+    counts.tokensMigrated,
+    counts.tokensMigrated
+  );
+  try {
+    const saved = await opts.target.save(targetData);
+    if (!saved.success) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          { phase: "target-save", error: saved.error ?? "target.save() returned !success" }
+        ],
+        dryRun: false,
+        durationMs: Date.now() - startTime,
+        // Preserve the counts we computed pre-save so callers can see
+        // what would have been migrated.
+        counts
+      });
+    }
+  } catch (err) {
+    return failureResult({
+      addressId,
+      direction: opts.direction,
+      errors: [...errors, { phase: "target-save", error: errMsg(err) }],
+      dryRun: false,
+      durationMs: Date.now() - startTime,
+      counts
+    });
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "await-flush", 0, 0);
+  if (typeof opts.target.awaitNextFlush === "function") {
+    try {
+      await opts.target.awaitNextFlush();
+    } catch (err) {
+      return failureResult({
+        addressId,
+        direction: opts.direction,
+        errors: [
+          ...errors,
+          { phase: "await-flush", error: `awaitNextFlush failed: ${errMsg(err)}` }
+        ],
+        dryRun: false,
+        durationMs: Date.now() - startTime,
+        counts
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "stamp-marker", 0, 0);
+  if (opts.markerStorage) {
+    const markerPayload = JSON.stringify({
+      v: TOKEN_STORAGE_MIGRATION_MARKER_VERSION,
+      direction: opts.direction,
+      addressId,
+      completedAt: Date.now(),
+      counts
+    });
+    try {
+      const markerStorageWithSetEntry = opts.markerStorage;
+      if (typeof markerStorageWithSetEntry.setEntry === "function") {
+        await markerStorageWithSetEntry.setEntry(markerKey, markerPayload, "cache_index");
+      } else {
+        await opts.markerStorage.set(markerKey, markerPayload);
+      }
+    } catch (err) {
+      errors.push({
+        phase: "stamp-marker",
+        error: `marker write failed: ${errMsg(err)} (data is durable on target)`
+      });
+    }
+  }
+  emitProgress(opts.onProgress, addressId, opts.direction, "complete", 0, 0);
+  return {
+    success: true,
+    addressId,
+    direction: opts.direction,
+    skippedDueToMarker: false,
+    dryRun: false,
+    ...counts,
+    durationMs: Date.now() - startTime,
+    errors
+  };
+}
+async function migrateLegacyToProfile(opts) {
+  if (isSphereBoundOptions(opts)) {
+    return migrateLegacyToProfileFromSphereImpl(opts);
+  }
+  return migrateTokenStorage({
+    source: opts.legacy,
+    target: opts.profile,
+    direction: "legacy-to-profile",
+    identity: opts.identity,
+    oracle: opts.oracle,
+    markerStorage: opts.markerStorage,
+    onProgress: opts.onProgress,
+    dryRun: opts.dryRun,
+    force: opts.force
+  });
+}
+function isSphereBoundOptions(opts) {
+  return "sphere" in opts && opts.sphere !== void 0 && opts.sphere !== null;
+}
+async function migrateLegacyToProfileFromSphereImpl(opts) {
+  const profileProviders = await opts.profileFactory(opts.sphere, {
+    network: opts.network,
+    profileConfig: opts.profileConfig,
+    oracle: opts.oracle
+  });
+  const identityForMigration = identityForMigrationFromSphere(opts.sphere);
+  const markerStorage = opts.markerStorage === void 0 ? profileProviders.storage : opts.markerStorage;
+  const result = await migrateTokenStorage({
+    source: opts.legacy,
+    target: profileProviders.tokenStorage,
+    direction: "legacy-to-profile",
+    identity: identityForMigration,
+    oracle: opts.oracle,
+    markerStorage,
+    onProgress: opts.onProgress,
+    dryRun: opts.dryRun,
+    force: opts.force
+  });
+  return { ...result, profileProviders };
+}
+function identityForMigrationFromSphere(sphere) {
+  const publicIdentity = sphere.identity;
+  if (!publicIdentity) {
+    throw new Error(
+      "migrateLegacyToProfile({ sphere }): Sphere has no identity \u2014 call Sphere.init/create/load first"
+    );
+  }
+  return {
+    chainPubkey: publicIdentity.chainPubkey,
+    l1Address: publicIdentity.l1Address,
+    directAddress: publicIdentity.directAddress,
+    ipnsName: publicIdentity.ipnsName,
+    nametag: publicIdentity.nametag,
+    // INTENTIONAL: privateKey stays inside Sphere. The migration body
+    // does not invoke any code path that reads this field; see the
+    // identityForMigrationFromSphere docstring.
+    privateKey: ""
+  };
+}
+function isHonoredMarkerPayload(raw2) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw2);
+  } catch {
+    return true;
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    return true;
+  }
+  const obj = parsed;
+  if (obj.v === void 0) {
+    return true;
+  }
+  if (typeof obj.v !== "number" || !Number.isFinite(obj.v) || obj.v < 0) {
+    return false;
+  }
+  return obj.v <= TOKEN_STORAGE_MIGRATION_MARKER_VERSION;
+}
+function markerKeyFor(direction, addressId) {
+  const prefix = direction === "legacy-to-profile" ? MARKER_KEY_PREFIX_LEGACY_TO_PROFILE : MARKER_KEY_PREFIX_PROFILE_TO_LEGACY;
+  void STORAGE_PREFIX;
+  return `${prefix}:${addressId}`;
+}
+function classifyBuckets(data) {
+  const activeTokens = [];
+  const archivedTokens = [];
+  let forksMigrated = 0;
+  for (const [key, value] of Object.entries(data)) {
+    if (RESERVED_KEYS2.has(key)) continue;
+    if (isForkedKey(key)) {
+      if (value && typeof value === "object") forksMigrated += 1;
+      continue;
+    }
+    if (!value || typeof value !== "object") continue;
+    const txf = value;
+    if (isArchivedKey(key)) {
+      archivedTokens.push({ key, txf });
+    } else if (isTokenKey(key)) {
+      activeTokens.push({ key, txf });
+    }
+  }
+  return { activeTokens, archivedTokens, forksMigrated };
+}
+function shallowCopyStorageData(data) {
+  const out = {
+    _meta: { ...data._meta }
+  };
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "_meta") continue;
+    out[key] = value;
+  }
+  return out;
+}
+function extractCurrentStateHashFromTxf(txf) {
+  if (!txf) return "";
+  if (Array.isArray(txf.transactions) && txf.transactions.length > 0) {
+    for (let i = txf.transactions.length - 1; i >= 0; i -= 1) {
+      const tx = txf.transactions[i];
+      if (tx?.inclusionProof?.authenticator?.stateHash) {
+        return tx.inclusionProof.authenticator.stateHash;
+      }
+    }
+  }
+  if (txf.genesis?.inclusionProof?.authenticator?.stateHash) {
+    return txf.genesis.inclusionProof.authenticator.stateHash;
+  }
+  return "";
+}
+function emitProgress(cb, addressId, direction, phase, processed, total) {
+  if (!cb) return;
+  try {
+    cb({ addressId, direction, phase, processed, total });
+  } catch (err) {
+    logger.debug(
+      "TokenStorageMigration",
+      `onProgress threw (ignored): ${errMsg(err)}`
+    );
+  }
+}
+function errMsg(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function failureResult(args) {
+  const c = args.counts;
+  return {
+    success: false,
+    addressId: args.addressId,
+    direction: args.direction,
+    skippedDueToMarker: false,
+    dryRun: args.dryRun,
+    tokensMigrated: c?.tokensMigrated ?? 0,
+    archivedMigrated: c?.archivedMigrated ?? 0,
+    tombstonesMigrated: c?.tombstonesMigrated ?? 0,
+    outboxMigrated: c?.outboxMigrated ?? 0,
+    sentMigrated: c?.sentMigrated ?? 0,
+    historyMigrated: c?.historyMigrated ?? 0,
+    auditMigrated: c?.auditMigrated ?? 0,
+    finalizationQueueMigrated: c?.finalizationQueueMigrated ?? 0,
+    invalidMigrated: c?.invalidMigrated ?? 0,
+    forksMigrated: c?.forksMigrated ?? 0,
+    spentTokensArchived: c?.spentTokensArchived ?? 0,
+    oracleProbeErrors: c?.oracleProbeErrors ?? 0,
+    durationMs: args.durationMs,
+    errors: args.errors
+  };
+}
+
 // profile/node.ts
 function createNodeProfileProviders(config) {
   const network = config.network;
@@ -25774,8 +26243,30 @@ function createNodeProfileProviders(config) {
   );
   return { storage, tokenStorage };
 }
+async function createNodeProfileProvidersFromSphere(sphere, config) {
+  const providers = createNodeProfileProviders({
+    network: config.network,
+    dataDir: config.dataDir,
+    profileConfig: config.profileConfig,
+    oracle: config.oracle
+  });
+  await attachIdentityToProfileProviders(sphere, providers);
+  return providers;
+}
+async function migrateLegacyToProfileNode(opts) {
+  const { dataDir, ...rest } = opts;
+  return migrateLegacyToProfile({
+    ...rest,
+    profileFactory: async (sphere, config) => createNodeProfileProvidersFromSphere(sphere, {
+      ...config,
+      dataDir
+    })
+  });
+}
 export {
-  createNodeProfileProviders
+  createNodeProfileProviders,
+  createNodeProfileProvidersFromSphere,
+  migrateLegacyToProfileNode
 };
 /*! Bundled license information:
 

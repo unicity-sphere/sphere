@@ -14394,6 +14394,355 @@ declare class PaymentsModule {
 }
 
 /**
+ * Shared transport address resolver.
+ *
+ * Resolves any valid Unicity address (@nametag, DIRECT://, PROXY://, hex pubkey)
+ * to a transport-level pubkey for messaging and token delivery.
+ *
+ * Used by both CommunicationsModule (DMs) and PaymentsModule (token transfers)
+ * to ensure a single resolution path — no code duplication.
+ *
+ * Includes an in-memory cache (TTL-based) to avoid redundant network lookups.
+ */
+interface ResolvedTransport {
+    /** Transport-level pubkey (e.g., 32-byte x-only hex for Nostr) */
+    pubkey: string;
+    /** Unicity ID (nametag) if known */
+    nametag?: string;
+}
+interface TransportAddressResolver {
+    /**
+     * Resolve any Unicity address to a transport pubkey.
+     *
+     * Accepts: @nametag, DIRECT://..., PROXY://..., compressed hex (66 chars),
+     * x-only hex (64 chars).
+     *
+     * Results are cached to avoid redundant network round-trips.
+     */
+    resolve(address: string): Promise<ResolvedTransport>;
+    /**
+     * Warm the cache for one or more addresses without sending a message.
+     * Useful before a batch of DM or token transfer operations.
+     */
+    preResolve(...addresses: string[]): Promise<void>;
+    /**
+     * Invalidate a specific cache entry or the entire cache.
+     */
+    invalidateCache(address?: string): void;
+}
+
+/**
+ * Communications Module
+ * Platform-independent messaging operations
+ */
+
+interface CommunicationsModuleConfig {
+    /** Auto-save messages */
+    autoSave?: boolean;
+    /** Max messages in memory (global cap) */
+    maxMessages?: number;
+    /** Max messages per conversation (default: 200) */
+    maxPerConversation?: number;
+    /** Enable read receipts */
+    readReceipts?: boolean;
+    /** Cache messages in memory and storage (default: true).
+     *  When false, DMs flow through onDirectMessage handlers and events
+     *  but are never stored. Useful for anonymous/ephemeral agents.
+     *  Note: deduplication is skipped when caching is disabled, so duplicate
+     *  events may occur if the relay delivers the same message twice. */
+    cacheMessages?: boolean;
+}
+interface ConversationPage {
+    messages: DirectMessage[];
+    hasMore: boolean;
+    oldestTimestamp: number | null;
+}
+interface GetConversationPageOptions {
+    /** Max messages to return (default: 20) */
+    limit?: number;
+    /** Return messages older than this timestamp */
+    before?: number;
+}
+interface CommunicationsModuleDependencies {
+    identity: FullIdentity;
+    storage: StorageProvider;
+    transport: TransportProvider;
+    emitEvent: <T extends SphereEventType>(type: T, data: SphereEventMap[T]) => void;
+    /**
+     * Optional CID-reference store for OpLog fat-data migration
+     * (PROFILE-CID-REFERENCES.md §8.4). When present, DM arrays are pinned
+     * to IPFS and the OpLog holds a small ref envelope instead of the fat
+     * inline JSON. When absent, falls back to legacy inline storage.
+     */
+    cidRefStore?: CidRefStore;
+}
+declare class CommunicationsModule {
+    private config;
+    private deps;
+    private messages;
+    private broadcasts;
+    private unsubscribeMessages;
+    private unsubscribeComposing;
+    private broadcastSubscriptions;
+    private dmHandlers;
+    private replayedHandlers;
+    private composingHandlers;
+    private broadcastHandlers;
+    private initializedAt;
+    /** Shared transport address resolver (with cache). Created during initialize(). */
+    private transportResolver;
+    constructor(config?: CommunicationsModuleConfig);
+    /**
+     * Initialize module with dependencies
+     */
+    initialize(deps: CommunicationsModuleDependencies): void;
+    /**
+     * Load messages from storage.
+     * Uses per-address key (STORAGE_KEYS_ADDRESS.MESSAGES) which is automatically
+     * scoped by LocalStorageProvider to sphere_DIRECT_xxx_yyy_messages.
+     * Falls back to legacy global 'direct_messages' key for migration.
+     */
+    load(): Promise<void>;
+    /**
+     * Parse the raw KV payload for `<addr>.messages`.
+     *
+     * Dual-read per PROFILE-CID-REFERENCES.md §6:
+     *   - If the payload is a CID ref envelope → fetch content from IPFS
+     *     via `cidRefStore`. Errors propagate with typed codes.
+     *   - If no cidRefStore is injected but a ref is found → throw typed
+     *     `ProfileError('CID_REF_UNREADABLE')`. Silent fallback would mean
+     *     silently losing all stored DMs for this address.
+     *   - Otherwise parse as legacy inline JSON with narrow SyntaxError catch.
+     */
+    private parseMessagesPayload;
+    /**
+     * Cleanup resources
+     */
+    destroy(): void;
+    /**
+     * Send direct message
+     */
+    sendDM(recipient: string, content: string): Promise<DirectMessage>;
+    /**
+     * Get conversation with peer.
+     * Normalizes the key to x-only format so lookups work regardless of whether
+     * the caller passes a compressed (02.../03...) or x-only (64-char) pubkey.
+     */
+    getConversation(peerPubkey: string): DirectMessage[];
+    /**
+     * Get all conversations grouped by peer.
+     * Keys are normalized to x-only format so compressed and x-only pubkeys
+     * map to the same conversation.
+     */
+    getConversations(): Map<string, DirectMessage[]>;
+    /**
+     * Mark messages as read
+     */
+    markAsRead(messageIds: string[]): Promise<void>;
+    /**
+     * Get unread count
+     */
+    getUnreadCount(peerPubkey?: string): number;
+    /**
+     * Get a page of messages from a conversation (for lazy loading).
+     * Returns messages in chronological order with a cursor for loading older messages.
+     */
+    getConversationPage(peerPubkey: string, options?: GetConversationPageOptions): ConversationPage;
+    /**
+     * Delete all messages in a conversation with a peer
+     */
+    deleteConversation(peerPubkey: string): Promise<void>;
+    /**
+     * Send typing indicator to a peer
+     */
+    sendTypingIndicator(peerPubkey: string): Promise<void>;
+    /**
+     * Send a composing indicator to a peer.
+     * Fire-and-forget — does not save to message history.
+     */
+    sendComposingIndicator(recipientPubkeyOrNametag: string): Promise<void>;
+    /**
+     * Subscribe to incoming composing indicators
+     */
+    onComposingIndicator(handler: (indicator: ComposingIndicator) => void): () => void;
+    /**
+     * Subscribe to incoming DMs.
+     *
+     * Replay contract: cached messages that haven't yet been delivered to
+     * `handler` are replayed SYNCHRONOUSLY inside this call, before the
+     * function returns. This is load-bearing for two callers:
+     *   - modules loaded after `Sphere.init` (SwapModule, AccountingModule)
+     *     rely on the replay completing before their `load()` returns so
+     *     they can recover state without losing DMs that arrived while the
+     *     module was being constructed;
+     *   - E2E test helpers distinguish replays from live deliveries by
+     *     ignoring handler invocations that occur before this function
+     *     returns. Changing replay to be asynchronous (deferred via
+     *     queueMicrotask, setImmediate, etc.) would silently break those
+     *     callers — keep it synchronous and update this comment + the
+     *     `synchronous replay` unit test in CommunicationsModule.selffilter
+     *     if the contract ever has to change.
+     *
+     * Self-filter (#155): handleIncomingMessage skips self-sent messages
+     * before calling handlers (`handlers` is the "incoming only" contract,
+     * see CommunicationsModule.selffilter.test.ts). The cache holds BOTH
+     * sent and received messages, so the replay loop must apply the same
+     * filter; otherwise newly registered handlers see their own outbound
+     * messages — exactly the bug that surfaced in #155 dm-nip17 tests.
+     */
+    onDirectMessage(handler: (message: DirectMessage) => void): () => void;
+    /**
+     * Publish broadcast message
+     */
+    broadcast(content: string, tags?: string[]): Promise<BroadcastMessage>;
+    /**
+     * Subscribe to broadcasts with tags
+     */
+    subscribeToBroadcasts(tags: string[]): () => void;
+    /**
+     * Get broadcasts
+     */
+    getBroadcasts(limit?: number): BroadcastMessage[];
+    /**
+     * Subscribe to incoming broadcasts
+     */
+    onBroadcast(handler: (message: BroadcastMessage) => void): () => void;
+    /**
+     * Resolve a peer's nametag by their transport pubkey.
+     * Uses transport.resolveTransportPubkeyInfo() for live lookup from relay binding events.
+     * Returns undefined if transport doesn't support resolution or peer has no nametag.
+     */
+    resolvePeerNametag(peerPubkey: string): Promise<string | undefined>;
+    private handleIncomingMessage;
+    private handleComposingIndicator;
+    private handleIncomingBroadcast;
+    /**
+     * Memoized plaintext + CID ref for the last messages pin. See
+     * `_lastPinnedV5Json` in PaymentsModule for rationale: AES-GCM uses
+     * random IVs so re-pinning identical plaintext produces a different CID.
+     * We'd rather write the cached ref than thrash the IPFS gateway.
+     */
+    private _lastPinnedMessagesJson;
+    private _lastPinnedMessagesRef;
+    /**
+     * Single-flight chain for save() — DMs arrive over the Nostr subscription
+     * and can trigger multiple concurrent save() invocations (one per event).
+     * Without serialization, two concurrent saves both read the same Map
+     * snapshot and the second clobbers the first. The chain mirrors
+     * PaymentsModule._saveChain / _outboxChain discipline.
+     *
+     * Caveat: guarantees ORDERING, not atomicity — a failing save doesn't
+     * roll back state but also doesn't block the next save.
+     */
+    private _saveChain;
+    /**
+     * W11 classification sentinel passed through `save()` → `_doSave()`.
+     *
+     * SPEC §10.2.3 requires each OpLog write to carry an originated tag that
+     * matches the intent of the local author at the site of the write. DMs
+     * introduce a directional wrinkle (SPEC §10.2.3.1): outgoing sends are
+     * user actions (`dm_send`, originated='user'), while an incoming receipt
+     * is ORIGIN-SIDE `'replicated'` — the ONE place in the codebase where
+     * `replicated` applies at call time rather than via receiver-authority
+     * downgrade.
+     *
+     * Because `ProfileStorageProvider.setEntry` validates via
+     * `assertOriginTagLocal` (which rejects `replicated`), we route the
+     * incoming-DM save through plain `storage.set` instead (the `'raw'`
+     * sentinel below). The read path in `OrbitDbAdapter.getEntry` forces
+     * replicated-downgrade for keys NOT in `localAuthoredKeys` — i.e., for
+     * peers who see the replicated entry. Locally, the stored envelope
+     * defaults to `cache_index/system`; that classification is benign for
+     * a snapshot that mixes directions, and receiver-authority downgrade
+     * makes it correct for peers either way.
+     *
+     * Cache/metadata writes (read-state markers, legacy migration, etc.)
+     * are passed as `'cache_index'` — system maintenance of the messages
+     * snapshot rather than a user action.
+     */
+    private save;
+    /**
+     * Write the current messages Map — via CID reference when `cidRefStore`
+     * is injected, inline JSON otherwise. PROFILE-CID-REFERENCES.md §8.4.
+     *
+     * Note on pattern choice: §8.4 specifies Pattern B (index of per-message
+     * CIDs). This implementation uses Pattern A (single CID for the whole
+     * array) for parity with PaymentsModule's migration. Pattern B is a
+     * future Phase-2 optimization — both share the same OpLog envelope
+     * shape, so the migration path from A → B is transparent to peers.
+     * Pattern A is adequate for typical wallets (<1000 DMs per address);
+     * Pattern B matters once conversations get very long.
+     *
+     * W11 `entryType` dispatch (see `save()` docstring):
+     *   - 'dm_send'     → setStorageEntry (outgoing user action)
+     *   - 'cache_index' → setStorageEntry (system maintenance)
+     *   - 'raw'         → plain storage.set (incoming DM — read-time
+     *                     downgrade supplies the 'replicated' tag to peers;
+     *                     the locally stored envelope defaults to
+     *                     cache_index/system, which is benign for a snapshot
+     *                     that mixes directions).
+     */
+    private _doSave;
+    /**
+     * Single write funnel for the `<addr>.messages` key. Dispatches between
+     * `setStorageEntry` (classified writes) and plain `storage.set` (raw
+     * writes used for incoming DM receipts — see the `save()` docstring for
+     * the receiver-authority model). Keeping the dispatch on one line of
+     * code avoids four-way duplication in `_doSave()`.
+     */
+    private writeMessagesKey;
+    /**
+     * W11 originated-tag helper (SPEC §10.2.3). Mirrors
+     * `PaymentsModule.setStorageEntry` — routes through
+     * `storage.setEntry(key, value, entryType)` when the provider implements
+     * the envelope-typed API, falls back to plain `set()` otherwise.
+     *
+     * Narrow union: `'dm_send' | 'cache_index'`. The third class of write
+     * for this module — an incoming DM received from a peer — is NOT routed
+     * through this helper (see `writeMessagesKey` and `save()` docstring).
+     *
+     * A once-per-provider-class debug log on fallback surfaces silent loss
+     * of W11 stamping during a mixed-provider migration.
+     */
+    private setStorageEntry;
+    /** Per-class dedup set for the W11 fallback log (see setStorageEntry). */
+    private static _w11FallbackLogged;
+    private pruneIfNeeded;
+    /**
+     * Resolve a Unicity address to a transport-level pubkey for DM delivery.
+     * Delegates to the shared TransportAddressResolver (with cache).
+     */
+    private resolveRecipient;
+    /**
+     * Pre-resolve a Unicity address to warm the transport address cache.
+     *
+     * Call before a batch of DM operations to avoid resolution latency
+     * on the first sendDM() call. Subsequent calls use the cache.
+     *
+     * @param address - Any valid Unicity address (@nametag, DIRECT://, PROXY://, hex pubkey)
+     * @returns The resolved transport pubkey (caller should NOT use this — it's transport-specific)
+     */
+    preResolve(address: string): Promise<string>;
+    /**
+     * Invalidate the resolution cache for a specific address or all entries.
+     * Use after a known key rotation or nametag transfer.
+     */
+    invalidateResolveCache(address?: string): void;
+    /**
+     * Get the shared transport address resolver (for use by other modules
+     * that need the same resolution + caching, e.g., PaymentsModule).
+     */
+    getTransportResolver(): TransportAddressResolver | null;
+    private ensureInitialized;
+    /**
+     * Normalize a pubkey to x-only (64-char lowercase hex) for consistent lookups.
+     * Compressed keys (02.../03... 66-char) are stripped to x-only.
+     * Already x-only keys are lowercased. Non-hex strings pass through unchanged.
+     */
+    static _normalizeKey(key: string): string;
+}
+
+/**
  * Accounting Module Type Definitions
  *
  * All types for the AccountingModule: invoices, status, receipts,
@@ -14402,6 +14751,240 @@ declare class PaymentsModule {
  * @see docs/ACCOUNTING-SPEC.md
  */
 
+/**
+ * A fungible coin entry — same [coinId, amount] tuple used in TxfGenesisData.coinData.
+ *
+ * Examples: ["UCT", "1000000"], ["USDU", "500000000"], ["ALPHA", "200000"]
+ *
+ * This is the EXISTING format from TxfGenesisData.coinData: [string, string][].
+ * Invoice targets reuse this exact type for consistency.
+ */
+type CoinEntry = [string, string];
+/**
+ * An NFT entry — placeholder for future NFT support (not yet implemented in Sphere SDK).
+ * Same type will be used in both token genesis and invoice targets when NFTs are added.
+ */
+interface NFTEntry {
+    /** Unique NFT token ID (64-char hex) */
+    readonly tokenId: string;
+    /** NFT type identifier (64-char hex, optional) */
+    readonly tokenType?: string;
+}
+/**
+ * A single requested asset in an invoice target.
+ * Wraps either a CoinEntry (fungible) or NFTEntry (non-fungible).
+ * Exactly one of `coin` or `nft` must be set.
+ */
+interface InvoiceRequestedAsset {
+    /** Fungible token request — same [coinId, amount] tuple as genesis coinData */
+    readonly coin?: CoinEntry;
+    /** NFT request (placeholder — not yet implemented) */
+    readonly nft?: NFTEntry;
+}
+/**
+ * A payment target within an invoice.
+ * Each target specifies a destination address and the assets it should receive.
+ */
+interface InvoiceTarget {
+    /** Destination address (DIRECT://... format) */
+    readonly address: string;
+    /** Requested assets for this address */
+    readonly assets: InvoiceRequestedAsset[];
+}
+/**
+ * Invoice terms — the payload serialized into the token's genesis.data.tokenData field.
+ * This is the complete invoice definition. The token IS the invoice.
+ */
+interface InvoiceTerms {
+    /**
+     * Chain pubkey of the invoice creator.
+     * OPTIONAL — when omitted, the invoice is anonymous.
+     * This field is informational only — it does not gate any authorization.
+     * All explicit close/cancel authorization is target-based.
+     */
+    readonly creator?: string;
+    /**
+     * Creation timestamp (ms). Set to the creator's local clock at mint time
+     * (Date.now() when createInvoice() is called), NOT the aggregator's timestamp.
+     * The aggregator inclusion proof has its own timestamp for ordering.
+     * This field is informational — used for display and dueDate calculations.
+     */
+    readonly createdAt: number;
+    /** Optional due date (ms timestamp). Expiration does NOT invalidate the invoice. */
+    readonly dueDate?: number;
+    /** Optional memo — free text or URL describing the reason */
+    readonly memo?: string;
+    /**
+     * Optional ordered list of delivery method URLs, highest priority first.
+     *
+     * PLACEHOLDER — not used by the current SDK. The SDK currently uses
+     * the Nostr-based delivery network exclusively. When delivery method
+     * support is implemented, a payer should attempt delivery to the first
+     * URL, falling back to subsequent URLs on failure.
+     *
+     * Examples: ["https://pay.example.com/inv/abc", "wss://relay.example.com"]
+     */
+    readonly deliveryMethods?: string[];
+    /** Payment targets — at least one required */
+    readonly targets: InvoiceTarget[];
+}
+/**
+ * Request to create a new invoice.
+ * Passed to `accounting.createInvoice()`.
+ */
+interface CreateInvoiceRequest {
+    /** Payment targets — at least one required */
+    readonly targets: InvoiceTarget[];
+    /** Optional due date (ms timestamp). */
+    readonly dueDate?: number;
+    /** Optional memo — free text or URL describing the reason for the invoice */
+    readonly memo?: string;
+    /**
+     * Optional ordered list of delivery method URLs, highest priority first.
+     * PLACEHOLDER — not used by current SDK (Nostr delivery only).
+     */
+    readonly deliveryMethods?: string[];
+    /**
+     * Whether to include the creator's chain pubkey in the invoice terms.
+     * Default: true. Set to false to create an anonymous invoice.
+     * Anonymous invoices follow the same authorization: only targets can close or cancel.
+     */
+    readonly anonymous?: boolean;
+}
+/**
+ * Computed invoice state.
+ *
+ * For non-terminal states (OPEN, PARTIAL, COVERED, EXPIRED): always derived
+ * on-demand from transaction history. Never stored.
+ *
+ * For terminal states (CLOSED, CANCELLED): balances are frozen and persisted.
+ * Dynamic recomputation stops.
+ *
+ * IMPORTANT: Balances are computed from memo-referenced transfers only.
+ * Physical token inventory (whether tokens are still held) is irrelevant.
+ */
+type InvoiceState = 'OPEN' | 'PARTIAL' | 'COVERED' | 'CLOSED' | 'CANCELLED' | 'EXPIRED';
+/**
+ * Balance breakdown for a single sender contributing to a target:coinId.
+ * Tracks how much this sender has forwarded and how much has been returned to them.
+ */
+interface InvoiceSenderBalance {
+    /**
+     * Effective sender address (DIRECT:// format).
+     * This is the per-sender balance key: `refundAddress ?? senderAddress` from the
+     * transfer's InvoiceTransferRef. Refund address takes priority — if the payer
+     * provided a refund address, that IS their identity for per-sender keying,
+     * regardless of whether the sender's predicate is masked or unmasked.
+     * Use `isRefundAddress` to distinguish.
+     */
+    readonly senderAddress: string;
+    /**
+     * True when `senderAddress` actually contains a refund address (the sender
+     * provided `inv.ra`). False or undefined when no refund address was provided
+     * and senderAddress was derived from the sender's predicate.
+     */
+    readonly isRefundAddress?: boolean;
+    /**
+     * Sender's chain pubkey (if known). Null when the sender's predicate was
+     * masked (identity unresolvable on-chain). May be present even when
+     * `isRefundAddress` is true — an unmasked sender who provides a refund
+     * address has both a resolvable pubkey and isRefundAddress=true.
+     */
+    readonly senderPubkey?: string;
+    /** Sender's nametag (if known) */
+    readonly senderNametag?: string;
+    /**
+     * All unique contact info entries provided by the sender across transfers
+     * (from on-chain TransferMessagePayload `inv.ct`).
+     *
+     * ALWAYS present (never undefined). Empty array if no contacts were provided.
+     * Contacts are accumulated from all transfers by this effective sender —
+     * different transfers may carry different contact info, and all unique entries
+     * are preserved up to a maximum of 10 per sender (storage amplification defense).
+     * Deduplication key: `${address}\0${url ?? ''}` (normalized, not JSON.stringify —
+     * avoids key-ordering sensitivity). Two entries with the same address but
+     * different url values are both kept.
+     *
+     * Contact is informational only — does not affect balance computation or per-sender keying.
+     *
+     * SECURITY: contact.address is self-asserted by the payer. Applications MUST NOT
+     * trust it as identity verification. A malicious payer can set any DIRECT:// address
+     * as their contact. Use out-of-band verification for identity-sensitive operations.
+     */
+    readonly contacts: ReadonlyArray<{
+        address: string;
+        url?: string;
+    }>;
+    /** Total forwarded by this sender for this target:coinId */
+    readonly forwardedAmount: string;
+    /** Total returned to this sender for this target:coinId (includes :B, :RC, :RX) */
+    readonly returnedAmount: string;
+    /** Net balance: max(0, forwardedAmount - returnedAmount) — the max returnable to this sender */
+    readonly netBalance: string;
+}
+/**
+ * Detailed status of a single coin asset within a target.
+ *
+ * Balance formula:
+ *   coveredAmount = sum of all forward payment amounts referencing this invoice for this target:coinId
+ *   returnedAmount = sum of all back/return payment amounts referencing this invoice for this target:coinId
+ *                    (includes :B, :RC, and :RX directions)
+ *   netCoveredAmount = max(0, coveredAmount - returnedAmount)   // defensive floor; validation prevents negative
+ *   surplusAmount = max(0, netCoveredAmount - requestedAmount) // overpayment beyond requested
+ *
+ * Note: These balances reflect memo-referenced transfers only.
+ * Whether the underlying tokens are still in the wallet is irrelevant.
+ */
+interface InvoiceCoinAssetStatus {
+    /** The coin entry from the invoice target: [coinId, amount] */
+    readonly coin: CoinEntry;
+    /** Total forward payments for this asset (smallest units) */
+    readonly coveredAmount: string;
+    /** Total back/return payments for this asset (smallest units, includes :B, :RC, :RX) */
+    readonly returnedAmount: string;
+    /** Net covered = coveredAmount - returnedAmount (validation ensures non-negative; max(0,...) as defensive floor) */
+    readonly netCoveredAmount: string;
+    /** Whether requested amount is fully met (netCovered >= requested) */
+    readonly isCovered: boolean;
+    /** Surplus amount if overpaid (netCovered - requested), '0' if not overpaid */
+    readonly surplusAmount: string;
+    /** Whether all related tokens are confirmed (full proof chain) */
+    readonly confirmed: boolean;
+    /** Individual transfers contributing to this asset */
+    readonly transfers: InvoiceTransferRef[];
+    /** Per-sender balance breakdown for this target:coinId */
+    readonly senderBalances: InvoiceSenderBalance[];
+}
+/**
+ * Status of a single NFT line item (placeholder — not implemented in v1).
+ * In v1, `received` is always `false` and `confirmed` is always `false`.
+ * NFT coverage is excluded from the target `isCovered` check until NFT
+ * matching logic is implemented. The `isCovered` computation in §5.1 step 6
+ * considers only coin assets in v1.
+ */
+interface InvoiceNFTAssetStatus {
+    /** The NFT entry from the invoice target */
+    readonly nft: NFTEntry;
+    /** Whether the NFT has been received (always false in v1) */
+    readonly received: boolean;
+    /** Whether the received token is confirmed (always false in v1) */
+    readonly confirmed: boolean;
+}
+/**
+ * Detailed status of a single target within an invoice.
+ */
+interface InvoiceTargetStatus {
+    /** Target destination address */
+    readonly address: string;
+    /** Per-coin-asset status */
+    readonly coinAssets: InvoiceCoinAssetStatus[];
+    /** Per-NFT-asset status (placeholder) */
+    readonly nftAssets: InvoiceNFTAssetStatus[];
+    /** Whether all assets (coins and NFTs) for this target are covered */
+    readonly isCovered: boolean;
+    /** Whether all related tokens are confirmed */
+    readonly confirmed: boolean;
+}
 /**
  * Reference to a transfer that contributes to (or is related to) an invoice.
  *
@@ -14480,6 +15063,102 @@ interface InvoiceTransferRef {
 interface IrrelevantTransfer extends InvoiceTransferRef {
     /** Why this transfer is irrelevant */
     readonly reason: 'unknown_address' | 'unknown_asset' | 'unknown_address_and_asset' | 'self_payment' | 'no_coin_data' | 'unauthorized_return';
+}
+/**
+ * Complete computed status of an invoice.
+ * Returned by `accounting.getInvoiceStatus()`.
+ *
+ * For non-terminal invoices: computed fresh from transaction history on every call.
+ * For terminal invoices (CLOSED, CANCELLED): returns persisted frozen balances.
+ */
+interface InvoiceStatus {
+    /** Invoice token ID */
+    readonly invoiceId: string;
+    /** Current computed state */
+    readonly state: InvoiceState;
+    /** Per-target breakdown */
+    readonly targets: InvoiceTargetStatus[];
+    /** Transfers referencing this invoice but not matching any target/asset */
+    readonly irrelevantTransfers: IrrelevantTransfer[];
+    /** Total forward payments across all targets, keyed by coinId */
+    readonly totalForward: Record<string, string>;
+    /** Total back/return payments across all targets, keyed by coinId */
+    readonly totalBack: Record<string, string>;
+    /**
+     * Whether ALL related tokens are confirmed.
+     * ALWAYS dynamically derived from PaymentsModule — never stored.
+     * For terminal invoices, this is computed by checking related token
+     * confirmation status at query time, not frozen at termination.
+     * This ensures tokens confirmed after termination are reflected.
+     */
+    readonly allConfirmed: boolean;
+    /** Timestamp of most recent related transfer */
+    readonly lastActivityAt: number;
+    /** Whether this is an explicit close (true) or implicit (false). Only meaningful when state === CLOSED. */
+    readonly explicitClose?: boolean;
+}
+/**
+ * Result of invoice creation.
+ */
+interface CreateInvoiceResult {
+    /** Whether the invoice was successfully minted */
+    readonly success: boolean;
+    /** Invoice token ID (if successful) */
+    readonly invoiceId?: string;
+    /** Invoice token in TXF format (if successful) */
+    readonly token?: TxfToken;
+    /** Parsed invoice terms (if successful) */
+    readonly terms?: InvoiceTerms;
+    /** Error message (if failed) */
+    readonly error?: string;
+}
+/**
+ * Options for listing invoices.
+ */
+interface GetInvoicesOptions {
+    /** Filter by computed state */
+    readonly state?: InvoiceState | InvoiceState[];
+    /** Filter: only invoices created by this wallet */
+    readonly createdByMe?: boolean;
+    /** Filter: only invoices where this wallet is a target */
+    readonly targetingMe?: boolean;
+    /** Limit number of results */
+    readonly limit?: number;
+    /** Offset for pagination */
+    readonly offset?: number;
+    /** Sort order. When sortBy is 'dueDate', invoices without a dueDate sort last (null-last). */
+    readonly sortBy?: 'createdAt' | 'dueDate';
+    readonly sortOrder?: 'asc' | 'desc';
+}
+/**
+ * Lightweight invoice reference returned by getInvoices().
+ * Contains the token ID and parsed terms. Status is NOT included --
+ * call getInvoiceStatus() per invoice when needed.
+ */
+interface InvoiceRef {
+    /** Invoice token ID */
+    readonly invoiceId: string;
+    /** Parsed invoice terms from token genesis */
+    readonly terms: InvoiceTerms;
+    /**
+     * Whether this wallet created the invoice (based on terms.creator matching identity).
+     * For anonymous invoices (terms.creator is undefined), this is always false — even
+     * for the wallet that created the invoice.
+     */
+    readonly isCreator: boolean;
+    /** Whether this invoice has been locally cancelled */
+    readonly cancelled: boolean;
+    /** Whether this invoice has been locally closed (explicitly or implicitly via all-covered+confirmed) */
+    readonly closed: boolean;
+}
+/**
+ * Auto-return settings for terminated invoices.
+ */
+interface AutoReturnSettings {
+    /** Global auto-return flag for all terminated invoices */
+    readonly global: boolean;
+    /** Per-invoice auto-return overrides (invoiceId -> enabled) */
+    readonly perInvoice: Record<string, boolean>;
 }
 /**
  * Structured payload inside a receipt DM content field.
@@ -14608,7 +15287,427 @@ interface IncomingCancellationNotice {
     /** Timestamp when the DM was received */
     readonly receivedAt: number;
 }
+/**
+ * Configuration for AccountingModule.
+ */
+interface AccountingModuleConfig {
+    /** Enable debug logging */
+    debug?: boolean;
+    /**
+     * Whether to auto-terminate (close/cancel) the local invoice when
+     * receiving an auto-return transfer with :RC or :RX direction.
+     * Default: false (opt-in).
+     *
+     * NOTE: This is a construction-time config, NOT persisted to storage.
+     * The value is set when `createAccountingModule()` is called and remains
+     * fixed for the lifetime of the module instance. Changing this setting
+     * requires restarting the module with a new config.
+     */
+    autoTerminateOnReturn?: boolean;
+    /**
+     * Maximum number of coinData entries processed per token transaction.
+     * Defense against adversarial tokens with thousands of coin types.
+     * Default: 50. In practice, tokens carry 1-3 coin types.
+     */
+    maxCoinDataEntries?: number;
+}
+/**
+ * Dependencies injected into AccountingModule.
+ * Follows the same pattern as MarketModuleDependencies.
+ */
+interface AccountingModuleDependencies {
+    /** PaymentsModule instance (read access to history/tokens, send() for auto-return) */
+    payments: PaymentsModule;
+    /** Token storage for invoice tokens (same provider as currency/nametag tokens) */
+    tokenStorage: TokenStorageProvider;
+    /** Oracle for minting invoice tokens (also provides stateTransitionClient via getStateTransitionClient()) */
+    oracle: OracleProvider;
+    /**
+     * Trust base for aggregator proof verification.
+     * Required by waitInclusionProof() and Token.mint() during invoice minting.
+     * Follows the same pattern as NametagMinterConfig.trustBase.
+     * Obtained via the oracle/aggregator configuration at init time.
+     */
+    trustBase: unknown;
+    /** Current wallet identity */
+    identity: FullIdentity;
+    /**
+     * All tracked wallet addresses — used for target check in close/cancel/return.
+     * Target validation compares TrackedAddress.directAddress against
+     * InvoiceTarget.address (both are DIRECT:// format). Checks all HD addresses,
+     * not just the current one.
+     */
+    getActiveAddresses: () => TrackedAddress[];
+    /** Event emitter (from Sphere) */
+    emitEvent: <T extends SphereEventType>(type: T, data: SphereEventMap[T]) => void;
+    /**
+     * Event subscriber (from Sphere) — allows the module to listen to events
+     * fired by other modules (PaymentsModule 'transfer:incoming', 'transfer:confirmed',
+     * 'history:updated') without holding a reference to the Sphere instance itself.
+     * Returns an unsubscribe function.
+     */
+    on: <T extends SphereEventType>(type: T, handler: (data: SphereEventMap[T]) => void) => () => void;
+    /** General storage for cancelled/closed sets, frozen balances, auto-return settings */
+    storage: StorageProvider;
+    /**
+     * Optional CommunicationsModule instance for sending/receiving receipt and
+     * cancellation notice DMs.
+     * When provided:
+     * - `sendInvoiceReceipts()` and `sendCancellationNotices()` send DMs via `sendDM()`
+     * - Incoming DMs are monitored for `invoice_receipt:` and `invoice_cancellation:`
+     *   prefixes (payer-side detection of receipts and cancellation notices)
+     * When omitted:
+     * - Both methods throw `COMMUNICATIONS_UNAVAILABLE`
+     * - Payer-side receipt and cancellation notice detection is disabled (no subscription)
+     */
+    communications?: CommunicationsModule;
+    /**
+     * Optional CID-reference store for OpLog fat-data migration
+     * (PROFILE-CID-REFERENCES.md §8.3). When present, invoice ledger entries
+     * are pinned to IPFS per-invoice and the OpLog stores a small ref envelope
+     * instead of the fat inline JSON. When absent, falls back to legacy inline
+     * storage.
+     */
+    cidRefStore?: CidRefStore;
+    /**
+     * Optional CAR publisher used by {@link AccountingModule.deliverInvoice}
+     * when the assembled UXF bundle exceeds the inline CAR ceiling. Same
+     * contract as {@link PaymentsModuleDependencies.publishToIpfs} — returns
+     * a CID that MUST equal `extractCarRootCid(carBytes)`. When absent,
+     * deliverInvoice falls back to inline-only and rejects oversized
+     * bundles with a typed error.
+     */
+    publishToIpfs?: (carBytes: Uint8Array) => Promise<{
+        cid: string;
+    }>;
+    /**
+     * Optional IPFS gateway list forwarded into the `uxf-cid` envelope's
+     * informational `gateways` hint. Same role as
+     * {@link PaymentsModuleDependencies.cidFetchGateways}. Empty/undefined
+     * sends no hint; the receiver's own gateway list is authoritative.
+     */
+    cidFetchGateways?: ReadonlyArray<string>;
+}
+/**
+ * Parsed invoice reference from a transfer memo.
+ */
+interface InvoiceMemoRef {
+    /** Invoice token ID (64-char hex) */
+    readonly invoiceId: string;
+    /** Payment direction (matches InvoiceTransferRef.paymentDirection values) */
+    readonly paymentDirection: 'forward' | 'back' | 'return_closed' | 'return_cancelled';
+    /** Optional free text after the structured prefix */
+    readonly freeText?: string;
+}
+/**
+ * Parameters for payInvoice().
+ */
+interface PayInvoiceParams {
+    /** Which target to pay (index into invoice terms.targets) */
+    readonly targetIndex: number;
+    /** Which asset within that target (index into target.assets). Defaults to 0. */
+    readonly assetIndex?: number;
+    /**
+     * Amount to pay in smallest units (defaults to remaining needed to cover the asset).
+     * Same convention as TransferRequest.amount.
+     */
+    readonly amount?: string;
+    /** Optional free text appended to memo */
+    readonly freeText?: string;
+    /**
+     * Optional refund address (DIRECT:// format) embedded in the on-chain
+     * TransferMessagePayload. Provides an explicit return destination for the
+     * payer. Essential for masked-predicate senders (one-time address that
+     * becomes unresolvable), but also usable by unmasked senders who want
+     * returns routed to a different address. When present, takes priority
+     * over senderAddress for per-sender balance keying.
+     *
+     * This address is NOT included in the transport memo (privacy: transport
+     * memos are human-readable). It is only recorded on-chain in the
+     * structured `inv.ra` field of the TransferMessagePayload.
+     *
+     * Privacy note: while the refund address is not in the memo, it IS the
+     * recipient of auto-return transfers and therefore visible in the transport
+     * layer's addressing metadata (Nostr NIP-04/NIP-17 envelope), as with any
+     * transfer recipient.
+     *
+     * Auto-return destination priority: refundAddress → senderAddress → fail.
+     */
+    readonly refundAddress?: string;
+    /**
+     * Optional contact info embedded in the on-chain TransferMessagePayload
+     * (`inv.ct` field). Allows the invoice target to reach the payer for
+     * future communication: receipts (after close), cancellation notices,
+     * and payment reminders.
+     *
+     * `address`: a reachable DIRECT:// address for the payer (required within the object).
+     * `url`: optional non-Nostr transport URL (https:// or wss://, max 2048 chars).
+     *
+     * NOT included in the transport memo (same privacy model as refund address).
+     * Contact is purely informational — it does not affect auto-return routing,
+     * balance computation, or per-sender keying.
+     *
+     * When not provided, auto-populated from `identity.directAddress` at runtime
+     * (see §4.7). This ensures every outbound invoice payment carries contact info.
+     *
+     * Contact resolution priority (application-level recommendation):
+     * `contacts[0].address → refundAddress → senderAddress → null`
+     */
+    readonly contact?: {
+        address: string;
+        url?: string;
+    };
+    /**
+     * Optional transfer-delivery mode forwarded to PaymentsModule.send.
+     *
+     * `'instant'` (default): ships a V6 combined-transfer bundle. The
+     * recipient saves the token at status='submitted' with the SENDER's
+     * sdkData and finalizes via background proof-polling. Lower latency,
+     * but the recipient cannot spend the token until finalization
+     * completes.
+     *
+     * `'conservative'`: collects the inclusion proof on the SENDER's
+     * side before delivering. The recipient receives a fully-finalized
+     * {sourceToken, transferTx} bundle and produces a 'confirmed' Token
+     * immediately bound to the recipient's predicate. Higher latency,
+     * but enables chained spends without racing background proof-polls.
+     *
+     * Use `'conservative'` for forwarding flows (faucet → trader →
+     * deposit, escrow payouts, withdraws). Default `'instant'` is fine
+     * for low-latency UX where the recipient won't immediately re-spend.
+     */
+    readonly transferMode?: 'instant' | 'conservative';
+    /**
+     * When true, request source-token selection that MAY include unconfirmed
+     * tokens (chain-mode). Forwarded verbatim to PaymentsModule.send() for
+     * non-escrow invoice flows.
+     *
+     * §2.5 forced-conservative coercion (T.7.D / W21): when the invoice is
+     * bridged to an external escrow (registered via
+     * `markInvoiceEscrowBridged()`), this flag is silently coerced to `false`
+     * regardless of the caller's value. The coercion is surfaced via
+     * `TransferResult.overrides = ['allowPendingTokens-coerced-to-false']`.
+     *
+     * Rationale: escrow flows depend on payout verifiability and dispute-safe
+     * settlement. Pending source tokens introduce a finalization race window
+     * that can leave the escrow holding tokens whose ancestry is contested.
+     * Forcing conservative source selection guarantees every deposit-bearing
+     * token is fully finalized before the escrow takes custody.
+     *
+     * Defaults to `false` when omitted.
+     */
+    readonly allowPendingTokens?: boolean;
+}
+/**
+ * Parameters for returnInvoicePayment().
+ */
+interface ReturnPaymentParams {
+    /** Recipient address (original sender to return tokens to) */
+    readonly recipient: string;
+    /** Amount to return in smallest units (same convention as TransferRequest.amount) */
+    readonly amount: string;
+    /** Coin ID */
+    readonly coinId: string;
+    /** Optional free text appended to memo */
+    readonly freeText?: string;
+}
+/**
+ * Options for sendInvoiceReceipts().
+ */
+interface SendInvoiceReceiptsOptions {
+    /** Optional memo — deal/service description included in each receipt. Max 4096 chars. */
+    readonly memo?: string;
+    /** Whether to include senders with net balance of 0 (default: false) */
+    readonly includeZeroBalance?: boolean;
+}
+/**
+ * Result of sendInvoiceReceipts().
+ */
+interface SendReceiptsResult {
+    /** Number of receipts successfully sent */
+    readonly sent: number;
+    /** Number of receipts that failed to send */
+    readonly failed: number;
+    /** Details of each successfully sent receipt */
+    readonly sentReceipts: SentReceiptInfo[];
+    /** Details of each failed receipt */
+    readonly failedReceipts: FailedReceiptInfo[];
+}
+/**
+ * Info about a successfully sent receipt DM.
+ */
+interface SentReceiptInfo {
+    /** Target address this receipt was sent for (DIRECT:// format) */
+    readonly targetAddress: string;
+    /** Effective sender address the receipt was sent for */
+    readonly senderAddress: string;
+    /** Resolved DM recipient address */
+    readonly recipientAddress: string;
+    /** DM ID returned by CommunicationsModule.sendDM() */
+    readonly dmId: string;
+}
+/**
+ * Info about a failed receipt DM.
+ */
+interface FailedReceiptInfo {
+    /** Target address this receipt was attempted for (DIRECT:// format) */
+    readonly targetAddress: string;
+    /** Effective sender address the receipt was attempted for */
+    readonly senderAddress: string;
+    /** Reason the receipt failed */
+    readonly reason: 'unresolvable' | 'dm_failed';
+    /** Error message (for 'dm_failed' reason) */
+    readonly error?: string;
+}
+/**
+ * Options for sendCancellationNotices().
+ */
+interface SendCancellationNoticesOptions {
+    /** Cancellation reason — free-text explaining why the invoice was cancelled. Max 4096 chars. */
+    readonly reason?: string;
+    /**
+     * Deal/service/asset description — context about what was being bought, sold,
+     * exchanged, or provided. Max 4096 chars.
+     */
+    readonly dealDescription?: string;
+    /** Whether to include senders with net balance of 0 (default: false) */
+    readonly includeZeroBalance?: boolean;
+}
+/**
+ * Result of sendCancellationNotices().
+ */
+interface SendNoticesResult {
+    /** Number of notices successfully sent */
+    readonly sent: number;
+    /** Number of notices that failed to send */
+    readonly failed: number;
+    /** Details of each successfully sent notice */
+    readonly sentNotices: SentNoticeInfo[];
+    /** Details of each failed notice */
+    readonly failedNotices: FailedNoticeInfo[];
+}
+/**
+ * Info about a successfully sent cancellation notice DM.
+ */
+interface SentNoticeInfo {
+    /** Target address this notice was sent for (DIRECT:// format) */
+    readonly targetAddress: string;
+    /** Effective sender address the notice was sent for */
+    readonly senderAddress: string;
+    /** Resolved DM recipient address */
+    readonly recipientAddress: string;
+    /** DM ID returned by CommunicationsModule.sendDM() */
+    readonly dmId: string;
+}
+/**
+ * Info about a failed cancellation notice DM.
+ */
+interface FailedNoticeInfo {
+    /** Target address this notice was attempted for (DIRECT:// format) */
+    readonly targetAddress: string;
+    /** Effective sender address the notice was attempted for */
+    readonly senderAddress: string;
+    /** Reason the notice failed */
+    readonly reason: 'unresolvable' | 'dm_failed';
+    /** Error message (for 'dm_failed' reason) */
+    readonly error?: string;
+}
+/**
+ * Options for {@link AccountingModule.deliverInvoice}.
+ */
+interface DeliverInvoiceOptions {
+    /**
+     * Explicit recipient list. Each entry is any Unicity address resolvable
+     * by the shared transport resolver: `@nametag`, `DIRECT://...`,
+     * compressed/x-only chain pubkey hex.
+     *
+     * When omitted, the helper resolves recipients from the invoice's
+     * `terms.targets[].address` list, dropping any target that matches one
+     * of our own active addresses (multi-HD aware).
+     */
+    readonly recipients?: ReadonlyArray<string>;
+    /**
+     * Optional free-text memo placed on the DM envelope. Display-only;
+     * not authenticated by the UXF bundle hash.
+     */
+    readonly memo?: string;
+}
+/**
+ * Per-recipient outcome of a {@link AccountingModule.deliverInvoice} call.
+ */
+interface DeliverInvoiceRecipientResult {
+    /** The original recipient identifier the caller (or the helper's default)
+     *  passed to `sendDM`. May be a `@nametag`, `DIRECT://`, or hex pubkey. */
+    readonly recipient: string;
+    /** Outcome flag — `true` if the DM was published successfully. */
+    readonly success: boolean;
+    /**
+     * Bundle delivery shape used for this recipient.
+     * - `'inline'` — the UXF CAR fit under the inline ceiling and shipped
+     *   as a base64-encoded CAR inside the DM envelope.
+     * - `'cid'`    — the CAR was pinned to IPFS via the wallet's configured
+     *   publisher and the DM envelope carries the CID + gateway hints.
+     *
+     * Empty string when `success === false` and no delivery shape was chosen.
+     */
+    readonly shape: 'inline' | 'cid' | '';
+    /**
+     * Error message when `success === false`. Examples: resolve failure,
+     * transport throw, CAR too large with no IPFS publisher.
+     */
+    readonly error?: string;
+}
+/**
+ * Result of {@link AccountingModule.deliverInvoice}.
+ */
+interface DeliverInvoiceResult {
+    /** The invoice tokenId that was delivered (echoed for caller convenience). */
+    readonly invoiceId: string;
+    /** Number of recipients that received the DM successfully. */
+    readonly sent: number;
+    /** Number of recipients that failed (resolver miss, transport throw, etc.). */
+    readonly failed: number;
+    /** Number of targets that were skipped because they matched one of our
+     *  own active addresses (multi-HD aware self-skip). */
+    readonly skippedSelf: number;
+    /** Detailed per-recipient outcome — same length as the resolved recipient
+     *  list, in send order. */
+    readonly recipients: ReadonlyArray<DeliverInvoiceRecipientResult>;
+}
 
+/**
+ * Group Chat Types (NIP-29)
+ * Plain interfaces for SDK consumers — no classes, no UI helpers.
+ */
+declare const GroupRole: {
+    readonly ADMIN: "ADMIN";
+    readonly MODERATOR: "MODERATOR";
+    readonly MEMBER: "MEMBER";
+};
+type GroupRole = (typeof GroupRole)[keyof typeof GroupRole];
+declare const GroupVisibility: {
+    readonly PUBLIC: "PUBLIC";
+    readonly PRIVATE: "PRIVATE";
+};
+type GroupVisibility = (typeof GroupVisibility)[keyof typeof GroupVisibility];
+interface GroupData {
+    id: string;
+    relayUrl: string;
+    name: string;
+    description?: string;
+    picture?: string;
+    visibility: GroupVisibility;
+    createdAt: number;
+    updatedAt?: number;
+    memberCount?: number;
+    unreadCount?: number;
+    lastMessageTime?: number;
+    lastMessageText?: string;
+    /** Only admins and moderators can post; other members are read-only (NIP-29 "write-restricted" tag) */
+    writeRestricted?: boolean;
+    /** When the current user joined this group locally (used to filter old events) */
+    localJoinedAt?: number;
+}
 interface GroupMessageData {
     id?: string;
     groupId: string;
@@ -14618,6 +15717,44 @@ interface GroupMessageData {
     senderNametag?: string;
     replyToId?: string;
     previousIds?: string[];
+}
+interface GroupMemberData {
+    pubkey: string;
+    groupId: string;
+    role: GroupRole;
+    nametag?: string;
+    joinedAt: number;
+}
+interface GroupChatModuleConfig {
+    /** Override relay URLs (default: from network config) */
+    relays?: string[];
+    /** Default message fetch limit (default: 50) */
+    defaultMessageLimit?: number;
+    /** Max previous message IDs in ordering tags (default: 3) */
+    maxPreviousTags?: number;
+    /** Reconnect delay in ms (default: 3000) */
+    reconnectDelayMs?: number;
+    /** Max reconnect attempts (default: 5) */
+    maxReconnectAttempts?: number;
+}
+interface GroupMessagesPage {
+    messages: GroupMessageData[];
+    hasMore: boolean;
+    oldestTimestamp: number | null;
+}
+interface GetGroupMessagesPageOptions {
+    /** Max messages to return (default: 20) */
+    limit?: number;
+    /** Return messages older than this timestamp */
+    before?: number;
+}
+interface CreateGroupOptions {
+    name: string;
+    description?: string;
+    picture?: string;
+    visibility?: GroupVisibility;
+    /** Only admins and moderators can post; other members are read-only */
+    writeRestricted?: boolean;
 }
 
 /**
@@ -16140,6 +17277,97 @@ interface SphereEventMap {
         returnedAmount: string;
         returnedCurrency: string;
     };
+}
+type SphereEventHandler<T extends SphereEventType> = (data: SphereEventMap[T]) => void;
+/**
+ * Derivation mode determines how child keys are derived:
+ * - "bip32": Standard BIP32 with chain code (IL + parentKey) mod n
+ * - "legacy_hmac": Legacy Sphere HMAC derivation with chain code
+ * - "wif_hmac": Simple HMAC derivation without chain code (webwallet compatibility)
+ */
+type DerivationMode = 'bip32' | 'legacy_hmac' | 'wif_hmac';
+/**
+ * Source of wallet creation
+ */
+type WalletSource = 'mnemonic' | 'file' | 'unknown';
+/**
+ * Wallet information for backup/export purposes
+ */
+interface WalletInfo {
+    readonly source: WalletSource;
+    readonly hasMnemonic: boolean;
+    readonly hasChainCode: boolean;
+    readonly derivationMode: DerivationMode;
+    readonly basePath: string;
+    readonly address0: string | null;
+}
+/**
+ * JSON export format for wallet backup (v1.0)
+ */
+interface WalletJSON {
+    readonly version: '1.0';
+    readonly type: 'sphere-wallet';
+    readonly createdAt: string;
+    readonly wallet: {
+        readonly masterPrivateKey?: string;
+        readonly chainCode?: string;
+        readonly addresses: ReadonlyArray<{
+            readonly address: string;
+            readonly publicKey: string;
+            readonly path: string;
+            readonly index: number;
+        }>;
+        readonly isBIP32: boolean;
+        readonly descriptorPath?: string;
+    };
+    readonly mnemonic?: string;
+    readonly encrypted?: boolean;
+    readonly source?: WalletSource;
+    readonly derivationMode?: DerivationMode;
+}
+/**
+ * Options for exporting wallet to JSON
+ */
+interface WalletJSONExportOptions {
+    /** Include mnemonic in export (default: true if available) */
+    includeMnemonic?: boolean;
+    /** Encrypt sensitive data with password */
+    password?: string;
+    /** Number of addresses to include (default: 1) */
+    addressCount?: number;
+}
+
+/** Role of a provider in the system */
+type ProviderRole = 'storage' | 'token-storage' | 'transport' | 'oracle' | 'l1' | 'price';
+/**
+ * Rich status information for a single provider (used in getStatus())
+ */
+interface ProviderStatusInfo {
+    /** Provider unique ID */
+    id: string;
+    /** Display name */
+    name: string;
+    /** Role in the system */
+    role: ProviderRole;
+    /** Detailed status */
+    status: ProviderStatus;
+    /** Shorthand for status === 'connected' */
+    connected: boolean;
+    /** Whether the provider is enabled (can be toggled at runtime) */
+    enabled: boolean;
+    /** Provider-specific metadata (e.g., relay count for transport) */
+    metadata?: Record<string, unknown>;
+}
+/**
+ * Aggregated status of all providers, grouped by role
+ */
+interface SphereStatus {
+    storage: ProviderStatusInfo[];
+    tokenStorage: ProviderStatusInfo[];
+    transport: ProviderStatusInfo[];
+    oracle: ProviderStatusInfo[];
+    l1: ProviderStatusInfo[];
+    price: ProviderStatusInfo[];
 }
 
 /**
@@ -21468,6 +22696,3827 @@ interface LegacyImportResult {
 declare function importLegacyTokens(legacyTokenStorage: TokenStorageProvider<TxfStorageDataBase>, targetPayments: PaymentsModule, options?: LegacyImportOptions): Promise<LegacyImportResult>;
 
 /**
+ * Group Chat Module (NIP-29)
+ *
+ * Relay-based group chat using NIP-29 protocol on a dedicated Nostr relay.
+ * Embeds its own NostrClient — does NOT share the wallet's TransportProvider.
+ */
+
+interface GroupChatModuleDependencies {
+    identity: FullIdentity;
+    storage: StorageProvider;
+    emitEvent: <T extends SphereEventType>(type: T, data: SphereEventMap[T]) => void;
+    /**
+     * Optional CID-reference store for OpLog fat-data migration
+     * (PROFILE-CID-REFERENCES.md §8.5). When present, group state is
+     * pinned to IPFS with a split encryption policy:
+     *   - `groupChatGroups` → encrypted (per-wallet membership view)
+     *   - `groupChatMembers:<groupId>` → encrypted (per-wallet view of
+     *     the group, small)
+     *   - `groupChatMessages:<groupId>` → PLAINTEXT (NIP-29 messages are
+     *     relay-plaintext anyway; plaintext pins enable full IPFS
+     *     content dedup across member wallets — a 100-member group
+     *     stores each message ONCE globally instead of 100×)
+     * When absent, falls back to legacy inline JSON storage.
+     */
+    cidRefStore?: CidRefStore;
+}
+declare class GroupChatModule {
+    private config;
+    private deps;
+    private client;
+    private keyManager;
+    private connected;
+    private connecting;
+    private connectPromise;
+    private reconnectAttempts;
+    private reconnectTimer;
+    private subscriptionIds;
+    private groups;
+    private messages;
+    private members;
+    private processedEventIds;
+    private pendingLeaves;
+    /**
+     * Orphan-cleanup tracking for per-groupId storage keys. Records which
+     * groupIds currently have a per-group messages/members key in storage
+     * so that, on persist, we can delete keys for groups the user has left
+     * (otherwise per-group blobs would leak indefinitely).
+     *
+     * Populated on `load()` (from observed keys) and on each successful
+     * persist (with the just-written groupIds).
+     */
+    private _lastWrittenMessageGroupIds;
+    private _lastWrittenMemberGroupIds;
+    /**
+     * Memoized (plaintext JSON → CidRef) pairs for each persist target.
+     * AES-GCM uses random IVs so re-pinning identical plaintext encrypted
+     * produces a different CID; for plaintext pins the CID is deterministic,
+     * but we still avoid the round-trip cost on unchanged state. Both paths
+     * benefit from memoization.
+     *
+     * Groups memo: single ref (one key for the whole groups list).
+     * Members memo: keyed by groupId (one ref per group).
+     * Messages memo: keyed by groupId → per-group-INDEX ref (Pattern B —
+     * the stored ref points at an index blob, NOT the message array
+     * directly). The per-message CIDs are cached separately in
+     * `_pinnedMessageCids` so identical messages don't re-pin across
+     * persists.
+     */
+    private _lastPinnedGroupsJson;
+    private _lastPinnedGroupsRef;
+    private _lastPinnedMembersByGroup;
+    private _lastPinnedMessagesByGroup;
+    /**
+     * Issue #285 — `processedEvents` (NIP-29 event ID dedup ledger) memo.
+     * Grows unbounded with relay activity (observed 263 KB after routine
+     * use) and was the second-worst soft-warn offender behind
+     * `groupChatMembers`. Pattern A encrypted pin (per-wallet view —
+     * dedup across wallets has no value).
+     */
+    private _lastPinnedProcessedEventsJson;
+    private _lastPinnedProcessedEventsRef;
+    /**
+     * Pattern B per-message CID cache — maps a message's serialized JSON
+     * to the CID it was pinned under. Lets repeated persists for the same
+     * group reuse CIDs for unchanged messages (saves ~N pin round-trips
+     * per re-persist when only one message was added).
+     *
+     * Keyed by `JSON.stringify(message)` so any semantic change (content,
+     * id, metadata, anything) invalidates the memo automatically. Cache
+     * entries evict when the containing group is removed from
+     * `_lastPinnedMessagesByGroup` (group-leave → whole group's message
+     * memos drop).
+     */
+    private _pinnedMessageCids;
+    private persistTimer;
+    /**
+     * Single-flight chain serializing all persist work (debounced +
+     * explicit-flush + destroy-path). Every `doPersistAll()` invocation
+     * chains onto the previous tail via `.then()`, so two writers can
+     * never race — critical under Pattern B where `persistMessages` does
+     * N+1 awaits (per-message pin + index pin), leaving a wide window
+     * for a fresh message to arrive mid-persist and trigger a second
+     * persist that would otherwise race the in-flight one's storage.set.
+     *
+     * Prior failures are isolated via `.catch()` so one failed persist
+     * does not block subsequent persists. Mirrors
+     * PaymentsModule._saveChain and CommunicationsModule._saveChain.
+     *
+     * The tail is also what `destroy()` and the explicit `persistAll()`
+     * await to observe "all queued persists complete."
+     */
+    private persistPromise;
+    private relayAdminPubkeys;
+    private relayAdminFetchPromise;
+    private messageHandlers;
+    constructor(config?: GroupChatModuleConfig);
+    initialize(deps: GroupChatModuleDependencies): void;
+    load(): Promise<void>;
+    destroy(): void;
+    private destroyConnection;
+    connect(): Promise<void>;
+    getConnectionStatus(): boolean;
+    /**
+     * Refresh subscriptions after load() switched to a different address.
+     * Clears old subscriptions, restores groups if needed, and re-subscribes.
+     */
+    private refreshSubscriptions;
+    private doConnect;
+    private scheduleReconnect;
+    private subscribeToJoinedGroups;
+    private subscribeToGroup;
+    private handleGroupEvent;
+    private handleMetadataEvent;
+    private handleModerationEvent;
+    private updateAdminsFromEvent;
+    private restoreJoinedGroups;
+    fetchAvailableGroups(): Promise<GroupData[]>;
+    joinGroup(groupId: string, inviteCode?: string): Promise<boolean>;
+    leaveGroup(groupId: string): Promise<boolean>;
+    createGroup(options: CreateGroupOptions): Promise<GroupData | null>;
+    deleteGroup(groupId: string): Promise<boolean>;
+    createInvite(groupId: string): Promise<string | null>;
+    sendMessage(groupId: string, content: string, replyToId?: string): Promise<GroupMessageData | null>;
+    fetchMessages(groupId: string, since?: number, limit?: number): Promise<GroupMessageData[]>;
+    getGroups(): GroupData[];
+    getGroup(groupId: string): GroupData | null;
+    getMessages(groupId: string): GroupMessageData[];
+    getMessagesPage(groupId: string, options?: GetGroupMessagesPageOptions): GroupMessagesPage;
+    getMembers(groupId: string): GroupMemberData[];
+    getMember(groupId: string, pubkey: string): GroupMemberData | null;
+    getTotalUnreadCount(): number;
+    markGroupAsRead(groupId: string): void;
+    kickUser(groupId: string, userPubkey: string, reason?: string): Promise<boolean>;
+    deleteMessage(groupId: string, messageId: string): Promise<boolean>;
+    isCurrentUserAdmin(groupId: string): boolean;
+    isCurrentUserModerator(groupId: string): boolean;
+    /**
+     * Check if current user can moderate a group:
+     * - Group admin/moderator can always moderate their group
+     * - Relay admins can moderate public groups
+     */
+    canModerateGroup(groupId: string): Promise<boolean>;
+    isCurrentUserRelayAdmin(): Promise<boolean>;
+    /**
+     * Check if current user can write messages to a group.
+     * For write-restricted groups, only admins/moderators can post.
+     * For normal groups, any member can post.
+     */
+    canWriteToGroup(groupId: string): boolean;
+    getCurrentUserRole(groupId: string): GroupRole | null;
+    onMessage(handler: (message: GroupMessageData) => void): () => void;
+    getRelayUrls(): string[];
+    getMyPublicKey(): string | null;
+    /**
+     * Returns the latest message timestamp (in Nostr seconds) across the given groups,
+     * or 0 if no messages exist.  Used to set `since` on subscriptions so the relay
+     * only sends events we don't already have.
+     */
+    private getLatestKnownTimestamp;
+    private fetchRelayAdmins;
+    private doFetchRelayAdmins;
+    private fetchGroupMetadataInternal;
+    private fetchAndSaveMembers;
+    private fetchGroupMembersInternal;
+    private fetchGroupAdminsInternal;
+    private saveMessageToMemory;
+    private deleteMessageFromMemory;
+    private saveMemberToMemory;
+    private removeMemberFromMemory;
+    private removeGroupFromMemory;
+    private updateGroupLastMessage;
+    private updateMemberNametag;
+    private addProcessedEventId;
+    /** Schedule a debounced persist (coalesces rapid event bursts). */
+    private schedulePersist;
+    /** Persist immediately (for explicit flush points).
+     *
+     *  Joins the persist chain like `schedulePersist` but returns a
+     *  promise that resolves (or rejects) with THIS persist's outcome,
+     *  so explicit-flush callers see real errors instead of the
+     *  log-and-swallow treatment applied to the background chain. */
+    private persistAll;
+    private doPersistAll;
+    private persistGroups;
+    /**
+     * Write messages partitioned by groupId. See GROUP_CHAT_MESSAGES_PREFIX
+     * comment for the storage-layout rationale (PROFILE-CID-REFERENCES.md
+     * §8.5). On each persist:
+     *   1. Write a per-group key for every groupId currently in memory
+     *      (via CID ref when cidRefStore is available, inline JSON otherwise).
+     *   2. Delete per-group keys for groupIds that were written on a previous
+     *      persist but are no longer present (e.g., after leave-group).
+     *      Without this, orphaned blobs would leak indefinitely.
+     *
+     * **Encryption policy: PLAINTEXT PINS.** Group-chat messages transit
+     * through the Nostr relay as plaintext (signed but unencrypted —
+     * grep the module for `NIP17|giftWrap|encrypt|decrypt` to verify zero
+     * hits). Per-wallet AES-GCM encryption on IPFS under that threat model
+     * buys no real privacy and defeats content-addressed dedup (random
+     * IV → 100 members produce 100 different CIDs for the same message).
+     * Plaintext pins make one CID serve all members of a group.
+     */
+    private persistMessages;
+    /**
+     * Write members partitioned by groupId. Encryption policy: ENCRYPTED
+     * (per-wallet). Member lists are this wallet's view of group membership
+     * at a point in time and don't share the "all members see identical
+     * content verbatim" property of messages — dedup wouldn't help. Apply
+     * the default wallet-key AES-GCM encryption for consistency with every
+     * other CID-refs migration in the suite.
+     */
+    private persistMembers;
+    /**
+     * Persist the NIP-29 event ID dedup ledger. The ledger grows
+     * unbounded with relay activity — observed 263 KB on routine sphere.telco
+     * use, which was the second-worst PAYLOAD-SIZE soft-warn after
+     * `groupChatMembers` (issue #285).
+     *
+     * Encryption policy: ENCRYPTED. The ledger is a per-wallet privacy
+     * footprint (it reveals which NIP-29 events this wallet has
+     * processed — including private/invite-only groups). Dedup across
+     * wallets is not a goal; the canonical-content-addressed property
+     * of plaintext pins would actively leak group-membership signal to
+     * any IPFS observer.
+     */
+    private persistProcessedEvents;
+    private checkAndClearOnRelayChange;
+    private wrapMessageContent;
+    private unwrapMessageContent;
+    private getGroupIdFromEvent;
+    private getGroupIdFromMetadataEvent;
+    private extractReplyTo;
+    private extractPreviousIds;
+    private parseGroupMetadata;
+    /** Subscribe and track the subscription ID for cleanup. */
+    private trackSubscription;
+    /** Subscribe for a one-shot fetch, auto-unsubscribe on EOSE or timeout. */
+    private oneshotSubscription;
+    private ensureInitialized;
+    private ensureConnected;
+    private randomId;
+}
+
+/**
+ * Retry + Circuit Breaker for the Market API.
+ *
+ * Why this exists:
+ * The Market API sits behind a load balancer that occasionally returns
+ * transient errors (HTTP 502/503/504/408) or drops connections during
+ * deploys. Without tolerance, a single 502 from the testnet Market API
+ * kills an in-progress test or trader operation even when the rest of
+ * the protocol is working fine.
+ *
+ * Policy:
+ *  - Retry on:    HTTP 502, 503, 504, 408 and network/abort errors.
+ *  - Don't retry: 400, 401, 403, 404, 422 — anything 4xx that isn't 408
+ *                 indicates a caller bug, not an outage.
+ *  - Backoff:     exponential with full jitter, schedule 200/500/1000/2000/4000 ms,
+ *                 capped at 5 attempts and a 10s total budget.
+ *  - Breaker:     after N consecutive failures across operations, fail fast
+ *                 for `cooldownMs` before allowing the next attempt.
+ */
+
+interface RetryConfig {
+    /** Maximum number of attempts (including the first). Default: 5. */
+    maxAttempts?: number;
+    /** Per-attempt delays in ms. Length should equal maxAttempts - 1. */
+    delaysMs?: number[];
+    /** Maximum total time spent retrying before giving up. Default: 10_000. */
+    totalBudgetMs?: number;
+    /** Failures across operations needed to open the breaker. Default: 5. */
+    breakerThreshold?: number;
+    /** How long the breaker stays open after tripping. Default: 30_000. */
+    breakerCooldownMs?: number;
+    /** Inject for tests: override the wall-clock used for backoff/breaker. */
+    now?: () => number;
+    /** Inject for tests: override the sleep implementation. */
+    sleep?: (ms: number) => Promise<void>;
+    /** Inject for tests: override jitter (0..1). Default: Math.random. */
+    random?: () => number;
+}
+
+/**
+ * Market Module Types
+ * Intent bulletin board for posting and discovering intents,
+ * plus real-time feed subscription.
+ */
+type IntentType = 'buy' | 'sell' | 'service' | 'announcement' | 'other' | (string & {});
+type IntentStatus = 'active' | 'closed' | 'expired';
+interface MarketModuleConfig {
+    /** Market API base URL (default: https://market-api.unicity.network) */
+    apiUrl?: string;
+    /** Request timeout in ms (default: 30000) */
+    timeout?: number;
+}
+interface MarketModuleDependencies {
+    identity: FullIdentity;
+    emitEvent: <T extends SphereEventType>(type: T, data: SphereEventMap[T]) => void;
+}
+interface PostIntentRequest {
+    description: string;
+    intentType: IntentType;
+    category?: string;
+    price?: number;
+    currency?: string;
+    location?: string;
+    contactHandle?: string;
+    expiresInDays?: number;
+}
+interface PostIntentResult {
+    intentId: string;
+    message: string;
+    expiresAt: string;
+}
+interface MarketIntent {
+    id: string;
+    intentType: IntentType;
+    category?: string;
+    price?: string;
+    currency: string;
+    location?: string;
+    status: IntentStatus;
+    createdAt: string;
+    expiresAt: string;
+}
+interface SearchIntentResult {
+    id: string;
+    score: number;
+    agentNametag?: string;
+    agentPublicKey: string;
+    description: string;
+    intentType: IntentType;
+    category?: string;
+    price?: number;
+    currency: string;
+    location?: string;
+    contactMethod: string;
+    contactHandle?: string;
+    createdAt: string;
+    expiresAt: string;
+}
+interface SearchFilters {
+    intentType?: IntentType;
+    category?: string;
+    minPrice?: number;
+    maxPrice?: number;
+    location?: string;
+    /** Minimum similarity score (0–1). Results below this threshold are excluded (client-side). */
+    minScore?: number;
+}
+interface SearchOptions {
+    filters?: SearchFilters;
+    limit?: number;
+}
+interface SearchResult {
+    intents: SearchIntentResult[];
+    count: number;
+}
+/** A listing broadcast on the live feed */
+interface FeedListing {
+    id: string;
+    title: string;
+    descriptionPreview: string;
+    agentName: string;
+    agentId: number;
+    type: IntentType;
+    createdAt: string;
+}
+/** WebSocket message: initial batch of recent listings */
+interface FeedInitialMessage {
+    type: 'initial';
+    listings: FeedListing[];
+}
+/** WebSocket message: single new listing */
+interface FeedNewMessage {
+    type: 'new';
+    listing: FeedListing;
+}
+type FeedMessage = FeedInitialMessage | FeedNewMessage;
+/** Callback for live feed events */
+type FeedListener = (message: FeedMessage) => void;
+
+/**
+ * Market Module
+ *
+ * Intent bulletin board — post and discover intents (buy, sell,
+ * service, announcement, other) with secp256k1-signed requests
+ * tied to the wallet identity. Includes real-time feed via WebSocket.
+ */
+
+declare class MarketModule {
+    private readonly apiUrl;
+    private readonly timeout;
+    private identity;
+    private registered;
+    /** Shared breaker — once tripped, all operations on this module fail fast. */
+    private readonly breaker;
+    /** Optional retry-policy overrides for tests. */
+    private readonly retryConfig;
+    constructor(config?: MarketModuleConfig & {
+        retryConfig?: RetryConfig;
+    });
+    /** Called by Sphere after construction */
+    initialize(deps: MarketModuleDependencies): void;
+    /** No-op — stateless module */
+    load(): Promise<void>;
+    /** No-op — stateless module */
+    destroy(): void;
+    /** Post a new intent (agent is auto-registered on first post) */
+    postIntent(intent: PostIntentRequest): Promise<PostIntentResult>;
+    /** Semantic search for intents (public — no auth required) */
+    search(query: string, opts?: SearchOptions): Promise<SearchResult>;
+    /** List own intents (authenticated) */
+    getMyIntents(): Promise<MarketIntent[]>;
+    /** Close (delete) an intent */
+    closeIntent(intentId: string): Promise<void>;
+    /** Fetch the most recent listings via REST (public — no auth required) */
+    getRecentListings(): Promise<FeedListing[]>;
+    /**
+     * Subscribe to the live listing feed via WebSocket.
+     * Returns an unsubscribe function that closes the connection.
+     *
+     * Requires a WebSocket implementation — works natively in browsers
+     * and in Node.js 21+ (or with the `ws` package).
+     */
+    subscribeFeed(listener: FeedListener): () => void;
+    private ensureIdentity;
+    /** Register the agent's public key with the server (idempotent) */
+    private ensureRegistered;
+    /**
+     * Parse a fetch Response into JSON.
+     *
+     * Throws either:
+     *   - {@link TransientMarketError} for HTTP statuses we want to retry
+     *     (502/503/504/408). The `final` SphereError mirrors the historical
+     *     error shape so callers see the same message after retries exhaust.
+     *   - {@link SphereError} for permanent failures (4xx other than 408).
+     */
+    private parseResponse;
+    /**
+     * Execute a single HTTP attempt, translating fetch-level network errors
+     * (timeouts, connection resets) into TransientMarketError so the retry
+     * layer can re-issue the request.
+     */
+    private attemptFetch;
+    /** Run an authenticated request through the retry + breaker layer. */
+    private withRetry;
+    private apiPost;
+    private apiGet;
+    private apiDelete;
+    private apiPublicPost;
+}
+
+/**
+ * AccountingModule manages invoice creation, import, status tracking, and
+ * payment attribution. It maintains a persistent invoice-transfer index (§5.4)
+ * and integrates with PaymentsModule and CommunicationsModule for real-time
+ * event handling.
+ *
+ * Lifecycle:
+ * 1. `new AccountingModule(config)` — construct with optional config
+ * 2. `initialize(deps)` — inject dependencies (synchronous)
+ * 3. `await load()` — load persisted state, populate index, subscribe to events
+ * 4. Use public API methods
+ * 5. `destroy()` — cleanup subscriptions and in-memory state
+ *
+ * @see docs/ACCOUNTING-SPEC.md §2.1
+ */
+declare class AccountingModule {
+    private config;
+    private deps;
+    private destroyed;
+    private loadPromise;
+    private _loading;
+    private _loadingDeferred;
+    private invoiceTermsCache;
+    private invoiceIdHashIndex;
+    private cancelledInvoices;
+    private closedInvoices;
+    private frozenBalances;
+    private escrowBridgedInvoices;
+    /**
+     * Override marker emitted in TransferResult.overrides whenever
+     * `payInvoice()` silently coerces `allowPendingTokens=true` to `false`
+     * because the invoice is bridged to escrow.
+     */
+    static readonly OVERRIDE_FORCED_CONSERVATIVE = "allowPendingTokens-coerced-to-false";
+    private autoReturnGlobal;
+    private autoReturnPerInvoice;
+    /** Timestamp of last `setAutoReturn('*')` call — for 5-second rate-limit. */
+    private autoReturnLastGlobalSet;
+    /** Auto-return deduplication ledger manager (§7.5). */
+    private autoReturnManager;
+    /**
+     * Primary index: per-invoice transfer ledger.
+     * entryKey = `${transferId}::${coinId}` (composite dedup key).
+     * Outer: invoiceId → Inner: entryKey → InvoiceTransferRef
+     */
+    private invoiceLedger;
+    /**
+     * Token scan watermark — tracks processed tx count per token.
+     * tokenId → number of TxfToken.transactions[] entries processed.
+     */
+    private tokenScanState;
+    /**
+     * Secondary: token → invoice mapping (rebuilt on load, not persisted).
+     * Answers "which invoices does this token affect?" for efficient event handling.
+     */
+    private tokenInvoiceMap;
+    /**
+     * Balance cache — computed lazily, invalidated on index mutation.
+     * Not persisted. Outer key: invoiceId.
+     */
+    private balanceCache;
+    /** Dirty invoiceIds whose ledger entries need to be flushed to storage. */
+    private dirtyLedgerEntries;
+    /** Count of unknown (not in invoiceTermsCache) invoice IDs in the ledger. */
+    private unknownLedgerCount;
+    /**
+     * Per-unknown-invoice first-seen timestamp for TTL eviction.
+     *
+     * W1 (steelman round-4): without TTL, an attacker who can deliver 500
+     * inbound transfers with synthesized memo invoiceIds permanently exhausts
+     * the unknown-ledger cap, after which legitimate orphan transfers (out-of-
+     * order delivery for real swaps) are silently dropped at the cap-check.
+     *
+     * Round-5 perf: gated by `unknownLedgerNextSweepMs` to amortize the
+     * sweep cost. The naive every-call sweep is O(N) where N=cap=500;
+     * combined with the per-token cleanup loop inside the sweep it became
+     * O(N×M) on every transfer under flood. Now we sweep at most every
+     * `UNKNOWN_LEDGER_SWEEP_INTERVAL_MS` (60s) UNLESS the cap is currently
+     * full, in which case we sweep on each call (the only path that can
+     * actually drop a legitimate orphan).
+     */
+    private unknownLedgerFirstSeen;
+    private unknownLedgerNextSweepMs;
+    /** W17: Tracks whether tokenScanState has been mutated since last flush. */
+    private tokenScanDirty;
+    /** W2 fix: Serialization guard for _flushDirtyLedgerEntries. */
+    private _flushPromise;
+    /**
+     * Memoization of the last successful CID pin per invoice
+     * (PROFILE-CID-REFERENCES.md §8.3). AES-GCM uses random IVs so re-pinning
+     * identical plaintext produces a different CID; the memo skips re-pinning
+     * when the entries-for-invoice JSON is byte-identical to the last pin.
+     *
+     * Keyed by invoiceId — each invoice has its own KV key and therefore its
+     * own pin lifecycle. Memo entries are cleared when an invoice is
+     * terminated (closed/cancelled) since no further writes should occur.
+     */
+    private _lastPinnedLedgerByInvoice;
+    /**
+     * Per-invoice async mutex. Maps invoiceId → tail of current promise chain.
+     * New operations append to the chain; cleanup removes the key when the chain
+     * is idle (no pending operations for this invoice).
+     */
+    private _gateMap;
+    private unsubscribePayments;
+    private unsubscribeDMs;
+    /**
+     * Construct the AccountingModule with optional configuration.
+     *
+     * @param config - Optional module configuration. All fields have sensible defaults.
+     */
+    constructor(config?: AccountingModuleConfig);
+    /**
+     * Inject dependencies into the module. Must be called before `load()`.
+     * Calling `initialize()` again replaces the deps without resetting in-memory state —
+     * always call `load()` after re-initializing.
+     *
+     * @param deps - Module dependencies provided by Sphere.
+     */
+    initialize(deps: AccountingModuleDependencies): void;
+    /**
+     * Load persisted state from storage and subscribe to event streams.
+     *
+     * Steps (per §7.6 load() specification):
+     * 1.  Clear all in-memory state.
+     * 2.  Load invoice tokens from TokenStorage (filter by INVOICE_TOKEN_TYPE_HEX).
+     * 3.  Parse InvoiceTerms from each token's genesis.data.tokenData.
+     * 4.  Load terminal sets (CANCELLED_INVOICES, CLOSED_INVOICES).
+     * 4b. Storage reconciliation (forward): frozen balances without terminal-set entry.
+     * 4c. Storage reconciliation (inverse): terminal-set entries without frozen balances.
+     * 5.  Load frozen balances (FROZEN_BALANCES).
+     * 6.  Load auto-return settings (AUTO_RETURN).
+     * 7.  Load auto-return dedup ledger (AUTO_RETURN_LEDGER) — crash recovery (stub).
+     * 8.  Populate invoice-transfer index (§5.4.4).
+     * 9.  Subscribe to PaymentsModule events.
+     * 10. Subscribe to CommunicationsModule DM events if available.
+     *
+     * @throws {SphereError} `NOT_INITIALIZED` if `initialize()` has not been called.
+     * @throws {SphereError} `MODULE_DESTROYED` if the module has been destroyed.
+     */
+    load(): Promise<void>;
+    /** Create a deferred promise (resolve callable externally). */
+    private _createDeferred;
+    private _doLoad;
+    /**
+     * Cleanup subscriptions and clear all in-memory state.
+     * After calling destroy(), all public methods will throw `MODULE_DESTROYED`.
+     */
+    destroy(): Promise<void>;
+    /**
+     * Ensure dependencies have been injected via `initialize()`.
+     * @throws {SphereError} `NOT_INITIALIZED`
+     */
+    private ensureInitialized;
+    /**
+     * Ensure the module has not been destroyed.
+     * @throws {SphereError} `MODULE_DESTROYED`
+     */
+    private ensureNotDestroyed;
+    /**
+     * Parse a string as BigInt with validation. Returns 0n for invalid input
+     * (consistent with balance-computer.ts parseBigInt).
+     */
+    private static _safeBigInt;
+    /**
+     * Safely defer an event emission via queueMicrotask. Wraps the callback in
+     * try/catch so a throwing event handler doesn't become an uncaught exception
+     * that crashes the process.
+     */
+    private _deferEvent;
+    /**
+     * Acquire the per-invoice serialization gate, execute `fn` exclusively, then
+     * release. Prevents concurrent modification of the same invoice's state.
+     *
+     * The gate is implemented as a promise chain: each new operation appends to
+     * the tail of the chain for the given invoiceId. When the chain becomes idle
+     * (this operation's next-promise is still the gate tail), the key is deleted
+     * to prevent unbounded memory growth.
+     *
+     * @param invoiceId - The invoice to gate on.
+     * @param fn        - The async operation to run exclusively.
+     * @returns The result of `fn`.
+     */
+    private withInvoiceGate;
+    /**
+     * Check whether any of the wallet's tracked addresses is listed as a target
+     * in the given invoice. Compares `TrackedAddress.directAddress` against
+     * `InvoiceTarget.address` (both are DIRECT:// strings — case-sensitive exact match).
+     *
+     * @param invoiceId - The invoice token ID.
+     * @returns `true` if the local wallet is a target party for this invoice.
+     */
+    private isTarget;
+    /**
+     * Create and mint a new invoice on-chain.
+     *
+     * Flow (§2.1):
+     * 1. Validate request (§8.1).
+     * 2. Build InvoiceTerms with creator pubkey and createdAt timestamp.
+     * 3. Serialize InvoiceTerms canonically into tokenData.
+     * 4. Mint token via aggregator (same flow as NametagMinter).
+     * 5. Store token via TokenStorageProvider.
+     * 6. Scan full transaction history for pre-existing payments referencing this invoice.
+     * 7. Fire 'invoice:created' event + any retroactive payment/coverage events.
+     *
+     * @param request - Invoice creation parameters.
+     * @returns CreateInvoiceResult with token and parsed terms.
+     *
+     * @throws {SphereError} `INVOICE_NO_TARGETS` — targets array is empty.
+     * @throws {SphereError} `INVOICE_NO_ASSETS` — a target has no assets.
+     * @throws {SphereError} `INVOICE_INVALID_AMOUNT` — asset amount is not a positive integer.
+     * @throws {SphereError} `INVOICE_INVALID_ADDRESS` — a target address is not a valid DIRECT:// address.
+     * @throws {SphereError} `INVOICE_ORACLE_REQUIRED` — oracle provider is not available.
+     * @throws {SphereError} `INVOICE_MINT_FAILED` — aggregator submission failed after retries.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    createInvoice(request: CreateInvoiceRequest): Promise<CreateInvoiceResult>;
+    /**
+     * Deliver an existing invoice to one or more recipients (#226).
+     *
+     * Packages the invoice's TXF token into a UXF CARv1 bundle (the same
+     * content-addressed packaging the payments instant-sender uses) and
+     * ships the bundle inside a NIP-17 DM with prefix `invoice_delivery:`.
+     * The DM body is a JSON {@link InvoiceDeliveryEnvelope} carrying either
+     * the CAR inline (`uxf-car`, default for bundles ≤ ~16 KiB) or a CID
+     * reference (`uxf-cid`, requires `publishToIpfs` injection).
+     *
+     * Decoupled from {@link createInvoice}: the mint step records the
+     * invoice locally; callers explicitly trigger delivery when they want
+     * payers to discover the invoice. This separation lets callers mint
+     * once and deliver multiple times (e.g. re-deliver after a relay outage,
+     * deliver to a late-added target).
+     *
+     * Recipients default to every `terms.targets[].address` that is NOT one
+     * of our own active addresses (multi-HD self-skip). Callers can override
+     * via `options.recipients`. Each recipient resolves through the shared
+     * `transportResolver` so `@nametag`, `DIRECT://`, and chain pubkey are
+     * all accepted.
+     *
+     * Delivery is best-effort per recipient — one failure does NOT block
+     * subsequent recipients and does NOT throw. The returned
+     * {@link DeliverInvoiceResult} carries per-recipient outcome so callers
+     * (CLI, UI) can surface partial-failure reports and retry.
+     *
+     * @param invoiceId - 64-char hex tokenId of an invoice the wallet owns.
+     * @param options   - Optional recipient override and memo.
+     * @returns Per-recipient outcome.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token absent locally.
+     * @throws {SphereError} `COMMUNICATIONS_UNAVAILABLE` — no CommunicationsModule.
+     * @throws {SphereError} `INVOICE_DELIVERY_FAILED` — token storage / UXF
+     *   build threw irrecoverably before any recipient was attempted.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    deliverInvoice(invoiceId: string, options?: DeliverInvoiceOptions): Promise<DeliverInvoiceResult>;
+    /**
+     * Import an invoice token received from another party.
+     * The token is validated (proof chain, token type, parseable tokenData).
+     * Stored via TokenStorageProvider alongside other tokens.
+     *
+     * After import, scans full transaction history for any pre-existing payments
+     * referencing this invoice and fires retroactive events.
+     *
+     * @param token - Invoice token in TXF format.
+     * @returns Parsed InvoiceTerms.
+     *
+     * @throws {SphereError} `INVOICE_INVALID_PROOF` — inclusion proof is invalid.
+     * @throws {SphereError} `INVOICE_WRONG_TOKEN_TYPE` — token type is not INVOICE_TOKEN_TYPE_HEX.
+     * @throws {SphereError} `INVOICE_INVALID_DATA` — tokenData cannot be parsed as InvoiceTerms.
+     * @throws {SphereError} `INVOICE_ALREADY_EXISTS` — invoice token already exists locally.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    importInvoice(token: TxfToken): Promise<InvoiceTerms>;
+    /**
+     * Compute the current status of an invoice from local data (§5.1).
+     *
+     * For non-terminal invoices: reads from the persistent invoice-transfer index.
+     * For terminal invoices (CLOSED, CANCELLED): returns persisted frozen balances.
+     *
+     * SIDE EFFECT: When the computed status reaches implicit close (all targets covered
+     * and all tokens confirmed), this call acquires the per-invoice gate, re-verifies,
+     * freezes balances, persists them, and may trigger surplus auto-return.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @returns Computed InvoiceStatus.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    getInvoiceStatus(invoiceId: string): Promise<InvoiceStatus>;
+    /**
+     * List invoice tokens with optional filtering and pagination (§2.1).
+     *
+     * Returns lightweight InvoiceRef objects (token ID + parsed terms).
+     * Status is NOT computed unless a `state` filter is provided.
+     *
+     * @param options - Filter/sort/pagination options.
+     * @returns Array of InvoiceRef objects.
+     *
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    getInvoices(options?: GetInvoicesOptions): Promise<InvoiceRef[]>;
+    /**
+     * Get a single invoice by token ID. Synchronous — cancelled/closed sets
+     * are kept in memory after load(), so no async storage reads are needed.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @returns InvoiceRef or null if not found.
+     *
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     */
+    getInvoice(invoiceId: string): InvoiceRef | null;
+    /**
+     * Return the set of token IDs that are currently linked to the given
+     * invoice. Populated by both the on-chain `_processTokenTransactions`
+     * path (tokens with `inv:` references) and the transport-memo orphan
+     * buffering path in `_handleIncomingTransfer`.
+     *
+     * Used by callers that want to scope per-invoice operations (e.g.
+     * SwapModule.verifyPayout's L3 validation) to only the tokens that
+     * cover this invoice — avoiding false negatives when the wallet
+     * contains unrelated tokens of the same currency in unconfirmed or
+     * spent state.
+     *
+     * Returns an empty set if no tokens are currently linked.
+     */
+    getTokenIdsForInvoice(invoiceId: string): Set<string>;
+    /**
+     * Explicitly close an invoice. Only target parties may close (§8.3).
+     *
+     * On close:
+     * 1. Current balances are computed one final time and frozen.
+     * 2. Invoice ID is added to the closed set in storage.
+     * 3. Fires 'invoice:closed' with { explicit: true }.
+     * 4. If autoReturn is true, auto-return is enabled and surplus is returned immediately.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param options   - Optional: { autoReturn?: boolean }.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_NOT_TARGET` — caller is not a target party.
+     * @throws {SphereError} `INVOICE_ALREADY_CLOSED` — invoice is already closed.
+     * @throws {SphereError} `INVOICE_ALREADY_CANCELLED` — invoice is already cancelled.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    closeInvoice(invoiceId: string, options?: {
+        autoReturn?: boolean;
+    }): Promise<void>;
+    /**
+     * Cancel an invoice. Only target parties can cancel (§8.4).
+     *
+     * On cancel:
+     * 1. Current balances are computed one final time and frozen.
+     * 2. Invoice ID is added to the cancelled set in storage.
+     * 3. Fires 'invoice:cancelled' event.
+     * 4. If autoReturn is true, everything is returned immediately.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param options   - Optional: { autoReturn?: boolean }.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_NOT_TARGET` — caller is not a target party.
+     * @throws {SphereError} `INVOICE_ALREADY_CLOSED` — invoice is already closed.
+     * @throws {SphereError} `INVOICE_ALREADY_CANCELLED` — invoice is already cancelled.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    cancelInvoice(invoiceId: string, options?: {
+        autoReturn?: boolean;
+    }): Promise<void>;
+    /**
+     * Mark an invoice as bridged to an external escrow flow.
+     *
+     * Higher-level orchestrators (SwapModule, future P2P trading flows) call
+     * this when they receive a deposit invoice from an escrow service. From
+     * that moment on, any caller-supplied `allowPendingTokens=true` on
+     * `payInvoice(invoiceId, …)` is silently coerced to `false` per §2.5 last
+     * paragraph, and `TransferResult.overrides` carries the
+     * `'allowPendingTokens-coerced-to-false'` marker so callers can audit the
+     * coercion.
+     *
+     * Idempotent: re-marking an already-marked invoice is a no-op.
+     *
+     * @param invoiceId - The invoice token ID to mark as escrow-bridged.
+     */
+    markInvoiceEscrowBridged(invoiceId: string): void;
+    /**
+     * Remove the escrow-bridged marker for an invoice (e.g., after the swap
+     * reaches a terminal state and no further payInvoice() calls should be
+     * coerced). Idempotent.
+     *
+     * @param invoiceId - The invoice token ID to unmark.
+     */
+    unmarkInvoiceEscrowBridged(invoiceId: string): void;
+    /**
+     * Whether the given invoice is currently registered as bridged to an
+     * external escrow flow. Exposed primarily for tests and audit tooling.
+     *
+     * @param invoiceId - The invoice token ID to check.
+     * @returns `true` if the invoice is escrow-bridged.
+     */
+    isInvoiceEscrowBridged(invoiceId: string): boolean;
+    /**
+     * Pay an invoice — send tokens referencing the given invoice (§2.1, §8.5).
+     *
+     * This is a convenience wrapper around PaymentsModule.send() that:
+     * 1. Validates the invoice is not terminated locally (throws INVOICE_TERMINATED if it is).
+     * 2. Constructs the appropriate INV:<id>:F memo.
+     * 3. Auto-populates contact info from identity.directAddress if not provided.
+     * 4. Calls PaymentsModule.send().
+     *
+     * §2.5 forced-conservative coercion (T.7.D / W21):
+     *   When the invoice has been marked escrow-bridged (see
+     *   `markInvoiceEscrowBridged()`), a caller-supplied
+     *   `params.allowPendingTokens = true` is silently coerced to `false`
+     *   before being forwarded to `payments.send()`. The returned
+     *   `TransferResult` carries `overrides: ['allowPendingTokens-coerced-to-false']`
+     *   so callers can audit the coercion. Non-escrow invoice flows pass the
+     *   flag through verbatim and surface no override marker.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param params    - Pay parameters: targetIndex, assetIndex?, amount?, freeText?,
+     *                    refundAddress?, contact?, allowPendingTokens?.
+     * @returns TransferResult from PaymentsModule.send(), with `overrides`
+     *          augmented when forced-conservative coercion was applied.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_TERMINATED` — invoice is CLOSED or CANCELLED.
+     * @throws {SphereError} `INVOICE_INVALID_TARGET` — targetIndex is out of range.
+     * @throws {SphereError} `INVOICE_INVALID_ASSET_INDEX` — assetIndex is out of range.
+     * @throws {SphereError} `INVOICE_INVALID_REFUND_ADDRESS` — refundAddress is malformed.
+     * @throws {SphereError} `INVOICE_INVALID_CONTACT` — contact is malformed.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    payInvoice(invoiceId: string, params: PayInvoiceParams): Promise<TransferResult>;
+    /**
+     * Return tokens for an invoice — send tokens back to the original sender (§2.1, §8.6).
+     *
+     * Only callable when the local wallet's address matches one of the invoice targets.
+     * Return amount is capped at the per-sender net balance for (target, sender, coinId).
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param params    - Return parameters: recipient, amount, coinId, freeText?.
+     * @returns TransferResult from PaymentsModule.send().
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_NOT_TARGET` — wallet is not an invoice target.
+     * @throws {SphereError} `INVOICE_RETURN_EXCEEDS_BALANCE` — amount exceeds per-sender net balance.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    returnInvoicePayment(invoiceId: string, params: ReturnPaymentParams): Promise<TransferResult>;
+    /**
+     * Enable or disable auto-return for terminated invoices (§2.1, §8.7).
+     *
+     * When auto-return is enabled for a terminated invoice, future incoming forward
+     * payments referencing the invoice are automatically returned. When enabled
+     * for `'*'`, applies to all terminated invoices globally.
+     *
+     * @param invoiceId - Invoice token ID, or `'*'` for the global setting.
+     * @param enabled   - Whether auto-return is enabled.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoiceId is not `'*'` and invoice does not exist.
+     * @throws {SphereError} `RATE_LIMITED` — invoiceId is `'*'` and called within 5-second cooldown.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    setAutoReturn(invoiceId: string | '*', enabled: boolean): Promise<void>;
+    /**
+     * Get current auto-return settings.
+     *
+     * @returns AutoReturnSettings with global flag and per-invoice overrides.
+     *
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     */
+    getAutoReturnSettings(): AutoReturnSettings;
+    /**
+     * Send receipt DMs to each payer of a terminated invoice (§2.1, §8.9).
+     *
+     * For each target address controlled by this wallet, iterates over the frozen
+     * per-sender balances and sends a structured receipt DM via CommunicationsModule.
+     *
+     * PREREQUISITES:
+     * - Invoice must be in a terminal state (CLOSED or CANCELLED).
+     * - Caller must be a target party.
+     * - CommunicationsModule must be available.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param options   - Optional: { memo?, includeZeroBalance? }.
+     * @returns SendReceiptsResult with counts and details.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_NOT_TERMINATED` — invoice is not in a terminal state.
+     * @throws {SphereError} `INVOICE_NOT_TARGET` — caller is not a target party.
+     * @throws {SphereError} `COMMUNICATIONS_UNAVAILABLE` — CommunicationsModule is not available.
+     * @throws {SphereError} `INVOICE_MEMO_TOO_LONG` — memo exceeds 4096 characters.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    sendInvoiceReceipts(invoiceId: string, options?: SendInvoiceReceiptsOptions): Promise<SendReceiptsResult>;
+    /**
+     * Send cancellation notice DMs to each payer of a cancelled invoice (§2.1, §8.10).
+     *
+     * PREREQUISITES:
+     * - Invoice must be in CANCELLED state (not CLOSED).
+     * - Caller must be a target party.
+     * - CommunicationsModule must be available.
+     *
+     * @param invoiceId - The invoice token ID.
+     * @param options   - Optional: { reason?, dealDescription?, includeZeroBalance? }.
+     * @returns SendNoticesResult with counts and details.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice token not found locally.
+     * @throws {SphereError} `INVOICE_NOT_CANCELLED` — invoice is not in CANCELLED state.
+     * @throws {SphereError} `INVOICE_NOT_TARGET` — caller is not a target party.
+     * @throws {SphereError} `COMMUNICATIONS_UNAVAILABLE` — CommunicationsModule is not available.
+     * @throws {SphereError} `INVOICE_MEMO_TOO_LONG` — reason or dealDescription exceeds 4096 chars.
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    sendCancellationNotices(invoiceId: string, options?: SendCancellationNoticesOptions): Promise<SendNoticesResult>;
+    /**
+     * Get all transfers that reference the given invoice.
+     * Returns complete transfer history from the invoice-transfer index,
+     * including irrelevant transfers (see §5.4 for classification).
+     *
+     * @param invoiceId - The invoice token ID.
+     * @returns Array of InvoiceTransferRef entries from the index.
+     *
+     * @throws {SphereError} `INVOICE_NOT_FOUND` — invoice not found (throws rather than empty array).
+     * @throws {SphereError} `NOT_INITIALIZED` — module not initialized.
+     * @throws {SphereError} `MODULE_DESTROYED` — module has been destroyed.
+     */
+    getRelatedTransfers(invoiceId: string): (InvoiceTransferRef | IrrelevantTransfer)[];
+    /**
+     * Parse a transport-layer invoice memo string.
+     * Delegates to the memo.ts utility — pure, no side effects.
+     *
+     * @param memo - The raw memo string from TransferRequest.memo / HistoryRecord.memo.
+     * @returns Parsed InvoiceMemoRef or null if the string does not match the INV: format.
+     */
+    parseInvoiceMemo(memo: string): InvoiceMemoRef | null;
+    /**
+     * Freeze and persist a terminal state for the given invoice.
+     * MUST only be called from code paths that already hold the per-invoice gate.
+     * MUST NOT acquire the gate internally (would deadlock).
+     *
+     * @param invoiceId - The invoice to terminate.
+     * @param state     - Terminal state: 'CLOSED' or 'CANCELLED'.
+     *
+     * @internal
+     */
+    private _terminateInvoice;
+    /**
+     * Execute auto-return sends for all senders with a positive net balance in
+     * the given frozen snapshot, using the dedup ledger to avoid duplicate sends.
+     *
+     * Used by `setAutoReturn()` when enabling auto-return on an already-terminated
+     * invoice, and by crash recovery.
+     *
+     * Semantics (§5.9, §7.5):
+     * - CLOSED (direction :RC): latest sender per target:coinId with surplus > 0
+     * - CANCELLED (direction :RX): every sender with netBalance > 0
+     *
+     * Dedup key: `{invoiceId}:FROZEN:{targetAddress}:{senderAddress}:{coinId}`
+     * This is distinct from the per-transfer key used during ongoing auto-return,
+     * because the frozen-balance return is per (target, sender, coin), not per
+     * individual inbound transfer.
+     *
+     * Best-effort: send failures are logged and marked in the ledger but do not
+     * throw. Each return is attempted independently.
+     *
+     * MUST be called inside the per-invoice gate (ensured by callers).
+     *
+     * @param invoiceId  - Invoice being processed.
+     * @param frozen     - Frozen balance snapshot.
+     * @param direction  - 'RC' for CLOSED surplus returns; 'RX' for CANCELLED full.
+     * @param deps       - Module dependencies.
+     */
+    private _executeAutoReturnFromFrozen;
+    /**
+     * Execute immediate auto-return sends for all senders with a positive net balance
+     * in the given frozen snapshot. Used by closeInvoice (direction :RC) and
+     * cancelInvoice (direction :RX).
+     *
+     * Best-effort: send failures are logged but do not throw. Each send is
+     * attempted independently so a failure for one sender does not block others.
+     *
+     * @param invoiceId  - Invoice being terminated.
+     * @param frozen     - Frozen balance snapshot (already persisted before this call).
+     * @param direction  - 'RC' for CLOSED surplus returns; 'RX' for CANCELLED full returns.
+     * @param deps       - Module dependencies.
+     */
+    private _executeTerminationReturns;
+    /**
+     * Reset all in-memory state to empty. Called at the start of `load()` and
+     * in `destroy()`.
+     */
+    private _clearInMemoryState;
+    /**
+     * Scan PaymentsModule's live + archived token sets for INVOICE-typed
+     * tokens and populate `invoiceTermsCache` with any whose terms are
+     * parseable. Idempotent — existing entries are NOT overwritten (the
+     * cache is also a write-through surface for locally-minted /
+     * locally-imported invoices that may have additional state the
+     * on-disk genesis doesn't carry yet).
+     *
+     * Used by:
+     *   - `_doLoad()` to populate the cache at startup (`emitForNew: false`).
+     *   - The `sync:completed` subscriber to pick up invoice tokens that
+     *     a peer published to Profile/IPFS but never delivered via DM-TXF
+     *     (`emitForNew: true`). The §C.4 cross-device flow depends on this.
+     *
+     * Always rebuilds the hash→ID index at the end so the index stays in
+     * sync with the cache.
+     *
+     * @param opts.emitForNew  When true, fire `invoice:created` with
+     *                         `confirmed: false` for any invoiceId that
+     *                         was NOT already in the cache before this
+     *                         call (matches `importInvoice` semantics —
+     *                         externally-sourced invoices are
+     *                         "unconfirmed" until the caller validates).
+     * @returns The list of invoiceIds newly added by this call.
+     */
+    private _refreshInvoiceTermsCache;
+    /**
+     * Rebuild the hash→invoiceId index from all known invoices.
+     * Called after invoiceTermsCache is fully populated during load().
+     */
+    private _rebuildHashIndex;
+    /**
+     * Register a single invoice ID in the hash index.
+     * Called when a new invoice is created or imported at runtime.
+     */
+    private _addToHashIndex;
+    /**
+     * Resolve an invoice reference (from an on-chain memo) to a known invoice ID.
+     *
+     * Tries two paths:
+     * 1. Direct match: the reference IS the invoice ID (legacy / transport memos)
+     * 2. Hash match: the reference is SHA-256(invoiceId) (privacy-preserving on-chain memos)
+     *
+     * @param ref - The hex string from the parsed memo (raw ID or hash)
+     * @returns The resolved invoice ID, or null if not found
+     */
+    resolveInvoiceRef(ref: string): string | null;
+    /**
+     * Persist frozen balances map to storage.
+     *
+     * W11 (T-D8): frozen balances are derived-state housekeeping — the
+     * user action that triggered the freeze (close / cancel / implicit
+     * terminate) is committed by a separate terminal-set write that
+     * carries the `invoice_close` / `invoice_cancel` tag. Hence
+     * `cache_index` here is correct regardless of caller context.
+     */
+    private _persistFrozenBalances;
+    /**
+     * Persist both terminal sets (CANCELLED and CLOSED) to storage.
+     *
+     * W11 (T-D8): this helper is a bulk snapshot of BOTH sets — called
+     * from contexts where either set may have changed (load
+     * reconciliation, auto-close on coverage). Classifying as
+     * `cache_index` is a deliberate choice: the caller-side user-action
+     * commit points in `closeInvoice` / `cancelInvoice` / `_terminateInvoice`
+     * already write only the single mutated set with the specific
+     * `invoice_close` / `invoice_cancel` tag; this bulk re-snapshot is
+     * defensive housekeeping (and on the load path the "user action"
+     * already happened in a prior session).
+     */
+    private _persistTerminalSets;
+    /**
+     * Persist auto-return settings (global flag + per-invoice map) to storage.
+     *
+     * W11 (T-D8): auto-return settings are preferences / housekeeping
+     * state (per SPEC §10.2.3 → "auto-return ledger" is `cache_index`).
+     * The user-action triggers (close / cancel) carry their own tag at
+     * the terminal-set commit point; this settings write is ancillary.
+     */
+    private _persistAutoReturnSettings;
+    /**
+     * Load the auto-return dedup ledger, prune stale completed entries, and
+     * attempt crash recovery for pending entries.
+     *
+     * Crash recovery (§7.5):
+     * - For each 'pending' entry: check getHistory() for an existing outbound return
+     *   transfer whose memo contains the originalTransferId (secondary dedup).
+     * - If found → mark completed.
+     * - If not found and retryCount < MAX_RETRY_COUNT → retry send.
+     * - If not found and retryCount >= MAX_RETRY_COUNT → mark failed, fire event.
+     */
+    private _loadAndRecoverAutoReturnLedger;
+    /**
+     * Load the persisted invoice-transfer index from storage and perform an
+     * initial gap-fill scan for any new token transactions since last session.
+     *
+     * Phase 1: Load persisted index state (INV_LEDGER_INDEX, per-invoice keys, TOKEN_SCAN_STATE).
+     * Phase 2: Gap-fill by scanning token transaction tails.
+     */
+    private _loadInvoiceTransferIndex;
+    /**
+     * Scan the tail of each token's transaction array for new invoice references.
+     * Uses `tokenScanState` as a watermark to process only new transactions.
+     *
+     * After scanning, flushes dirty ledger entries and updates tokenScanState.
+     * This is idempotent due to the composite dedup key in processTokenTransactions.
+     */
+    private _gapFillTokenScan;
+    /**
+     * Update confirmed=true on all ledger entries whose transferId starts with
+     * the given tokenId prefix. Called when transfer:confirmed fires to ensure
+     * allConfirmed can become true for implicit close.
+     */
+    private _markTokenEntriesConfirmed;
+    /**
+     * Scan a token's transaction array from `startIndex` and index any invoice
+     * references found in the on-chain message bytes or (fallback) transport memo.
+     *
+     * For each transaction with an invoice reference, produces one
+     * InvoiceTransferRef per coin entry in the token's coinData and inserts it
+     * into the invoiceLedger under the composite key `${transferId}::${coinId}`.
+     *
+     * Updates `tokenScanState` watermark and invalidates `balanceCache` for
+     * affected invoices.
+     *
+     * @param tokenId    - The token's genesis ID.
+     * @param txf        - Parsed TxfToken.
+     * @param startIndex - First unprocessed transaction index.
+     */
+    private _processTokenTransactions;
+    /**
+     * Register listeners on the Sphere event bus for PaymentsModule-emitted events:
+     * - `transfer:incoming` — new inbound transfer (IncomingTransfer payload)
+     * - `transfer:confirmed` — outbound transfer confirmed (TransferResult payload)
+     * - `history:updated` — history entry added/updated (TransactionHistoryEntry payload)
+     *
+     * All handlers are wrapped in try/catch to prevent event handler errors from
+     * propagating back to the event emitter.
+     *
+     * Subscription must be set up AFTER the initial index build (§7.6 step 7) to
+     * prevent races between recovery retries and incoming event processing.
+     */
+    private _subscribeToPaymentsEvents;
+    /**
+     * Handle a token change notification from PaymentsModule.
+     *
+     * Called synchronously by the `onTokenChange` observer when a token is
+     * added or updated in PaymentsModule (addToken, updateToken). Parses the
+     * token's TXF data and indexes any invoice-referencing transactions.
+     *
+     * This is the "index at validation time" path — transactions are indexed
+     * the moment they enter the wallet, eliminating the need for separate
+     * gap-fill scans for runtime changes.
+     *
+     * Synchronous: only updates in-memory ledger and marks dirty entries.
+     * Persistence is deferred to the next `_flushDirtyLedgerEntries()` call
+     * (triggered by event handlers or explicit flush).
+     *
+     * @param tokenId - The genesis tokenId (64-hex) of the changed token.
+     * @param sdkData - The raw TXF JSON string from the token's sdkData field.
+     */
+    private _handleTokenChange;
+    /**
+     * Drain the `_flushPromise` chain until it's fully resolved.
+     * A concurrent `_handleTokenChange` can replace the reference between our
+     * await and the null assignment, so we loop until the field is null.
+     */
+    private _drainFlushPromise;
+    /**
+     * Synchronously persist any pending provisional ledger entry for `invoiceId`
+     * before returning to the caller. Used by `payInvoice` and
+     * `returnInvoicePayment` to make the in-memory provisional entry durable
+     * inside the same per-invoice gate that wrote it, closing the
+     * crash-mid-conclude race that produces over-coverage on receivers.
+     *
+     * Implementation:
+     *   1. Schedule a flush via the existing `_flushPromise` chain (so
+     *      concurrent `_handleTokenChange` callers waiting on the chain
+     *      observe ours as part of the sequence).
+     *   2. Await OUR flush directly — NOT `_drainFlushPromise()`, which would
+     *      spin while concurrent token changes keep extending the chain and
+     *      hold the per-invoice gate for an unbounded number of additional
+     *      flushes. We only need OUR provisional entry durable.
+     *   3. `_flushDirtyLedgerEntries` swallows per-invoice `storage.set`
+     *      rejections internally (sets a local `step1Failed` flag), leaving
+     *      the dirty entry on the set without re-throwing. So we post-check
+     *      `dirtyLedgerEntries.has(invoiceId)` and throw a `STORAGE_ERROR`
+     *      `SphereError` if our entry is still dirty — propagating to the
+     *      caller so they learn about the durability failure rather than
+     *      receiving a silent "success" return that lies on disk.
+     *
+     * @param invoiceId    The invoice whose provisional entry must be durable.
+     * @param callContext  Used in the error message so the caller is named
+     *                     ('payInvoice' / 'returnInvoicePayment') without
+     *                     forcing a stack-trace inspection.
+     */
+    private _persistProvisionalAndVerify;
+    /**
+     * Handle an incoming transfer event from PaymentsModule (§6.2).
+     *
+     * Advances token scan watermarks, then parses the transport memo for an invoice
+     * reference. If found, executes the full §6.2 event firing pipeline: unknown-
+     * reference check, return handling with gate serialization, payment event firing,
+     * status recomputation, and coverage/overpayment cascade.
+     *
+     * Non-blocking: errors are caught by the caller's .catch() wrapper in
+     * _subscribeToPaymentsEvents().
+     *
+     * @param transfer - IncomingTransfer payload from 'transfer:incoming' event.
+     */
+    private _handleIncomingTransfer;
+    /**
+     * Handle a transfer:confirmed event from PaymentsModule (§6.2 confirmed path).
+     *
+     * Advances watermarks, invalidates balance caches, then re-fires all applicable
+     * invoice events with confirmed=true for any related invoices. If all targets are
+     * covered and confirmed, triggers implicit close via the per-invoice gate.
+     *
+     * @param result - TransferResult payload from 'transfer:confirmed' event.
+     */
+    private _handleTransferConfirmed;
+    /**
+     * Handle a history:updated event from PaymentsModule (§6.2 history fallback).
+     *
+     * Used as a fallback trigger for pre-change transfers or when on-chain message
+     * decoding is not yet available. Advances watermark, then parses transport memo
+     * and fires events exactly as _handleIncomingTransfer does.
+     *
+     * @param entry - HistoryRecord payload from 'history:updated' event.
+     */
+    private _handleHistoryUpdated;
+    /**
+     * Handle an incoming DM event from CommunicationsModule.
+     * Detects `invoice_receipt:` and `invoice_cancellation:` prefixes (§5.11, §5.12).
+     * Ordered: receipt prefix checked first, then cancellation, then treated as regular DM.
+     *
+     * @param message - DirectMessage from 'message:dm' event.
+     */
+    private _handleIncomingDM;
+    /**
+     * Parse and import an `invoice_delivery:` UXF-bundle DM (#226).
+     *
+     * Steps:
+     *   1. Apply DM-size guard (`MAX_INVOICE_DELIVERY_BYTES`).
+     *   2. JSON.parse the substring after the prefix.
+     *   3. Validate the {@link InvoiceDeliveryEnvelope} shape (type / version
+     *      / invoiceId / bundle discriminator).
+     *   4. For `uxf-car`: base64-decode the CAR bytes inline.
+     *      For `uxf-cid`: deferred to a follow-up; logs a warning and drops.
+     *   5. `UxfPackage.fromCar(carBytes)` then `pkg.assemble(invoiceId)` to
+     *      rebuild the TxfToken JSON.
+     *   6. Call {@link importInvoice} with the assembled token. The import
+     *      path owns full proof verification + token-type guard + ledger
+     *      insertion — no logic is duplicated here.
+     *   7. `INVOICE_ALREADY_EXISTS` is treated as benign (relay replay,
+     *      prior manual import, parallel deliverInvoice). All other
+     *      `SphereError` codes are logged and dropped — a single malicious
+     *      DM must NOT break the wider receive pipeline.
+     *
+     * @param message - DM whose content starts with `invoice_delivery:`.
+     */
+    private _processInvoiceDeliveryDM;
+    /**
+     * Parse and fire an `invoice:receipt_received` event from a receipt DM (§5.11).
+     *
+     * Applies 64 KB size guard before JSON.parse, performs full payload validation
+     * per §5.11 step 5, enforces invoice existence check (step 5b), and applies
+     * nametag fallback: `dm.senderNametag ?? payload.targetNametag` (step 6).
+     *
+     * @param message - The DM containing the receipt payload.
+     */
+    private _processReceiptDM;
+    /**
+     * Parse and fire an `invoice:cancellation_received` event from a cancellation DM (§5.12).
+     *
+     * Applies 64 KB size guard, performs full payload validation per §5.12 step 5,
+     * enforces invoice existence check (step 5b), and applies nametag fallback:
+     * `dm.senderNametag ?? payload.targetNametag` (step 6).
+     *
+     * @param message - The DM containing the cancellation notice payload.
+     */
+    private _processCancellationDM;
+    /**
+     * Core §6.2 event pipeline for an incoming transfer that references a known invoice.
+     *
+     * Handles both the return path (§6.2 step 3) and the forward path (§6.2 steps 4–7).
+     * Called from _handleIncomingTransfer after invoice existence is confirmed.
+     *
+     * @param transfer         - IncomingTransfer source data (tokens, sender info).
+     * @param invoiceId        - Validated invoice token ID from parsed memo.
+     * @param paymentDirection - Parsed direction from memo.
+     * @param confirmed        - Whether the transfer is already confirmed.
+     */
+    private _processInvoiceTransferEvent;
+    /**
+     * Core §6.2 event pipeline for a history:updated entry that references a known invoice.
+     * Mirrors _processInvoiceTransferEvent but operates on a HistoryRecord.
+     *
+     * @param entry            - HistoryRecord from 'history:updated' event.
+     * @param invoiceId        - Validated invoice token ID.
+     * @param paymentDirection - Parsed direction from memo.
+     * @param confirmed        - Whether the transfer is confirmed.
+     */
+    private _processInvoiceHistoryEvent;
+    /**
+     * Execute an auto-return for a forward payment to a terminal invoice (§6.2 step 5).
+     *
+     * Uses the dedup ledger pattern to prevent double-returns. Runs inside the
+     * per-invoice gate to serialize concurrent auto-returns for the same invoice.
+     * Best-effort: send failures are recorded in the dedup ledger and fire
+     * `invoice:auto_return_failed` but do not throw.
+     *
+     * @param invoiceId    - The terminal invoice ID.
+     * @param originalRef  - The InvoiceTransferRef for the incoming forward payment.
+     * @param deps         - Module dependencies.
+     */
+    private _executeEventAutoReturn;
+    /**
+     * Fire cascade coverage events (§6.2 steps 7a–7d) from a recomputed invoice status.
+     *
+     * Fires per §6.3 idempotency contract: may fire multiple times. Consumers MUST
+     * handle them idempotently. Events fired:
+     * - `invoice:asset_covered` for each covered coin asset
+     * - `invoice:target_covered` for each covered target
+     * - `invoice:covered` when all targets are covered
+     * - `invoice:overpayment` when surplus > 0 for any coin asset
+     *
+     * @param invoiceId - Invoice token ID.
+     * @param terms     - Invoice terms (unused directly; kept for future per-asset checks).
+     * @param status    - Recomputed invoice status from computeInvoiceStatus().
+     * @param _entries  - Ledger entries (reserved for future use).
+     * @param confirmed - Whether the triggering transfer is confirmed.
+     * @param deps      - Module dependencies.
+     */
+    private _fireCoverageEvents;
+    /**
+     * Build a synthetic InvoiceTransferRef from an IncomingTransfer event payload.
+     *
+     * Used during the event pipeline when the on-chain index (_processTokenTransactions)
+     * has not yet populated the ledger with a real ref. Derives coinId/amount from the
+     * first token's genesis coinData. Falls back to empty strings for unknown fields.
+     *
+     * Direction is determined by comparing the wallet's addresses against
+     * destinationAddress: inbound if destination matches a wallet address, outbound if
+     * the wallet is the sender.
+     *
+     * @param transfer         - IncomingTransfer payload.
+     * @param invoiceId        - Parsed invoice ID from memo (used for destination lookup).
+     * @param paymentDirection - Parsed direction from memo.
+     * @param confirmed        - Whether the transfer is confirmed.
+     * @returns Synthetic InvoiceTransferRef for event payloads.
+     */
+    private _buildSyntheticTransferRef;
+    /**
+     * Build a synthetic InvoiceTransferRef from a HistoryRecord event payload.
+     *
+     * Used during the history:updated event pipeline when the on-chain index is not
+     * yet populated. Direction is derived from HistoryRecord.type ('SENT' → outbound,
+     * otherwise inbound).
+     *
+     * @param entry            - HistoryRecord from 'history:updated'.
+     * @param invoiceId        - Parsed invoice ID (unused; reserved for future use).
+     * @param paymentDirection - Parsed direction from memo.
+     * @param confirmed        - Whether the transfer is confirmed.
+     * @returns Synthetic InvoiceTransferRef for event payloads.
+     */
+    private _buildSyntheticTransferRefFromHistory;
+    /**
+     * Persist all dirty invoice ledger entries to storage, update token scan state,
+     * and update the INV_LEDGER_INDEX.
+     *
+     * Write order (§7.3 crash recovery):
+     * 1. Write inv_ledger:{invoiceId} for each dirty invoice.
+     * 2. Write token_scan_state.
+     * 3. Write inv_ledger_index.
+     */
+    private _flushDirtyLedgerEntries;
+    /**
+     * Register that a token affects a given invoice in the secondary reverse index.
+     */
+    private _addToTokenInvoiceMap;
+    /**
+     * Persist an invoice's ledger entries — via CID reference when
+     * `cidRefStore` is injected, inline JSON otherwise. Pattern A per-invoice
+     * per spec §8.3. Each invoice has its own KV key and its own memo slot,
+     * so pins/refs for different invoices never collide.
+     *
+     * Memoization: if the serialized entries match the last successful pin
+     * for this invoice, reuse the cached ref rather than re-pinning (AES-GCM
+     * random IVs would otherwise churn a new CID on every unchanged flush).
+     */
+    private _persistLedgerForInvoice;
+    /**
+     * Parse a raw ledger KV payload for one invoice — dual-read per §6:
+     *   - CID ref envelope → fetch from IPFS via `cidRefStore`.
+     *   - No cidRefStore but ref present → throw CID_REF_UNREADABLE (silent
+     *     fallback would mean silently losing all tracked payments for this
+     *     invoice, corrupting balance computation).
+     *   - Legacy inline JSON → parse with narrow SyntaxError catch.
+     *
+     * Returns `null` on malformed non-ref data; caller treats that as
+     * "reset this invoice's inner map and force rescan" (same contract as
+     * the pre-refactor try/catch at the load call site).
+     */
+    private _parseLedgerPayload;
+    /**
+     * Parse InvoiceTerms from a tokenData string (JSON).
+     * Returns null on parse failure (corruption-resilient).
+     *
+     * @param tokenData - JSON string from genesis.data.tokenData.
+     */
+    /**
+     * Normalize symbol coinIds (e.g. "BTC", "ETH") to hash coinIds in invoice terms.
+     * Called after parsing to ensure computeInvoiceStatus matches against hash coinIds
+     * from ledger entries (which come from token coinData, always hash format).
+     */
+    private _normalizeInvoiceTerms;
+    private _parseInvoiceTerms;
+    /**
+     * Build a per-address-scoped storage key.
+     * Uses the current identity's addressId prefix for per-address isolation.
+     *
+     * @param key - The STORAGE_KEYS_ADDRESS key (or arbitrary string).
+     */
+    private getStorageKey;
+    /**
+     * Load and JSON-parse a value from storage, returning `defaultValue` on
+     * missing keys or JSON parse failures (corruption-resilient).
+     *
+     * @param key          - Storage key (will be scoped via getStorageKey).
+     * @param defaultValue - Value to return when the key is missing or corrupt.
+     */
+    private loadJsonFromStorage;
+    /**
+     * JSON-serialize and save a value to storage with an explicit W11
+     * originated-tag classification (T-D8, SPEC §10.2.3).
+     *
+     * Callers MUST choose `entryType` at the call site — the helper does
+     * not infer. Mis-classification is caught at runtime by
+     * `assertOriginTagLocal` inside the storage layer and surfaced as
+     * SECURITY_ORIGIN_MISMATCH. TypeScript catches unknown tags at
+     * compile time via the narrow union.
+     *
+     * @param key       - Storage key (will be scoped via getStorageKey).
+     * @param value     - Value to serialize and store.
+     * @param entryType - W11 classification (see setStorageEntry).
+     */
+    private saveJsonToStorage;
+    /**
+     * W11 originated-tag dispatcher (T-D8, SPEC §10.2.3). Writes through
+     * `storage.setEntry` when the provider supports it so the OpLog
+     * envelope carries an explicit `originated` tag matching the semantic
+     * class of the write. Providers without envelope-storage (plain
+     * IndexedDB / file KV) fall through to the plain `set()` — semantics
+     * are identical, only the peer-replicated classification differs.
+     *
+     * Classification (see profile/aggregator-pointer/originated-tag.ts):
+     *   - `invoice_pay`    — per-invoice ledger entry persists a payment
+     *                         attribution (user action on the target side).
+     *   - `invoice_close`  — explicit or implicit CLOSED-set commit point.
+     *   - `invoice_cancel` — explicit or implicit CANCELLED-set commit point.
+     *   - `cache_index`    — derived-state snapshots (frozen balances,
+     *                         auto-return settings, token scan watermark,
+     *                         INV_LEDGER_INDEX, bulk terminal-set
+     *                         re-writes, load-time reconciliation).
+     *
+     * `invoice_mint` is deliberately NOT in the union: invoice mint
+     * persists the token via `PaymentsModule.addToken` (TokenStorageProvider
+     * — envelope-stamped separately in T-D11) and never reaches this
+     * KV-level helper.
+     *
+     * Callers MUST choose the classification at the call site — the
+     * helper does NOT infer. Mis-classification is caught by
+     * `assertOriginTagLocal` inside the storage layer and surfaced as
+     * SECURITY_ORIGIN_MISMATCH.
+     */
+    private setStorageEntry;
+    /** Per-class dedup set for the W11 fallback log (see setStorageEntry). */
+    private static _w11FallbackLogged;
+}
+
+/** Network configurations */
+declare const NETWORKS: {
+    readonly mainnet: {
+        readonly name: "Mainnet";
+        readonly aggregatorUrl: "https://aggregator.unicity.network/rpc";
+        readonly nostrRelays: readonly ["wss://relay.unicity.network", "wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band"];
+        readonly ipfsGateways: readonly string[];
+        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
+        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
+        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
+    };
+    readonly testnet: {
+        readonly name: "Testnet";
+        readonly aggregatorUrl: "https://goggregator-test.unicity.network";
+        readonly nostrRelays: readonly ["wss://nostr-relay.testnet.unicity.network"];
+        readonly ipfsGateways: readonly string[];
+        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
+        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
+        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
+    };
+    readonly dev: {
+        readonly name: "Development";
+        readonly aggregatorUrl: "https://dev-aggregator.dyndns.org/rpc";
+        readonly nostrRelays: readonly ["wss://nostr-relay.testnet.unicity.network"];
+        readonly ipfsGateways: readonly string[];
+        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
+        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
+        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
+    };
+};
+type NetworkType = keyof typeof NETWORKS;
+
+/**
+ * Swap Module Type Definitions
+ *
+ * All types for the SwapModule: deal/manifest, state machine, swap references,
+ * DM message formats, escrow inbound messages, event payloads, configuration,
+ * dependencies, and storage schemas.
+ *
+ * @see docs/SWAP-SPEC.md - Section 2
+ */
+
+/**
+ * A swap deal -- the user-facing description of what is being exchanged.
+ * Constructed by the application layer (e.g., UI, agent) and passed to
+ * proposeSwap(). Addresses may use any Sphere-supported format; they are
+ * resolved to DIRECT:// before manifest construction.
+ */
+interface SwapDeal {
+    /** Party A's address: @nametag, DIRECT://, or 33-byte chain pubkey (02.../03...) */
+    readonly partyA: string;
+    /** Party B's address: @nametag, DIRECT://, or 33-byte chain pubkey (02.../03...) */
+    readonly partyB: string;
+    /** Coin ID that party A will deposit (e.g., 'UCT') */
+    readonly partyACurrency: string;
+    /** Amount party A will deposit (positive integer string, smallest units) */
+    readonly partyAAmount: string;
+    /** Coin ID that party B will deposit (e.g., 'USDU') */
+    readonly partyBCurrency: string;
+    /** Amount party B will deposit (positive integer string, smallest units) */
+    readonly partyBAmount: string;
+    /**
+     * Swap timeout in seconds. Range: [60, 86400] (1 minute to 24 hours).
+     * Starts counting when the first deposit is received by the escrow.
+     * If both deposits are not covered within this window, the escrow
+     * cancels the swap and returns deposits.
+     */
+    readonly timeout: number;
+    /**
+     * Address of the escrow service: @nametag or DIRECT:// format.
+     * If omitted, falls back to SwapModuleConfig.defaultEscrowAddress.
+     * At least one of these must be provided.
+     */
+    readonly escrowAddress?: string;
+}
+/**
+ * Nametag binding proof -- proves that the nametag owner authorized
+ * the DIRECT:// address for this swap. The signature covers
+ * "nametag_bind:{nametag}:{directAddress}:{swapId}".
+ */
+interface NametagBindingProof {
+    /** The human-readable nametag (without @) */
+    readonly nametag: string;
+    /** The party's resolved DIRECT:// address */
+    readonly direct_address: string;
+    /** The party's 33-byte compressed chain pubkey (hex) */
+    readonly chain_pubkey: string;
+    /** 130-char hex signature over the binding message */
+    readonly signature: string;
+}
+/**
+ * Auxiliary manifest data (nametag bindings).
+ * Not part of swap_id hash -- carried alongside the manifest
+ * for UI enrichment and nametag verification.
+ */
+interface ManifestAuxiliary {
+    /** Nametag binding proof for party A */
+    readonly party_a_binding?: NametagBindingProof;
+    /** Nametag binding proof for party B */
+    readonly party_b_binding?: NametagBindingProof;
+}
+/**
+ * The swap manifest -- wire format submitted to the escrow service.
+ * All addresses are resolved to DIRECT:// before construction.
+ * The swap_id is a content-addressed hash ensuring manifest integrity.
+ *
+ * This is the same SwapManifest type used by the escrow service
+ * (see escrow-service/src/core/manifest-validator.ts).
+ */
+interface SwapManifest {
+    /** SHA-256 of JCS(manifest fields excluding swap_id). 64 lowercase hex chars. */
+    readonly swap_id: string;
+    /** Party A's resolved DIRECT:// address */
+    readonly party_a_address: string;
+    /** Party B's resolved DIRECT:// address */
+    readonly party_b_address: string;
+    /** Coin ID party A deposits */
+    readonly party_a_currency_to_change: string;
+    /** Amount party A deposits (positive integer string) */
+    readonly party_a_value_to_change: string;
+    /** Coin ID party B deposits */
+    readonly party_b_currency_to_change: string;
+    /** Amount party B deposits (positive integer string) */
+    readonly party_b_value_to_change: string;
+    /** Timeout in seconds (integer, [60, 86400]) */
+    readonly timeout: number;
+    /** Random salt ensuring unique swap_id even for identical deal terms (32 hex chars) */
+    readonly salt: string;
+    /** Escrow DIRECT:// address (v2, required when protocol_version === 2) */
+    readonly escrow_address?: string;
+    /** Protocol version (v2: 2, absent for v1) */
+    readonly protocol_version?: number;
+}
+/**
+ * Client-side swap progress. This is the wallet's LOCAL view of where
+ * the swap is in its lifecycle. It does not 1:1 map to the escrow's
+ * SwapState -- the escrow has its own state machine with different
+ * granularity (ANNOUNCED, DEPOSIT_INVOICE_CREATED, PARTIAL_DEPOSIT, etc.).
+ *
+ * The client-side progress is a simplified projection:
+ *
+ *   proposed -> accepted -> announced -> depositing -> awaiting_counter
+ *     -> concluding -> completed
+ *
+ * Terminal states: completed, cancelled, failed
+ *
+ * State transitions are strictly forward except for terminal states,
+ * which can be reached from most non-terminal states.
+ */
+type SwapProgress = 'proposed' | 'accepted' | 'announced' | 'depositing' | 'awaiting_counter' | 'concluding' | 'completed' | 'cancelled' | 'failed';
+/**
+ * The role this wallet plays in the swap.
+ * Determined at proposal time and immutable for the swap's lifetime.
+ */
+type SwapRole = 'proposer' | 'acceptor';
+/**
+ * The persistent swap record stored locally per address.
+ * Contains all state needed to resume a swap across wallet restarts.
+ *
+ * This is the wallet-side record. The escrow maintains its own
+ * SwapRecord with different fields (see escrow-service/src/core/types.ts).
+ */
+interface SwapRef {
+    /** Swap ID (64 lowercase hex chars, content-addressed from manifest) */
+    readonly swapId: string;
+    /** The original deal description (user-facing, pre-resolution) */
+    readonly deal: SwapDeal;
+    /** The wire-format manifest (addresses resolved to DIRECT://) */
+    readonly manifest: SwapManifest;
+    /** This wallet's role in the swap */
+    readonly role: SwapRole;
+    /** Current progress in the client-side state machine */
+    progress: SwapProgress;
+    /**
+     * Deposit invoice token ID (set after escrow announcement).
+     * This is the invoice the escrow created for collecting deposits
+     * from both parties.
+     */
+    depositInvoiceId?: string;
+    /**
+     * Payout invoice token ID (set after escrow delivers payout).
+     * For proposer (party A): the invoice targeting party A's address
+     * with party B's currency. For acceptor: vice versa.
+     */
+    payoutInvoiceId?: string;
+    /**
+     * Last known escrow state (from status_result or announce_result DMs).
+     * Informational -- the client-side progress is authoritative for the
+     * wallet's own state machine.
+     */
+    escrowState?: string;
+    /**
+     * Counterparty's transport pubkey (HKDF-derived, 64-hex).
+     * Set from dm.senderPubkey on incoming proposals, or resolved from
+     * PeerInfo.transportPubkey on outgoing proposals. Used for DM sender
+     * verification on acceptance/rejection messages.
+     */
+    counterpartyPubkey?: string;
+    /** Human-readable nametag of the counterparty (e.g., 'alice', 'bob'), if known. */
+    counterpartyNametag?: string;
+    /**
+     * Transfer ID of the local deposit payment (from TransferResult.id).
+     * Used to correlate invoice:payment events with the local deposit.
+     */
+    localDepositTransferId?: string;
+    /**
+     * Transport pubkey of the resolved escrow service (HKDF-derived, 64-hex).
+     * Stored after escrow resolution so that incoming escrow DMs can be
+     * authenticated by comparing dm.senderPubkey against this field.
+     */
+    escrowPubkey?: string;
+    /**
+     * DIRECT:// address of the resolved escrow service.
+     * Used for deposit invoice term verification (target address check).
+     */
+    escrowDirectAddress?: string;
+    /**
+     * Whether the payout invoice has been verified (correct terms, covered).
+     * Set to true by verifyPayout() after successful verification.
+     */
+    payoutVerified: boolean;
+    /** Timestamp when the swap record was created (ms) */
+    readonly createdAt: number;
+    /** Timestamp when the swap entered 'announced' state (deposit invoice available). Used as timeout base. */
+    announcedAt?: number;
+    /** Timestamp of most recent state change (ms) */
+    updatedAt: number;
+    /** Error message if progress is 'failed' */
+    error?: string;
+    /** Proposer's chain pubkey (from v2 proposal DM) */
+    readonly proposerChainPubkey?: string;
+    /** Proposer's signature over swap consent message */
+    readonly proposerSignature?: string;
+    /** Acceptor's signature over swap consent message */
+    readonly acceptorSignature?: string;
+    /** Auxiliary data (nametag bindings) */
+    readonly auxiliary?: ManifestAuxiliary;
+    /** Protocol version (2 for v2, undefined for v1) */
+    readonly protocolVersion?: number;
+}
+/**
+ * Result of proposeSwap().
+ */
+interface SwapProposalResult {
+    /** The swap ID (content-addressed from manifest) */
+    readonly swapId: string;
+    /** The constructed manifest (addresses resolved to DIRECT://) */
+    readonly manifest: SwapManifest;
+    /** The created SwapRef (progress='proposed', role='proposer') */
+    readonly swap: SwapRef;
+}
+/**
+ * Options for proposeSwap().
+ */
+interface ProposeSwapOptions {
+    /** Human-readable message sent to the counterparty in the proposal DM. */
+    readonly message?: string;
+}
+/**
+ * Options for getSwapStatus().
+ */
+interface GetSwapStatusOptions {
+    /**
+     * If true, send a 'status' DM to the escrow and merge the response.
+     * Default: false for terminal swaps, true for active swaps.
+     */
+    readonly queryEscrow?: boolean;
+}
+/**
+ * Filter options for getSwaps().
+ */
+interface GetSwapsFilter {
+    /** Filter by progress state(s) */
+    readonly progress?: SwapProgress | SwapProgress[];
+    /** Filter by role */
+    readonly role?: SwapRole;
+    /** When true, exclude swaps where progress is 'completed', 'cancelled', or 'failed' */
+    readonly excludeTerminal?: boolean;
+}
+/**
+ * Configuration for SwapModule.
+ * Passed to createSwapModule() factory function.
+ */
+interface SwapModuleConfig {
+    /** Enable debug logging */
+    readonly debug?: boolean;
+    /**
+     * Pre-configured escrow address (@nametag or DIRECT://).
+     * Used as the default when SwapDeal.escrowAddress is omitted.
+     * At least one of this or SwapDeal.escrowAddress must be provided
+     * for any swap operation.
+     */
+    readonly defaultEscrowAddress?: string;
+    /**
+     * Time to wait for the counterparty to accept or reject a proposal (ms).
+     * After this timeout, the proposal is marked as 'failed' locally.
+     * Default: 300000 (5 minutes).
+     *
+     * This is a CLIENT-SIDE timeout only. The proposal DM remains
+     * deliverable on Nostr indefinitely -- the counterparty could still
+     * respond after this timeout. Late responses are ignored.
+     */
+    readonly proposalTimeoutMs?: number;
+    /**
+     * Maximum number of non-terminal swaps tracked simultaneously.
+     * Prevents unbounded memory growth from DM spam.
+     * Default: 100.
+     *
+     * When the limit is reached, new proposals (both outgoing and incoming)
+     * are rejected with SWAP_LIMIT_EXCEEDED.
+     */
+    readonly maxPendingSwaps?: number;
+    /**
+     * Time to wait for the escrow's announce_result DM after announcing (ms).
+     * After this timeout, the announce is considered failed.
+     * Default: 120000 (2 minutes).
+     */
+    readonly announceTimeoutMs?: number;
+    /**
+     * TTL for terminal swap records before they are purged from storage (ms).
+     * Completed, cancelled, and failed swaps older than this TTL are removed
+     * during load() to prevent unbounded storage growth.
+     * Default: 604800000 (7 days).
+     */
+    readonly terminalPurgeTtlMs?: number;
+}
+/**
+ * Dependencies injected into SwapModule.
+ * Follows the same pattern as AccountingModuleDependencies.
+ * Each external module is represented by a narrow interface containing
+ * only the methods the SwapModule actually calls.
+ */
+interface SwapModuleDependencies {
+    /**
+     * AccountingModule subset -- invoice import, lookup, status, payment,
+     * and event subscription. Used for deposit invoice import, deposit
+     * payment, and payout verification.
+     */
+    readonly accounting: {
+        /** Import a received invoice TXF token (deposit or payout) */
+        importInvoice(token: unknown): Promise<unknown>;
+        /** Lightweight invoice lookup by ID */
+        getInvoice(invoiceId: string): unknown | null;
+        /** Full status with per-target balances */
+        getInvoiceStatus(invoiceId: string): unknown;
+        /** Send payment referencing an invoice */
+        payInvoice(invoiceId: string, params: unknown): Promise<TransferResult>;
+        /**
+         * Reverse-index lookup: which token IDs are linked to this invoice.
+         *
+         * Required by `verifyPayout` to filter the validate-invalid set down to
+         * tokens that actually back this swap's payout invoice. Without this on
+         * the facade, the call site's optional-chain returns undefined → empty
+         * Set → security fail-closed branch fires forever and the swap can
+         * never reach `completed`. Diagnosed in HMA-trade-settlement round 20.
+         */
+        getTokenIdsForInvoice(invoiceId: string): Set<string>;
+        /** Subscribe to invoice events (returns unsubscribe function) */
+        on<T extends SphereEventType>(type: T, handler: (data: SphereEventMap[T]) => void): () => void;
+    };
+    /**
+     * PaymentsModule subset -- L3 token validation during payout verification.
+     */
+    readonly payments: {
+        /** Validate all tokens against the aggregator */
+        validate(): Promise<{
+            valid: Token[];
+            invalid: Token[];
+        }>;
+    };
+    /**
+     * CommunicationsModule subset -- DM send/receive for peer and escrow messaging.
+     */
+    readonly communications: {
+        /** Send an encrypted DM to a peer by chain pubkey */
+        sendDM(recipientPubkey: string, content: string): Promise<{
+            eventId: string;
+        }>;
+        /** Subscribe to incoming DMs (returns unsubscribe function) */
+        onDirectMessage(handler: (message: {
+            readonly senderPubkey: string;
+            readonly senderNametag?: string;
+            readonly content: string;
+            readonly timestamp: number;
+        }) => void): () => void;
+    };
+    /** General storage for persistent swap records */
+    readonly storage: StorageProvider;
+    /** Current wallet identity */
+    readonly identity: FullIdentity;
+    /** Event emitter (from Sphere) */
+    readonly emitEvent: <T extends SphereEventType>(type: T, data: SphereEventMap[T]) => void;
+    /**
+     * Transport-level peer resolution.
+     * Used to resolve @nametag and chain pubkey addresses to DIRECT:// and PeerInfo.
+     */
+    readonly resolve: (identifier: string) => Promise<PeerInfo | null>;
+    /** All tracked wallet addresses (for determining party role) */
+    readonly getActiveAddresses: () => TrackedAddress[];
+}
+
+/**
+ * Swap Module
+ *
+ * Orchestrates two-party atomic currency swaps within a Sphere wallet.
+ * Coordinates the swap lifecycle — proposal negotiation, escrow interaction,
+ * deposit payment, and payout verification — using DM messaging between
+ * counterparties and the escrow service, backed by AccountingModule invoices.
+ *
+ * This module is a CLIENT of the escrow service: it does not hold funds,
+ * compute coverage, or execute payouts. Those responsibilities belong to the
+ * escrow service. The module manages the wallet-side state machine, DM protocol,
+ * and local persistence.
+ *
+ * @see docs/SWAP-SPEC.md
+ */
+
+declare class SwapModule {
+    private config;
+    private deps;
+    private swaps;
+    /** Set of swap IDs that have reached terminal state (completed/cancelled/failed).
+     * Used to reject replayed proposal DMs for swaps that were already processed.
+     * Populated during loadFromStorage and updated on terminal transitions. */
+    private terminalSwapIds;
+    /** Terminal index entries loaded from storage — preserved so persistIndex()
+     * can merge them back (terminal swaps are NOT in this.swaps). */
+    private _storedTerminalEntries;
+    private _gateMap;
+    private localTimers;
+    /** AbortControllers for in-progress sendAnnounce_v2 calls, keyed by swapId.
+     * Cancelled/rejected swaps abort these to stop retry loops immediately. */
+    private announceAbortControllers;
+    /** Tracks swaps for which we already emitted swap:completed(payoutVerified:false).
+     * Prevents returnFalse() from emitting duplicate events on repeated verifyPayout calls. */
+    private _completedEventEmittedUnverified;
+    private invoiceToSwapIndex;
+    private destroyed;
+    private loaded;
+    private _loading;
+    private _loadingDeferred;
+    private loadPromise;
+    private dmUnsubscribe;
+    private invoiceEventUnsubs;
+    /**
+     * Create a SwapModule instance.
+     * Stores configuration only. No I/O, no subscriptions, no storage access.
+     * The module is inert until `initialize()` and `load()` are called.
+     *
+     * @param config - Optional module configuration. Defaults are applied for all fields.
+     */
+    constructor(config?: SwapModuleConfig);
+    /**
+     * Inject dependencies into the module. Must be called before `load()`.
+     * Calling `initialize()` again replaces the deps without resetting in-memory
+     * state -- always call `load()` after re-initializing.
+     *
+     * @param deps - Module dependencies provided by Sphere.
+     */
+    initialize(deps: SwapModuleDependencies): void;
+    /**
+     * Load persisted state from storage and subscribe to event streams.
+     *
+     * Steps (per SWAP-SPEC section 3.4):
+     * 1. Load persisted swap records from storage.
+     * 2. Purge terminal swaps older than terminalPurgeTtlMs.
+     * 3. Clean up stale proposals (proposer-side timeout).
+     * 4. Register DM handler via CommunicationsModule.
+     * 5. Subscribe to invoice events.
+     * 6. Resume local timers.
+     * 7. Rebuild invoiceToSwapIndex.
+     * 8. Crash recovery actions per state.
+     *
+     * @throws {SphereError} `SWAP_NOT_INITIALIZED` if `initialize()` has not been called.
+     * @throws {SphereError} `SWAP_MODULE_DESTROYED` if the module has been destroyed.
+     */
+    load(): Promise<void>;
+    /** Create a deferred promise (resolve callable externally). */
+    private _createDeferred;
+    /**
+     * Internal load implementation. Separated from load() to keep the
+     * re-entry guard logic clean.
+     */
+    private _doLoad;
+    /**
+     * Clean up the module. Unsubscribes from events, clears timers, drains gates,
+     * and persists any dirty state.
+     *
+     * After destroy(), all public methods throw `SWAP_MODULE_DESTROYED`.
+     */
+    destroy(): Promise<void>;
+    /**
+     * Execute `fn` exclusively for the given swap ID.
+     * Operations on the same swap are serialized (FIFO).
+     * Operations on different swaps run concurrently.
+     */
+    private withSwapGate;
+    /**
+     * W11 originated-tag helper (SPEC §10.2.3, T-D9). Writes through
+     * `storage.setEntry` when the provider supports it so the OpLog
+     * envelope carries an explicit `originated` tag matching the
+     * semantic class of the write. Providers without envelope-storage
+     * (plain IndexedDB / file KV) fall through to the plain `set()` —
+     * semantics are identical, only the peer-replicated classification
+     * differs.
+     *
+     * Classification (see profile/aggregator-pointer/originated-tag.ts):
+     *   - `swap_propose`  — proposer/acceptor records a new proposal
+     *   - `swap_accept`   — acceptor transitions 'proposed' → 'accepted'
+     *   - `swap_deposit`  — post-accept lifecycle progression
+     *                       (announced / depositing / concluding / terminal).
+     *                       The three swap user-action edges defined by the
+     *                       spec collapse post-accept progression into
+     *                       `swap_deposit`; this covers both the deposit
+     *                       payment itself and the downstream transitions
+     *                       emitted by escrow DM handlers.
+     *   - `cache_index`   — swap-index refresh, dedup / cleanup
+     *
+     * Callers MUST choose the classification at the call site — the
+     * helper does NOT infer. Mis-classification is caught by
+     * `assertOriginTagLocal` inside the storage layer and surfaced as
+     * SECURITY_ORIGIN_MISMATCH.
+     */
+    private setStorageEntry;
+    /** Per-class dedup set for the W11 fallback log (see setStorageEntry). */
+    private static _w11FallbackLogged;
+    /**
+     * Classify a swap record write by the swap's current progress. Used
+     * by `persistSwap` to stamp the OpLog entry with the correct user-
+     * action originated-tag.
+     *
+     * Mapping (SPEC §10.2.3):
+     *   - 'proposed'  → 'swap_propose'
+     *   - 'accepted'  → 'swap_accept'
+     *   - all other progress values (announced, depositing,
+     *     awaiting_counter, concluding, completed, cancelled, failed)
+     *     → 'swap_deposit' (closest spec-defined user-action edge for
+     *     post-accept progression, including escrow-driven terminals).
+     */
+    private classifySwapWrite;
+    /**
+     * Persist a single swap record to storage.
+     * Writes the per-swap key and updates the index.
+     *
+     * TODO: Swap records are stored in StorageProvider (local file/IndexedDB) which
+     * is NOT synced to IPFS. The IpfsStorageProvider only covers TokenStorageProvider
+     * (TXF data). Nostr DMs provide the primary replication mechanism for swaps
+     * (proposals, acceptance, escrow messages). In a future iteration, consider
+     * extending IPFS sync to include swap records for full cross-device recovery.
+     */
+    private persistSwap;
+    /**
+     * Persist the lightweight swap index to storage.
+     * The index contains summary entries for all known swaps (including terminal).
+     */
+    /**
+     * Persist the swap index. Merges in-memory active swaps with stored
+     * terminal entries (which are not kept in this.swaps but still need
+     * to be in the index for dedup and TTL purging).
+     */
+    private persistIndex;
+    /**
+     * Load swap records from storage.
+     * Reads the swap_index, then loads each non-terminal swap from its per-swap key.
+     * Purges terminal swap records older than terminalPurgeTtlMs.
+     */
+    private loadFromStorage;
+    /**
+     * Remove a single swap from storage (per-swap key) and update the index.
+     */
+    private removeSwapFromStorage;
+    /**
+     * Transition a swap to a new progress state with optional field updates.
+     * Validates the transition, updates in memory, persists, then returns.
+     *
+     * External actions (DM sends, event emissions) should happen AFTER calling
+     * this method -- persist-before-act ensures crash safety.
+     *
+     * @param swap - The swap record to transition.
+     * @param to - The target progress state.
+     * @param updates - Optional partial updates to merge into the swap.
+     */
+    private transitionProgress;
+    /**
+     * Ensure dependencies have been injected via `initialize()`.
+     * @throws {SphereError} `SWAP_NOT_INITIALIZED`
+     */
+    private ensureInitialized;
+    /**
+     * Ensure the module has been initialized AND loaded.
+     * Used by public API methods that require full readiness.
+     * @throws {SphereError} `SWAP_NOT_INITIALIZED`
+     */
+    private ensureReady;
+    /**
+     * Ensure the module has not been destroyed.
+     * @throws {SphereError} `SWAP_MODULE_DESTROYED`
+     */
+    private ensureNotDestroyed;
+    /**
+     * Propose a swap to a counterparty.
+     *
+     * @param deal - The swap deal terms (parties, currencies, amounts, timeout).
+     * @param options - Optional proposal options (message to include in DM).
+     * @returns The swap proposal result with swapId, manifest, and SwapRef.
+     * @throws {SphereError} `SWAP_INVALID_DEAL` for invalid deal fields.
+     * @throws {SphereError} `SWAP_RESOLVE_FAILED` if address resolution fails.
+     * @throws {SphereError} `SWAP_LIMIT_EXCEEDED` if max pending swaps reached.
+     * @throws {SphereError} `SWAP_DM_SEND_FAILED` if proposal DM fails to send.
+     */
+    /**
+     * Ping an escrow service to verify it is online and reachable.
+     *
+     * Resolves the escrow address, sends a `{ type: 'ping' }` DM, and waits
+     * for a `{ type: 'pong', escrow_address, timestamp }` response.
+     *
+     * @param escrowAddress - The escrow's @nametag or DIRECT:// address.
+     * @param timeoutMs - Max wait for pong (default 30s).
+     * @returns The pong payload with the escrow's confirmed address and timestamp.
+     */
+    pingEscrow(escrowAddress: string, timeoutMs?: number): Promise<{
+        escrow_address: string;
+        timestamp: number;
+    }>;
+    proposeSwap(deal: SwapDeal, options?: ProposeSwapOptions): Promise<SwapProposalResult>;
+    /**
+     * Accept a received swap proposal.
+     * Transitions the swap from 'proposed' to 'accepted', sends an acceptance
+     * DM to the proposer, then announces the manifest to the escrow.
+     *
+     * @param swapId - The swap ID to accept.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     * @throws {SphereError} `SWAP_WRONG_STATE` if swap is not in 'proposed' state.
+     */
+    acceptSwap(swapId: string): Promise<void>;
+    /**
+     * Reject a received swap proposal.
+     * Transitions the swap to 'cancelled', sends a rejection DM to the proposer.
+     *
+     * @param swapId - The swap ID to reject.
+     * @param reason - Optional human-readable reason for rejection.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     * @throws {SphereError} `SWAP_WRONG_STATE` if swap is not in 'proposed' state.
+     */
+    rejectSwap(swapId: string, reason?: string): Promise<void>;
+    /**
+     * Send the local deposit for a swap.
+     * Calls accounting.payInvoice() with the swap's deposit invoice.
+     *
+     * @param swapId - The swap ID to deposit for.
+     * @returns The transfer result from payInvoice().
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     * @throws {SphereError} `SWAP_WRONG_STATE` if swap is not in 'announced' state.
+     * @throws {SphereError} `SWAP_DEPOSIT_FAILED` if payment fails.
+     */
+    deposit(swapId: string): Promise<TransferResult>;
+    /**
+     * Verify that the payout invoice was correctly fulfilled.
+     * Checks invoice status, verifies terms match the manifest, validates
+     * L3 proofs, and verifies escrow creator identity.
+     *
+     * @param swapId - The swap ID to verify.
+     * @returns true if payout is verified, false otherwise.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     * @throws {SphereError} `SWAP_PAYOUT_VERIFICATION_FAILED` on verification failure.
+     */
+    verifyPayout(swapId: string): Promise<boolean>;
+    /**
+     * Get the current status of a swap.
+     * Optionally queries the escrow for the latest state.
+     *
+     * @param swapId - The swap ID to query.
+     * @param options - Optional options (queryEscrow).
+     * @returns The current SwapRef.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     */
+    getSwapStatus(swapId: string, options?: GetSwapStatusOptions): Promise<SwapRef>;
+    /**
+     * List swaps with optional filtering.
+     *
+     * @param filter - Optional filter by progress, role, or excludeTerminal.
+     * @returns Array of SwapRef matching the filter.
+     */
+    getSwaps(filter?: GetSwapsFilter): SwapRef[];
+    /**
+     * Cancel an active swap.
+     * Transitions to 'cancelled' and cleans up local state.
+     *
+     * @param swapId - The swap ID to cancel.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if swap does not exist.
+     * @throws {SphereError} `SWAP_ALREADY_COMPLETED` if swap is already completed.
+     * @throws {SphereError} `SWAP_ALREADY_CANCELLED` if swap is already cancelled.
+     */
+    cancelSwap(swapId: string): Promise<void>;
+    /**
+     * Resolve a swap ID from a full 64-char hex string or a unique prefix (min 4 chars).
+     * Matches against all known swaps (active + terminal in current session).
+     *
+     * @param idOrPrefix - Full swap ID or unique hex prefix (min 4 chars).
+     * @returns The full 64-char swap ID.
+     * @throws {SphereError} `SWAP_NOT_FOUND` if no match or ambiguous prefix.
+     * @throws {SphereError} `SWAP_INVALID_DEAL` if prefix is too short or not hex.
+     */
+    resolveSwapId(idOrPrefix: string): string;
+    /**
+     * Handle an incoming DM that may be a swap-related message.
+     * Dispatches to the appropriate handler based on message type.
+     * All errors are caught and logged — never propagated.
+     *
+     * @param dm - The incoming direct message.
+     */
+    private handleIncomingDM;
+    /**
+     * Check if a DM sender matches the expected escrow for a swap.
+     * Compares the sender's transport pubkey (dm.senderPubkey) against the
+     * escrowPubkey (transport pubkey) stored on the SwapRef during escrow resolution.
+     *
+     * @returns `true` if the sender matches the stored escrow pubkey,
+     *          `false` if no escrowPubkey is stored (unknown escrow) or mismatch.
+     */
+    private isFromExpectedEscrow;
+    /**
+     * Subscribe to AccountingModule invoice events relevant to active swaps.
+     * Maintains the invoiceId -> swapId reverse index and emits swap events
+     * in response to deposit/payout invoice state changes.
+     */
+    private setupInvoiceEventSubscriptions;
+    /**
+     * Start a local timeout timer for a swap.
+     * Uses announcedAt as the timeout base (per Unicity finding #2).
+     * Adds a 30-second grace period over the escrow's timeout.
+     */
+    private startLocalTimer;
+    /**
+     * Clear the local timeout timer for a swap.
+     */
+    private clearLocalTimer;
+    /**
+     * Resume local timers for all active swaps during load().
+     * Computes remaining time from announcedAt and starts timers.
+     * Immediately cancels swaps whose timeouts have already elapsed.
+     */
+    private resumeTimers;
+    /**
+     * Start a proposal timeout timer for outgoing proposals.
+     * Expires the proposal after proposalTimeoutMs if no acceptance arrives.
+     */
+    private startProposalTimer;
+    /**
+     * Start an announce-response timeout timer for swaps waiting for escrow invoice delivery.
+     * Used by both v1 (after sendAnnounce) and v2 acceptor (after sendAnnounce_v2).
+     * If the escrow's invoice_delivery DM is not received within announceTimeoutMs,
+     * the swap is transitioned to 'failed'.
+     *
+     * Cleared automatically when:
+     * - invoice_delivery transitions the swap to 'announced' (via startLocalTimer →
+     *   clearLocalTimer)
+     * - transitionProgress transitions to any terminal state (calls clearLocalTimer)
+     */
+    private startAnnounceTimer;
+}
+
+/**
+ * Address Scanning — Derive HD addresses and check L1 balances via Fulcrum.
+ *
+ * Used after importing BIP32/.dat wallets to discover which addresses have funds.
+ */
+
+/** Progress callback for address scanning */
+interface ScanAddressProgress {
+    /** Number of addresses scanned so far */
+    scanned: number;
+    /** Total addresses to scan (maxAddresses * chains) */
+    total: number;
+    /** Current address being checked */
+    currentAddress: string;
+    /** Number of addresses found with balance */
+    foundCount: number;
+    /** Current gap count (consecutive empty addresses) */
+    currentGap: number;
+    /** Number of found addresses that have a nametag */
+    nametagsFoundCount: number;
+}
+/** Single scanned address result */
+interface ScannedAddressResult {
+    /** HD derivation index */
+    index: number;
+    /** L1 bech32 address (alpha1...) */
+    address: string;
+    /** Full BIP32 derivation path */
+    path: string;
+    /** L1 balance in ALPHA */
+    balance: number;
+    /** Whether this is a change address (chain 1) */
+    isChange: boolean;
+    /** Nametag associated with this address (resolved during scan) */
+    nametag?: string;
+}
+/** Options for scanning addresses */
+interface ScanAddressesOptions {
+    /** Maximum number of addresses to scan per chain (default: 50) */
+    maxAddresses?: number;
+    /** Stop after this many consecutive 0-balance addresses (default: 20) */
+    gapLimit?: number;
+    /** Also scan change addresses (chain 1) (default: true) */
+    includeChange?: boolean;
+    /** Progress callback */
+    onProgress?: (progress: ScanAddressProgress) => void;
+    /** Abort signal for cancellation */
+    signal?: AbortSignal;
+    /** Resolve nametag for a found address. Return nametag string or null. */
+    resolveNametag?: (l1Address: string) => Promise<string | null>;
+}
+/** Result of scanning */
+interface ScanAddressesResult {
+    /** All addresses found with non-zero balance */
+    addresses: ScannedAddressResult[];
+    /** Total balance across all found addresses (in ALPHA) */
+    totalBalance: number;
+    /** Number of addresses actually scanned */
+    scannedCount: number;
+}
+
+/**
+ * HD Address Discovery — discover previously used addresses via transport binding events.
+ *
+ * Derives transport pubkeys for HD indices and batch-queries the relay.
+ * Complements L1 scan (scan.ts) by finding L3-only addresses.
+ */
+
+/** Progress callback for address discovery */
+interface DiscoverAddressProgress {
+    /** Current batch being queried */
+    currentBatch: number;
+    /** Total batches planned */
+    totalBatches: number;
+    /** Number of addresses discovered so far */
+    discoveredCount: number;
+    /** Current gap count (consecutive empty indices) */
+    currentGap: number;
+    /** Phase: 'transport' or 'l1' */
+    phase: 'transport' | 'l1';
+}
+/** Single discovered address result */
+interface DiscoveredAddress {
+    /** HD derivation index */
+    index: number;
+    /** L1 bech32 address (alpha1...) */
+    l1Address: string;
+    /** L3 DIRECT address */
+    directAddress: string;
+    /** 33-byte compressed chain pubkey */
+    chainPubkey: string;
+    /** Nametag (from binding event) */
+    nametag?: string;
+    /** L1 balance in ALPHA (0 if only discovered via transport) */
+    l1Balance: number;
+    /** Discovery source */
+    source: 'transport' | 'l1' | 'both';
+}
+/** Options for address discovery */
+interface DiscoverAddressesOptions {
+    /** Max HD indices to probe (default: 50) */
+    maxAddresses?: number;
+    /** Stop after N consecutive empty indices (default: 20) */
+    gapLimit?: number;
+    /** Batch size for transport queries (default: 20) */
+    batchSize?: number;
+    /** Also run L1 balance scan (default: true when L1 is configured, false otherwise) */
+    includeL1Scan?: boolean;
+    /** Progress callback */
+    onProgress?: (progress: DiscoverAddressProgress) => void;
+    /** Abort signal */
+    signal?: AbortSignal;
+    /** Auto-track discovered addresses (default: true) */
+    autoTrack?: boolean;
+}
+/** Result of address discovery */
+interface DiscoverAddressesResult {
+    /** All discovered addresses */
+    addresses: DiscoveredAddress[];
+    /** Total indices scanned */
+    scannedCount: number;
+    /** Whether scan was aborted */
+    aborted: boolean;
+}
+
+/**
+ * Legacy File Serialization Types
+ */
+
+type LegacyFileType = 'dat' | 'txt' | 'json' | 'mnemonic' | 'unknown';
+/**
+ * Progress callback for decryption operations
+ */
+type DecryptionProgressCallback = (iteration: number, total: number) => Promise<void> | void;
+
+/** Steps reported by the onProgress callback during wallet init/create/load/import */
+type InitProgressStep = 'clearing' | 'storing_keys' | 'initializing' | 'recovering_nametag' | 'registering_nametag' | 'syncing_identity' | 'syncing_tokens' | 'discovering_addresses' | 'finalizing' | 'complete';
+/** Progress info passed to onProgress callback */
+interface InitProgress {
+    /** Current step identifier */
+    readonly step: InitProgressStep;
+    /** Human-readable description of what's happening */
+    readonly message: string;
+}
+/** Callback for tracking wallet initialization progress */
+type InitProgressCallback = (progress: InitProgress) => void;
+/** Options for creating a new wallet */
+interface SphereCreateOptions {
+    /** BIP39 mnemonic (12 or 24 words) */
+    mnemonic: string;
+    /** Custom derivation path (default: m/44'/0'/0') */
+    derivationPath?: string;
+    /** Optional nametag to register for this wallet (e.g., 'alice' for @alice). Token is auto-minted. */
+    nametag?: string;
+    /** Storage provider instance */
+    storage: StorageProvider;
+    /** Optional token storage provider (for IPFS sync) */
+    tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    /** Transport provider instance */
+    transport: TransportProvider;
+    /** Oracle provider instance */
+    oracle: OracleProvider;
+    /** L1 (ALPHA blockchain) configuration. Pass null to disable L1 entirely. */
+    l1?: L1Config | null;
+    /** Optional price provider for fiat conversion */
+    price?: PriceProvider;
+    /**
+     * Network type (mainnet, testnet, dev) - informational only.
+     * Actual network configuration comes from provider URLs.
+     * Use createBrowserProviders({ network: 'testnet' }) to set up testnet providers.
+     */
+    network?: NetworkType;
+    /** Group chat configuration (NIP-29). Omit to disable groupchat. */
+    groupChat?: GroupChatModuleConfig | boolean;
+    /** Market module configuration. true = enable with defaults, object = custom config. */
+    market?: MarketModuleConfig | boolean;
+    /** Accounting module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    accounting?: AccountingModuleConfig | boolean;
+    /** Swap module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    swap?: SwapModuleConfig | boolean;
+    /** Communications module configuration. */
+    communications?: CommunicationsModuleConfig;
+    /** Optional password to encrypt the wallet. If omitted, mnemonic is stored as plaintext. */
+    password?: string;
+    /**
+     * Auto-discover previously used HD addresses after creation.
+     * - true: discover with defaults (Nostr + L1 scan, autoTrack: true)
+     * - DiscoverAddressesOptions: custom config
+     * - false/undefined: no auto-discovery (default)
+     */
+    discoverAddresses?: boolean | DiscoverAddressesOptions;
+    /** Enable debug logging (default: false) */
+    debug?: boolean;
+    /** Optional callback to report initialization progress steps */
+    onProgress?: InitProgressCallback;
+    /**
+     * Optional UXF bundle-CAR publisher for the `uxf-cid` delivery branch
+     * (Issue #200 Phase 1 wiring). When omitted, CID-bound delivery falls
+     * back to inline (under cap) or throws `IPFS_PUBLISHER_REQUIRED`
+     * (force-cid, over-cap auto). The provider factories
+     * (`createBrowserProviders` / `createNodeProviders`) construct this
+     * with `createUxfCarPublisher(gateways)` from `tokenSync.ipfs` and
+     * expose it on their returned object — propagate it here.
+     */
+    publishToIpfs?: PublishToIpfsCallback;
+    /**
+     * Issue #223 — recipient-side gateway list used to stream-fetch
+     * CARs for incoming `kind: 'uxf-cid'` bundles. Same gateways the
+     * `publishToIpfs` callback targets. Without this list the
+     * auto-installed {@link IngestWorkerPool} silently drops every
+     * `uxf-cid` arrival — see PaymentsModule.cidFetchGateways doc.
+     * The provider factories populate this from `tokenSync.ipfs` —
+     * propagate it here.
+     */
+    cidFetchGateways?: ReadonlyArray<string>;
+}
+/** Options for loading existing wallet */
+interface SphereLoadOptions {
+    /** Storage provider instance */
+    storage: StorageProvider;
+    /** Optional token storage provider (for IPFS sync) */
+    tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    /** Transport provider instance */
+    transport: TransportProvider;
+    /** Oracle provider instance */
+    oracle: OracleProvider;
+    /** L1 (ALPHA blockchain) configuration. Pass null to disable L1 entirely. */
+    l1?: L1Config | null;
+    /** Optional price provider for fiat conversion */
+    price?: PriceProvider;
+    /**
+     * Network type (mainnet, testnet, dev) - informational only.
+     * Actual network configuration comes from provider URLs.
+     * Use createBrowserProviders({ network: 'testnet' }) to set up testnet providers.
+     */
+    network?: NetworkType;
+    /** Group chat configuration (NIP-29). Omit to disable groupchat. */
+    groupChat?: GroupChatModuleConfig | boolean;
+    /** Market module configuration. true = enable with defaults, object = custom config. */
+    market?: MarketModuleConfig | boolean;
+    /** Accounting module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    accounting?: AccountingModuleConfig | boolean;
+    /** Swap module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    swap?: SwapModuleConfig | boolean;
+    /** Communications module configuration. */
+    communications?: CommunicationsModuleConfig;
+    /** Optional password to decrypt the wallet. Must match the password used during creation. */
+    password?: string;
+    /**
+     * Auto-discover previously used HD addresses on load.
+     * - true: discover with defaults (Nostr + L1 scan, autoTrack: true)
+     * - DiscoverAddressesOptions: custom config
+     * - false/undefined: no auto-discovery (default)
+     */
+    discoverAddresses?: boolean | DiscoverAddressesOptions;
+    /** Enable debug logging (default: false) */
+    debug?: boolean;
+    /** Optional callback to report initialization progress steps */
+    onProgress?: InitProgressCallback;
+    /**
+     * Optional UXF bundle-CAR publisher for the `uxf-cid` delivery branch
+     * (Issue #200 Phase 1 wiring). See {@link SphereCreateOptions.publishToIpfs}.
+     */
+    publishToIpfs?: PublishToIpfsCallback;
+    /**
+     * Issue #223 — recipient-side gateway list used to stream-fetch
+     * CARs for incoming `kind: 'uxf-cid'` bundles. Same gateways the
+     * `publishToIpfs` callback targets. Without this list the
+     * auto-installed {@link IngestWorkerPool} silently drops every
+     * `uxf-cid` arrival — see PaymentsModule.cidFetchGateways doc.
+     * The provider factories populate this from `tokenSync.ipfs` —
+     * propagate it here.
+     */
+    cidFetchGateways?: ReadonlyArray<string>;
+}
+/** Options for importing a wallet */
+interface SphereImportOptions {
+    /** BIP39 mnemonic to import */
+    mnemonic?: string;
+    /** Or master private key (hex) */
+    masterKey?: string;
+    /** Chain code for BIP32 (optional) */
+    chainCode?: string;
+    /** Custom derivation path */
+    derivationPath?: string;
+    /** Base path for BIP32 derivation (e.g., "m/84'/1'/0'" from wallet.dat) */
+    basePath?: string;
+    /** Derivation mode: bip32, wif_hmac, legacy_hmac */
+    derivationMode?: DerivationMode;
+    /** Optional nametag to register for this wallet (e.g., 'alice' for @alice). Token is auto-minted. */
+    nametag?: string;
+    /** Storage provider instance */
+    storage: StorageProvider;
+    /** Optional token storage provider */
+    tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    /** Transport provider instance */
+    transport: TransportProvider;
+    /** Oracle provider instance */
+    oracle: OracleProvider;
+    /** L1 (ALPHA blockchain) configuration. Pass null to disable L1 entirely. */
+    l1?: L1Config | null;
+    /** Optional price provider for fiat conversion */
+    price?: PriceProvider;
+    /** Group chat configuration (NIP-29). Omit to disable groupchat. */
+    groupChat?: GroupChatModuleConfig | boolean;
+    /** Market module configuration. true = enable with defaults, object = custom config. */
+    market?: MarketModuleConfig | boolean;
+    /** Accounting module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    accounting?: AccountingModuleConfig | boolean;
+    /** Swap module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    swap?: SwapModuleConfig | boolean;
+    /** Communications module configuration. */
+    communications?: CommunicationsModuleConfig;
+    /** Optional password to encrypt the wallet. If omitted, mnemonic/key is stored as plaintext. */
+    password?: string;
+    /**
+     * Auto-discover previously used HD addresses after import.
+     * - true: discover with defaults (Nostr + L1 scan, autoTrack: true)
+     * - DiscoverAddressesOptions: custom config
+     * - false/undefined: no auto-discovery (default)
+     */
+    discoverAddresses?: boolean | DiscoverAddressesOptions;
+    /** Enable debug logging (default: false) */
+    debug?: boolean;
+    /** Optional callback to report initialization progress steps */
+    onProgress?: InitProgressCallback;
+    /**
+     * Optional UXF bundle-CAR publisher for the `uxf-cid` delivery branch
+     * (Issue #200 Phase 1 wiring). See {@link SphereCreateOptions.publishToIpfs}.
+     */
+    publishToIpfs?: PublishToIpfsCallback;
+    /**
+     * Issue #223 — recipient-side gateway list used to stream-fetch
+     * CARs for incoming `kind: 'uxf-cid'` bundles. Same gateways the
+     * `publishToIpfs` callback targets. Without this list the
+     * auto-installed {@link IngestWorkerPool} silently drops every
+     * `uxf-cid` arrival — see PaymentsModule.cidFetchGateways doc.
+     * The provider factories populate this from `tokenSync.ipfs` —
+     * propagate it here.
+     */
+    cidFetchGateways?: ReadonlyArray<string>;
+}
+/** L1 (ALPHA blockchain) configuration */
+interface L1Config {
+    /** Fulcrum WebSocket URL (default: wss://fulcrum.alpha.unicity.network:50004) */
+    electrumUrl?: string;
+    /** Default fee rate in sat/byte (default: 10) */
+    defaultFeeRate?: number;
+    /** Enable vesting classification (default: true) */
+    enableVesting?: boolean;
+}
+/** Options for unified init (auto-create or load) */
+interface SphereInitOptions {
+    /** Storage provider instance */
+    storage: StorageProvider;
+    /** Transport provider instance */
+    transport: TransportProvider;
+    /** Oracle provider instance */
+    oracle: OracleProvider;
+    /** Optional token storage provider (for IPFS sync) */
+    tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    /** BIP39 mnemonic - if wallet doesn't exist, use this to create */
+    mnemonic?: string;
+    /** Auto-generate mnemonic if wallet doesn't exist and no mnemonic provided */
+    autoGenerate?: boolean;
+    /** Custom derivation path (default: m/44'/0'/0') */
+    derivationPath?: string;
+    /** Optional nametag to register (only on create). Token is auto-minted. */
+    nametag?: string;
+    /** L1 (ALPHA blockchain) configuration. Pass null to disable L1 entirely. */
+    l1?: L1Config | null;
+    /** Optional price provider for fiat conversion */
+    price?: PriceProvider;
+    /**
+     * Network type (mainnet, testnet, dev) - informational only.
+     * Actual network configuration comes from provider URLs.
+     * Use createBrowserProviders({ network: 'testnet' }) to set up testnet providers.
+     */
+    network?: NetworkType;
+    /**
+     * Group chat configuration (NIP-29).
+     * - `true`: Enable with network-default relays
+     * - `GroupChatModuleConfig`: Enable with custom config
+     * - Omit/undefined: No groupchat module
+     */
+    groupChat?: GroupChatModuleConfig | boolean;
+    /** Market module configuration. true = enable with defaults, object = custom config. */
+    market?: MarketModuleConfig | boolean;
+    /** Accounting module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    accounting?: AccountingModuleConfig | boolean;
+    /** Swap module configuration. `true` for defaults, object for custom config, `false`/`undefined` to disable. */
+    swap?: SwapModuleConfig | boolean;
+    /** Optional password to encrypt/decrypt the wallet. If omitted, mnemonic is stored as plaintext. */
+    password?: string;
+    /**
+     * Auto-discover previously used HD addresses when creating from mnemonic.
+     * Only applies when wallet is newly created (not on load of existing wallet).
+     * - true: discover with defaults (Nostr + L1 scan, autoTrack: true)
+     * - DiscoverAddressesOptions: custom config
+     * - false/undefined: no auto-discovery (default)
+     */
+    discoverAddresses?: boolean | DiscoverAddressesOptions;
+    /**
+     * Fallback 'since' timestamp (unix seconds) for the DM (gift-wrap) subscription.
+     * Used when no persisted DM timestamp exists in storage (e.g. first connect).
+     * Without this, a fresh wallet starts from "now" and misses older DMs.
+     */
+    dmSince?: number;
+    /** Communications module configuration. */
+    communications?: CommunicationsModuleConfig;
+    /** Enable debug logging (default: false) */
+    debug?: boolean;
+    /** Optional callback to report initialization progress steps */
+    onProgress?: InitProgressCallback;
+    /**
+     * Optional UXF bundle-CAR publisher for the `uxf-cid` delivery branch
+     * (Issue #200 Phase 1 wiring). See {@link SphereCreateOptions.publishToIpfs}.
+     */
+    publishToIpfs?: PublishToIpfsCallback;
+    /**
+     * Issue #223 — recipient-side gateway list used to stream-fetch
+     * CARs for incoming `kind: 'uxf-cid'` bundles. Same gateways the
+     * `publishToIpfs` callback targets. Without this list the
+     * auto-installed {@link IngestWorkerPool} silently drops every
+     * `uxf-cid` arrival — see PaymentsModule.cidFetchGateways doc.
+     * The provider factories populate this from `tokenSync.ipfs` —
+     * propagate it here.
+     */
+    cidFetchGateways?: ReadonlyArray<string>;
+}
+/** Result of init operation */
+interface SphereInitResult {
+    /** The initialized Sphere instance */
+    sphere: Sphere;
+    /** Whether wallet was newly created */
+    created: boolean;
+    /** Generated mnemonic (only if autoGenerate was used) */
+    generatedMnemonic?: string;
+}
+/**
+ * Issue #239 — options accepted by {@link Sphere.destroy}.
+ *
+ * The default contract is "normal mode": destroy() must not return
+ * until any in-flight flush is drained AND the most-recent pin +
+ * pointer publish are verifiably durable on remote infrastructure
+ * (HEAD-readable bundle CID + aggregator `recoverLatest` returns the
+ * just-published snapshot CID). The verification deadline is
+ * configurable via {@link DestroyOptions.verificationDeadlineMs} and
+ * defaults to 30 000 ms.
+ *
+ * `force: true` switches to "fast-exit": the remote-durability gate is
+ * skipped and any unconfirmed publish is stamped as a
+ * `pendingPublishCid` retry marker. Cold-start on next boot replays
+ * the unverified publish via the existing retry machinery
+ * (`LifecycleManager.retryPendingPublishIfAny`). Use for E2E tests
+ * that simulate ungraceful crash, or for operator-triggered fast
+ * exits where waiting for gateway propagation is not acceptable.
+ */
+/**
+ * Wallet-layer destroy options. Extends `ShutdownOptions` with
+ * wallet-only knobs the storage layer doesn't see.
+ *
+ * Issue #255 (2026-05-25) — `skipFlush` + `flushTimeoutMs` added so
+ * `Sphere.destroy()` can drive a synchronous pre-shutdown
+ * `awaitNextFlush()` on every TokenStorageProvider. Without that,
+ * fire-and-exit CLI commands (`sphere init`, `sphere faucet`,
+ * `sphere invoice pay`, etc.) trigger `notifyProfileDirty()` but
+ * exit before the debounced flush timer fires — their state
+ * mutations never reach IPFS / the aggregator pointer, leaving
+ * sibling devices unable to discover what just happened. The
+ * default behavior is now "flush then shutdown" so CLI mutations
+ * are durably published before the process exits.
+ *
+ * Use `skipFlush: true` for ungraceful-shutdown simulation in tests
+ * or any caller that explicitly wants the legacy fast-exit
+ * semantics (state stamps `pendingPublishCid` and replays on next
+ * boot).
+ */
+interface DestroyOptions extends ShutdownOptions {
+    /**
+     * If `true`, skip the pre-shutdown
+     * `provider.awaitNextFlush(flushTimeoutMs)` call. Default `false`
+     * — destroy waits for any pending debounced flush to complete
+     * (pin + OrbitDB ref + aggregator pointer publish) before
+     * shutting providers down. Set to `true` for fast-exit
+     * scenarios where the cold-start `pendingPublishCid` retry path
+     * is an acceptable recovery surface.
+     */
+    readonly skipFlush?: boolean;
+    /**
+     * Per-provider timeout for the pre-shutdown
+     * `awaitNextFlush(timeoutMs)` call. Default 30 000 ms (matches
+     * `awaitNextFlush`'s own default, and the `flushVerificationDeadlineMs`
+     * the factory wires by default). On TIMEOUT the provider's
+     * `pendingPublishCid` retry marker is left stamped — destroy()
+     * proceeds to shutdown anyway so the caller doesn't hang
+     * indefinitely on a misbehaving gateway.
+     */
+    readonly flushTimeoutMs?: number;
+}
+declare class Sphere {
+    private static instance;
+    private _initialized;
+    private _trackedAddressesLoaded;
+    private _identity;
+    private _masterKey;
+    private _mnemonic;
+    private _password;
+    private _source;
+    private _derivationMode;
+    private _basePath;
+    private _currentAddressIndex;
+    /** Registry of all tracked (activated) addresses, keyed by HD index */
+    private _trackedAddresses;
+    /** Reverse lookup: addressId -> HD index */
+    private _addressIdToIndex;
+    /** Nametag cache: addressId -> (nametagIndex -> nametag). Separate from tracked addresses. */
+    private _addressNametags;
+    /** Cached PROXY address (computed once when nametag is set) */
+    private _cachedProxyAddress;
+    private _storage;
+    private _tokenStorageProviders;
+    private _transport;
+    private _oracle;
+    private _priceProvider;
+    /**
+     * Optional UXF bundle-CAR publisher for the `uxf-cid` delivery branch
+     * (Issue #200 Phase 1 wiring). Forwarded into every PaymentsModule
+     * instance — including those created per-address by
+     * `initializeAddressModules` — so CID-bound delivery branches actually
+     * pin. When null, CID-bound delivery falls back to inline (under cap)
+     * or throws `IPFS_PUBLISHER_REQUIRED` (force-cid, over-cap auto).
+     *
+     * Set by the caller via `SphereCreateOptions.publishToIpfs` /
+     * `SphereLoadOptions.publishToIpfs` / `SphereInitOptions.publishToIpfs`
+     * / `SphereImportOptions.publishToIpfs`. The provider factories
+     * (`createBrowserProviders`, `createNodeProviders`) build this with
+     * `createUxfCarPublisher(gateways)` when `tokenSync.ipfs` is configured.
+     */
+    private _publishToIpfs;
+    /**
+     * Issue #223 — gateway list forwarded to every per-address
+     * PaymentsModule's auto-installed IngestWorkerPool so incoming
+     * `kind: 'uxf-cid'` bundles can be stream-fetched. Same value as
+     * the gateways the `publishToIpfs` callback targets — the provider
+     * factories populate both from `tokenSync.ipfs.gateways`. Null /
+     * empty preserves legacy drop-silent behaviour for `uxf-cid` events.
+     */
+    private _cidFetchGateways;
+    private _payments;
+    private _communications;
+    private _groupChat;
+    private _market;
+    private _accounting;
+    private _swap;
+    private _addressModules;
+    private _transportMux;
+    /** Fallback DM since timestamp from init options, forwarded to mux on creation. */
+    private _dmSince;
+    private _l1Config;
+    private _groupChatConfig;
+    private _marketConfig;
+    private _communicationsConfig;
+    private eventHandlers;
+    private _disabledProviders;
+    private _providerEventCleanups;
+    private _lastProviderConnected;
+    private _pointerWinSubscriptions;
+    private _pointerWinSeen;
+    private _pointerWinInstallInFlight;
+    private constructor();
+    /**
+     * Check if wallet exists in storage
+     */
+    static exists(storage: StorageProvider): Promise<boolean>;
+    /**
+     * Initialize wallet - auto-loads existing or creates new
+     *
+     * @example
+     * ```ts
+     * // Load existing or create with provided mnemonic
+     * const { sphere, created } = await Sphere.init({
+     *   storage,
+     *   transport,
+     *   oracle,
+     *   mnemonic: 'your twelve words...',
+     * });
+     *
+     * // Load existing or auto-generate new mnemonic
+     * const { sphere, created, generatedMnemonic } = await Sphere.init({
+     *   storage,
+     *   transport,
+     *   oracle,
+     *   autoGenerate: true,
+     * });
+     * if (generatedMnemonic) {
+     *   console.log('Save this mnemonic:', generatedMnemonic);
+     * }
+     * ```
+     */
+    static init(options: SphereInitOptions): Promise<SphereInitResult>;
+    /**
+     * Resolve groupChat config from init/create/load options.
+     * - `true` → use network-default relays
+     * - `GroupChatModuleConfig` → pass through
+     * - `undefined` → no groupchat
+     */
+    /**
+     * Resolve GroupChat config from Sphere.init() options.
+     * Note: impl/shared/resolvers.ts has a similar resolver for provider-level config
+     * (different input shape: { enabled?, relays? }). Both fill relay URLs from network defaults.
+     */
+    private static resolveGroupChatConfig;
+    /**
+     * Resolve market module config from Sphere.init() options.
+     * - `true` → enable with default API URL
+     * - `MarketModuleConfig` → pass through
+     * - `undefined` → no market module
+     */
+    private static resolveMarketConfig;
+    /**
+     * Resolve accounting module config from Sphere.init() options.
+     * - `true` → enable with defaults
+     * - `AccountingModuleConfig` → pass through
+     * - `false`/`undefined` → no accounting module
+     */
+    private static resolveAccountingConfig;
+    /**
+     * Resolve swap module config from Sphere.init() options.
+     * - `true` → enable with defaults
+     * - `SwapModuleConfig` → pass through
+     * - `false`/`undefined` → no swap module
+     */
+    private static resolveSwapConfig;
+    /**
+     * Configure TokenRegistry in the main bundle context.
+     *
+     * The provider factory functions (createBrowserProviders / createNodeProviders)
+     * are compiled into separate bundles by tsup, each with their own inlined copy
+     * of TokenRegistry. Their TokenRegistry.configure() call configures a different
+     * singleton than the one used by PaymentsModule (which lives in the main bundle).
+     * This method ensures the main bundle's TokenRegistry is properly configured.
+     */
+    private static configureTokenRegistry;
+    /**
+     * Create new wallet with mnemonic
+     */
+    static create(options: SphereCreateOptions): Promise<Sphere>;
+    /**
+     * Load existing wallet from storage
+     */
+    static load(options: SphereLoadOptions): Promise<Sphere>;
+    /**
+     * Import wallet from mnemonic or master key
+     */
+    static import(options: SphereImportOptions): Promise<Sphere>;
+    /**
+     * Clear all SDK-owned wallet data from storage.
+     *
+     * Removes wallet keys, per-address data, and optionally token storage.
+     * Does NOT affect application-level data stored outside the SDK.
+     *
+     * **W46 — per-entry-key collections coverage (T.1.E):**
+     * Per-entry-key collections (outbox, mintOutbox, audit, invalid,
+     * finalizationQueue) live under composite keys of the form
+     * `${addr}.<collection>.${id}` (and, for multi-rep collections,
+     * further composite ids `${tokenId}.${observedTokenContentHash}`).
+     * `clear()` reaches them via the parent `StorageProvider.clear()`
+     * call below — a full prefix-scan-and-delete on the underlying
+     * KV — NOT via `PROFILE_KEY_MAPPING` lookup. This is intentional:
+     * adding a new per-entry-key collection requires zero changes to
+     * `Sphere.clear()`. The mapping table declares the LOGICAL schema;
+     * runtime keys are always reached by prefix wipe. See
+     * `profile/types.ts` PROFILE_KEY_MAPPING contract block.
+     *
+     * @param storageOrOptions - StorageProvider (backward compatible) or options object
+     *
+     * @example
+     * // New usage (recommended) - clears wallet keys AND token data
+     * await Sphere.clear({
+     *   storage: providers.storage,
+     *   tokenStorage: providers.tokenStorage,
+     * });
+     *
+     * @example
+     * // Legacy usage - clears only wallet keys
+     * await Sphere.clear(storage);
+     */
+    static clear(storageOrOptions: StorageProvider | {
+        storage: StorageProvider;
+        tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    }): Promise<void>;
+    /**
+     * Get current instance
+     */
+    static getInstance(): Sphere | null;
+    /**
+     * Check if initialized
+     */
+    static isInitialized(): boolean;
+    /**
+     * Validate mnemonic using BIP39
+     */
+    static validateMnemonic(mnemonic: string): boolean;
+    /**
+     * Generate new BIP39 mnemonic
+     * @param strength - 128 for 12 words, 256 for 24 words
+     */
+    static generateMnemonic(strength?: 128 | 256): string;
+    /** Payments module (L3 + L1) */
+    get payments(): PaymentsModule;
+    /** Communications module */
+    get communications(): CommunicationsModule;
+    /** Group chat module (NIP-29). Null if not configured. */
+    get groupChat(): GroupChatModule | null;
+    /** Market module (intent bulletin board). Null if not configured. */
+    get market(): MarketModule | null;
+    /** Accounting module (invoicing). Null if not configured. */
+    get accounting(): AccountingModule | null;
+    /** Swap module (atomic token swaps). Null if not configured. */
+    get swap(): SwapModule | null;
+    /** Current identity (public info only) */
+    get identity(): Identity | null;
+    /** Is ready */
+    get isReady(): boolean;
+    /**
+     * Sign a plaintext message with the wallet's secp256k1 private key.
+     *
+     * Returns a 130-character hex string: v (2) + r (64) + s (64).
+     * The private key never leaves the SDK boundary.
+     *
+     * @throws SphereError if the wallet is not initialized or identity is missing
+     */
+    signMessage(message: string): string;
+    /**
+     * Attach this Sphere's internal {@link FullIdentity} (with privateKey) to
+     * a pair of identity-consuming providers WITHOUT exposing the private key
+     * to the caller. Used exclusively by the Sphere-bound Profile factories
+     * in `profile/browser.ts` / `profile/node.ts` and the
+     * `migrateLegacyToProfile({ sphere, ... })` overload in
+     * `profile/token-storage-migration.ts`.
+     *
+     * The `privateKey` field is read from `this._identity` (a private field),
+     * passed directly into `setIdentity` on each provider, and never escapes
+     * the closure. The callback shape is intentionally narrow — only
+     * `setIdentity(FullIdentity): void` is invoked — so the helper cannot
+     * be subverted into leaking the identity through some other provider
+     * method.
+     *
+     * Honors the architectural invariant from the issue #292 owner comment:
+     *
+     * > "Private key material should never leave Sphere SDK itself. However,
+     * > it should be possible to perform all the relevant cryptographic
+     * > operations within Sphere SDK over external materials by means of
+     * > undisclosed respective private key."
+     *
+     * @param applySetIdentity Synchronous callback that receives the live
+     *        `FullIdentity` and calls `setIdentity` on each provider. The
+     *        identity reference MUST NOT be stored, logged, or returned by
+     *        the callback. The helper invokes it once and discards.
+     * @throws {SphereError} `NOT_INITIALIZED` when no identity is bound
+     *        (call this AFTER `Sphere.init` / `Sphere.create` / `Sphere.load`
+     *        resolves). Distinct from the `hexToBytes: empty hex string`
+     *        crash that would have fired inside `Profile*.setIdentity`
+     *        without this guard.
+     *
+     * @internal — sphere-sdk private. Not part of the public API surface.
+     *           Consumers should use `createBrowserProfileProvidersFromSphere`
+     *           or `migrateLegacyToProfile({ sphere, ... })` instead.
+     */
+    _withFullIdentityForProfileFactory(applySetIdentity: (identity: FullIdentity) => void): void;
+    getStorage(): StorageProvider;
+    /**
+     * Get first token storage provider (for backward compatibility)
+     * @deprecated Use getTokenStorageProviders() for multiple providers
+     */
+    getTokenStorage(): TokenStorageProvider<TxfStorageDataBase> | undefined;
+    /**
+     * Get all token storage providers
+     */
+    getTokenStorageProviders(): Map<string, TokenStorageProvider<TxfStorageDataBase>>;
+    /**
+     * Add a token storage provider dynamically (e.g., from UI)
+     * Provider will be initialized and connected automatically
+     */
+    addTokenStorageProvider(provider: TokenStorageProvider<TxfStorageDataBase>): Promise<void>;
+    /**
+     * Remove a token storage provider dynamically
+     */
+    removeTokenStorageProvider(providerId: string): Promise<boolean>;
+    /**
+     * Check if a token storage provider is registered
+     */
+    hasTokenStorageProvider(providerId: string): boolean;
+    /**
+     * Set or update the price provider after initialization
+     */
+    setPriceProvider(provider: PriceProvider): void;
+    getTransport(): TransportProvider;
+    /**
+     * Fetch pending events from Nostr relay and process them through the
+     * multi-address transport mux. This ensures DMs (invoice receipts,
+     * escrow messages, transfer notifications) are delivered to module
+     * handlers before reading in-memory state.
+     *
+     * Tolerates failures — returns silently if transport is not connected.
+     */
+    fetchPendingEvents(): Promise<void>;
+    getAggregator(): OracleProvider;
+    /**
+     * Check if wallet has BIP32 master key for HD derivation
+     */
+    hasMasterKey(): boolean;
+    /**
+     * Get the base derivation path used by this wallet (e.g., "m/44'/0'/0'")
+     */
+    getBasePath(): string;
+    /**
+     * Get the default address path (first external address)
+     * Returns path like "m/44'/0'/0'/0/0"
+     */
+    getDefaultAddressPath(): string;
+    /**
+     * Get current derivation mode
+     */
+    getDerivationMode(): DerivationMode;
+    /**
+     * Get the mnemonic phrase (for backup purposes)
+     * Returns null if wallet was imported from file (masterKey only)
+     */
+    getMnemonic(): string | null;
+    /**
+     * Get wallet info for backup/export purposes
+     */
+    getWalletInfo(): WalletInfo;
+    /**
+     * Export wallet to JSON format for backup
+     *
+     * @example
+     * ```ts
+     * // Export with mnemonic (if available)
+     * const json = sphere.exportToJSON();
+     *
+     * // Export with encryption
+     * const encrypted = sphere.exportToJSON({ password: 'secret' });
+     *
+     * // Export multiple addresses
+     * const multi = sphere.exportToJSON({ addressCount: 5 });
+     * ```
+     */
+    exportToJSON(options?: WalletJSONExportOptions): WalletJSON;
+    /**
+     * Export wallet to text format for backup
+     *
+     * @example
+     * ```ts
+     * // Export unencrypted
+     * const text = sphere.exportToTxt();
+     *
+     * // Export with encryption
+     * const encrypted = sphere.exportToTxt({ password: 'secret' });
+     *
+     * // Export multiple addresses
+     * const multi = sphere.exportToTxt({ addressCount: 5 });
+     * ```
+     */
+    exportToTxt(options?: {
+        password?: string;
+        addressCount?: number;
+    }): string;
+    /**
+     * Import wallet from JSON backup
+     *
+     * @returns Object with success status and optionally recovered mnemonic
+     *
+     * @example
+     * ```ts
+     * const json = '{"version":"1.0",...}';
+     * const { success, mnemonic } = await Sphere.importFromJSON({
+     *   jsonContent: json,
+     *   password: 'secret', // if encrypted
+     *   storage, transport, oracle,
+     * });
+     * ```
+     */
+    static importFromJSON(options: Omit<SphereImportOptions, 'mnemonic' | 'masterKey' | 'chainCode' | 'derivationPath' | 'basePath' | 'derivationMode'> & {
+        jsonContent: string;
+        password?: string;
+    }): Promise<{
+        success: boolean;
+        mnemonic?: string;
+        error?: string;
+    }>;
+    /**
+     * Import wallet from legacy file (.dat, .txt, or mnemonic text)
+     *
+     * Supports:
+     * - Bitcoin Core wallet.dat files (SQLite format, encrypted or unencrypted)
+     * - Text backup files (UNICITY WALLET DETAILS format)
+     * - Plain mnemonic text (12 or 24 words)
+     *
+     * @returns Object with success status, created Sphere instance, and optionally recovered mnemonic
+     *
+     * @example
+     * ```ts
+     * // Import from .dat file
+     * const fileBuffer = await file.arrayBuffer();
+     * const result = await Sphere.importFromLegacyFile({
+     *   fileContent: new Uint8Array(fileBuffer),
+     *   fileName: 'wallet.dat',
+     *   password: 'wallet-password', // if encrypted
+     *   storage, transport, oracle,
+     * });
+     *
+     * // Import from .txt file
+     * const textContent = await file.text();
+     * const result = await Sphere.importFromLegacyFile({
+     *   fileContent: textContent,
+     *   fileName: 'backup.txt',
+     *   storage, transport, oracle,
+     * });
+     * ```
+     */
+    static importFromLegacyFile(options: Omit<SphereImportOptions, 'mnemonic' | 'masterKey' | 'chainCode' | 'derivationPath' | 'basePath' | 'derivationMode'> & {
+        /** File content - Uint8Array for .dat, string for .txt */
+        fileContent: string | Uint8Array;
+        /** File name (used for type detection) */
+        fileName: string;
+        /** Password for encrypted files */
+        password?: string;
+        /** Progress callback for long decryption operations */
+        onDecryptProgress?: DecryptionProgressCallback;
+    }): Promise<{
+        success: boolean;
+        sphere?: Sphere;
+        mnemonic?: string;
+        needsPassword?: boolean;
+        error?: string;
+    }>;
+    /**
+     * Detect legacy file type from filename and content
+     */
+    static detectLegacyFileType(fileName: string, content: string | Uint8Array): LegacyFileType;
+    /**
+     * Check if a legacy file is encrypted
+     */
+    static isLegacyFileEncrypted(fileName: string, content: string | Uint8Array): boolean;
+    /**
+     * Get the current active address index
+     *
+     * @example
+     * ```ts
+     * const currentIndex = sphere.getCurrentAddressIndex();
+     * console.log(currentIndex); // 0
+     *
+     * await sphere.switchToAddress(2);
+     * console.log(sphere.getCurrentAddressIndex()); // 2
+     * ```
+     */
+    getCurrentAddressIndex(): number;
+    /**
+     * Get primary nametag for a specific address
+     *
+     * @param addressId - Address identifier (DIRECT://xxx), defaults to current address
+     * @returns Primary nametag (index 0) or undefined if not registered
+     */
+    getNametagForAddress(addressId?: string): string | undefined;
+    /**
+     * Get all nametags for a specific address
+     *
+     * @param addressId - Address identifier (DIRECT://xxx), defaults to current address
+     * @returns Map of nametagIndex to nametag, or undefined if no nametags
+     */
+    getNametagsForAddress(addressId?: string): Map<number, string> | undefined;
+    /**
+     * Get all registered address nametags
+     * @deprecated Use getActiveAddresses() or getAllTrackedAddresses() instead
+     * @returns Map of addressId to (nametagIndex -> nametag)
+     */
+    getAllAddressNametags(): Map<string, Map<number, string>>;
+    /**
+     * Get all active (non-hidden) tracked addresses.
+     * Returns addresses that have been activated through create, switchToAddress,
+     * registerNametag, or nametag recovery.
+     *
+     * @returns Array of TrackedAddress entries sorted by index, excluding hidden ones
+     */
+    getActiveAddresses(): TrackedAddress[];
+    /**
+     * Get all tracked addresses, including hidden ones.
+     *
+     * @returns Array of all TrackedAddress entries sorted by index
+     */
+    getAllTrackedAddresses(): TrackedAddress[];
+    /**
+     * Get tracked address info by index.
+     *
+     * @param index - Address index
+     * @returns TrackedAddress or undefined if not tracked
+     */
+    getTrackedAddress(index: number): TrackedAddress | undefined;
+    /**
+     * Set visibility of a tracked address.
+     * Hidden addresses are not returned by getActiveAddresses() but remain tracked.
+     *
+     * @param index - Address index to hide/unhide
+     * @param hidden - true to hide, false to show
+     * @throws Error if address index is not tracked
+     */
+    setAddressHidden(index: number, hidden: boolean): Promise<void>;
+    /**
+     * Switch to a different address by index
+     * This changes the active identity to the derived address at the specified index.
+     *
+     * @param index - Address index to switch to (0, 1, 2, ...)
+     *
+     * @example
+     * ```ts
+     * // Switch to second address
+     * await sphere.switchToAddress(1);
+     * console.log(sphere.identity?.address); // alpha1... (address at index 1)
+     *
+     * // Register nametag for this address
+     * await sphere.registerNametag('bob');
+     *
+     * // Switch back to first address
+     * await sphere.switchToAddress(0);
+     * ```
+     */
+    switchToAddress(index: number, options?: {
+        nametag?: string;
+    }): Promise<void>;
+    /**
+     * Background transport sync and nametag operations after address switch.
+     * Runs after switchToAddress returns so L1/L3 queries can start immediately.
+     */
+    private postSwitchSync;
+    /**
+     * Create a new set of per-address modules for the given index.
+     * Each address gets its own PaymentsModule, CommunicationsModule, etc.
+     * Modules are fully independent — they have their own token storage,
+     * and can sync/finalize/split in background regardless of active address.
+     *
+     * @param index - HD address index
+     * @param identity - Full identity for this address
+     * @param tokenStorageProviders - Token storage providers for this address
+     */
+    private initializeAddressModules;
+    /**
+     * Issue #97 — Wire the profile-resident OutboxWriter + SentLedgerWriter
+     * onto a PaymentsModule. Used by BOTH `initializeModules` (primary
+     * address bootstrap) and `initializeAddressModules` (per-address
+     * bootstrap on `switchToAddress`).
+     *
+     * **Atomicity (steelman C5 partial fix):** the OutboxWriter and
+     * SentLedgerWriter MUST be installed together. PaymentsModule's
+     * dispatcher hooks dual-write through both — installing OutboxWriter
+     * alone would tombstone outbox entries on `delivered` with no
+     * permanent SENT backup. To enforce this:
+     *   - If either build returns null, install NEITHER. Falls back to
+     *     legacy KV outbox.
+     *   - Pre-check both before either install fires.
+     *
+     * **Best-effort:** when the storage provider is not a
+     * `ProfileStorageProvider` (e.g. legacy IndexedDB), this is a no-op.
+     *
+     * @param payments  The PaymentsModule instance to wire.
+     * @param identity  The full identity carrying the directAddress (used
+     *                  to derive the addressId scope for both writers).
+     */
+    private wireProfilePersistedSendStorage;
+    /**
+     * Issue #285 — Construct a {@link CidRefStore} via the storage
+     * provider's `buildCidRefStore()` helper when available.
+     *
+     * The four fat-data OpLog write sites
+     * (`CommunicationsModule._doSave`, `GroupChatModule.persistMembers`,
+     * `GroupChatModule.persistProcessedEvents`,
+     * `GroupChatModule.persistMessages`) — plus `PaymentsModule` pending
+     * V5 tokens and `AccountingModule` invoice ledger — accept an
+     * optional CidRefStore via their `initialize()` deps. Without one,
+     * each falls through to inline JSON storage which routinely exceeds
+     * the 128 KiB Profile OpLog cap (3.98 MB observed for the
+     * `announcements` group's `groupChatMembers` blob).
+     *
+     * Best-effort: when the storage provider is not a
+     * `ProfileStorageProvider`, when encryption is disabled, when the
+     * identity has not been set yet, or when no IPFS gateways are
+     * configured, this returns `null` and the modules retain their
+     * legacy inline behaviour (still bounded by the 128 KiB cap; the
+     * existing PAYLOAD-SIZE soft-warn will fire on offending writes).
+     *
+     * The returned store is cached per-Sphere-instance. Identity
+     * rotation (`load()` switching to a different address) MUST
+     * `_cidRefStore = null` to force a rebuild — the captured
+     * encryption key is the one at construction time.
+     */
+    private buildCidRefStoreOrNull;
+    /**
+     * Ensure the transport multiplexer exists and register an address.
+     * Creates the mux on first call. Returns an AddressTransportAdapter
+     * that routes events for this address independently.
+     * @returns AddressTransportAdapter or null if transport is not Nostr-based
+     */
+    private ensureTransportMux;
+    /**
+     * Get per-address modules for any address index (creates lazily if needed).
+     * This allows accessing any address's modules without switching.
+     */
+    getAddressPayments(index: number): PaymentsModule | undefined;
+    /**
+     * Derive address at a specific index
+     *
+     * @param index - Address index (0, 1, 2, ...)
+     * @param isChange - Whether this is a change address (default: false)
+     * @returns Address info with privateKey, publicKey, address, path, index
+     *
+     * @example
+     * ```ts
+     * // Derive first receiving address
+     * const addr0 = sphere.deriveAddress(0);
+     * console.log(addr0.address); // alpha1...
+     *
+     * // Derive second receiving address
+     * const addr1 = sphere.deriveAddress(1);
+     *
+     * // Derive change address
+     * const change = sphere.deriveAddress(0, true);
+     * ```
+     */
+    deriveAddress(index: number, isChange?: boolean): AddressInfo;
+    /**
+     * Internal getActiveAddresses without ensureReady() check.
+     * IMPORTANT: This method skips ensureReady() because it's called during initialization
+     * before _initialized is set. It REQUIRES that loadTrackedAddresses() has already completed.
+     */
+    private _getActiveAddressesInternal;
+    /**
+     * Internal address derivation without ensureReady() check.
+     * Used during initialization (loadTrackedAddresses, ensureAddressTracked)
+     * when _initialized is still false.
+     */
+    private _deriveAddressInternal;
+    /**
+     * Derive address at a full BIP32 path
+     *
+     * @param path - Full BIP32 path like "m/44'/0'/0'/0/5"
+     * @returns Address info
+     *
+     * @example
+     * ```ts
+     * const addr = sphere.deriveAddressAtPath("m/44'/0'/0'/0/5");
+     * ```
+     */
+    deriveAddressAtPath(path: string): AddressInfo;
+    /**
+     * Derive multiple addresses starting from index 0
+     *
+     * @param count - Number of addresses to derive
+     * @param includeChange - Include change addresses (default: false)
+     * @returns Array of address info
+     *
+     * @example
+     * ```ts
+     * // Get first 5 receiving addresses
+     * const addresses = sphere.deriveAddresses(5);
+     *
+     * // Get 5 receiving + 5 change addresses
+     * const allAddresses = sphere.deriveAddresses(5, true);
+     * ```
+     */
+    deriveAddresses(count: number, includeChange?: boolean): AddressInfo[];
+    /**
+     * Scan blockchain addresses to discover used addresses with balances.
+     * Derives addresses sequentially and checks L1 balance via Fulcrum.
+     * Uses gap limit to stop after N consecutive empty addresses.
+     *
+     * @param options - Scanning options
+     * @returns Scan results with found addresses and total balance
+     *
+     * @example
+     * ```ts
+     * const result = await sphere.scanAddresses({
+     *   maxAddresses: 100,
+     *   gapLimit: 20,
+     *   onProgress: (p) => console.log(`Scanned ${p.scanned}/${p.total}, found ${p.foundCount}`),
+     * });
+     * console.log(`Found ${result.addresses.length} addresses, total: ${result.totalBalance} ALPHA`);
+     * ```
+     */
+    scanAddresses(options?: ScanAddressesOptions): Promise<ScanAddressesResult>;
+    /**
+     * Bulk-track scanned addresses with visibility and nametag data.
+     * Selected addresses get `hidden: false`, unselected get `hidden: true`.
+     * Performs only 2 storage writes total (tracked addresses + nametags).
+     */
+    trackScannedAddresses(entries: Array<{
+        index: number;
+        hidden: boolean;
+        nametag?: string;
+    }>): Promise<void>;
+    /**
+     * Discover previously used HD addresses.
+     *
+     * Primary: queries Nostr relay for identity binding events (fast, single batch query).
+     * Secondary: runs L1 balance scan to find legacy addresses with no binding event.
+     *
+     * @example
+     * ```ts
+     * const result = await sphere.discoverAddresses();
+     * console.log(`Found ${result.addresses.length} addresses`);
+     *
+     * // With auto-tracking
+     * await sphere.discoverAddresses({ autoTrack: true });
+     * ```
+     */
+    discoverAddresses(options?: DiscoverAddressesOptions): Promise<DiscoverAddressesResult>;
+    /**
+     * Get aggregated status of all providers, grouped by role.
+     *
+     * @example
+     * ```ts
+     * const status = sphere.getStatus();
+     * // status.transport[0].connected  // true/false
+     * // status.transport[0].metadata?.relays  // { total: 3, connected: 2 }
+     * // status.tokenStorage  // all registered token storage providers
+     * ```
+     */
+    getStatus(): SphereStatus;
+    reconnect(): Promise<void>;
+    /**
+     * Disable a provider at runtime. The provider stays registered but is disconnected
+     * and skipped during operations (e.g., sync).
+     *
+     * Main storage provider cannot be disabled.
+     *
+     * @returns true if successfully disabled, false if provider not found
+     */
+    disableProvider(providerId: string): Promise<boolean>;
+    /**
+     * Re-enable a previously disabled provider. Reconnects and resumes operations.
+     *
+     * @returns true if successfully enabled, false if provider not found
+     */
+    enableProvider(providerId: string): Promise<boolean>;
+    /**
+     * Check if a provider is currently enabled
+     */
+    isProviderEnabled(providerId: string): boolean;
+    /**
+     * Get the set of disabled provider IDs (for passing to modules)
+     */
+    getDisabledProviderIds(): ReadonlySet<string>;
+    /** Get the price provider's ID (implementation detail — not on PriceProvider interface) */
+    private get _priceProviderId();
+    /**
+     * Find a provider by ID across all provider collections
+     */
+    private findProviderById;
+    on<T extends SphereEventType>(type: T, handler: SphereEventHandler<T>): () => void;
+    off<T extends SphereEventType>(type: T, handler: SphereEventHandler<T>): void;
+    sync(options?: SyncOptions): Promise<SyncResult$1>;
+    /**
+     * Get current nametag (if registered)
+     */
+    getNametag(): string | undefined;
+    /**
+     * Check if nametag is registered
+     */
+    hasNametag(): boolean;
+    /**
+     * Get the PROXY address for the current nametag
+     * PROXY addresses are derived from the nametag hash and require
+     * the nametag token to claim funds sent to them
+     * @returns PROXY address string or undefined if no nametag
+     */
+    getProxyAddress(): string | undefined;
+    /**
+     * Resolve any identifier to full peer information.
+     * Accepts @nametag, bare nametag, DIRECT://, PROXY://, L1 address, or transport pubkey.
+     *
+     * @example
+     * ```ts
+     * const peer = await sphere.resolve('@alice');
+     * const peer = await sphere.resolve('DIRECT://...');
+     * const peer = await sphere.resolve('alpha1...');
+     * const peer = await sphere.resolve('ab12cd...'); // 64-char hex transport pubkey
+     * ```
+     */
+    resolve(identifier: string): Promise<PeerInfo | null>;
+    /**
+     * Pre-resolve a Unicity address for DM delivery.
+     *
+     * Warms the CommunicationsModule's internal resolution cache so that
+     * subsequent sendDM() calls to this address avoid the network round-trip.
+     * Useful before a batch of DM operations (e.g., sending hello_ack to
+     * multiple tenants, or broadcasting to a list of agents).
+     *
+     * @param address - Any valid Unicity address (@nametag, DIRECT://, PROXY://, hex pubkey)
+     * @throws SphereError if the address cannot be resolved
+     */
+    preResolveDM(address: string): Promise<void>;
+    /** Compute and cache the PROXY address from the current nametag */
+    private _updateCachedProxyAddress;
+    /**
+     * Register a nametag for the current active address
+     * Each address can have its own independent nametag
+     *
+     * @example
+     * ```ts
+     * // Register nametag for first address (index 0)
+     * await sphere.registerNametag('alice');
+     *
+     * // Switch to second address and register different nametag
+     * await sphere.switchToAddress(1);
+     * await sphere.registerNametag('bob');
+     *
+     * // Now:
+     * // - Address 0 has nametag @alice
+     * // - Address 1 has nametag @bob
+     * ```
+     */
+    registerNametag(nametag: string): Promise<void>;
+    /**
+     * Persist tracked addresses to storage (only minimal fields via StorageProvider)
+     */
+    private persistTrackedAddresses;
+    /**
+     * Mint a nametag token on-chain (like Sphere wallet and lottery)
+     * This creates the nametag token required for receiving tokens via PROXY addresses (@nametag)
+     *
+     * @param nametag - The nametag to mint (e.g., "alice" or "@alice")
+     * @returns MintNametagResult with success status and token if successful
+     *
+     * @example
+     * ```typescript
+     * // Mint nametag token for receiving via @alice
+     * const result = await sphere.mintNametag('alice');
+     * if (result.success) {
+     *   console.log('Nametag minted:', result.nametagData?.name);
+     * } else {
+     *   console.error('Mint failed:', result.error);
+     * }
+     * ```
+     */
+    mintNametag(nametag: string): Promise<MintNametagResult>;
+    /**
+     * Check if a nametag is available for minting
+     * @param nametag - The nametag to check (e.g., "alice" or "@alice")
+     * @returns true if available, false if taken or error
+     */
+    isNametagAvailable(nametag: string): Promise<boolean>;
+    /**
+     * Load tracked addresses from storage.
+     * Falls back to migrating from old ADDRESS_NAMETAGS format.
+     */
+    private loadTrackedAddresses;
+    /**
+     * Migrate from old ADDRESS_NAMETAGS format to tracked addresses.
+     * Scans HD indices 0..19 to match addressIds from the old format.
+     * Populates both _trackedAddresses and _addressNametags.
+     */
+    private migrateFromOldNametagFormat;
+    /**
+     * Ensure an address is tracked in the registry.
+     * If not yet tracked, derives full info and creates the entry.
+     */
+    private ensureAddressTracked;
+    /**
+     * Persist nametag cache to storage.
+     * Format: { addressId: { "0": "alice", "1": "alice2" } }
+     */
+    private persistAddressNametags;
+    /**
+     * Load nametag cache from storage.
+     */
+    private loadAddressNametags;
+    /**
+     * Publish identity binding via transport.
+     * Always publishes base identity (chainPubkey, l1Address, directAddress).
+     * If nametag is set, also publishes nametag hash, proxy address, encrypted nametag.
+     */
+    private syncIdentityWithTransport;
+    /**
+     * Recover nametag from transport after wallet import.
+     * Searches for encrypted nametag events authored by this wallet's pubkey
+     * and decrypts them to restore the nametag association.
+     */
+    private recoverNametagFromTransport;
+    /**
+     * Strip @ prefix and normalize a nametag (lowercase, phone E.164, strip @unicity suffix).
+     */
+    private cleanNametag;
+    /**
+     * Issue #255 (2026-05-25) — synchronously drain every pending
+     * debounced flush across all per-address ProfileTokenStorage
+     * providers (pin + OrbitDB ref + aggregator pointer publish +
+     * per-flush remote-durability verification per #239).
+     *
+     * Use this when a CLI command wants to confirm its state mutation
+     * is durably published BEFORE returning a success exit, without
+     * actually tearing the wallet down. Equivalent to the implicit
+     * pre-shutdown sweep `destroy()` now does, but re-callable.
+     *
+     * Returns when all providers report no pending data OR the
+     * `timeoutMs` budget is exhausted (in which case the affected
+     * provider's `pendingPublishCid` retry marker remains stamped for
+     * cold-start recovery and this method resolves normally — never
+     * throws). Errors during individual provider flushes are logged
+     * and swallowed; the caller cannot distinguish per-provider
+     * failures via this API. For that, call
+     * `(provider as { awaitNextFlush?: ... }).awaitNextFlush(timeoutMs)`
+     * directly on the specific provider you care about.
+     *
+     * @param timeoutMs Per-provider deadline. Default 30 000 ms.
+     */
+    flushPending(timeoutMs?: number): Promise<void>;
+    destroy(options?: DestroyOptions): Promise<void>;
+    private storeMnemonic;
+    private storeMasterKey;
+    /**
+     * Mark wallet as fully created (after successful initialization)
+     * This is called at the end of create()/import() to ensure wallet is only
+     * marked as existing after all initialization steps succeed.
+     */
+    private finalizeWalletCreation;
+    private loadIdentityFromStorage;
+    private initializeIdentityFromMnemonic;
+    private initializeIdentityFromMasterKey;
+    private initializeProviders;
+    /**
+     * Subscribe to provider-level events and bridge them to Sphere connection:changed events.
+     * Uses deduplication to avoid emitting duplicate events.
+     */
+    private subscribeToProviderEvents;
+    /**
+     * RFC-251 Approach D / issue #255 Problem B — publisher side.
+     *
+     * Receives a `storage:pointer-published` event from the lifecycle
+     * manager (which carries an already-signed broadcast payload + its
+     * per-wallet tag) and forwards it over Nostr. Best-effort:
+     * - No publish? Drop silently (transport doesn't support broadcasts
+     *   — falls back to existing WALKBACK_FLOOR convergence).
+     * - Publish throws? Log warn and drop.
+     *
+     * The signing happened upstream (in lifecycle-manager where the
+     * pointer layer is reachable). This method does pure transport I/O.
+     */
+    private forwardPointerPublishedToNostr;
+    /**
+     * RFC-251 Approach D / issue #255 Problem B — subscriber side.
+     *
+     * Install the per-wallet Nostr subscription so this device receives
+     * pointer-win broadcasts from sibling devices sharing the same
+     * wallet identity. Idempotent — safe to call repeatedly; once the
+     * subscription is in place for a given signing pubkey, subsequent
+     * invocations short-circuit.
+     *
+     * Pointer layer is built async during OrbitDB attach, so the
+     * subscription cannot be installed at Sphere init time. Two
+     * triggers eventually fire `maybeInstallPointerWinSubscription`:
+     *   - Lazy-on-own-publish: our own first `storage:pointer-published`
+     *     event implies pointer is live. We install then.
+     *   - (Phase 2 expansion) An eager polling loop after init for
+     *     receive-only devices that never publish themselves. NOT
+     *     wired in Phase 1 — those devices currently miss broadcasts
+     *     until they themselves publish at least once. Acceptable for
+     *     prototype; document as known-gap.
+     */
+    private maybeInstallPointerWinSubscription;
+    /**
+     * Handle an incoming pointer-win broadcast from a sibling device.
+     *
+     * Flow:
+     *   1. Parse JSON content.
+     *   2. Verify signature against own signingPubKey (signature mismatch
+     *      = spoofed or wrong-wallet event; drop silently).
+     *   3. Dedup by (signingPubKey, version) — bounded LRU.
+     *   4. Trigger early reconcile: `recoverLatest()` + `reconcileLocalVersionDownward()`.
+     *      Same path the WALKBACK_FLOOR catch arm runs (lifecycle-manager.ts
+     *      lines 1311-1331), just collapsed to "now" instead of "60s
+     *      throttle expiry".
+     *
+     * All errors are caught and logged at debug — never propagate to the
+     * transport handler.
+     */
+    private handleIncomingPointerWinBroadcast;
+    /**
+     * Emit connection:changed with deduplication — only emits if status actually changed.
+     */
+    private emitConnectionChanged;
+    private cleanupProviderEventSubscriptions;
+    private initializeModules;
+    private ensureReady;
+    private emitEvent;
+    private encrypt;
+    private decrypt;
+}
+
+/**
  * Bidirectional Token Storage Migration (Issue #286)
  *
  * Copies a wallet's token inventory between two `TokenStorageProvider`
@@ -21745,14 +26794,17 @@ declare const TOKEN_STORAGE_MIGRATION_MARKER_VERSION: 1;
  */
 declare function migrateTokenStorage(opts: TokenStorageMigrationOptions): Promise<TokenStorageMigrationResult>;
 /**
- * Convenience wrapper for the common case: migrating from a legacy
- * `IndexedDBTokenStorageProvider` / `FileTokenStorageProvider` to a
- * Profile-backed `ProfileTokenStorageProvider`.
+ * Options shape for the existing legacy→Profile convenience wrapper. Kept
+ * as a named type so the discriminated overload below can reference it.
  *
- * Equivalent to `migrateTokenStorage({ source: legacy, target: profile,
- * direction: 'legacy-to-profile', ... })`.
+ * Consumers passing this shape supply their own `FullIdentity` — typically
+ * because they derived identity outside the SDK (rare) or because they're
+ * exercising the lower-level path. Callers with a live `Sphere` instance
+ * SHOULD prefer the {@link MigrateLegacyToProfileFromSphereOptions} variant
+ * to avoid synthesizing a `FullIdentity` (which can crash inside
+ * `Profile*.setIdentity` if `privateKey === ''`; see Issue #292).
  */
-declare function migrateLegacyToProfile(opts: {
+interface MigrateLegacyToProfileOptions {
     readonly legacy: TokenStorageProvider<TxfStorageDataBase>;
     readonly profile: TokenStorageProvider<TxfStorageDataBase>;
     readonly identity: FullIdentity;
@@ -21761,7 +26813,105 @@ declare function migrateLegacyToProfile(opts: {
     readonly onProgress?: (p: TokenStorageMigrationProgress) => void;
     readonly dryRun?: boolean;
     readonly force?: boolean;
-}): Promise<TokenStorageMigrationResult>;
+}
+/**
+ * Sphere-bound variant (Issue #292). Consumers pass a live `Sphere` instance
+ * plus the legacy provider; the helper:
+ *
+ *   1. Calls the platform-appropriate
+ *      `create{Browser,Node}ProfileProvidersFromSphere` factory to build
+ *      Profile providers WITH identity already attached (private key never
+ *      crosses the SDK boundary).
+ *   2. Runs the same `migrateTokenStorage` flow.
+ *   3. Returns the constructed Profile providers as part of the result so
+ *      the consumer can immediately hand them to `Sphere.init` /
+ *      `Sphere.load` / store them in app state.
+ *
+ * The `factory` field is INJECTED rather than imported here to keep this
+ * file platform-agnostic. The browser/node entry points wire their own
+ * factory; consumers typically call this through one of the platform
+ * helpers, but the raw entry point lets unit tests stub the factory.
+ *
+ * @see https://github.com/unicity-sphere/sphere-sdk/issues/292
+ */
+interface MigrateLegacyToProfileFromSphereOptions {
+    /** Live Sphere instance — used as the identity authority. */
+    readonly sphere: Sphere;
+    /**
+     * Legacy token storage provider (already set up with identity +
+     * initialized) — the migration SOURCE.
+     */
+    readonly legacy: TokenStorageProvider<TxfStorageDataBase>;
+    /**
+     * Factory callback that builds the Profile providers with identity
+     * pre-attached. Typically one of:
+     *
+     *   - `createBrowserProfileProvidersFromSphere` (from
+     *     `@unicitylabs/sphere-sdk/profile/browser`)
+     *   - `createNodeProfileProvidersFromSphere` (from
+     *     `@unicitylabs/sphere-sdk/profile/node`)
+     *
+     * Injected (rather than imported here) so `token-storage-migration.ts`
+     * stays platform-agnostic and the IndexedDB / file-system tree is only
+     * pulled into the bundle the consumer is actually building.
+     */
+    readonly profileFactory: (sphere: Sphere, config: {
+        readonly network: NetworkType;
+        readonly profileConfig?: Partial<ProfileConfig>;
+        readonly oracle?: OracleProvider;
+    }) => Promise<{
+        readonly storage: StorageProvider;
+        readonly tokenStorage: TokenStorageProvider<TxfStorageDataBase>;
+    }>;
+    /** Network preset — forwarded to `profileFactory`. */
+    readonly network: NetworkType;
+    /** Profile-specific configuration overrides — forwarded to `profileFactory`. */
+    readonly profileConfig?: Partial<ProfileConfig>;
+    /** Oracle — forwarded to BOTH the factory AND the migration's spent-probe. */
+    readonly oracle?: OracleProvider;
+    /**
+     * Override marker storage. When omitted, the Profile factory's storage
+     * is used (matches the recommended idiom for legacy→Profile migrations).
+     */
+    readonly markerStorage?: StorageProvider | null;
+    readonly onProgress?: (p: TokenStorageMigrationProgress) => void;
+    readonly dryRun?: boolean;
+    readonly force?: boolean;
+}
+/**
+ * Result of the Sphere-bound `migrateLegacyToProfile` overload. Extends
+ * the base {@link TokenStorageMigrationResult} with the constructed
+ * Profile providers so consumers can immediately swap them in (no
+ * separate factory call required).
+ */
+interface MigrateLegacyToProfileFromSphereResult extends TokenStorageMigrationResult {
+    /** The Profile providers constructed by `profileFactory`. */
+    readonly profileProviders: {
+        readonly storage: StorageProvider;
+        readonly tokenStorage: TokenStorageProvider<TxfStorageDataBase>;
+    };
+}
+/**
+ * Convenience wrapper for the common case: migrating from a legacy
+ * `IndexedDBTokenStorageProvider` / `FileTokenStorageProvider` to a
+ * Profile-backed `ProfileTokenStorageProvider`.
+ *
+ * Two overloads:
+ *
+ *   1. **Original** `{ legacy, profile, identity, ... }` — caller supplies
+ *      a `FullIdentity` directly. Unchanged from #286.
+ *   2. **Sphere-bound (Issue #292)** `{ sphere, legacy, profileFactory,
+ *      network, ... }` — caller supplies a live Sphere; the helper builds
+ *      the Profile providers with identity attached internally (private
+ *      key never crosses the SDK boundary) and returns them alongside
+ *      the migration result.
+ *
+ * The overloads are discriminated by the presence of `sphere`. Backward
+ * compatibility: every existing call site supplying `{ legacy, profile,
+ * identity }` continues to work without source changes.
+ */
+declare function migrateLegacyToProfile(opts: MigrateLegacyToProfileOptions): Promise<TokenStorageMigrationResult>;
+declare function migrateLegacyToProfile(opts: MigrateLegacyToProfileFromSphereOptions): Promise<MigrateLegacyToProfileFromSphereResult>;
 /**
  * Convenience wrapper for the rollback direction:
  * `ProfileTokenStorageProvider` → legacy
@@ -21805,6 +26955,156 @@ declare function clearTokenStorageMigrationMarker(opts: {
     readonly direction: MigrationDirection;
     readonly identity: FullIdentity;
 }): Promise<void>;
+
+/**
+ * SphereCryptographer — Foundation for SDK-bound cryptographic delegation (Issue #292)
+ *
+ * ## Architectural invariant (from project owner)
+ *
+ * > "Private key material should never leave Sphere SDK itself. However, it
+ * > should be possible to perform all the relevant cryptographic operations
+ * > within Sphere SDK over external materials by means of undisclosed
+ * > respective private key (like generating digital signature, etc.)."
+ *
+ * Consumers (and even sibling SDK modules outside `core/Sphere.ts`) MUST NEVER
+ * receive raw `privateKey` material. They get back signatures, ciphertexts, or
+ * opaque purpose-derived key bytes — never the seed.
+ *
+ * ## Scope of THIS file
+ *
+ * This module sketches the long-term `SphereCryptographer` interface, but
+ * Issue #292's tactical scope only requires ONE of its operations:
+ * `derivePurposeKey('profile-cache')`. The Profile providers
+ * (`ProfileStorageProvider.setIdentity`,
+ * `ProfileTokenStorageProvider.setIdentity`) call `hexToBytes(privateKey)`
+ * synchronously inside their bodies to derive the cache-layer encryption
+ * key. Consumers building Profile providers without a live wallet (probe,
+ * migration) could not supply a real `privateKey`, so they passed `''` and
+ * crashed inside `hexToBytes`.
+ *
+ * The Sphere-bound Profile factories in `profile/browser.ts` and
+ * `profile/node.ts` route through `Sphere`'s internal identity to perform
+ * the same derivation INSIDE the SDK boundary. The cryptographer interface
+ * is what they conceptually invoke; for now the implementation just calls
+ * `Sphere`'s existing private accessor.
+ *
+ * ## Future surface (NOT implemented in this PR — follow-up tracked)
+ *
+ * The interface below lists the methods a future, fully-extracted
+ * `SphereCryptographer` would expose so external modules and consumers can
+ * delegate ALL key operations without ever holding the raw key:
+ *
+ *   - `signMessage(bytes)` — secp256k1 ECDSA signing
+ *   - `signMessageHex(hex)` — convenience hex wrapper
+ *   - `encryptForRecipient(pubkey, plaintext)` — NIP-04 / NIP-17 envelope encrypt
+ *   - `decryptFromSender(pubkey, ciphertext)` — counterpart decrypt
+ *   - `derivePurposeKey(purpose)` — HKDF-derived per-purpose key bytes; the
+ *     returned bytes ARE secret-equivalent (any holder can decrypt that
+ *     purpose's data) but do not let the holder reconstruct the privateKey
+ *     or perform other key operations. Suitable for handing to a Profile
+ *     provider that needs ONE encryption key for ONE cache.
+ *   - `identity` — public Identity (mirrors `Sphere.identity`)
+ *
+ * The existing private signing / encryption surfaces inside Sphere,
+ * `PaymentsModule`, and `CommunicationsModule` would all be migrated to
+ * consume this interface in a future PR (so the boundary becomes a single
+ * implementation rather than scattered private methods).
+ *
+ * @module profile/cryptographer
+ * @see https://github.com/unicity-sphere/sphere-sdk/issues/292
+ */
+
+/**
+ * Purpose tag for `derivePurposeKey`. Used as the HKDF info string so two
+ * purposes derive distinct keys even from the same root secret. Extend the
+ * union as new purposes are added; the string value is the canonical
+ * HKDF info parameter and MUST NOT be renamed once shipped (would break
+ * forward compatibility with previously-encrypted caches).
+ */
+type SphereCryptographerPurpose = 
+/**
+ * Encryption key for the Profile-mode local cache (used by
+ * `ProfileStorageProvider` and `ProfileTokenStorageProvider`).
+ * Stable since v0.6.x — Issue #292.
+ */
+'profile-cache' | string;
+/**
+ * The cryptographer delegate. Exposed via `Sphere.cryptographer`. Consumers
+ * pass this to internal SDK modules that need to perform crypto operations
+ * under the wallet key — modules MUST NEVER touch the raw `privateKey`.
+ *
+ * **Status (Issue #292 tactical):** Only `derivePurposeKey` is wired through
+ * Profile factories today. The remaining methods are sketched here so the
+ * shape is stable from the first release; a follow-up issue tracks the full
+ * migration of `Sphere.signMessage`, `PaymentsModule` signing, and
+ * `CommunicationsModule` encryption to consume this interface.
+ */
+interface SphereCryptographer {
+    /**
+     * The wallet's PUBLIC identity. Same shape as `Sphere.identity`.
+     * Returned by reference; callers MUST treat it as read-only.
+     */
+    readonly identity: Identity;
+    /**
+     * Derive a deterministic per-purpose key as opaque bytes. The bytes are
+     * suitable for handing to a downstream module that needs a single
+     * symmetric key for ONE purpose (e.g. a Profile cache's HKDF subkey).
+     *
+     * **Security note**: the returned bytes ARE secret-equivalent FOR THIS
+     * PURPOSE. They do NOT let the holder reconstruct the wallet's
+     * privateKey or derive keys for OTHER purposes (HKDF-Expand is
+     * one-way). But anyone with these bytes CAN decrypt this purpose's
+     * persisted data. Treat the returned `Uint8Array` like a session key:
+     * keep it in memory only, do not log it, do not persist it outside
+     * the consumer's own encrypted store.
+     *
+     * Pure function of (wallet privateKey, purpose). Two calls with the
+     * same purpose return identical bytes; this is what makes the
+     * Profile cache decryptable across process restarts.
+     *
+     * @param purpose Stable purpose tag (see {@link SphereCryptographerPurpose}).
+     *                The string is the HKDF `info` parameter, so it MUST NOT
+     *                be renamed once shipped — would invalidate every cache
+     *                derived under the old name.
+     * @returns 32-byte derived key (AES-256-ready).
+     */
+    derivePurposeKey(purpose: SphereCryptographerPurpose): Promise<Uint8Array>;
+    /**
+     * secp256k1 ECDSA signature over the SHA-256 digest of `message`.
+     *
+     * @future Wired through `Sphere.signMessage` in a follow-up PR.
+     */
+    signMessage?(message: Uint8Array): Promise<Uint8Array>;
+    /**
+     * Hex-convenience wrapper for {@link signMessage}. Returns the signature
+     * as `v(2) + r(64) + s(64)` hex — the format `Sphere.signMessage` already
+     * returns today.
+     *
+     * @future Wired through `Sphere.signMessage` in a follow-up PR.
+     */
+    signMessageHex?(messageHex: string): Promise<string>;
+    /**
+     * NIP-04 / NIP-17 envelope encrypt for an arbitrary recipient pubkey.
+     *
+     * @future Wired through `CommunicationsModule` in a follow-up PR.
+     */
+    encryptForRecipient?(recipientPubkey: string, plaintext: Uint8Array): Promise<Uint8Array>;
+    /**
+     * Counterpart to {@link encryptForRecipient}.
+     *
+     * @future Wired through `CommunicationsModule` in a follow-up PR.
+     */
+    decryptFromSender?(senderPubkey: string, ciphertext: Uint8Array): Promise<Uint8Array>;
+}
+/**
+ * The HKDF info string for the `profile-cache` purpose. Mirrors
+ * `PROFILE_HKDF_INFO` in `profile/encryption.ts` (kept in sync — bumping
+ * this here without bumping there is a silent data-loss bug). Re-exported
+ * for tests that want to verify the binding.
+ *
+ * @internal
+ */
+declare const PROFILE_CACHE_PURPOSE: SphereCryptographerPurpose;
 
 /**
  * Profile Deriver
@@ -21902,38 +27202,6 @@ interface ProfileProviders {
  */
 declare function createProfileProviders(config: ProfileConfig, cacheStorage: StorageProvider, oracle?: OracleProvider): ProfileProviders;
 
-/** Network configurations */
-declare const NETWORKS: {
-    readonly mainnet: {
-        readonly name: "Mainnet";
-        readonly aggregatorUrl: "https://aggregator.unicity.network/rpc";
-        readonly nostrRelays: readonly ["wss://relay.unicity.network", "wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band"];
-        readonly ipfsGateways: readonly string[];
-        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
-        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
-        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
-    };
-    readonly testnet: {
-        readonly name: "Testnet";
-        readonly aggregatorUrl: "https://goggregator-test.unicity.network";
-        readonly nostrRelays: readonly ["wss://nostr-relay.testnet.unicity.network"];
-        readonly ipfsGateways: readonly string[];
-        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
-        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
-        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
-    };
-    readonly dev: {
-        readonly name: "Development";
-        readonly aggregatorUrl: "https://dev-aggregator.dyndns.org/rpc";
-        readonly nostrRelays: readonly ["wss://nostr-relay.testnet.unicity.network"];
-        readonly ipfsGateways: readonly string[];
-        readonly electrumUrl: "wss://fulcrum.unicity.network:50004";
-        readonly groupRelays: readonly ["wss://sphere-relay.unicity.network"];
-        readonly tokenRegistryUrl: "https://raw.githubusercontent.com/unicitynetwork/unicity-ids/refs/heads/main/unicity-ids.testnet.json";
-    };
-};
-type NetworkType = keyof typeof NETWORKS;
-
 /**
  * Profile Browser Factory
  *
@@ -21989,6 +27257,24 @@ interface BrowserProfileProviders {
     readonly storage: ProfileStorageProvider;
     /** Profile-backed token storage provider (drop-in for IndexedDBTokenStorageProvider) */
     readonly tokenStorage: ProfileTokenStorageProvider;
+}
+/**
+ * Configuration for {@link createBrowserProfileProvidersFromSphere}.
+ *
+ * Mirrors {@link BrowserProfileProvidersConfig} but is used with the
+ * Sphere-bound factory below.
+ */
+interface BrowserProfileProvidersFromSphereConfig {
+    /** Network preset: mainnet, testnet, or dev */
+    readonly network: NetworkType;
+    /** Profile-specific configuration overrides */
+    readonly profileConfig?: Partial<ProfileConfig>;
+    /**
+     * Oracle provider for the aggregator pointer layer. Pass the same
+     * `oracle` instance that the Sphere instance was constructed with so
+     * the embedded `RootTrustBase` is shared (SPEC §8.4.2 H6).
+     */
+    readonly oracle?: OracleProvider;
 }
 
 /**
@@ -22050,5 +27336,25 @@ interface NodeProfileProviders {
     /** Profile-backed token storage provider (drop-in for FileTokenStorageProvider) */
     readonly tokenStorage: ProfileTokenStorageProvider;
 }
+/**
+ * Configuration for {@link createNodeProfileProvidersFromSphere}.
+ *
+ * Mirrors {@link NodeProfileProvidersConfig} but is used with the
+ * Sphere-bound factory below.
+ */
+interface NodeProfileProvidersFromSphereConfig {
+    /** Network preset: mainnet, testnet, or dev */
+    readonly network: NetworkType;
+    /** Directory for wallet data storage (local cache) */
+    readonly dataDir: string;
+    /** Profile-specific configuration overrides */
+    readonly profileConfig?: Partial<ProfileConfig>;
+    /**
+     * Oracle provider for the aggregator pointer layer. Pass the same
+     * `oracle` instance that the Sphere instance was constructed with so
+     * the embedded `RootTrustBase` is shared (SPEC §8.4.2 H6).
+     */
+    readonly oracle?: OracleProvider;
+}
 
-export { type BrowserProfileProviders, type BrowserProfileProvidersConfig, CACHE_ONLY_KEYS, CAS_MAX_RETRIES, CID_REF_SCHEMA_VERSION, type CidRef, CidRefStore, type CidRefStoreOptions, ConsolidationEngine, type ConsolidationPendingState, type ConsolidationResult, DEFAULT_ENCRYPTION_CONFIG, DEFAULT_LIST_KEYS_MAX_RESULTS, type DispositionEventEmitter, type DispositionPerEntryStorage, DispositionWriter, type DispositionWriterOptions, type FetchOptions, IPFS_STATE_KEYS_PATTERN, InMemoryDispositionStorageAdapter, Lamport, type LegacyImportOptions, type LegacyImportResult, MAX_LOCK_HOLD_MS, ManifestCas, ManifestCasConcurrentModificationError, type ManifestCasResult, ManifestStore, type ManifestStoreOptions, type MigrationDirection, type MigrationPhase, type MigrationResult, type MinimalManifestStorage, type NodeProfileProviders, type NodeProfileProvidersConfig, NostrReplicationBridge, type NostrReplicationConfig, OrbitDbAdapter, type OrbitDbConfig, OrbitDbDispositionStorageAdapter, type OrbitDbDispositionStorageAdapterOptions, PROFILE_HKDF_INFO, PROFILE_KEY_MAPPING, PerTokenMutex, type PerTokenMutexOptions, type PerTokenMutexStrategy, type PinOptions, type ProfileConfig, type ProfileDatabase, type ProfileEncryptionConfig, ProfileError, type ProfileErrorCode, type ProfileKeyMap, type ProfileKeyMapEntry, ProfileMigration, type ProfileProviders, ProfileStorageProvider, type ProfileStorageProviderOptions, ProfileTokenStorageProvider, type ProfileTokenStorageProviderOptions, type SyncEventCallback, type SyncEventType, TOKEN_STORAGE_MIGRATION_MARKER_VERSION, type TokenManifest, type TokenManifestEntry, type TokenManifestStatus, type TokenStorageMigrationCounts, type TokenStorageMigrationOptions, type TokenStorageMigrationProgress, type TokenStorageMigrationResult, type UxfBundleRef, auditKeyFor, clearTokenStorageMigrationMarker, computeAddressId, conflictingTokenIds, createProfileProviders, decryptProfileValue, decryptString, deriveHistoryFromArchived, deriveProfileEncryptionKey, deriveSentFromArchived, deriveStructuralManifest, deriveTombstonesFromArchived, encryptProfileValue, encryptString, fetchCarFromIpfs, fetchFromIpfs, importLegacyTokens, invalidKeyFor, isConflictingStatus, isTokenStorageMigrationComplete, mergeAuditEntry, mergeManifestEntry, migrateLegacyToProfile, migrateProfileToLegacy, migrateTokenStorage, pinCarBlocksToIpfs, pinToIpfs, verifyCidAccessible };
+export { type BrowserProfileProviders, type BrowserProfileProvidersConfig, type BrowserProfileProvidersFromSphereConfig, CACHE_ONLY_KEYS, CAS_MAX_RETRIES, CID_REF_SCHEMA_VERSION, type CidRef, CidRefStore, type CidRefStoreOptions, ConsolidationEngine, type ConsolidationPendingState, type ConsolidationResult, DEFAULT_ENCRYPTION_CONFIG, DEFAULT_LIST_KEYS_MAX_RESULTS, type DispositionEventEmitter, type DispositionPerEntryStorage, DispositionWriter, type DispositionWriterOptions, type FetchOptions, IPFS_STATE_KEYS_PATTERN, InMemoryDispositionStorageAdapter, Lamport, type LegacyImportOptions, type LegacyImportResult, MAX_LOCK_HOLD_MS, ManifestCas, ManifestCasConcurrentModificationError, type ManifestCasResult, ManifestStore, type ManifestStoreOptions, type MigrateLegacyToProfileFromSphereOptions, type MigrateLegacyToProfileFromSphereResult, type MigrateLegacyToProfileOptions, type MigrationDirection, type MigrationPhase, type MigrationResult, type MinimalManifestStorage, type NodeProfileProviders, type NodeProfileProvidersConfig, type NodeProfileProvidersFromSphereConfig, NostrReplicationBridge, type NostrReplicationConfig, OrbitDbAdapter, type OrbitDbConfig, OrbitDbDispositionStorageAdapter, type OrbitDbDispositionStorageAdapterOptions, PROFILE_CACHE_PURPOSE, PROFILE_HKDF_INFO, PROFILE_KEY_MAPPING, PerTokenMutex, type PerTokenMutexOptions, type PerTokenMutexStrategy, type PinOptions, type ProfileConfig, type ProfileDatabase, type ProfileEncryptionConfig, ProfileError, type ProfileErrorCode, type ProfileKeyMap, type ProfileKeyMapEntry, ProfileMigration, type ProfileProviders, ProfileStorageProvider, type ProfileStorageProviderOptions, ProfileTokenStorageProvider, type ProfileTokenStorageProviderOptions, type SphereCryptographer, type SphereCryptographerPurpose, type SyncEventCallback, type SyncEventType, TOKEN_STORAGE_MIGRATION_MARKER_VERSION, type TokenManifest, type TokenManifestEntry, type TokenManifestStatus, type TokenStorageMigrationCounts, type TokenStorageMigrationOptions, type TokenStorageMigrationProgress, type TokenStorageMigrationResult, type UxfBundleRef, auditKeyFor, clearTokenStorageMigrationMarker, computeAddressId, conflictingTokenIds, createProfileProviders, decryptProfileValue, decryptString, deriveHistoryFromArchived, deriveProfileEncryptionKey, deriveSentFromArchived, deriveStructuralManifest, deriveTombstonesFromArchived, encryptProfileValue, encryptString, fetchCarFromIpfs, fetchFromIpfs, importLegacyTokens, invalidKeyFor, isConflictingStatus, isTokenStorageMigrationComplete, mergeAuditEntry, mergeManifestEntry, migrateLegacyToProfile, migrateProfileToLegacy, migrateTokenStorage, pinCarBlocksToIpfs, pinToIpfs, verifyCidAccessible };

@@ -17,6 +17,7 @@ import {
 } from '@unicitylabs/sphere-sdk/impl/browser';
 import {
   createBrowserProfileProviders,
+  createBrowserProfileProvidersFromSphere,
   type BrowserProfileProviders,
 } from '@unicitylabs/sphere-sdk/profile/browser';
 import { IS_UXF_BUILD } from '../config/uxf';
@@ -157,17 +158,27 @@ async function probeLegacyTokenData(identity: FullIdentity): Promise<boolean> {
 }
 
 /**
- * Probe Profile token storage for material content. Uses a fresh
- * `createBrowserProfileProviders` to avoid disturbing the active
- * providers. Caller MUST disconnect after.
+ * Probe Profile token storage for material content. Uses
+ * `createBrowserProfileProvidersFromSphere` (sphere-sdk #294) so the
+ * Profile providers' encryption key is correctly derived from the
+ * Sphere's INTERNAL `_identity.privateKey` — the private key never
+ * crosses the SDK boundary; this consumer holds no key material.
+ *
+ * Caller MUST disconnect via the helper's own cleanup path (this
+ * function handles it).
  *
  * Returns `false` (not `null`) on any error — the banner reads this as
  * "no Profile data" which is the safe default (it only enables the
  * "Switch to UXF Profile" action; the user can still try the migrate
  * path if they think there's data we missed).
+ *
+ * Pre-#294 history: this used to take a synthesized `FullIdentity`
+ * with `privateKey: ''` and the documented limitation was that the
+ * probe could not decrypt Profile data written under the real key.
+ * That limitation is removed.
  */
 async function probeProfileTokenData(
-  identity: FullIdentity,
+  sphere: Sphere,
   network: NetworkType,
   oracle: BrowserProviders['oracle'],
 ): Promise<boolean> {
@@ -180,30 +191,16 @@ async function probeProfileTokenData(
     // the spin-up cost (~500ms-1s) shows up as the banner "(checking
     // stores…)" hint. A future optimization could skip this probe
     // when `walletMode === 'profile'` AND the active sphere already
-    // reports tokens — but identity-only probing keeps the code path
+    // reports tokens — but identity-bound probing keeps the code path
     // symmetric and avoids subtle aliasing bugs across React state
     // updates.
-    //
-    // KNOWN LIMITATION (inherited from PR #307): the `identity` we
-    // pass here has `privateKey: ''` — the real private key isn't
-    // exposed via the public Sphere API. The Profile providers
-    // attempt to derive an encryption key from the empty hex string
-    // and silently fall back to NO encryption when `hexToBytes('')`
-    // throws. For wallets whose Profile data was ever written with a
-    // real privateKey (i.e. directly via Sphere.init, not via this
-    // app's migration path), this probe will fail to decrypt and
-    // return `false` — banner shows "no Profile data" when actually
-    // there is some. The user can still click Switch to UXF Profile
-    // to recover. Cleanly resolving this requires either
-    //   (a) exposing the private key via Sphere's public API, or
-    //   (b) running the probe through an already-initialized Sphere
-    //       instance that has the key in scope.
-    // Both are out of scope for this PR.
-    profile = createBrowserProfileProviders({ network, oracle });
-    profile.tokenStorage.setIdentity(identity);
-    profile.storage.setIdentity(identity);
-    await profile.tokenStorage.initialize();
-    await profile.storage.connect();
+    // Cast through `unknown` to bridge the tsup-bundle Sphere class
+    // duplication (`dist/index.d.ts` vs `dist/profile/browser.d.ts`).
+    // Same runtime class; documented in CLAUDE.md.
+    profile = await createBrowserProfileProvidersFromSphere(
+      sphere as unknown as Parameters<typeof createBrowserProfileProvidersFromSphere>[0],
+      { network, oracle },
+    );
     const snap = await profile.tokenStorage.load();
     if (!snap.success || !snap.data) return false;
     return hasMaterialContent(snap.data as unknown as Record<string, unknown>);
@@ -219,10 +216,15 @@ async function probeProfileTokenData(
 }
 
 /**
- * Synthesize a `FullIdentity` from `sphere.identity` for the probe
- * helpers. The probes only read `directAddress`/`l1Address`/
- * `chainPubkey` to compute the IndexedDB name and decrypt the Profile
- * cache — `privateKey` is never used.
+ * Synthesize a `FullIdentity` from `sphere.identity` for the LEGACY
+ * IndexedDB token-storage probe (`probeLegacyTokenData`). That probe
+ * only needs `directAddress` to compute the DB name — the legacy
+ * provider's `setIdentity()` does not dereference `privateKey` at all.
+ *
+ * The Profile token-storage probe NO LONGER uses this helper — it
+ * takes the live Sphere directly via
+ * `createBrowserProfileProvidersFromSphere`, so the private key never
+ * crosses the SDK boundary on that path. (See `probeProfileTokenData`.)
  */
 function probeIdentityFromSphere(sphere: Sphere): FullIdentity | null {
   const id = sphere.identity;
@@ -315,18 +317,17 @@ export function SphereProvider({
     const oracle = liveProviders?.oracle;
 
     // Probe choice — use the live `liveProviders.tokenStorage` when
-    // it's the SAME backend we're probing, because that instance was
-    // initialized by Sphere.init with the REAL privateKey and its
-    // encryption key is correctly derived. Falling back to a fresh
-    // probe-only provider (with synthesized empty privateKey) only
-    // works for non-encrypted data and is therefore a best-effort
-    // fallback for cross-mode probes.
+    // it's the SAME backend we're probing. Cross-mode probes use the
+    // dedicated helpers:
+    //   - `probeLegacyTokenData(id)` — legacy IndexedDB only reads
+    //     `directAddress` to compute the DB name; no Sphere binding
+    //     needed.
+    //   - `probeProfileTokenData(instance, ...)` — post sphere-sdk #294
+    //     this takes the LIVE Sphere instance and routes through
+    //     `createBrowserProfileProvidersFromSphere`, so the Profile
+    //     providers' encryption key is correctly derived. Encrypted
+    //     Profile data written by another mode is now readable.
     //
-    // The result: when in Legacy mode we probe LIVE legacy + fresh
-    // Profile; when in Profile mode we probe fresh legacy + LIVE
-    // Profile. The "fresh" side may return a false-negative for
-    // encrypted data on the opposite backend — documented limitation
-    // (see `probeProfileTokenData` docstring).
     // The SDK's ProfileTokenStorageProvider exposes `id === 'profile-token'`
     // (NOT 'profile-token-storage' — that's the user-facing name).
     // Legacy is 'indexeddb-token-storage'. We key off `id` to avoid
@@ -365,7 +366,7 @@ export function SphereProvider({
               return null;
             }
           })()
-        : probeProfileTokenData(id, network, oracle).catch((err) => {
+        : probeProfileTokenData(instance, network, oracle).catch((err) => {
             logger.warn('SphereProvider', 'probeProfileTokenData failed', err);
             return null;
           });
@@ -568,6 +569,16 @@ export function SphereProvider({
         // swap to Profile-backed providers preemptively so the
         // subsequent createWallet()/importWallet() call writes directly
         // into Profile storage.
+        //
+        // DECISION (post sphere-sdk #294): we keep
+        // `createBrowserProfileProviders` (no-identity factory) here.
+        // The Sphere-bound variant `createBrowserProfileProvidersFromSphere`
+        // requires a LIVE Sphere instance, but there is none at this
+        // point — the providers are needed BEFORE `Sphere.init()` runs
+        // (so `Sphere.init` can attach identity itself via the standard
+        // `setIdentity()` hook). The no-identity factory is a public,
+        // architecturally-sound API for this case; identity is bound
+        // later by the SDK with the REAL key in scope.
         if (IS_UXF_BUILD && preferredMode === 'profile') {
           const profile = createBrowserProfileProviders({
             network,
@@ -953,19 +964,22 @@ export function SphereProvider({
       }
       extraLegacyTokenStorage = freshLegacy;
 
-      // CRITICAL — destroy the active Profile-backed Sphere BEFORE we
-      // spin up the migration helper's own Profile providers.
-      // Otherwise we'd have TWO live OrbitDB instances writing to the
-      // same database (active sphere + migration helper). OrbitDB's
-      // OpLog is multi-writer but concurrent writes can re-order with
-      // visible inconsistency to a future reader. By tearing down the
-      // active instance first we serialize: migration writes → reinit
-      // reads.
-      await instance.destroy({ force: true, reason: 'user-initiated-uxf-merge' });
-      sphereRef.current = null;
-      // Disconnect the active providers' Profile-backed storage so the
-      // migration helper's `setIdentity` + `initialize` aren't fighting
-      // a stale handle.
+      // CRITICAL — disconnect the active Profile providers BEFORE we
+      // call the migration helper. The helper builds its OWN Profile
+      // providers internally (via the SDK's Sphere-bound factory),
+      // and we don't want TWO live OrbitDB/Helia instances on the
+      // same content-addressed databases. OrbitDB's OpLog is
+      // multi-writer but concurrent writes can re-order with visible
+      // inconsistency to a future reader.
+      //
+      // NOTE (post sphere-sdk #294): we DO NOT destroy the live Sphere
+      // instance here anymore. The new Sphere-bound factory inside
+      // `migrateLegacyToProfileBrowser` reaches into the instance's
+      // internal `_identity.privateKey` via
+      // `Sphere._withFullIdentityForProfileFactory` — it MUST be alive.
+      // Disconnecting the providers releases the IndexedDB/OrbitDB
+      // handles; the Sphere's in-memory identity is untouched. Sphere
+      // destruction happens AFTER the migration succeeds (below).
       try { await providers.tokenStorage.disconnect(); } catch { /* ignore */ }
       try { await providers.storage.disconnect(); } catch { /* ignore */ }
 
@@ -986,15 +1000,14 @@ export function SphereProvider({
     }
 
     try {
-      // From legacy mode, we still pass `sphere: instance` because the
-      // helper reads `sphere.identity`. From profile mode we already
-      // destroyed `instance`; reach into the snapshot.
-      const helperSphereArg = walletMode === 'profile'
-        ? ({ identity: snapshotIdentity } as unknown as Sphere)
-        : instance;
+      // Always pass the LIVE Sphere instance — the new Sphere-bound
+      // factory in `migrateLegacyToProfileBrowser` requires it to
+      // reach the in-memory private key without ever exposing it to
+      // this consumer. A synthetic `{ identity }` cast would throw
+      // `SphereError('NOT_INITIALIZED')` inside the factory.
       const profileResult = await runProfileMigration({
         legacyProviders: migrationSourceProviders,
-        sphere: helperSphereArg,
+        sphere: instance,
         network,
         setInitProgress,
         force: opts?.force === true,
@@ -1002,13 +1015,12 @@ export function SphereProvider({
       if (!profileResult) {
         throw new Error('Migration failed — see logs for details');
       }
-      // From legacy mode, destroy the still-live legacy Sphere now;
-      // from profile mode it was already destroyed before the migrate
-      // call (see comment above).
-      if (walletMode === 'legacy') {
-        await instance.destroy({ force: true, reason: 'user-initiated-uxf-migration' });
-        sphereRef.current = null;
-      }
+      // Destroy the still-live original Sphere now — its providers
+      // have either been disconnected (profile-mode path) or are
+      // about to be replaced (legacy-mode path), and the helper has
+      // already finished reading its identity.
+      await instance.destroy({ force: true, reason: 'user-initiated-uxf-migration' });
+      sphereRef.current = null;
       const netConfig = NETWORKS[network] ?? NETWORKS.testnet;
       const swapped: BrowserProviders = {
         ...providers,

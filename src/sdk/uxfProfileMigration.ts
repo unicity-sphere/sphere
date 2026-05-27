@@ -1,45 +1,75 @@
 /**
  * UXF Profile mode bring-up — safe legacy→Profile token migration.
  *
- * Why this exists (post PR #305 / #306):
- *  - PR #305 swapped providers WITHOUT migration → stranded existing wallets'
- *    tokens (balance went to 0). PR #306 reverted #305.
- *  - sphere-sdk PRs #287/#288/#289 (integration/all-fixes @ 8307711) deliver:
- *      • CidRefStore for OpLog 128 KiB cap relief (GroupChat regression fix)
- *      • migrateLegacyToProfile() helper with idempotency marker,
- *        aggregator-spent gating, partial-write safety, crash-safety
- *  - This module chains the helper into the SphereProvider initialize()
- *    flow so users with existing legacy data keep their tokens after the
- *    Profile swap.
+ * Why this exists (post sphere-sdk #294, vendor-bumped to fdd8db6):
+ *  - sphere-sdk PR #294 (issue #292) introduced Sphere-bound Profile
+ *    factories that build providers with identity ALREADY attached, via
+ *    `Sphere._withFullIdentityForProfileFactory`. The private key never
+ *    crosses the SDK boundary — this consumer holds zero key material.
+ *  - Before #294 this file synthesized a `FullIdentity` with
+ *    `privateKey: ''` and passed it through the old
+ *    `setIdentity(identity)` surface, which Profile providers rejected
+ *    via `hexToBytes('')` (Issue #292). That synthesis is now DELETED.
  *
- * Migration contract (see sphere-sdk PR #289 docstring):
- *  - Idempotent: marker check short-circuits the second call.
+ * Public API used here:
+ *   - `createBrowserProfileProvidersFromSphere(sphere, { network, oracle })`
+ *     — returns ready-to-use Profile providers, identity already bound.
+ *   - `migrateLegacyToProfileBrowser({ sphere, legacy, network, oracle, ... })`
+ *     — runs the legacy→Profile copy via the SDK's `migrateTokenStorage`
+ *     core, with the Sphere-bound factory injected internally. Returns
+ *     `{ ...migrationResult, profileProviders }`.
+ *
+ * Migration contract (unchanged):
+ *  - Idempotent: the SDK's marker check short-circuits the second call.
  *  - Atomic at the target: target.save() runs once after a full snapshot
  *    transform; partial writes do NOT stamp the marker, so a crash
  *    mid-migration leaves both stores intact and the next boot retries.
  *  - Aggregator-spent gating: active tokens whose state is already spent
- *    on-chain are demoted to `archived-`; throws during probe are tolerated
+ *    on-chain are demoted to `archived-`; probe throws are tolerated
  *    (left in active slot, retried by the runtime SpentStateRescanWorker).
+ *
+ * Architectural invariant (user, verbatim): "Private key materials should
+ * never leave Sphere SDK itself! However, it should be possible to perform
+ * all the relevant cryptographic operations within Sphere SDK over external
+ * materials by means of undisclosed respective private key (like, generating
+ * digital signature, etc.)". This file enforces that — no `FullIdentity`
+ * is ever constructed here, no `privateKey` field is ever read or written.
  */
 
 import { logger } from '@unicitylabs/sphere-sdk';
 import type {
-  FullIdentity,
   InitProgress,
   NetworkType,
   Sphere,
+  StorageProvider,
+  TokenStorageProvider,
+  TxfStorageDataBase,
 } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import {
-  createBrowserProfileProviders,
+  createBrowserProfileProvidersFromSphere,
+  migrateLegacyToProfileBrowser,
   type BrowserProfileProviders,
 } from '@unicitylabs/sphere-sdk/profile/browser';
-import { migrateLegacyToProfile } from '@unicitylabs/sphere-sdk/profile';
 import { hasMaterialContent } from './utils/tokenStorageProbe';
+
+/**
+ * tsup bundles `Sphere` separately into `dist/index.d.ts` and
+ * `dist/profile/browser.d.ts`. Each declaration has private fields, so
+ * TS treats them as distinct nominal types and rejects passing one
+ * where the other is expected. The runtime class is the same. We cast
+ * through `unknown` at the call boundary into the profile/browser
+ * bundle. Documented in CLAUDE.md ("tsup bundle duplication note").
+ */
+type SphereInProfileBundle = Parameters<typeof createBrowserProfileProvidersFromSphere>[0];
 
 /**
  * Inputs to {@link runProfileMigration}. Kept narrow so unit tests don't
  * need to construct full provider objects.
+ *
+ * Note: there is NO `createProfileProviders` test seam — the SDK helper
+ * `migrateLegacyToProfileBrowser` builds the Profile providers internally
+ * via the Sphere-bound factory. Tests stub the entire `migrate` call.
  */
 export interface RunProfileMigrationInput {
   readonly legacyProviders: BrowserProviders;
@@ -47,15 +77,10 @@ export interface RunProfileMigrationInput {
   readonly network: NetworkType;
   readonly setInitProgress: (p: InitProgress | null) => void;
   /**
-   * Override the Profile providers factory — used by tests.
-   * Defaults to `createBrowserProfileProviders` from sphere-sdk.
-   */
-  readonly createProfileProviders?: typeof createBrowserProfileProviders;
-  /**
    * Override the migration helper — used by tests.
-   * Defaults to `migrateLegacyToProfile` from sphere-sdk.
+   * Defaults to `migrateLegacyToProfileBrowser` from sphere-sdk.
    */
-  readonly migrate?: typeof migrateLegacyToProfile;
+  readonly migrate?: typeof migrateLegacyToProfileBrowser;
   /**
    * Bypass the data-presence guard AND the SDK marker. Used by the
    * user-initiated "Merge Legacy → UXF (overwrite)" banner button in
@@ -73,10 +98,19 @@ export interface RunProfileMigrationInput {
 /**
  * Successful migration result — caller swaps `legacyProviders.storage`
  * / `tokenStorage` to these references and deletes `ipfsTokenStorage`.
+ *
+ * Types are deliberately the BROAD `StorageProvider` /
+ * `TokenStorageProvider<TxfStorageDataBase>` (rather than the narrow
+ * `ProfileStorageProvider`/`ProfileTokenStorageProvider`) because:
+ *   1. The SDK helper's result types are already broad (see
+ *      `MigrateLegacyToProfileFromSphereResult.profileProviders`).
+ *   2. `BrowserProviders` consumers (e.g. `SphereProvider`) only need
+ *      the abstract interface — they assign these into fields typed
+ *      against the broad interfaces.
  */
 export interface RunProfileMigrationResult {
-  readonly profileStorage: BrowserProfileProviders['storage'];
-  readonly profileTokenStorage: BrowserProfileProviders['tokenStorage'];
+  readonly profileStorage: StorageProvider;
+  readonly profileTokenStorage: TokenStorageProvider<TxfStorageDataBase>;
   readonly migrationCounts: {
     readonly tokensMigrated: number;
     readonly archivedMigrated: number;
@@ -93,6 +127,13 @@ export interface RunProfileMigrationResult {
  * has loaded identity. Returns the constructed Profile providers + the
  * migration result on success, or `null` when the migration failed
  * (caller MUST keep using the legacy providers — DO NOT swap on failure).
+ *
+ * The `sphere` argument MUST be a LIVE Sphere instance (not a synthetic
+ * `{ identity }` cast) — the SDK's Sphere-bound factory reaches into the
+ * Sphere's INTERNAL `_identity.privateKey` via
+ * `Sphere._withFullIdentityForProfileFactory` to build providers with
+ * encryption keys correctly derived. A synthetic object will cause the
+ * factory to throw `SphereError('NOT_INITIALIZED')`.
  */
 export async function runProfileMigration(
   input: RunProfileMigrationInput,
@@ -102,8 +143,7 @@ export async function runProfileMigration(
     sphere,
     network,
     setInitProgress,
-    createProfileProviders = createBrowserProfileProviders,
-    migrate = migrateLegacyToProfile,
+    migrate = migrateLegacyToProfileBrowser,
     force = false,
   } = input;
 
@@ -113,107 +153,104 @@ export async function runProfileMigration(
     return null;
   }
 
-  let profile: BrowserProfileProviders | null = null;
-  try {
-    // Construct Profile providers (OrbitDB + aggregator pointer). Share the
-    // same `oracle` instance so the embedded RootTrustBase matches the L4
-    // aggregator (sphere-sdk SPEC §8.4.2 H6).
-    profile = createProfileProviders({
-      network,
-      oracle: legacyProviders.oracle,
-    });
-
-    // The migration helper requires a FullIdentity, but only reads
-    // `directAddress`, `chainPubkey`, and `l1Address` (see sphere-sdk
-    // profile/token-storage-migration.ts). `privateKey` is never touched
-    // by the helper itself — it's only needed for the provider's own
-    // setIdentity hook. We synthesize a zero-key FullIdentity here ONLY
-    // for the helper's contract.
-    const migrationIdentity: FullIdentity = {
-      ...identity,
-      privateKey: '',
-    };
-
-    // Both providers must accept the identity + be initialized BEFORE
-    // running the migration (per the helper's example contract).
-    //   - tokenStorage: `setIdentity(...)` + `initialize()`
-    //   - storage:      `setIdentity(...)` + `connect()` (StorageProvider
-    //                   interface uses connect(), not initialize())
-    profile.tokenStorage.setIdentity(migrationIdentity);
-    profile.storage.setIdentity(migrationIdentity);
-    await profile.tokenStorage.initialize();
-    await profile.storage.connect();
-
-    // CRITICAL — wallet-data-loss guard.
-    //
-    // The migration helper's target.save() is a FULL OVERWRITE (it
-    // saves `shallowCopyStorageData(sourceData)` which only contains
-    // `_meta` plus whatever was in source). If the source (legacy
-    // tokenStorage) is empty and the target (Profile tokenStorage)
-    // already has tokens, the helper would silently wipe Profile.
-    //
-    // This can legitimately happen when a wallet was created FRESH
-    // under UXF on a previous boot (fresh-wallet branch wrote to
-    // Profile-only) and then a later boot enters the
-    // `Sphere.exists(legacy)===true` branch (because the local-cache
-    // IndexedDB for wallet keys is shared between legacy and Profile
-    // local caches — Profile uses `createIndexedDBStorageProvider()`
-    // for its local cache, identical DB name to legacy).
-    //
-    // We probe target Profile token storage first; if it already has
-    // any active tokens, archived entries, outbox, sent, or tombstone
-    // records, we skip migration entirely and adopt Profile as-is.
-    // The SDK marker check inside the helper does NOT cover this case
-    // (the marker is only stamped by a previous run of the helper, not
-    // by fresh-wallet creation).
-    //
-    // FORCE OVERRIDE — when the caller explicitly opts into overwrite
-    // (e.g. the user clicked "Merge Legacy → UXF (overwrite)" in the
-    // banner), this guard is skipped because the user has acknowledged
-    // that Profile-only data will be lost.
-    if (!force) {
-      try {
-        const targetSnapshot = await profile.tokenStorage.load();
-        if (targetSnapshot.success && targetSnapshot.data) {
-          if (hasMaterialContent(targetSnapshot.data as unknown as Record<string, unknown>)) {
-            logger.debug(
-              'SphereProvider',
-              'UXF migration skipped: Profile storage already populated (fresh-wallet path or prior migration)',
-            );
-            return {
-              profileStorage: profile.storage,
-              profileTokenStorage: profile.tokenStorage,
-              migrationCounts: { tokensMigrated: 0, archivedMigrated: 0 },
-              skippedDueToMarker: true,
-            };
-          }
+  // CRITICAL — wallet-data-loss guard (pre-flight probe).
+  //
+  // The SDK helper's `migrateTokenStorage` does a FULL OVERWRITE of the
+  // target (it writes `shallowCopyStorageData(sourceData)` after probing).
+  // If the source (legacy tokenStorage) is empty and the target (Profile
+  // tokenStorage) already has tokens, the helper would silently wipe
+  // Profile. This can legitimately happen when a wallet was created
+  // FRESH under UXF on a previous boot (fresh-wallet branch wrote to
+  // Profile-only) and then a later boot enters the
+  // `Sphere.exists(legacy)===true` branch (because the local-cache
+  // IndexedDB for wallet keys is shared between legacy and Profile
+  // local caches — Profile uses `createIndexedDBStorageProvider()` for
+  // its local cache, identical DB name to legacy).
+  //
+  // The SDK's marker check inside the helper does NOT cover this case
+  // (the marker is only stamped by a previous run of the helper, not
+  // by fresh-wallet creation). So we still probe Profile target first
+  // via the new Sphere-bound factory (which attaches identity properly
+  // — no `privateKey: ''` synthesis required) and short-circuit if
+  // target already holds material content.
+  //
+  // FORCE OVERRIDE — when the caller explicitly opts into overwrite
+  // (e.g. the user clicked "Merge Legacy → UXF (overwrite)" in the
+  // banner), this guard is skipped because the user has acknowledged
+  // that Profile-only data will be lost.
+  if (!force) {
+    let probe: BrowserProfileProviders | null = null;
+    try {
+      probe = await createBrowserProfileProvidersFromSphere(
+        sphere as unknown as SphereInProfileBundle,
+        {
+          network,
+          oracle: legacyProviders.oracle,
+        },
+      );
+      const targetSnapshot = await probe.tokenStorage.load();
+      if (targetSnapshot.success && targetSnapshot.data) {
+        if (hasMaterialContent(targetSnapshot.data as unknown as Record<string, unknown>)) {
+          logger.debug(
+            'SphereProvider',
+            'UXF migration skipped: Profile storage already populated (fresh-wallet path or prior migration)',
+          );
+          // Hand the probe providers back to the caller — they're
+          // already initialized + identity-attached, and there's no
+          // material content to copy from legacy. Caller swaps these
+          // in directly. (We deliberately do NOT disconnect the probe
+          // providers here on the success path.)
+          return {
+            profileStorage: probe.storage,
+            profileTokenStorage: probe.tokenStorage,
+            migrationCounts: { tokensMigrated: 0, archivedMigrated: 0 },
+            skippedDueToMarker: true,
+          };
         }
-      } catch (err) {
-        // Probe failure is non-fatal — the helper will be called and its
-        // own source/target guards take over. We log and continue.
-        logger.warn(
-          'SphereProvider',
-          'Profile token storage probe failed before migration; proceeding',
-          err,
-        );
+      }
+      // Target is empty — disconnect the probe providers cleanly; the
+      // migration call below will spin up its own (the SDK helper
+      // builds them internally and there's no API to inject ours).
+      // Double Helia/OrbitDB attach to the same content-addressed DB
+      // is safe, but we still want to release the probe handle.
+      try { await probe.tokenStorage.disconnect(); } catch { /* ignore */ }
+      try { await probe.storage.disconnect(); } catch { /* ignore */ }
+      probe = null;
+    } catch (err) {
+      // Probe failure is non-fatal — fall through to the migration
+      // call, which has its own source/target guards. We log and
+      // continue. Clean up any half-built probe providers.
+      logger.warn(
+        'SphereProvider',
+        'Profile token storage probe failed before migration; proceeding',
+        err,
+      );
+      if (probe) {
+        try { await probe.tokenStorage.disconnect(); } catch { /* ignore */ }
+        try { await probe.storage.disconnect(); } catch { /* ignore */ }
       }
     }
+  }
 
-    setInitProgress({
-      step: 'syncing_tokens',
-      message: 'Migrating tokens to Profile storage…',
-    });
+  setInitProgress({
+    step: 'syncing_tokens',
+    message: 'Migrating tokens to Profile storage…',
+  });
 
+  try {
+    // The Sphere-bound helper builds Profile providers internally with
+    // the SDK's `_withFullIdentityForProfileFactory` — the private key
+    // never crosses this boundary. We pass the live Sphere, the legacy
+    // source tokenStorage, the network preset, and the oracle (shared
+    // RootTrustBase per SPEC §8.4.2 H6). The helper returns the
+    // constructed providers in `result.profileProviders`.
     const result = await migrate({
+      sphere: sphere as unknown as SphereInProfileBundle,
       legacy: legacyProviders.tokenStorage,
-      profile: profile.tokenStorage,
-      identity: migrationIdentity,
+      network,
       // Aggregator-spent gating: probes throw → token left in active
       // slot (defensive). Keeps us tolerant of transient oracle errors.
       oracle: legacyProviders.oracle,
-      // Marker lives in the TARGET (Profile) storage so a future
-      // profile-only client also sees the marker.
-      markerStorage: profile.storage,
       // When the caller passed `force: true` (merge-overwrite path),
       // skip the SDK's idempotency-marker short-circuit so the helper
       // re-copies legacy → Profile even if a prior migration was
@@ -249,9 +286,9 @@ export async function runProfileMigration(
         errors: result.errors,
       });
       // Best-effort cleanup: disconnect the half-initialized Profile
-      // providers so we don't leak handles.
-      try { await profile.tokenStorage.disconnect(); } catch { /* ignore */ }
-      try { await profile.storage.disconnect(); } catch { /* ignore */ }
+      // providers the helper built so we don't leak handles.
+      try { await result.profileProviders.tokenStorage.disconnect(); } catch { /* ignore */ }
+      try { await result.profileProviders.storage.disconnect(); } catch { /* ignore */ }
       return null;
     }
 
@@ -270,8 +307,8 @@ export async function runProfileMigration(
     }
 
     return {
-      profileStorage: profile.storage,
-      profileTokenStorage: profile.tokenStorage,
+      profileStorage: result.profileProviders.storage,
+      profileTokenStorage: result.profileProviders.tokenStorage,
       migrationCounts: {
         tokensMigrated: result.tokensMigrated,
         archivedMigrated: result.archivedMigrated,
@@ -284,12 +321,6 @@ export async function runProfileMigration(
       'UXF migration threw unexpectedly; falling back to legacy mode',
       err,
     );
-    // Best-effort cleanup on construction or attach failures.
-    if (profile) {
-      try { await profile.tokenStorage.disconnect(); } catch { /* ignore */ }
-      try { await profile.storage.disconnect(); } catch { /* ignore */ }
-    }
     return null;
   }
 }
-
