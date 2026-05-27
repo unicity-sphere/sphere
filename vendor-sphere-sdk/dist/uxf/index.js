@@ -655,24 +655,6 @@ var init_crypto = __esm({
   }
 });
 
-// uxf/limits.ts
-var CAR_IMPORT_MAX_BLOCK_COUNT, CAR_IMPORT_MAX_BLOCK_BYTES, VERIFY_MAX_ELEMENT_BYTES, EXTRACT_CAR_ROOT_HEADER_PROBE_BYTES, CAR_IMPORT_MAX_TOTAL_BYTES, MANIFEST_MAX_SIZE, ELEMENTS_MAX_SIZE, MAX_CREATOR_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_SMT_PATH_DECIMAL_LENGTH;
-var init_limits = __esm({
-  "uxf/limits.ts"() {
-    "use strict";
-    CAR_IMPORT_MAX_BLOCK_COUNT = 1e4;
-    CAR_IMPORT_MAX_BLOCK_BYTES = 64 * 1024;
-    VERIFY_MAX_ELEMENT_BYTES = 64 * 1024;
-    EXTRACT_CAR_ROOT_HEADER_PROBE_BYTES = 4 * 1024;
-    CAR_IMPORT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-    MANIFEST_MAX_SIZE = 1e5;
-    ELEMENTS_MAX_SIZE = 1e5;
-    MAX_CREATOR_LENGTH = 256;
-    MAX_DESCRIPTION_LENGTH = 1024;
-    MAX_SMT_PATH_DECIMAL_LENGTH = 78;
-  }
-});
-
 // uxf/hash.ts
 import { encode } from "@ipld/dag-cbor";
 function hexToBytes2(hex) {
@@ -693,12 +675,6 @@ function prepareContentForHashing(type, content) {
   const result = {};
   for (const [key, value] of Object.entries(content)) {
     if (value === void 0) {
-      continue;
-    }
-    if (type === "smt-path" && key === "segments") {
-      result[key] = prepareSmtSegments(
-        value
-      );
       continue;
     }
     if (type === "transaction-data" && key === "nametagRefs") {
@@ -737,45 +713,6 @@ function prepareContentForHashing(type, content) {
     result[key] = value;
   }
   return result;
-}
-function bigIntTo32Bytes(b) {
-  if (b < 0n) {
-    throw new UxfError("INVALID_HASH", `SMT path must be non-negative: ${b}`);
-  }
-  const buf = new Uint8Array(32);
-  let v = b;
-  for (let i = 31; i >= 0; i--) {
-    buf[i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  if (v !== 0n) {
-    throw new UxfError("INVALID_HASH", `SMT path exceeds 256 bits: ${b}`);
-  }
-  return buf;
-}
-function prepareSmtSegments(segments) {
-  return segments.map((seg) => ({
-    data: seg.data === null || seg.data === void 0 ? null : hexToBytes2(seg.data),
-    // Steelman remediation (FIX 11): BigInt() is permissive — it accepts
-    // " 100 ", "00100", "+100", "0xff", and many other lexical shapes
-    // that are NOT canonical decimal integers. Validate against a
-    // strict decimal regex BEFORE handing the string to BigInt() so a
-    // hostile peer cannot smuggle a path under a non-canonical
-    // representation that round-trips to a different bigint.
-    path: bigIntTo32Bytes(parseSmtPathDecimal(seg.path))
-  }));
-}
-function parseSmtPathDecimal(s) {
-  if (typeof s !== "string" || !/^(0|[1-9][0-9]*)$/.test(s)) {
-    throw new UxfError("INVALID_INPUT", `Invalid SMT path string: ${s}`);
-  }
-  if (s.length > MAX_SMT_PATH_DECIMAL_LENGTH) {
-    throw new UxfError(
-      "LIMIT_EXCEEDED",
-      `SMT path decimal exceeds MAX_SMT_PATH_DECIMAL_LENGTH=${MAX_SMT_PATH_DECIMAL_LENGTH}: ${s.length}`
-    );
-  }
-  return BigInt(s);
 }
 function prepareChildrenForHashing(children) {
   const result = {};
@@ -829,7 +766,6 @@ var init_hash = __esm({
     init_crypto();
     init_types();
     init_errors();
-    init_limits();
     BYTE_FIELDS = {
       "token-root": /* @__PURE__ */ new Set(["tokenId"]),
       "genesis": /* @__PURE__ */ new Set(),
@@ -855,7 +791,10 @@ var init_hash = __esm({
       "predicate": /* @__PURE__ */ new Set(["raw"]),
       "token-state": /* @__PURE__ */ new Set(["data", "predicate"]),
       "token-coin-data": /* @__PURE__ */ new Set(),
-      "smt-path": /* @__PURE__ */ new Set(["root"]),
+      // Issue #295 (rewrite #2): SmtPath is stored as a single opaque
+      // STS-canonical CBOR blob. UXF does NOT decompose the path into
+      // {root, segments}; the binary representation is owned by STS.
+      "smt-path": /* @__PURE__ */ new Set(["cbor"]),
       // #202 — Same byte-fields as `authenticator`. The element type tag is
       // different (pending vs. proven) but the wire content is identical.
       "pending-authenticator": /* @__PURE__ */ new Set([
@@ -1389,6 +1328,7 @@ __export(assemble_exports, {
   assembleTokenFromRoot: () => assembleTokenFromRoot
 });
 import { decode } from "@ipld/dag-cbor";
+import { SparseMerkleTreePath as SparseMerkleTreePath2 } from "@unicitylabs/state-transition-sdk/lib/mtree/plain/SparseMerkleTreePath.js";
 function resolveAndVerify(pool, hash, ctx, expectedType) {
   if (ctx.explored.has(hash)) {
     const cached = resolveElement(pool, hash, ctx.instanceChains, ctx.strategy);
@@ -1460,11 +1400,25 @@ function assemblePendingAuthenticator(pool, authHash, ctx) {
 function assembleSmtPath(pool, pathHash, ctx) {
   const el = resolveAndVerify(pool, pathHash, ctx, "smt-path");
   const c = el.content;
-  const steps = c.segments.map((seg) => ({
-    data: seg.data,
-    path: seg.path
-  }));
-  return { root: c.root, steps };
+  if (typeof c.cbor !== "string" || c.cbor.length === 0) {
+    throw new UxfError(
+      "INVALID_PACKAGE",
+      `SmtPath element has missing or empty cbor field (pathHash=${pathHash})`
+    );
+  }
+  const bytes = hexToBytesInline(c.cbor);
+  const sdkPath = SparseMerkleTreePath2.fromCBOR(bytes);
+  return sdkPath.toJSON();
+}
+function hexToBytesInline(hex) {
+  if (hex.length % 2 !== 0) {
+    throw new UxfError("INVALID_HASH", `Hex string has odd length: ${hex.length}`);
+  }
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    out[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+  }
+  return out;
 }
 function assembleUnicityCertificate(pool, certHash, ctx) {
   const el = resolveAndVerify(pool, certHash, ctx, "unicity-certificate");
@@ -1704,6 +1658,7 @@ init_instance_chain();
 // uxf/deconstruct.ts
 init_errors();
 import { encode as encode2 } from "@ipld/dag-cbor";
+import { SparseMerkleTreePath } from "@unicitylabs/state-transition-sdk/lib/mtree/plain/SparseMerkleTreePath.js";
 function makeHeader() {
   return {
     representation: 1,
@@ -1785,18 +1740,16 @@ function deconstructAuthenticator(pool, auth) {
   );
 }
 function deconstructSmtPath(pool, merkleTreePath) {
-  const segments = merkleTreePath.steps.map((step) => ({
-    data: step.data == null ? null : lowerHex(step.data),
-    path: step.path
-    // decimal bigint string, keep as-is
-  }));
+  const sdkPath = SparseMerkleTreePath.fromJSON(merkleTreePath);
+  const cborBytes = sdkPath.toCBOR();
+  let cborHex = "";
+  for (let i = 0; i < cborBytes.length; i++) {
+    cborHex += cborBytes[i].toString(16).padStart(2, "0");
+  }
   return putElement(
     pool,
     "smt-path",
-    {
-      root: lowerHex(merkleTreePath.root),
-      segments
-    },
+    { cbor: cborHex },
     {}
   );
 }
@@ -2020,8 +1973,20 @@ init_assemble();
 
 // uxf/verify.ts
 init_hash();
-init_limits();
 import { encode as dagCborEncode } from "@ipld/dag-cbor";
+
+// uxf/limits.ts
+var CAR_IMPORT_MAX_BLOCK_COUNT = 1e4;
+var CAR_IMPORT_MAX_BLOCK_BYTES = 64 * 1024;
+var VERIFY_MAX_ELEMENT_BYTES = 64 * 1024;
+var EXTRACT_CAR_ROOT_HEADER_PROBE_BYTES = 4 * 1024;
+var CAR_IMPORT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+var MANIFEST_MAX_SIZE = 1e5;
+var ELEMENTS_MAX_SIZE = 1e5;
+var MAX_CREATOR_LENGTH = 256;
+var MAX_DESCRIPTION_LENGTH = 1024;
+
+// uxf/verify.ts
 var EXPECTED_CHILD_TYPES = {
   "token-root": {
     genesis: "genesis",
@@ -2676,7 +2641,6 @@ init_errors();
 init_hash();
 init_hex();
 init_header_validation();
-init_limits();
 var TYPE_ID_TO_TAG = new Map(
   Object.entries(ELEMENT_TYPE_IDS).map(
     ([tag, id]) => [id, tag]
@@ -3105,7 +3069,6 @@ import { CarReader } from "@ipld/car";
 init_errors();
 init_header_validation();
 init_hash();
-init_limits();
 var DAG_CBOR_CODE = 113;
 var TYPE_ID_TO_TAG2 = new Map(
   Object.entries(ELEMENT_TYPE_IDS).map(
@@ -3515,27 +3478,6 @@ function decodeIpldContent(type, content) {
   return result;
 }
 function decodeIpldContentArray(type, key, value) {
-  if (type === "smt-path" && key === "segments") {
-    return value.map((seg) => {
-      const s = seg;
-      let pathStr;
-      if (s.path instanceof Uint8Array) {
-        let v = 0n;
-        for (const byte of s.path) {
-          v = v << 8n | BigInt(byte);
-        }
-        pathStr = v.toString();
-      } else if (typeof s.path === "bigint") {
-        pathStr = s.path.toString();
-      } else {
-        pathStr = String(s.path);
-      }
-      return {
-        data: s.data instanceof Uint8Array ? bytesToHex2(s.data) : s.data,
-        path: pathStr
-      };
-    });
-  }
   if (type === "transaction-data" && key === "nametagRefs") {
     return value.map(
       (item) => item instanceof Uint8Array ? bytesToHex2(item) : item
@@ -4864,7 +4806,6 @@ function isLegacyTokenTransferPayload(value) {
 }
 
 // uxf/transfer-payload.ts
-init_limits();
 function encodeTransferPayload(payload) {
   if (!isUxfTransferPayload(payload)) {
     throw new SphereError(
