@@ -58296,10 +58296,10 @@ var Sphere = class _Sphere {
     if (!this._transport.isConnected()) {
       await this._transport.connect();
     }
+    this.subscribeToProviderEvents();
     await Promise.all(
       [...this._tokenStorageProviders.values()].map((p) => p.initialize())
     );
-    this.subscribeToProviderEvents();
   }
   /**
    * Subscribe to provider-level events and bridge them to Sphere connection:changed events.
