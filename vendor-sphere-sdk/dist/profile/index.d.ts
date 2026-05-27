@@ -18986,7 +18986,19 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
      * advance Nostr `since` → re-replay on next reconnect (idempotent
      * via addToken stateHash dedup).
      *
-     * @param timeoutMs Max wall-clock time. Default 30s.
+     * @param timeoutMs Max wall-clock time. Default 30s. Pass 0 (or any
+     *   non-finite / non-positive value, including `Number.POSITIVE_INFINITY`
+     *   and `Number.NaN`) to disable the wall-clock deadline entirely —
+     *   appropriate for one-shot bulk operations like `migrateTokenStorage()`
+     *   whose duration legitimately scales with input size. The 4-iteration
+     *   runaway guard still applies regardless, so a genuinely stuck save-
+     *   flush feedback loop cannot run forever.
+     *
+     *   Note: this differs from `pinCarBlocksToIpfs(..., concurrency)`,
+     *   which treats `+Infinity` / `NaN` as "fall back to default
+     *   concurrency=10" rather than "no cap". The two parameters have
+     *   different shapes (time budget vs in-flight pool size); the shared
+     *   non-finite handling here is "disable", there is "use default".
      */
     awaitNextFlush(timeoutMs?: number): Promise<void>;
     save(data: TxfStorageDataBase): Promise<SaveResult>;
@@ -22403,11 +22415,16 @@ declare function pinToIpfs(gateways: string[], data: Uint8Array, timeoutMs?: num
  * @param timeoutMs         - Timeout per gateway+block (default: 60 000)
  * @param helia             - Optional local Helia node (see issue #236).
  *                            Pass the result of `OrbitDbAdapter.getHelia()`.
+ * @param concurrency       - Maximum simultaneous in-flight block pins
+ *                            (default: 10). Higher values may saturate
+ *                            slow sidecars; lower values increase serial
+ *                            tail. Non-positive / non-finite values are
+ *                            clamped to 1.
  * @returns The `expectedRootCid` on success.
  * @throws {ProfileError} `ORBITDB_WRITE_FAILED` if all gateways fail to
  *         accept a pin or the CAR doesn't contain the expected root.
  */
-declare function pinCarBlocksToIpfs(gateways: string[], carBytes: Uint8Array, expectedRootCid: string, timeoutMs?: number, helia?: unknown): Promise<string>;
+declare function pinCarBlocksToIpfs(gateways: string[], carBytes: Uint8Array, expectedRootCid: string, timeoutMs?: number, helia?: unknown, concurrency?: number): Promise<string>;
 /**
  * Fetch content from IPFS by CID.
  * Tries each gateway in order, returns the bytes on first success.

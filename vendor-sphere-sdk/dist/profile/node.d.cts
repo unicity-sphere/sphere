@@ -18389,7 +18389,19 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
      * advance Nostr `since` → re-replay on next reconnect (idempotent
      * via addToken stateHash dedup).
      *
-     * @param timeoutMs Max wall-clock time. Default 30s.
+     * @param timeoutMs Max wall-clock time. Default 30s. Pass 0 (or any
+     *   non-finite / non-positive value, including `Number.POSITIVE_INFINITY`
+     *   and `Number.NaN`) to disable the wall-clock deadline entirely —
+     *   appropriate for one-shot bulk operations like `migrateTokenStorage()`
+     *   whose duration legitimately scales with input size. The 4-iteration
+     *   runaway guard still applies regardless, so a genuinely stuck save-
+     *   flush feedback loop cannot run forever.
+     *
+     *   Note: this differs from `pinCarBlocksToIpfs(..., concurrency)`,
+     *   which treats `+Infinity` / `NaN` as "fall back to default
+     *   concurrency=10" rather than "no cap". The two parameters have
+     *   different shapes (time budget vs in-flight pool size); the shared
+     *   non-finite handling here is "disable", there is "use default".
      */
     awaitNextFlush(timeoutMs?: number): Promise<void>;
     save(data: TxfStorageDataBase): Promise<SaveResult>;

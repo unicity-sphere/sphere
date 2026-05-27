@@ -4694,7 +4694,7 @@ async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
     lastError
   );
 }
-async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia) {
+async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
   const localHelia = asHelia(helia);
   const { CarReader: CarReader5 } = await import("@ipld/car");
   let reader;
@@ -4723,7 +4723,15 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
       `expectedRootCid ${expectedRootCid} is not present among CAR blocks (count=${blocks.length}) \u2014 builder/publisher mismatch.`
     );
   }
-  for (const block of blocks) {
+  const effectiveConcurrency = Math.max(
+    1,
+    Number.isFinite(concurrency) ? Math.floor(concurrency) : DEFAULT_PIN_CONCURRENCY
+  );
+  const workerCount = Math.min(effectiveConcurrency, blocks.length);
+  let nextIndex = 0;
+  let aborted = false;
+  const workerErrors = [];
+  const processOne = async (block) => {
     if (localHelia !== null) {
       let cidBindingOk = true;
       try {
@@ -4740,6 +4748,30 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
       }
     }
     await pinSingleBlock(gateways, block.bytes, block.cid, timeoutMs);
+  };
+  const worker = async () => {
+    while (!aborted) {
+      const i = nextIndex++;
+      if (i >= blocks.length) return;
+      try {
+        await processOne(blocks[i]);
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
+    }
+  };
+  const workers = [];
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(
+      worker().catch((err) => {
+        workerErrors.push(err);
+      })
+    );
+  }
+  await Promise.all(workers);
+  if (workerErrors.length > 0) {
+    throw workerErrors[0];
   }
   return expectedRootCid;
 }
@@ -5180,7 +5212,7 @@ async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
   }
   return result;
 }
-var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
+var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_PIN_CONCURRENCY, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
 var init_ipfs_client = __esm({
   "profile/ipfs-client.ts"() {
     "use strict";
@@ -5197,6 +5229,7 @@ var init_ipfs_client = __esm({
     FETCH_CAR_MAX_BLOCKS = 1e4;
     DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
     DEFAULT_PIN_TIMEOUT_MS = 6e4;
+    DEFAULT_PIN_CONCURRENCY = 10;
     DEFAULT_FETCH_TIMEOUT_MS2 = 3e4;
     DEFAULT_VERIFY_TIMEOUT_MS = 1e4;
     DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
@@ -24046,17 +24079,30 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
    * advance Nostr `since` → re-replay on next reconnect (idempotent
    * via addToken stateHash dedup).
    *
-   * @param timeoutMs Max wall-clock time. Default 30s.
+   * @param timeoutMs Max wall-clock time. Default 30s. Pass 0 (or any
+   *   non-finite / non-positive value, including `Number.POSITIVE_INFINITY`
+   *   and `Number.NaN`) to disable the wall-clock deadline entirely —
+   *   appropriate for one-shot bulk operations like `migrateTokenStorage()`
+   *   whose duration legitimately scales with input size. The 4-iteration
+   *   runaway guard still applies regardless, so a genuinely stuck save-
+   *   flush feedback loop cannot run forever.
+   *
+   *   Note: this differs from `pinCarBlocksToIpfs(..., concurrency)`,
+   *   which treats `+Infinity` / `NaN` as "fall back to default
+   *   concurrency=10" rather than "no cap". The two parameters have
+   *   different shapes (time budget vs in-flight pool size); the shared
+   *   non-finite handling here is "disable", there is "use default".
    */
   async awaitNextFlush(timeoutMs = 3e4) {
     if (!this.initialized || !this.encryptionKey) return;
+    const noDeadline = !Number.isFinite(timeoutMs) || timeoutMs <= 0;
     logger.debug(
       "profile:flush",
       "awaitNextFlush enter",
-      { timeoutMs }
+      { timeoutMs, noDeadline }
     );
-    const deadline = Date.now() + timeoutMs;
-    const remainingMs = () => Math.max(0, deadline - Date.now());
+    const deadline = noDeadline ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+    const remainingMs = () => noDeadline ? 0 : Math.max(0, deadline - Date.now());
     let monotonicityRetried = false;
     for (let iteration = 0; iteration < 4; iteration++) {
       const timer = this.flushTimer;
@@ -24068,20 +24114,24 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       const chained = this.flushScheduler.forceFlushSerialized();
       let timeoutHandle;
       try {
-        await Promise.race([
-          chained,
-          new Promise((_, reject) => {
-            timeoutHandle = setTimeout(
-              () => reject(
-                new SphereError(
-                  "awaitNextFlush: timeout awaiting serialized flush",
-                  "TIMEOUT"
-                )
-              ),
-              remainingMs()
-            );
-          })
-        ]);
+        if (noDeadline) {
+          await chained;
+        } else {
+          await Promise.race([
+            chained,
+            new Promise((_, reject) => {
+              timeoutHandle = setTimeout(
+                () => reject(
+                  new SphereError(
+                    "awaitNextFlush: timeout awaiting serialized flush",
+                    "TIMEOUT"
+                  )
+                ),
+                remainingMs()
+              );
+            })
+          ]);
+        }
       } catch (err) {
         if (err instanceof SphereError && err.code === "TIMEOUT") throw err;
         const code2 = err.code;
@@ -26717,7 +26767,7 @@ async function migrateTokenStorage(opts) {
   emitProgress(opts.onProgress, addressId, opts.direction, "await-flush", 0, 0);
   if (typeof opts.target.awaitNextFlush === "function") {
     try {
-      await opts.target.awaitNextFlush();
+      await opts.target.awaitNextFlush(0);
     } catch (err) {
       return failureResult({
         addressId,
