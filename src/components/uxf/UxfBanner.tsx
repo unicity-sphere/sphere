@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { X, Loader2, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
@@ -198,17 +198,26 @@ export function UxfBanner() {
     switchWalletMode,
     runLegacyToProfileMigration,
     refreshDataProbes,
+    walletExists,
   } = ctx;
 
   const [dismissed, setDismissed] = useState(false);
   const [activeAction, setActiveAction] = useState<null | 'migrate' | 'switch-profile' | 'switch-legacy' | 'merge' | 'refresh'>(null);
   const [showMergeConfirm, setShowMergeConfirm] = useState(false);
+  // Synchronous double-click guard. `disabled` on the button only takes
+  // effect after React re-renders — a fast double-tap that fires in the
+  // same task can race past it. A ref flipped inside the handler closes
+  // that window.
+  const actionLockRef = useRef(false);
 
   // The banner is dismissible — but only the "experimental build" advisory
   // text is hidden. The mode controls keep rendering once probes settle.
   // We DON'T offer a way to re-show the advisory after dismissal because
   // it would clutter every reload.
   if (dismissed) return null;
+  // Without a wallet the storage-mode banner is meaningless — the user
+  // hasn't created/imported a wallet yet. Hide it during onboarding.
+  if (!walletExists) return null;
 
   const probesPending = hasLegacyData === null || hasProfileData === null;
   // Whether each button should be shown
@@ -226,7 +235,10 @@ export function UxfBanner() {
     action: 'migrate' | 'switch-profile' | 'switch-legacy' | 'merge' | 'refresh',
     op: () => Promise<void>,
   ) {
-    if (anyActionRunning) return;
+    // Synchronous double-click guard FIRST — closes the window where
+    // two clicks fire before React applies `disabled` on the buttons.
+    if (actionLockRef.current || anyActionRunning) return;
+    actionLockRef.current = true;
     setActiveAction(action);
     try {
       await op();
@@ -238,6 +250,7 @@ export function UxfBanner() {
       showToast(`${actionLabel(action)} failed: ${msg}`, 'error', 8000);
     } finally {
       setActiveAction(null);
+      actionLockRef.current = false;
     }
   }
 

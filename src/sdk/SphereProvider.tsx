@@ -173,6 +173,32 @@ async function probeProfileTokenData(
 ): Promise<boolean> {
   let profile: BrowserProfileProviders | null = null;
   try {
+    // KNOWN COST: when the active sphere is already on Profile mode, a
+    // probe spins up a SECOND Helia + OrbitDB instance against the
+    // same underlying IndexedDB databases. OrbitDB supports
+    // multi-process attach (content-addressed) so this is safe, but
+    // the spin-up cost (~500ms-1s) shows up as the banner "(checking
+    // stores…)" hint. A future optimization could skip this probe
+    // when `walletMode === 'profile'` AND the active sphere already
+    // reports tokens — but identity-only probing keeps the code path
+    // symmetric and avoids subtle aliasing bugs across React state
+    // updates.
+    //
+    // KNOWN LIMITATION (inherited from PR #307): the `identity` we
+    // pass here has `privateKey: ''` — the real private key isn't
+    // exposed via the public Sphere API. The Profile providers
+    // attempt to derive an encryption key from the empty hex string
+    // and silently fall back to NO encryption when `hexToBytes('')`
+    // throws. For wallets whose Profile data was ever written with a
+    // real privateKey (i.e. directly via Sphere.init, not via this
+    // app's migration path), this probe will fail to decrypt and
+    // return `false` — banner shows "no Profile data" when actually
+    // there is some. The user can still click Switch to UXF Profile
+    // to recover. Cleanly resolving this requires either
+    //   (a) exposing the private key via Sphere's public API, or
+    //   (b) running the probe through an already-initialized Sphere
+    //       instance that has the key in scope.
+    // Both are out of scope for this PR.
     profile = createBrowserProfileProviders({ network, oracle });
     profile.tokenStorage.setIdentity(identity);
     profile.storage.setIdentity(identity);
@@ -222,7 +248,7 @@ export function SphereProvider({
 }: SphereProviderProps) {
   const queryClient = useQueryClient();
   const [sphere, setSphere] = useState<Sphere | null>(null);
-  const [providers, setProviders] = useState<BrowserProviders | null>(null);
+  const [providers, setProvidersRaw] = useState<BrowserProviders | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -238,6 +264,23 @@ export function SphereProvider({
   const [hasProfileData, setHasProfileData] = useState<boolean | null>(null);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const sphereRef = useRef<Sphere | null>(null);
+  /**
+   * Ref-mirror of the latest `providers` for callbacks that need to
+   * read the current value *without* recreating themselves on every
+   * provider swap (e.g. `runProbes`). Updated synchronously inside
+   * `setProviders()` below so a callback fired in the SAME tick as
+   * the state write sees the new value (React state itself wouldn't
+   * propagate until the next commit).
+   */
+  const providersRef = useRef<BrowserProviders | null>(null);
+  /**
+   * Wrapper that updates both the ref AND the React state for
+   * `providers`. Always use this instead of `setProvidersRaw`.
+   */
+  const setProviders = useCallback((next: BrowserProviders | null) => {
+    providersRef.current = next;
+    setProvidersRaw(next);
+  }, []);
   /**
    * Sequence counter — bumped on every initialize() / mode-switch. Used
    * to discard probe-write races: if a probe completes AFTER a newer
@@ -261,30 +304,73 @@ export function SphereProvider({
       logger.debug('SphereProvider', 'runProbes: no identity yet — skipping');
       return;
     }
-    const oracle = providers?.oracle;
+    // Read providers + oracle from the ref (synchronous mirror of
+    // latest `providers`) rather than the closure-captured `providers`
+    // state. The state can be stale during the very first boot:
+    // `setProviders` is called inside `initialize()` and React
+    // batches the update until after the callback returns, so a
+    // closure that captured the previous (`null`) value would skip
+    // the Profile probe entirely.
+    const liveProviders = providersRef.current ?? providers;
+    const oracle = liveProviders?.oracle;
 
-    // Run both probes in parallel; tolerate individual failures.
+    // Probe choice — use the live `liveProviders.tokenStorage` when
+    // it's the SAME backend we're probing, because that instance was
+    // initialized by Sphere.init with the REAL privateKey and its
+    // encryption key is correctly derived. Falling back to a fresh
+    // probe-only provider (with synthesized empty privateKey) only
+    // works for non-encrypted data and is therefore a best-effort
+    // fallback for cross-mode probes.
     //
-    // The "current mode" probe is cheap (we already have the
-    // initialized provider attached to `sphere`), but to keep the code
-    // path symmetric AND to make the probe identity-only (not
-    // dependent on react state ordering), we always re-probe via a
-    // fresh provider. This costs ~20ms but avoids the alternative of
-    // accidentally reading a provider that's been swapped under us.
-    const [legacy, profile] = await Promise.all([
-      probeLegacyTokenData(id).catch((err) => {
-        logger.warn('SphereProvider', 'probeLegacyTokenData failed', err);
-        return null;
-      }),
-      // Profile probe requires an oracle. If we don't have one yet,
-      // assume no Profile data.
-      oracle
-        ? probeProfileTokenData(id, network, oracle).catch((err) => {
+    // The result: when in Legacy mode we probe LIVE legacy + fresh
+    // Profile; when in Profile mode we probe fresh legacy + LIVE
+    // Profile. The "fresh" side may return a false-negative for
+    // encrypted data on the opposite backend — documented limitation
+    // (see `probeProfileTokenData` docstring).
+    // The SDK's ProfileTokenStorageProvider exposes `id === 'profile-token'`
+    // (NOT 'profile-token-storage' — that's the user-facing name).
+    // Legacy is 'indexeddb-token-storage'. We key off `id` to avoid
+    // instanceof-against-imported-class issues across tsup bundle
+    // boundaries.
+    const inProfileMode = (
+      liveProviders?.tokenStorage as { id?: string } | undefined
+    )?.id === 'profile-token';
+
+    const legacyP: Promise<boolean | null> = inProfileMode
+      ? probeLegacyTokenData(id).catch((err) => {
+          logger.warn('SphereProvider', 'probeLegacyTokenData failed', err);
+          return null;
+        })
+      : (async () => {
+          try {
+            const snap = await liveProviders?.tokenStorage.load();
+            if (!snap?.success || !snap.data) return false;
+            return hasMaterialContent(snap.data as unknown as Record<string, unknown>);
+          } catch (err) {
+            logger.warn('SphereProvider', 'live legacy probe failed', err);
+            return null;
+          }
+        })();
+
+    const profileP: Promise<boolean | null> = !oracle
+      ? Promise.resolve(false)
+      : inProfileMode
+        ? (async () => {
+            try {
+              const snap = await liveProviders?.tokenStorage.load();
+              if (!snap?.success || !snap.data) return false;
+              return hasMaterialContent(snap.data as unknown as Record<string, unknown>);
+            } catch (err) {
+              logger.warn('SphereProvider', 'live profile probe failed', err);
+              return null;
+            }
+          })()
+        : probeProfileTokenData(id, network, oracle).catch((err) => {
             logger.warn('SphereProvider', 'probeProfileTokenData failed', err);
             return null;
-          })
-        : Promise.resolve(false),
-    ]);
+          });
+
+    const [legacy, profile] = await Promise.all([legacyP, profileP]);
 
     if (seq !== initSeqRef.current) {
       // A newer initialize / mode-switch started — drop these results.
@@ -531,7 +617,7 @@ export function SphereProvider({
       setInitProgress(null);
       setIsLoading(false);
     }
-  }, [network, runProbes]);
+  }, [network, runProbes, setProviders]);
 
   // Stable ref so the boot-time effect only fires once per `network`
   // change. Without this, the effect would re-run whenever `walletMode`
@@ -733,9 +819,15 @@ export function SphereProvider({
       sphereRef.current = importedSphere;
       setSphere(importedSphere);
       sendWelcomeDM(importedSphere);
+      // Kick off boot probes for the new wallet — otherwise the banner
+      // would be stuck in "(checking stores…)" forever on fresh-wallet
+      // create/import flows.
+      runProbes(importedSphere).catch((err) => {
+        logger.warn('SphereProvider', 'finalizeWallet runProbes failed', err);
+      });
     }
     setWalletExists(true);
-  }, [providers]);
+  }, [providers, runProbes]);
 
   const toggleIpfs = useCallback(() => {
     const next = !isIpfsEnabled();
@@ -839,14 +931,18 @@ export function SphereProvider({
     // that as the source.
     let migrationSourceProviders = providers;
     let extraLegacyTokenStorage: IndexedDBTokenStorageProvider | null = null;
+    // Snapshot the identity BEFORE we destroy the active sphere so we
+    // can pass it to the migration helper (which needs it for the
+    // marker keyspace + oracle.isSpent probes).
+    const snapshotIdentity = probeIdentityFromSphere(instance);
+
     if (walletMode === 'profile') {
-      const id = probeIdentityFromSphere(instance);
-      if (!id) {
+      if (!snapshotIdentity) {
         setIsSwitchingMode(false);
         throw new Error('Cannot merge: wallet identity unavailable');
       }
       const freshLegacy = new IndexedDBTokenStorageProvider();
-      freshLegacy.setIdentity(id);
+      freshLegacy.setIdentity(snapshotIdentity);
       const ok = await freshLegacy.initialize();
       if (!ok) {
         // initialize() may have left a partial DB connection — best-
@@ -856,6 +952,23 @@ export function SphereProvider({
         throw new Error('Cannot merge: legacy IndexedDB unavailable');
       }
       extraLegacyTokenStorage = freshLegacy;
+
+      // CRITICAL — destroy the active Profile-backed Sphere BEFORE we
+      // spin up the migration helper's own Profile providers.
+      // Otherwise we'd have TWO live OrbitDB instances writing to the
+      // same database (active sphere + migration helper). OrbitDB's
+      // OpLog is multi-writer but concurrent writes can re-order with
+      // visible inconsistency to a future reader. By tearing down the
+      // active instance first we serialize: migration writes → reinit
+      // reads.
+      await instance.destroy({ force: true, reason: 'user-initiated-uxf-merge' });
+      sphereRef.current = null;
+      // Disconnect the active providers' Profile-backed storage so the
+      // migration helper's `setIdentity` + `initialize` aren't fighting
+      // a stale handle.
+      try { await providers.tokenStorage.disconnect(); } catch { /* ignore */ }
+      try { await providers.storage.disconnect(); } catch { /* ignore */ }
+
       // Spread the active providers and SUBSTITUTE the tokenStorage
       // with the freshly-opened legacy provider. The oracle, storage
       // (for marker), etc. are unchanged.
@@ -873,9 +986,15 @@ export function SphereProvider({
     }
 
     try {
+      // From legacy mode, we still pass `sphere: instance` because the
+      // helper reads `sphere.identity`. From profile mode we already
+      // destroyed `instance`; reach into the snapshot.
+      const helperSphereArg = walletMode === 'profile'
+        ? ({ identity: snapshotIdentity } as unknown as Sphere)
+        : instance;
       const profileResult = await runProfileMigration({
         legacyProviders: migrationSourceProviders,
-        sphere: instance,
+        sphere: helperSphereArg,
         network,
         setInitProgress,
         force: opts?.force === true,
@@ -883,10 +1002,13 @@ export function SphereProvider({
       if (!profileResult) {
         throw new Error('Migration failed — see logs for details');
       }
-      // Tear down the current Sphere and swap providers — same code path
-      // as the boot-time migration block.
-      await instance.destroy({ force: true, reason: 'user-initiated-uxf-migration' });
-      sphereRef.current = null;
+      // From legacy mode, destroy the still-live legacy Sphere now;
+      // from profile mode it was already destroyed before the migrate
+      // call (see comment above).
+      if (walletMode === 'legacy') {
+        await instance.destroy({ force: true, reason: 'user-initiated-uxf-migration' });
+        sphereRef.current = null;
+      }
       const netConfig = NETWORKS[network] ?? NETWORKS.testnet;
       const swapped: BrowserProviders = {
         ...providers,
@@ -914,6 +1036,19 @@ export function SphereProvider({
       // Refresh probes — legacy is unchanged (the migration COPIES,
       // doesn't move), Profile now has data.
       await runProbes(reinit.sphere);
+    } catch (err) {
+      // Fatal error AFTER we destroyed the active sphere — the user is
+      // now sphere-less. Re-run `initialize()` to rebuild whatever
+      // mode the persisted preference points to (most likely legacy
+      // since we only stamp 'profile' on success). This ensures the
+      // user always lands on a usable wallet rather than a blank UI.
+      logger.error('SphereProvider', 'runLegacyToProfileMigration failed — recovering', err);
+      try {
+        await initializeRef.current(0, /*skipLoading=*/ true);
+      } catch (recoverErr) {
+        logger.error('SphereProvider', 'Recovery initialize() also failed', recoverErr);
+      }
+      throw err;
     } finally {
       // Release the temp legacy provider (only opened on the
       // profile-mode merge path).
@@ -922,7 +1057,7 @@ export function SphereProvider({
       }
       setIsSwitchingMode(false);
     }
-  }, [providers, network, isSwitchingMode, runProbes, walletMode]);
+  }, [providers, network, isSwitchingMode, runProbes, walletMode, setProviders]);
 
   const value: SphereContextValue = {
     sphere,

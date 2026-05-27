@@ -33,7 +33,9 @@ function makeCtx(
     providers: null,
     isLoading: false,
     isInitialized: false,
-    walletExists: false,
+    // Default: wallet EXISTS so the banner renders. Override per-test
+    // to verify the onboarding-hidden path.
+    walletExists: true,
     error: null,
     isDiscoveringAddresses: false,
     initProgress: null,
@@ -138,6 +140,20 @@ describe('UxfBanner — button matrix', () => {
     // Refresh + dismiss are always present
     expect(screen.getByRole('button', { name: labelRefresh })).toBeDefined();
     expect(screen.getByRole('button', { name: /Dismiss UXF banner/ })).toBeDefined();
+  });
+
+  it('hides the banner entirely during onboarding (walletExists=false)', () => {
+    const { container } = renderBanner(
+      makeCtx({
+        walletMode: 'legacy',
+        hasLegacyData: true,
+        hasProfileData: false,
+        walletExists: false,
+      }),
+    );
+    // Empty render — banner is omitted while the user is on the
+    // onboarding flow (no wallet yet).
+    expect(container.firstChild).toBeNull();
   });
 
   it('shows a "checking stores…" hint while probes are pending', () => {
