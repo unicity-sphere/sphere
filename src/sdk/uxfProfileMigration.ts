@@ -282,9 +282,20 @@ export async function runProfileMigration(
     // for THIS session we keep the legacy providers active so the user
     // sees their full balance.
     if (!result.success) {
-      logger.error('SphereProvider', 'UXF migration failed; falling back to legacy mode', {
-        errors: result.errors,
-      });
+      // Serialize each error inline so the browser console doesn't collapse
+      // them to "Array(2)" — without this the operator has no idea which
+      // phase failed. The SDK reports `{phase, error}` entries.
+      const errorSummary = (result.errors ?? [])
+        .map((e, i) => `#${i + 1} [${e.phase}] ${e.error}`)
+        .join(' | ');
+      logger.error(
+        'SphereProvider',
+        `UXF migration failed; falling back to legacy mode — ${errorSummary || '(no error details from SDK)'}`,
+        {
+          errorCount: result.errors?.length ?? 0,
+          errors: result.errors,
+        },
+      );
       // Best-effort cleanup: disconnect the half-initialized Profile
       // providers the helper built so we don't leak handles.
       try { await result.profileProviders.tokenStorage.disconnect(); } catch { /* ignore */ }
