@@ -526,7 +526,31 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * unique event IDs in the §C.2 soak failure observed at
  * `integration/all-fixes` HEAD `6102d59`).
  */
- | 'storage:durability-deferred';
+ | 'storage:durability-deferred'
+/**
+ * PR #302 (issue #???): emitted by the pointer-layer lifecycle when
+ * Phase 3 walkback skipped past one or more `CAR_TRANSIENT` versions
+ * (slot EXISTS on-chain — proof verified + CID decoded — but no IPFS
+ * gateway could serve the CAR bytes).
+ *
+ * Fired on both the recover path (cold-start / periodic poll
+ * `recoverLatest()`) and the publish path (conflict-driven rediscovery
+ * in `reconcileAndPublish()`). Also fired when ALL known anchor versions
+ * are CAR_TRANSIENT and no VALID predecessor was found (the
+ * `RecoverAllUnfetchableResult` case).
+ *
+ * `data` carries:
+ *   - `skippedVersions: number[]`   versions walked past
+ *   - `recoveredVersion?: number`   the VALID predecessor found
+ *                                   (absent when all anchors unfetchable)
+ *   - `path: 'recover' | 'publish'` the code path that fired the event
+ *
+ * Not a fatal alarm (`storage:error`). Operators should investigate
+ * IPFS gateway health for the wallet's IPNS CIDs and consider
+ * re-pinning the missing CARs from a backup or invoking
+ * `acceptCarLoss(version)` to permanently acknowledge the data loss.
+ */
+ | 'storage:pointer-version-skipped-unfetchable';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
