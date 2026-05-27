@@ -2,8 +2,9 @@
   "created_at": "2026-04-07T08:51:08.615Z",
   "mnemonic": "behave midnight what sea curve live coral chapter cabbage still beyond wife",
   "public_key": "0208dd545fff6a4a9737aa25e8fb7311b16c5992786bdddb1ffeb7c1a955470383",
-  "npub": "npub1qprw4ghlldf9fwda2yh50kuc3k9k9nyncd0wak8l7klq6j428qwpsp53860",
-  "nsec": "nsec1q89g4dfkacvdv2gjmc9xq3xgw096ef62pkx5dmccl8r49rfu2g6rq0wk3g2",
+  "npub": "npub1prw4ghlldf9fwda2yh50kuc3k9k9nyncd0wak8l7klq6j428qwpssd7d26",
+  "nsec": "nsec189g4dfkacvdv2gjmc9xq3xgw096ef62pkx5dmccl8r49rfu2g6rq454k6d",
   "derivation_path": "m/44'/0'/0'/0/0",
-  "nametag": "claude-sphere.telco"
+  "nametag": "claude-sphere.telco",
+  "private_key": "395156a6ddc31ac5225bc14c08990e797594e941b1a8dde31f38ea51a78a4686"
 }
