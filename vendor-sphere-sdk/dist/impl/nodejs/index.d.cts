@@ -2204,7 +2204,49 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * re-pinning the missing CARs from a backup or invoking
  * `acceptCarLoss(version)` to permanently acknowledge the data loss.
  */
- | 'storage:pointer-version-skipped-unfetchable';
+ | 'storage:pointer-version-skipped-unfetchable'
+/**
+ * Item #157 (OpLog auto-reset) — emitted by the FlushScheduler when an
+ * unreachable OpLog head block is detected and the adapter auto-resets
+ * the corrupted log to recover writability.
+ *
+ * `data` carries:
+ *   - `lostHeadCid: string | null`     CID captured from the Helia
+ *                                       "Failed to load block for <CID>"
+ *                                       pattern (null if regex missed).
+ *   - `recoveredAt: number`             UNIX ms timestamp.
+ *   - `context: string`                 trigger site, e.g.
+ *                                       `"flush-scheduler.bundle-write"`.
+ *   - `retrySucceeded: boolean`         true when the post-reset retry
+ *                                       of the failing write completed.
+ *   - `resetFailed?: boolean`           true when `resetCorruptedLog`
+ *                                       itself threw — `retrySucceeded`
+ *                                       is then `false` and the
+ *                                       original write error
+ *                                       propagates.
+ *
+ * Walk-back past `recoveredAt` is permanently impossible. The
+ * persistent {@link ProfileRecoveryMarker} (queryable via
+ * `ProfileTokenStorageProvider.getRecoveryStatus()`) records this for
+ * downstream UI surfaces.
+ *
+ * Distinct from `storage:error`: a recovered event indicates writes
+ * have resumed for the session; an error event indicates a fatal
+ * class. UI may surface a persistent "Recovered" badge based on the
+ * marker, not on this event alone.
+ */
+ | 'profile:recovered'
+/**
+ * Item #157 (OpLog auto-reset) — emitted IMMEDIATELY BEFORE the
+ * adapter's `resetCorruptedLog` call so operators see the trigger
+ * even if the reset itself fails (in which case `profile:recovered`
+ * fires with `resetFailed: true`).
+ *
+ * `data` carries `{ lostHeadCid, context }`. Companion to
+ * `profile:recovered`; both are emitted on every auto-reset attempt
+ * (one before, one after).
+ */
+ | 'profile:oplog-auto-resetting';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;

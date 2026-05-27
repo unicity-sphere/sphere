@@ -11223,6 +11223,16 @@ var OrbitDbAdapter = class {
   connectInFlight = null;
   closeInFlight = null;
   /**
+   * Last `OrbitDbConfig` passed to a successful `connect()`. Captured at
+   * the end of `connectInner` and retained across `close()` so
+   * `resetCorruptedLog()` can rebuild a fresh OrbitDB instance without
+   * the caller having to re-supply config. Cleared only by `cleanupOnError`
+   * (a config that produced a failure is suspect and should not be
+   * silently reused) — note `close()` intentionally does NOT clear it,
+   * the recovered Profile re-uses the same dbNameOverride / directory.
+   */
+  currentConfig = null;
+  /**
    * Steelman remediation for issue #236 — set TRUE at the entry of
    * `closeInner()` (BEFORE the bounded teardown begins), cleared after
    * the close completes (or at the start of the next successful
@@ -11461,6 +11471,7 @@ var OrbitDbAdapter = class {
       }
       this.db = await this.orbitdb.open(dbName, openOptions);
       this.connected = true;
+      this.currentConfig = config;
     } catch (err) {
       await this.cleanupOnError();
       if (err instanceof ProfileError) {
@@ -11818,8 +11829,129 @@ var OrbitDbAdapter = class {
     this.orbitdb = null;
     this.helia = null;
     this.connected = false;
+    this.currentConfig = null;
+  }
+  /**
+   * Recover from an unreachable-block OpLog corruption by tearing down
+   * the current OrbitDB DB and reconnecting from scratch.
+   *
+   * # When to call
+   *
+   * Invoked by callers (today: `FlushScheduler.flushToIpfs` →
+   * `BundleIndex.addBundle`) that catch a `PROFILE:ORBITDB_WRITE_FAILED`
+   * whose underlying error matches the "Failed to load block for <CID>"
+   * pattern emitted by Helia when the OpLog head block is unreachable.
+   * This happens reliably in browser deployments where Helia uses
+   * MemoryBlockstore (no persistence) while OrbitDB's level state (which
+   * holds the head CID pointer) IS persisted to IndexedDB. After a page
+   * reload, the level state survives but the head block bytes are gone —
+   * every subsequent append fails with the same error, forever.
+   *
+   * # Behaviour
+   *
+   *   1. Best-effort `db.drop()` — wipes the underlying level state so
+   *      the next `connect()` opens an empty OpLog. Some adapter shapes
+   *      (test stubs, future @orbitdb/core versions) may not expose
+   *      `drop`; we log the situation and proceed with close+reconnect.
+   *      In the no-drop case the corrupt level state may persist and
+   *      re-trigger failure on the next flush — the caller's error
+   *      handling should retry once and then bubble.
+   *   2. Full `close()` — releases helia + orbitdb + db handles so the
+   *      reconnect starts from a clean slate.
+   *   3. `connect()` against the captured `currentConfig` — rebuilds
+   *      the OrbitDB + Helia + libp2p stack.
+   *
+   * # Blast radius
+   *
+   * **Per-DB only.** The helia blockstore (FsBlockstore on Node;
+   * MemoryBlockstore in browser without a custom blockstore) is
+   * recreated by connect(); previously-cached UXF bundle bytes
+   * (in-session) are lost. Token data on IndexedDB token storage
+   * (`sphere-token-storage-<addressId>`) is UNTOUCHED — this method
+   * only operates on the OrbitDB profile layer.
+   *
+   * **Walk-back closed.** Prior OpLog entries become permanently
+   * inaccessible. The caller MUST write a recovery marker (via
+   * `ProfileTokenStorageHost.writeRecoveryMarker`) so the Profile is
+   * observably "Recovered" and downstream consumers know walk-back
+   * past `recoveredAt` is impossible.
+   *
+   * # Idempotency
+   *
+   * NOT idempotent if `connect()` fails: the second call will throw
+   * "currently not connected" if the failed connect cleaned up state.
+   * Callers should treat a failed reset as terminal for this session
+   * and surface the original error.
+   *
+   * @param reason  Diagnostics — the lost head CID (when captured by
+   *                the error pattern) and the call site ("flush-scheduler.bundle-write"
+   *                / etc.) for telemetry & operator triage.
+   * @returns       `{ recovered: true, lostHeadCid, recoveredAt }` on
+   *                success. Throws on failure.
+   */
+  async resetCorruptedLog(reason) {
+    if (this.currentConfig === null) {
+      throw new ProfileError(
+        "ORBITDB_CONNECTION_FAILED",
+        "resetCorruptedLog: no captured OrbitDbConfig \u2014 call connect() first."
+      );
+    }
+    const lostCidLabel = reason.lostHeadCid ?? "(unknown)";
+    logger.debug(
+      "profile:orbitdb",
+      `resetCorruptedLog: starting (context=${reason.context}, lostHeadCid=${lostCidLabel}); prior OpLog history will become permanently inaccessible.`
+    );
+    const dropFn = this.db && typeof this.db.drop === "function" ? this.db.drop.bind(this.db) : null;
+    if (dropFn !== null) {
+      try {
+        await dropFn();
+        logger.debug("profile:orbitdb", "resetCorruptedLog: db.drop() succeeded");
+      } catch (err) {
+        logger.debug(
+          "profile:orbitdb",
+          `resetCorruptedLog: db.drop() threw (${err instanceof Error ? err.message : String(err)}); proceeding`
+        );
+      }
+    } else {
+      logger.debug(
+        "profile:orbitdb",
+        "resetCorruptedLog: OrbitDB drop unavailable; performing close+reconnect; corrupt level state may persist and re-trigger failure."
+      );
+    }
+    await this.close();
+    await this.connect(this.currentConfig);
+    return {
+      recovered: true,
+      lostHeadCid: reason.lostHeadCid,
+      recoveredAt: Date.now()
+    };
   }
 };
+function extractLostHeadCid(err) {
+  const pattern = /Failed to load block for (bafy[a-z0-9]+)/i;
+  let current = err;
+  for (let depth = 0; depth < 4 && current !== void 0 && current !== null; depth++) {
+    let message = null;
+    if (current instanceof Error) {
+      message = current.message;
+    } else if (typeof current === "string") {
+      message = current;
+    } else if (typeof current === "object" && "message" in current) {
+      const raw2 = current.message;
+      if (typeof raw2 === "string") message = raw2;
+    }
+    if (message !== null) {
+      const match = pattern.exec(message);
+      if (match !== null) {
+        return match[1];
+      }
+    }
+    const next = current.cause;
+    if (next === void 0 || next === current) break;
+    current = next;
+  }
+  return null;
+}
 async function derivePublicKeyShort(privateKeyHex) {
   try {
     const secp256k1Module = await Promise.resolve().then(() => (init_secp256k1(), secp256k1_exports));
@@ -21873,7 +22005,7 @@ var FlushScheduler = class {
         createdAt: Math.floor(Date.now() / 1e3),
         tokenCount: tokens.size
       };
-      await this.bundleIndex.addBundle(cid, bundleRef);
+      await this.addBundleWithOplogAutoReset(cid, bundleRef);
       this.host.setLastPinnedBundleCid(cid);
       const loadedBundleCidsForUpdate = this.host.getLastLoadedFromBundleCids();
       if (loadedBundleCidsForUpdate !== null) {
@@ -22016,6 +22148,134 @@ var FlushScheduler = class {
     this.host.setLastPinnedCid(null);
     this.host.setPendingData(data);
     this.scheduleFlush();
+  }
+  /**
+   * Item #157 — call `BundleIndex.addBundle` with detection + recovery
+   * for the "Failed to load block for <CID>" (OpLog head unreachable)
+   * failure mode.
+   *
+   * # Failure mode being addressed
+   *
+   * In browsers Helia defaults to `MemoryBlockstore` (no persistence)
+   * while OrbitDB's level state (which holds the head-CID pointer for
+   * the OpLog) IS persisted to IndexedDB. On reload, level state
+   * survives but the bytes of the OpLog head block are gone. Every
+   * subsequent OrbitDB write fails with the exact same error —
+   * `bundleIndex.addBundle` is the first writer in the flush path that
+   * sees this and, untreated, blocks the entire pipeline forever.
+   *
+   * # Recovery contract
+   *
+   *   1. On any throw from `addBundle`, check `extractLostHeadCid` for
+   *      the signature pattern. Non-matching errors propagate unchanged
+   *      (network errors, encryption failures, etc.).
+   *   2. If the adapter lacks `resetCorruptedLog` (legacy stubs / test
+   *      doubles), the original error propagates unchanged — we cannot
+   *      recover.
+   *   3. Emit `profile:oplog-auto-resetting` BEFORE the reset so
+   *      operators see the trigger even when the reset itself fails.
+   *   4. Run `db.resetCorruptedLog`. On success:
+   *      a. Write the persistent recovery marker via
+   *         `host.writeRecoveryMarker`. Marker-write failures are
+   *         logged but do NOT block the retry — the in-memory
+   *         recovery still applies for this session.
+   *      b. Retry `addBundle` ONCE. Success → emit `profile:recovered`
+   *         with `retrySucceeded: true` and return; the caller's flush
+   *         body proceeds to step 7 (operational state write).
+   *      c. Retry failure → emit `profile:recovered` with
+   *         `retrySucceeded: false` and re-throw the retry's error.
+   *   5. `resetCorruptedLog` itself throws → emit `profile:recovered`
+   *      with `retrySucceeded: false, resetFailed: true` and re-throw
+   *      the original write error (the reset failure is reported in the
+   *      event; the propagated error is the one the caller asked for).
+   */
+  async addBundleWithOplogAutoReset(cid, bundleRef) {
+    try {
+      await this.bundleIndex.addBundle(cid, bundleRef);
+      return;
+    } catch (err) {
+      const lostHeadCid = extractLostHeadCid(err);
+      if (lostHeadCid === null) {
+        throw err;
+      }
+      const dbWithReset = this.host.db;
+      if (typeof dbWithReset.resetCorruptedLog !== "function") {
+        throw err;
+      }
+      this.host.log(
+        `OpLog head unreachable (lostHeadCid=${lostHeadCid}); auto-resetting Profile DB. Prior OpLog history is permanently inaccessible. Token data on local IndexedDB is preserved.`
+      );
+      const context = "flush-scheduler.bundle-write";
+      this.host.emitEvent({
+        type: "profile:oplog-auto-resetting",
+        timestamp: Date.now(),
+        data: { lostHeadCid, context }
+      });
+      let resetResult;
+      try {
+        resetResult = await dbWithReset.resetCorruptedLog({
+          lostHeadCid,
+          context
+        });
+      } catch (resetErr) {
+        this.host.emitEvent({
+          type: "profile:recovered",
+          timestamp: Date.now(),
+          data: {
+            lostHeadCid,
+            recoveredAt: Date.now(),
+            context,
+            retrySucceeded: false,
+            resetFailed: true
+          },
+          error: resetErr instanceof Error ? resetErr.message : String(resetErr),
+          cause: resetErr
+        });
+        throw err;
+      }
+      const marker = {
+        version: 1,
+        recoveredAt: resetResult.recoveredAt,
+        lostHeadCid: resetResult.lostHeadCid ?? lostHeadCid,
+        context,
+        walkBackClosed: true,
+        note: "Profile OpLog auto-reset: an OrbitDB head block was unreachable and could not be served by any known store (Helia blockstore, operator gateways). Walk-back past this point is permanently closed; some operational metadata (outbox/sent/history not yet pinned in a UXF bundle) may have been lost. Token data on local IndexedDB token storage is preserved."
+      };
+      try {
+        await this.host.writeRecoveryMarker(marker);
+      } catch (markerErr) {
+        this.host.log(
+          `Recovery marker write failed (continuing): ${markerErr instanceof Error ? markerErr.message : String(markerErr)}`
+        );
+      }
+      try {
+        await this.bundleIndex.addBundle(cid, bundleRef);
+      } catch (retryErr) {
+        this.host.emitEvent({
+          type: "profile:recovered",
+          timestamp: Date.now(),
+          data: {
+            lostHeadCid,
+            recoveredAt: resetResult.recoveredAt,
+            context,
+            retrySucceeded: false
+          },
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+          cause: retryErr
+        });
+        throw retryErr;
+      }
+      this.host.emitEvent({
+        type: "profile:recovered",
+        timestamp: Date.now(),
+        data: {
+          lostHeadCid,
+          recoveredAt: resetResult.recoveredAt,
+          context,
+          retrySucceeded: true
+        }
+      });
+    }
   }
 };
 
@@ -23658,6 +23918,9 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       writeProfileKey: (key, value) => this.writeProfileKey(key, value),
       readProfileKey: (key) => this.readProfileKey(key),
       readProfileKeyJson: (key) => this.readProfileKeyJson(key),
+      // Profile recovery marker (OpLog auto-reset — Item #157)
+      writeRecoveryMarker: (marker) => this.writeRecoveryMarker(marker),
+      readRecoveryMarker: () => this.readRecoveryMarker(),
       // Flush coordination
       flushToIpfs: () => this.flushScheduler.flushToIpfs(),
       refreshBaselineForMonotonicity: () => this.refreshBaselineForMonotonicity(),
@@ -25550,6 +25813,60 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     } catch {
       return null;
     }
+  }
+  // ===========================================================================
+  // Profile recovery marker (OpLog auto-reset — Item #157)
+  // ===========================================================================
+  /**
+   * Build the address-scoped OrbitDB key for the recovery marker. Kept
+   * private so a future addressId rename / migration only changes one
+   * call site.
+   */
+  recoveryMarkerKey() {
+    return `_profile_recovered:${this.getAddressId()}`;
+  }
+  /**
+   * Persist a {@link ProfileRecoveryMarker} for this Profile.
+   *
+   * Idempotent. Writes through the same encrypted-OrbitDB path as other
+   * profile metadata. Returns successfully if the write completes; on
+   * failure the underlying error is surfaced to the caller — the
+   * FlushScheduler treats marker-write failures as best-effort (the
+   * in-memory recovery still applies for this session).
+   *
+   * Implements `ProfileTokenStorageHost.writeRecoveryMarker`.
+   */
+  async writeRecoveryMarker(marker) {
+    await this.writeProfileKey(
+      this.recoveryMarkerKey(),
+      JSON.stringify(marker)
+    );
+  }
+  /**
+   * Read the {@link ProfileRecoveryMarker} for this Profile, or null
+   * when no recovery has ever happened on this device for this address.
+   *
+   * Implements `ProfileTokenStorageHost.readRecoveryMarker`.
+   */
+  async readRecoveryMarker() {
+    const parsed = await this.readProfileKeyJson(
+      this.recoveryMarkerKey()
+    );
+    if (!parsed) return null;
+    if (typeof parsed !== "object" || parsed === null || parsed.version !== 1 || parsed.walkBackClosed !== true || typeof parsed.recoveredAt !== "number") {
+      return null;
+    }
+    return parsed;
+  }
+  /**
+   * Public surface for "is this Profile Recovered?". Returns null when
+   * no OpLog auto-reset has happened on this device. Non-null marker
+   * indicates walk-back past `recoveredAt` is permanently impossible —
+   * UI should show a persistent "Recovered" badge. Surface
+   * `lostHeadCid` and `recoveredAt` in diagnostics.
+   */
+  async getRecoveryStatus() {
+    return this.readRecoveryMarker();
   }
   // ===========================================================================
   // Private: Replication handler
