@@ -27,7 +27,7 @@ var init_errors = __esm({
   }
 });
 
-// node_modules/@noble/hashes/utils.js
+// ../../../node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -156,7 +156,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "node_modules/@noble/hashes/utils.js"() {
+  "../../../node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -170,10 +170,10 @@ var init_utils = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hmac.js
+// ../../../node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "node_modules/@noble/hashes/hmac.js"() {
+  "../../../node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -248,7 +248,7 @@ var init_hmac = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hkdf.js
+// ../../../node_modules/@noble/hashes/hkdf.js
 function extract(hash, ikm, salt) {
   ahash(hash);
   if (salt === void 0)
@@ -283,7 +283,7 @@ function expand(hash, prk, info, length = 32) {
 }
 var HKDF_COUNTER, EMPTY_BUFFER, hkdf;
 var init_hkdf = __esm({
-  "node_modules/@noble/hashes/hkdf.js"() {
+  "../../../node_modules/@noble/hashes/hkdf.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -293,7 +293,7 @@ var init_hkdf = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_md.js
+// ../../../node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -302,7 +302,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV, SHA224_IV, SHA384_IV, SHA512_IV;
 var init_md = __esm({
-  "node_modules/@noble/hashes/_md.js"() {
+  "../../../node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -459,7 +459,7 @@ var init_md = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_u64.js
+// ../../../node_modules/@noble/hashes/_u64.js
 function fromBig(n, le = false) {
   if (le)
     return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
@@ -481,7 +481,7 @@ function add(Ah, Al, Bh, Bl) {
 }
 var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
-  "node_modules/@noble/hashes/_u64.js"() {
+  "../../../node_modules/@noble/hashes/_u64.js"() {
     "use strict";
     U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
     _32n = /* @__PURE__ */ BigInt(32);
@@ -500,7 +500,7 @@ var init_u64 = __esm({
   }
 });
 
-// node_modules/@noble/hashes/sha2.js
+// ../../../node_modules/@noble/hashes/sha2.js
 var sha2_exports = {};
 __export(sha2_exports, {
   _SHA224: () => _SHA224,
@@ -518,7 +518,7 @@ __export(sha2_exports, {
 });
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, _SHA224, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA2_64B, _SHA512, _SHA384, T224_IV, T256_IV, _SHA512_224, _SHA512_256, sha256, sha224, sha512, sha384, sha512_256, sha512_224;
 var init_sha2 = __esm({
-  "node_modules/@noble/hashes/sha2.js"() {
+  "../../../node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_u64();
@@ -2042,7 +2042,7 @@ var init_http_block_broker = __esm({
   }
 });
 
-// node_modules/@noble/curves/utils.js
+// ../../../node_modules/@noble/curves/utils.js
 function abool(value, title = "") {
   if (typeof value !== "boolean") {
     const prefix = title && `"${title}" `;
@@ -2194,7 +2194,7 @@ function memoized(fn) {
 }
 var _0n, _1n, isPosBig, bitMask;
 var init_utils2 = __esm({
-  "node_modules/@noble/curves/utils.js"() {
+  "../../../node_modules/@noble/curves/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
@@ -2205,7 +2205,7 @@ var init_utils2 = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/modular.js
+// ../../../node_modules/@noble/curves/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
   return result >= _0n2 ? result : b + result;
@@ -2428,7 +2428,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
 }
 var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, FIELD_FIELDS, _Field;
 var init_modular = __esm({
-  "node_modules/@noble/curves/abstract/modular.js"() {
+  "../../../node_modules/@noble/curves/abstract/modular.js"() {
     "use strict";
     init_utils2();
     _0n2 = /* @__PURE__ */ BigInt(0);
@@ -2598,7 +2598,7 @@ var init_modular = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/curve.js
+// ../../../node_modules/@noble/curves/abstract/curve.js
 function negateCt(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
@@ -2697,7 +2697,7 @@ function createKeygen(randomSecretKey, getPublicKey) {
 }
 var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
-  "node_modules/@noble/curves/abstract/curve.js"() {
+  "../../../node_modules/@noble/curves/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -2839,7 +2839,7 @@ var init_curve = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/hash-to-curve.js
+// ../../../node_modules/@noble/curves/abstract/hash-to-curve.js
 function i2osp(value, length) {
   asafenumber(value);
   asafenumber(length);
@@ -3000,7 +3000,7 @@ function createHasher2(Point, mapToCurve, defaults) {
 }
 var os2ip, _DST_scalar;
 var init_hash_to_curve = __esm({
-  "node_modules/@noble/curves/abstract/hash-to-curve.js"() {
+  "../../../node_modules/@noble/curves/abstract/hash-to-curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -3009,7 +3009,7 @@ var init_hash_to_curve = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/weierstrass.js
+// ../../../node_modules/@noble/curves/abstract/weierstrass.js
 function _splitEndoScalar(k, basis, n) {
   const [[a1, b1], [a2, b2]] = basis;
   const c1 = divNearest(b2 * k, n);
@@ -3872,7 +3872,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
 }
 var divNearest, DERErr, DER, _0n4, _1n4, _2n2, _3n2, _4n2;
 var init_weierstrass = __esm({
-  "node_modules/@noble/curves/abstract/weierstrass.js"() {
+  "../../../node_modules/@noble/curves/abstract/weierstrass.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -3993,7 +3993,7 @@ var init_weierstrass = __esm({
   }
 });
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 var secp256k1_exports = {};
 __export(secp256k1_exports, {
   schnorr: () => schnorr,
@@ -4098,7 +4098,7 @@ function schnorrVerify(signature, message, publicKey) {
 }
 var secp256k1_CURVE, secp256k1_ENDO, _0n5, _2n3, Fpk1, Pointk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, hasEven, num, schnorr, isoMap, mapSWU, secp256k1_hasher;
 var init_secp256k1 = __esm({
-  "node_modules/@noble/curves/secp256k1.js"() {
+  "../../../node_modules/@noble/curves/secp256k1.js"() {
     "use strict";
     init_sha2();
     init_utils();
@@ -10027,7 +10027,7 @@ var init_ipfs_http_client = __esm({
   }
 });
 
-// node_modules/@ipld/dag-pb/src/pb-decode.js
+// ../../../node_modules/@ipld/dag-pb/src/pb-decode.js
 function decodeVarint(bytes, offset) {
   let v = 0;
   for (let shift = 0; ; shift += 7) {
@@ -10158,16 +10158,16 @@ function decodeNode(bytes) {
 }
 var textDecoder;
 var init_pb_decode = __esm({
-  "node_modules/@ipld/dag-pb/src/pb-decode.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/pb-decode.js"() {
     "use strict";
     textDecoder = new TextDecoder();
   }
 });
 
-// node_modules/@ipld/dag-pb/src/pb-encode.js
+// ../../../node_modules/@ipld/dag-pb/src/pb-encode.js
 var textEncoder, maxInt32, maxUInt32;
 var init_pb_encode = __esm({
-  "node_modules/@ipld/dag-pb/src/pb-encode.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/pb-encode.js"() {
     "use strict";
     textEncoder = new TextEncoder();
     maxInt32 = 2 ** 32;
@@ -10175,7 +10175,7 @@ var init_pb_encode = __esm({
   }
 });
 
-// node_modules/@ipld/dag-pb/src/util.js
+// ../../../node_modules/@ipld/dag-pb/src/util.js
 import { CID as CID6 } from "multiformats/cid";
 function toByteView(buf) {
   if (buf instanceof ArrayBuffer) {
@@ -10185,13 +10185,13 @@ function toByteView(buf) {
 }
 var textEncoder2;
 var init_util = __esm({
-  "node_modules/@ipld/dag-pb/src/util.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/util.js"() {
     "use strict";
     textEncoder2 = new TextEncoder();
   }
 });
 
-// node_modules/@ipld/dag-pb/src/index.js
+// ../../../node_modules/@ipld/dag-pb/src/index.js
 import { CID as CID7 } from "multiformats/cid";
 function decode2(bytes) {
   const buf = toByteView(bytes);
@@ -10222,7 +10222,7 @@ function decode2(bytes) {
   return node;
 }
 var init_src = __esm({
-  "node_modules/@ipld/dag-pb/src/index.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/index.js"() {
     "use strict";
     init_pb_decode();
     init_pb_encode();
