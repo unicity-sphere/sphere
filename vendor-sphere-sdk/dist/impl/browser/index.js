@@ -8791,6 +8791,7 @@ async function putBlockToLocalHelia(helia, cidString, blockBytes) {
 }
 var DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
 var DEFAULT_PIN_TIMEOUT_MS = 6e4;
+var DEFAULT_PIN_CONCURRENCY = 10;
 var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
 var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
@@ -8870,7 +8871,7 @@ async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
     lastError
   );
 }
-async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia) {
+async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
   const localHelia = asHelia(helia);
   const { CarReader: CarReader2 } = await import("@ipld/car");
   let reader;
@@ -8899,7 +8900,15 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
       `expectedRootCid ${expectedRootCid} is not present among CAR blocks (count=${blocks.length}) \u2014 builder/publisher mismatch.`
     );
   }
-  for (const block of blocks) {
+  const effectiveConcurrency = Math.max(
+    1,
+    Number.isFinite(concurrency) ? Math.floor(concurrency) : DEFAULT_PIN_CONCURRENCY
+  );
+  const workerCount = Math.min(effectiveConcurrency, blocks.length);
+  let nextIndex = 0;
+  let aborted = false;
+  const workerErrors = [];
+  const processOne = async (block) => {
     if (localHelia !== null) {
       let cidBindingOk = true;
       try {
@@ -8916,6 +8925,30 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
       }
     }
     await pinSingleBlock(gateways, block.bytes, block.cid, timeoutMs);
+  };
+  const worker = async () => {
+    while (!aborted) {
+      const i = nextIndex++;
+      if (i >= blocks.length) return;
+      try {
+        await processOne(blocks[i]);
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
+    }
+  };
+  const workers = [];
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(
+      worker().catch((err) => {
+        workerErrors.push(err);
+      })
+    );
+  }
+  await Promise.all(workers);
+  if (workerErrors.length > 0) {
+    throw workerErrors[0];
   }
   return expectedRootCid;
 }
