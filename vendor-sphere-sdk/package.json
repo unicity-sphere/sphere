@@ -1,6 +1,6 @@
 {
   "name": "@unicitylabs/sphere-sdk",
-  "version": "0.7.4-sdk-50db1fd",
+  "version": "0.7.4-sdk-94e6593",
   "description": "Modular TypeScript SDK for Unicity wallet operations",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -142,7 +142,7 @@
     "test:relay": "vitest run --config vitest.relay.config.ts",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
-    "cli": "echo 'The CLI has moved to @unicity-sphere/cli — install it with: npm install -g @unicity-sphere/cli' && exit 1"
+    "cli": "echo 'The CLI has moved to @unicity-sphere/cli \u2014 install it with: npm install -g @unicity-sphere/cli' && exit 1"
   },
   "keywords": [
     "unicity",

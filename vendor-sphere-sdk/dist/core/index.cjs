@@ -916,7 +916,7 @@ var init_errors = __esm({
   }
 });
 
-// node_modules/@noble/hashes/utils.js
+// ../../../node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1040,7 +1040,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "node_modules/@noble/hashes/utils.js"() {
+  "../../../node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1054,7 +1054,7 @@ var init_utils = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_md.js
+// ../../../node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1063,7 +1063,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "node_modules/@noble/hashes/_md.js"() {
+  "../../../node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1174,10 +1174,10 @@ var init_md = __esm({
   }
 });
 
-// node_modules/@noble/hashes/sha2.js
+// ../../../node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "node_modules/@noble/hashes/sha2.js"() {
+  "../../../node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -2725,10 +2725,10 @@ var init_network = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hmac.js
+// ../../../node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "node_modules/@noble/hashes/hmac.js"() {
+  "../../../node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -41692,10 +41692,10 @@ function createGroupChatModule(config) {
   return new GroupChatModule(config);
 }
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 init_sha2();
 
-// node_modules/@noble/curves/utils.js
+// ../../../node_modules/@noble/curves/utils.js
 init_utils();
 init_utils();
 var _0n = /* @__PURE__ */ BigInt(0);
@@ -41837,7 +41837,7 @@ function memoized(fn) {
   };
 }
 
-// node_modules/@noble/curves/abstract/modular.js
+// ../../../node_modules/@noble/curves/abstract/modular.js
 var _0n2 = /* @__PURE__ */ BigInt(0);
 var _1n2 = /* @__PURE__ */ BigInt(1);
 var _2n = /* @__PURE__ */ BigInt(2);
@@ -42223,7 +42223,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
   return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// node_modules/@noble/curves/abstract/curve.js
+// ../../../node_modules/@noble/curves/abstract/curve.js
 var _0n3 = /* @__PURE__ */ BigInt(0);
 var _1n3 = /* @__PURE__ */ BigInt(1);
 function negateCt(condition, item) {
@@ -42456,7 +42456,7 @@ function createKeygen(randomSecretKey, getPublicKey2) {
   };
 }
 
-// node_modules/@noble/curves/abstract/weierstrass.js
+// ../../../node_modules/@noble/curves/abstract/weierstrass.js
 init_hmac();
 init_utils();
 var divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n2) / den;
@@ -43330,7 +43330,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   });
 }
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 var secp256k1_CURVE = {
   p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
   n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -58292,9 +58292,7 @@ var Sphere = class _Sphere {
       provider.setIdentity(this._identity);
     }
     await this._oracle.initialize();
-    if (!this._storage.isConnected()) {
-      await this._storage.connect();
-    }
+    await this._storage.connect();
     if (!this._transport.isConnected()) {
       await this._transport.connect();
     }
