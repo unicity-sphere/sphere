@@ -131,12 +131,34 @@ interface AuthenticatorContent {
     readonly signature: string;
     readonly stateHash: string;
 }
+/**
+ * SmtPath element content (issue #295, rewrite #2).
+ *
+ * **Architectural rule:** UXF treats the InclusionProof's SMT path as
+ * an OPAQUE STS-canonical CBOR blob. UXF does NOT decompose the path
+ * into `{root, segments}` at the element-pool level; UXF does NOT
+ * touch the path's binary representation. The bytes are produced by
+ * `SparseMerkleTreePath.toCBOR()` and consumed by
+ * `SparseMerkleTreePath.fromCBOR()` — STS owns the wire format.
+ *
+ * Storage:
+ *   - In-memory content: `{ cbor: <lowercase-hex string> }` — matches
+ *     the storage pattern of `UnicityCertificateContent.raw` and
+ *     `PredicateContent.raw`. Conversion to a Uint8Array happens
+ *     transiently inside `prepareContentForHashing` and IPLD encode.
+ *   - JSON wire: `{ "cbor": "<lowercase-hex>" }`
+ *   - CBOR wire: a single `bstr` (the opaque STS encoding)
+ *
+ * Dedup granularity: UNCHANGED — UXF's pool dedups at the whole-element
+ * level via ContentHash. Two transactions whose walkback produces
+ * identical SmtPaths share a single SmtPath element. Segments were
+ * always inline content inside a single putElement call (see
+ * pre-#295 uxf/deconstruct.ts), never separate pool entries, so this
+ * rewrite preserves the same dedup behaviour at the same granularity.
+ */
 interface SmtPathContent {
-    readonly root: string;
-    readonly segments: ReadonlyArray<{
-        readonly data: string;
-        readonly path: string;
-    }>;
+    /** Hex-encoded STS-canonical CBOR blob, stored opaquely. */
+    readonly cbor: string;
 }
 interface UnicityCertificateContent {
     /** Raw hex-encoded CBOR blob, stored opaquely */
@@ -332,10 +354,9 @@ declare function hexToBytes(hex: string): Uint8Array;
  * are left as-is.
  *
  * Special handling:
- * - SmtPath `segments[].data`: hex -> bytes (or null -> null)
- * - SmtPath `segments[].path`: decimal bigint string -> 32-byte big-endian
- *   Uint8Array (CBOR bstr). @ipld/dag-cbor does NOT support CBOR tag 2
- *   bignum; encode as fixed-width bstr per SPEC CDDL `segments [* [bstr, bstr]]`.
+ * - SmtPath `cbor`: opaque STS-canonical CBOR bytes (or hex string at
+ *   the JSON-deserialize boundary, converted to bytes here via the
+ *   generic byte-field path). UXF does NOT touch the bytes.
  * - `reason` in GenesisDataContent: already Uint8Array | null, pass through
  * - null values: pass through for CBOR null encoding
  */
