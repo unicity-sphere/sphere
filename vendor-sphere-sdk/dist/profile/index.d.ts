@@ -17788,7 +17788,49 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * re-pinning the missing CARs from a backup or invoking
  * `acceptCarLoss(version)` to permanently acknowledge the data loss.
  */
- | 'storage:pointer-version-skipped-unfetchable';
+ | 'storage:pointer-version-skipped-unfetchable'
+/**
+ * Item #157 (OpLog auto-reset) — emitted by the FlushScheduler when an
+ * unreachable OpLog head block is detected and the adapter auto-resets
+ * the corrupted log to recover writability.
+ *
+ * `data` carries:
+ *   - `lostHeadCid: string | null`     CID captured from the Helia
+ *                                       "Failed to load block for <CID>"
+ *                                       pattern (null if regex missed).
+ *   - `recoveredAt: number`             UNIX ms timestamp.
+ *   - `context: string`                 trigger site, e.g.
+ *                                       `"flush-scheduler.bundle-write"`.
+ *   - `retrySucceeded: boolean`         true when the post-reset retry
+ *                                       of the failing write completed.
+ *   - `resetFailed?: boolean`           true when `resetCorruptedLog`
+ *                                       itself threw — `retrySucceeded`
+ *                                       is then `false` and the
+ *                                       original write error
+ *                                       propagates.
+ *
+ * Walk-back past `recoveredAt` is permanently impossible. The
+ * persistent {@link ProfileRecoveryMarker} (queryable via
+ * `ProfileTokenStorageProvider.getRecoveryStatus()`) records this for
+ * downstream UI surfaces.
+ *
+ * Distinct from `storage:error`: a recovered event indicates writes
+ * have resumed for the session; an error event indicates a fatal
+ * class. UI may surface a persistent "Recovered" badge based on the
+ * marker, not on this event alone.
+ */
+ | 'profile:recovered'
+/**
+ * Item #157 (OpLog auto-reset) — emitted IMMEDIATELY BEFORE the
+ * adapter's `resetCorruptedLog` call so operators see the trigger
+ * even if the reset itself fails (in which case `profile:recovered`
+ * fires with `resetFailed: true`).
+ *
+ * `data` carries `{ lostHeadCid, context }`. Companion to
+ * `profile:recovered`; both are emitted on every auto-reset attempt
+ * (one before, one after).
+ */
+ | 'profile:oplog-auto-resetting';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -18098,6 +18140,16 @@ declare class OrbitDbAdapter implements ProfileDatabase {
     private connectInFlight;
     private closeInFlight;
     /**
+     * Last `OrbitDbConfig` passed to a successful `connect()`. Captured at
+     * the end of `connectInner` and retained across `close()` so
+     * `resetCorruptedLog()` can rebuild a fresh OrbitDB instance without
+     * the caller having to re-supply config. Cleared only by `cleanupOnError`
+     * (a config that produced a failure is suspect and should not be
+     * silently reused) — note `close()` intentionally does NOT clear it,
+     * the recovered Profile re-uses the same dbNameOverride / directory.
+     */
+    private currentConfig;
+    /**
      * Steelman remediation for issue #236 — set TRUE at the entry of
      * `closeInner()` (BEFORE the bounded teardown begins), cleared after
      * the close completes (or at the start of the next successful
@@ -18236,6 +18288,72 @@ declare class OrbitDbAdapter implements ProfileDatabase {
      * Clean up partially initialized state after a failed `connect()`.
      */
     private cleanupOnError;
+    /**
+     * Recover from an unreachable-block OpLog corruption by tearing down
+     * the current OrbitDB DB and reconnecting from scratch.
+     *
+     * # When to call
+     *
+     * Invoked by callers (today: `FlushScheduler.flushToIpfs` →
+     * `BundleIndex.addBundle`) that catch a `PROFILE:ORBITDB_WRITE_FAILED`
+     * whose underlying error matches the "Failed to load block for <CID>"
+     * pattern emitted by Helia when the OpLog head block is unreachable.
+     * This happens reliably in browser deployments where Helia uses
+     * MemoryBlockstore (no persistence) while OrbitDB's level state (which
+     * holds the head CID pointer) IS persisted to IndexedDB. After a page
+     * reload, the level state survives but the head block bytes are gone —
+     * every subsequent append fails with the same error, forever.
+     *
+     * # Behaviour
+     *
+     *   1. Best-effort `db.drop()` — wipes the underlying level state so
+     *      the next `connect()` opens an empty OpLog. Some adapter shapes
+     *      (test stubs, future @orbitdb/core versions) may not expose
+     *      `drop`; we log the situation and proceed with close+reconnect.
+     *      In the no-drop case the corrupt level state may persist and
+     *      re-trigger failure on the next flush — the caller's error
+     *      handling should retry once and then bubble.
+     *   2. Full `close()` — releases helia + orbitdb + db handles so the
+     *      reconnect starts from a clean slate.
+     *   3. `connect()` against the captured `currentConfig` — rebuilds
+     *      the OrbitDB + Helia + libp2p stack.
+     *
+     * # Blast radius
+     *
+     * **Per-DB only.** The helia blockstore (FsBlockstore on Node;
+     * MemoryBlockstore in browser without a custom blockstore) is
+     * recreated by connect(); previously-cached UXF bundle bytes
+     * (in-session) are lost. Token data on IndexedDB token storage
+     * (`sphere-token-storage-<addressId>`) is UNTOUCHED — this method
+     * only operates on the OrbitDB profile layer.
+     *
+     * **Walk-back closed.** Prior OpLog entries become permanently
+     * inaccessible. The caller MUST write a recovery marker (via
+     * `ProfileTokenStorageHost.writeRecoveryMarker`) so the Profile is
+     * observably "Recovered" and downstream consumers know walk-back
+     * past `recoveredAt` is impossible.
+     *
+     * # Idempotency
+     *
+     * NOT idempotent if `connect()` fails: the second call will throw
+     * "currently not connected" if the failed connect cleaned up state.
+     * Callers should treat a failed reset as terminal for this session
+     * and surface the original error.
+     *
+     * @param reason  Diagnostics — the lost head CID (when captured by
+     *                the error pattern) and the call site ("flush-scheduler.bundle-write"
+     *                / etc.) for telemetry & operator triage.
+     * @returns       `{ recovered: true, lostHeadCid, recoveredAt }` on
+     *                success. Throws on failure.
+     */
+    resetCorruptedLog(reason: {
+        lostHeadCid?: string;
+        context: string;
+    }): Promise<{
+        recovered: true;
+        lostHeadCid?: string;
+        recoveredAt: number;
+    }>;
 }
 
 /**
@@ -18392,6 +18510,28 @@ interface ProfileTokenStorageHost {
     writeProfileKey(key: string, value: string): Promise<void>;
     readProfileKey(key: string): Promise<string | null>;
     readProfileKeyJson<T>(key: string): Promise<T | null>;
+    /**
+     * Persist a {@link ProfileRecoveryMarker} for this Profile.
+     *
+     * MUST be called AFTER `db.resetCorruptedLog` succeeds. Idempotent —
+     * subsequent calls overwrite the marker (intentional: we want the
+     * most recent `recoveredAt` / `lostHeadCid` for operator triage).
+     *
+     * The marker is OBSERVABLE and PERMANENT — the wallet cannot un-mark
+     * itself once recovery has happened. The SDK never deletes it; only
+     * `Sphere.clear()` (full wallet wipe) removes it. Surface via
+     * `getRecoveryStatus()` to display a "Recovered" badge in the UI.
+     *
+     * Stored under key `_profile_recovered:<addressId>` via the same
+     * encrypted-write path used by other Profile metadata.
+     */
+    writeRecoveryMarker(marker: ProfileRecoveryMarker): Promise<void>;
+    /**
+     * Read the {@link ProfileRecoveryMarker} for this Profile, or null
+     * when no recovery has ever happened on this device for this address.
+     * Public surface lives on the facade as `getRecoveryStatus()`.
+     */
+    readRecoveryMarker(): Promise<ProfileRecoveryMarker | null>;
     /** Snapshot pendingData and run a single IPFS pin + OrbitDB write. */
     flushToIpfs(): Promise<void>;
     /**
@@ -19307,6 +19447,39 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
      * Read and parse a JSON value from an OrbitDB key.
      */
     private readProfileKeyJson;
+    /**
+     * Build the address-scoped OrbitDB key for the recovery marker. Kept
+     * private so a future addressId rename / migration only changes one
+     * call site.
+     */
+    private recoveryMarkerKey;
+    /**
+     * Persist a {@link ProfileRecoveryMarker} for this Profile.
+     *
+     * Idempotent. Writes through the same encrypted-OrbitDB path as other
+     * profile metadata. Returns successfully if the write completes; on
+     * failure the underlying error is surfaced to the caller — the
+     * FlushScheduler treats marker-write failures as best-effort (the
+     * in-memory recovery still applies for this session).
+     *
+     * Implements `ProfileTokenStorageHost.writeRecoveryMarker`.
+     */
+    writeRecoveryMarker(marker: ProfileRecoveryMarker): Promise<void>;
+    /**
+     * Read the {@link ProfileRecoveryMarker} for this Profile, or null
+     * when no recovery has ever happened on this device for this address.
+     *
+     * Implements `ProfileTokenStorageHost.readRecoveryMarker`.
+     */
+    readRecoveryMarker(): Promise<ProfileRecoveryMarker | null>;
+    /**
+     * Public surface for "is this Profile Recovered?". Returns null when
+     * no OpLog auto-reset has happened on this device. Non-null marker
+     * indicates walk-back past `recoveredAt` is permanently impossible —
+     * UI should show a persistent "Recovered" badge. Surface
+     * `lostHeadCid` and `recoveredAt` in diagnostics.
+     */
+    getRecoveryStatus(): Promise<ProfileRecoveryMarker | null>;
     /**
      * Handle OrbitDB replication events.
      * Checks for new `tokens.bundle.*` keys and emits `storage:remote-updated`.
@@ -20629,6 +20802,49 @@ interface ProfileSnapshotPublishResult {
     readonly ok: boolean;
     readonly transient: boolean;
     readonly code?: string;
+}
+/**
+ * Permanent marker written after a successful OpLog auto-reset
+ * (see `OrbitDbAdapter.resetCorruptedLog` + the auto-reset path in
+ * `FlushScheduler.flushToIpfs`).
+ *
+ * **Permanence semantics.** Once a Profile is "Recovered" it MUST stay
+ * Recovered for the life of the wallet on this device. The marker is
+ * idempotent under repeated writes (subsequent resets overwrite
+ * `recoveredAt` / `lostHeadCid`) but is never deleted by the SDK except
+ * via `Sphere.clear()` (full wallet wipe). The `walkBackClosed: true`
+ * field encodes the "history before this point is permanently
+ * inaccessible" invariant for downstream readers.
+ *
+ * **Data-loss implication.** Auto-reset wipes the local OrbitDB OpLog,
+ * which holds bundle-index pointers + operational state for the Profile
+ * layer. Token data on local token storage (TXF format under
+ * `sphere-token-storage-<addressId>`) is preserved. Operational state
+ * (outbox / sent / history / tombstones / finalization-queue) that lived
+ * ONLY in the OpLog and had not been published to a UXF bundle CID is
+ * lost. Cross-device peers may still hold some of that state and can
+ * re-replicate it via OrbitDB gossipsub — but on a fresh-`dataDir`
+ * cold start with no peers, the wallet starts from the snapshot/bundle
+ * pin set alone.
+ */
+interface ProfileRecoveryMarker {
+    /** Schema version. Currently 1. */
+    readonly version: 1;
+    /** UNIX ms timestamp of the recovery operation. */
+    readonly recoveredAt: number;
+    /** CID of the OpLog head that was unreachable; null if pattern didn't capture. */
+    readonly lostHeadCid: string | null;
+    /** Where the recovery was triggered from (e.g. "flush-scheduler.bundle-write"). */
+    readonly context: string;
+    /**
+     * Always true. Encodes the "walk-back past this point is permanently
+     * closed" semantic for downstream readers — once present, callers MUST
+     * treat any state derived from pre-`recoveredAt` OpLog entries as
+     * unrecoverable.
+     */
+    readonly walkBackClosed: true;
+    /** Human-readable note for operator triage. Stored verbatim. */
+    readonly note: string;
 }
 interface OrbitDbConfig {
     /**
