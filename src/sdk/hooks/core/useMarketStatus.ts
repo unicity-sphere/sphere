@@ -44,14 +44,45 @@ export function useMarketStatus(): MarketStatus {
         PROBE_TIMEOUT_MS,
       );
 
-      let nextStatus: MarketStatus = 'down';
+      // 'preserve' is an internal signal that the public `status`
+      // should NOT change for this round (used for 429 rate-limit:
+      // the API is reachable, we just hit a quota cap — flipping to
+      // 'down' would be misleading).
+      let nextStatus: MarketStatus | 'preserve' = 'down';
       try {
         const res = await fetch(COINGECKO_PING_URL, {
           method: 'GET',
           signal: inflightController.signal,
-          // CoinGecko CORS is permissive; no special headers needed.
+          // Send no cookies / referrer — this is an unauthenticated
+          // public ping and the wallet origin is not relevant to it.
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
         });
-        nextStatus = res.ok ? 'up' : 'down';
+        if (res.status === 429) {
+          // Rate-limited. The API is reachable; we just hit a quota.
+          // Preserve current status to avoid flapping to 'down' on
+          // every quota hit during shared-IP / multi-tab scenarios.
+          // The backoff still advances so we don't keep hammering.
+          nextStatus = 'preserve';
+        } else if (res.ok) {
+          // Steelman: HTTP 200 is not enough — captive portals and
+          // corporate proxies return 200 with an HTML login page.
+          // The real /ping response is JSON with a `gecko_says` string.
+          // Validate the body shape to defend against false-positive 'up'.
+          try {
+            const body = await res.json();
+            const looksValid =
+              body !== null &&
+              typeof body === 'object' &&
+              typeof (body as { gecko_says?: unknown }).gecko_says === 'string';
+            nextStatus = looksValid ? 'up' : 'down';
+          } catch {
+            // Body wasn't JSON (e.g. captive portal HTML).
+            nextStatus = 'down';
+          }
+        } else {
+          nextStatus = 'down';
+        }
       } catch {
         // Network error, abort, CORS — all treated as 'down'.
         nextStatus = 'down';
@@ -61,15 +92,24 @@ export function useMarketStatus(): MarketStatus {
 
       if (cancelled) return;
 
-      setStatus(nextStatus);
+      if (nextStatus !== 'preserve') {
+        setStatus(nextStatus);
+      }
 
-      // Reset backoff on success, advance on failure.
+      // Reset backoff on success, advance on failure (and on 'preserve'
+      // — a 429 should slow us down without flipping the status).
       stepRef.current =
         nextStatus === 'up'
           ? 0
           : Math.min(stepRef.current + 1, BACKOFF_SCHEDULE_MS.length - 1);
 
       const delay = BACKOFF_SCHEDULE_MS[stepRef.current];
+      // Defensive re-check before scheduling. Cleanup runs
+      // synchronously and JS is single-threaded, so an interleaved
+      // cleanup between the previous check and here is not generally
+      // observable, but the defensive guard documents intent and
+      // closes any future-refactor leak.
+      if (cancelled) return;
       timer = setTimeout(probe, delay);
     };
 

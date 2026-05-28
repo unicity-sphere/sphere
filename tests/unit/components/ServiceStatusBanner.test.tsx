@@ -259,6 +259,95 @@ describe('ServiceStatusBanner — manual dismissal', () => {
     expect(screen.queryByText(/1 service is unreachable/)).toBeNull();
   });
 
+  it('re-asserts the banner when a SECOND service fails during a dismissed incident', async () => {
+    // Steelman finding: previously the effect deps were too narrow
+    // ([hasIncident, overall]), so a second backend going down while
+    // the user had already dismissed an aggregator-only incident did
+    // NOT re-show the banner — the user missed the new fault entirely.
+    // With the failing-set snapshot model, the dismissal is voided
+    // automatically when a new service joins the failing set.
+    connectivityMock.mockReturnValue(
+      withOverrides(allUp(), { aggregator: 'down' }),
+    );
+    marketMock.mockReturnValue('up');
+    const { rerender } = render(<ServiceStatusBanner />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Dismiss service status banner' }),
+      );
+    });
+    expect(screen.queryByText(/1 service is unreachable/)).toBeNull();
+
+    // IPFS ALSO goes down — same incident period, but a new fault.
+    connectivityMock.mockReturnValue(
+      withOverrides(allUp(), { aggregator: 'down', ipfs: 'down' }),
+    );
+    await act(async () => {
+      rerender(<ServiceStatusBanner />);
+    });
+    // Banner re-asserts with the new headline.
+    expect(screen.getByText(/2 services are unreachable/)).toBeDefined();
+  });
+
+  it('keeps the banner dismissed when severity changes WITHIN the dismissed set (down→degraded)', async () => {
+    // Steelman finding: previously the effect's hasIncident=true branch
+    // unconditionally called setManuallyDismissed(false) on every
+    // re-run, so a severity change (down → degraded for a service that
+    // was ALREADY failing and dismissed) re-asserted the banner — even
+    // though the situation actually improved. Now the dismissal sticks
+    // because the failing-set is unchanged (only severity moved).
+    connectivityMock.mockReturnValue(
+      withOverrides(allUp(), { aggregator: 'down' }),
+    );
+    marketMock.mockReturnValue('up');
+    const { rerender } = render(<ServiceStatusBanner />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Dismiss service status banner' }),
+      );
+    });
+    expect(screen.queryByText(/unreachable/)).toBeNull();
+
+    // Aggregator improves down→degraded. Same service, less severe.
+    connectivityMock.mockReturnValue(
+      withOverrides(allUp(), { aggregator: 'degraded' }),
+    );
+    await act(async () => {
+      rerender(<ServiceStatusBanner />);
+    });
+    // Banner STAYS dismissed — no new information for the user.
+    expect(screen.queryByText(/unreachable/)).toBeNull();
+    expect(screen.queryByText(/degraded/)).toBeNull();
+  });
+
+  it('does NOT pop the green recovery confirmation when the user had dismissed the incident', async () => {
+    // Steelman: the user explicitly said "be quiet" by dismissing the
+    // warning banner. Popping a green "all services back" message a
+    // few seconds later is just as intrusive — they don't want it.
+    vi.useFakeTimers();
+    connectivityMock.mockReturnValue(
+      withOverrides(allUp(), { aggregator: 'down' }),
+    );
+    marketMock.mockReturnValue('up');
+    const { rerender } = render(<ServiceStatusBanner />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Dismiss service status banner' }),
+      );
+    });
+
+    // Full recovery.
+    connectivityMock.mockReturnValue(allUp());
+    await act(async () => {
+      rerender(<ServiceStatusBanner />);
+    });
+    // No green confirmation — the user was already informed and dismissed.
+    expect(screen.queryByText(/All services back online/)).toBeNull();
+  });
+
   it('re-asserts the banner when a fresh bad→ok→bad cycle hits after dismissal', async () => {
     // Dismissal is sticky for the CURRENT incident — the user told
     // us they don't want to see it. But once everything recovers and

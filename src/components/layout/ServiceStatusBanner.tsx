@@ -122,6 +122,14 @@ export function ServiceStatusBanner() {
   // green "all services back" message, and neither must transitions
   // out of `'unknown'` into `'ok'` on a fresh wallet.
   const previousHadIncidentRef = useRef(false);
+  // Steelman: snapshot of the failing-services set captured at the
+  // moment the user clicked dismiss. The dismissal only "covers" a
+  // failing set that is a SUBSET of this snapshot — i.e., adding a new
+  // failing service (e.g., user dismissed aggregator-only, then IPFS
+  // also fails) voids the dismissal so the user sees the new info.
+  // Severity changes WITHIN the dismissed set (down ↔ degraded for a
+  // service that was already failing) do not void the dismissal.
+  const dismissedAtFailingRef = useRef<Set<string> | null>(null);
 
   const rows: ServiceRow[] = useMemo(
     () => [
@@ -163,34 +171,77 @@ export function ServiceStatusBanner() {
   const degradedCount = severities.filter((s) => s === 'degraded').length;
   const hasIncident = overall === 'down' || overall === 'degraded';
 
+  // Current set of failing service keys. Memoized so the deps below
+  // are stable references when the set hasn't changed (useMemo returns
+  // the same Set instance across renders for the same severity tuple).
+  const failingServices = useMemo(() => {
+    const result = new Set<string>();
+    for (const row of rows) {
+      const sev = severityOf(row.status);
+      if (sev === 'down' || sev === 'degraded') result.add(row.key);
+    }
+    return result;
+  }, [rows]);
+
+  // Dismissal still "covers" the current state iff every currently-
+  // failing service was ALREADY in the snapshot at dismiss time. Adding
+  // a new failing service voids the dismissal — that's a new fault the
+  // user has not seen yet. Severity downgrade (down→degraded) within
+  // the same set does NOT void.
+  const dismissalStillCovers = useMemo(() => {
+    if (!manuallyDismissed) return false;
+    const snapshot = dismissedAtFailingRef.current;
+    if (snapshot === null) return false;
+    for (const k of failingServices) {
+      if (!snapshot.has(k)) return false;
+    }
+    return true;
+  }, [manuallyDismissed, failingServices]);
+
   // Open the recovery-confirmation window only on the bad→ok edge.
   // The ref captures whether the PRIOR render observed a live incident
   // so an initial mount with everything-already-up (or first probes
   // landing as `'ok'`) does NOT show the green "all services back"
   // message — there was nothing to recover from.
+  //
+  // Steelman: do NOT reset `manuallyDismissed` in the active-incident
+  // branch. The old behaviour cleared dismissal on every effect re-run
+  // with hasIncident=true, which meant any severity change during an
+  // incident (e.g., down→degraded as one service starts to recover)
+  // re-asserted the banner the user had explicitly dismissed. The new
+  // model relies on `dismissalStillCovers` — the dismissal naturally
+  // becomes void when a NEW service joins the failing set.
   useEffect(() => {
     if (hasIncident) {
-      // While incident is live keep the recovery window logically closed —
-      // re-arms it for the next bad→ok edge.
       setRecoveryWindowOpen(false);
-      // Any active incident also resets a prior manual dismissal so the
-      // banner re-asserts itself.
-      setManuallyDismissed(false);
       previousHadIncidentRef.current = true;
       return;
     }
-    // No live incident. Did the previous render have one? If yes,
-    // this is the bad→ok edge — open the confirmation window.
-    const wasIncident = previousHadIncidentRef.current;
+    // No live incident. Did the previous render have one? If yes AND
+    // we've fully recovered (overall === 'ok'), open the confirmation
+    // window. The ref is consumed ONLY when we actually fire the
+    // confirmation; a bad→'unknown' transient (e.g., sphere swap
+    // momentarily resets connectivity) keeps the ref armed so the
+    // eventual unknown→ok transition still shows confirmation.
+    if (!previousHadIncidentRef.current) return; // dormant
+    if (overall !== 'ok') return; // bad→'unknown' — keep ref armed
     previousHadIncidentRef.current = false;
-    if (!wasIncident) return; // dormant — fresh mount with all-up, or 'unknown'
-    if (overall !== 'ok') return; // ignore bad→'unknown' transitions
+    // If the user dismissed during the incident, don't pop a green
+    // confirmation banner — they explicitly asked for quiet. Just
+    // silently clear the dismissal state so a future incident is fresh.
+    if (manuallyDismissed) {
+      setManuallyDismissed(false);
+      dismissedAtFailingRef.current = null;
+      return;
+    }
     setRecoveryWindowOpen(true);
-    const t = setTimeout(() => setRecoveryWindowOpen(false), RECOVERY_CONFIRMATION_MS);
+    const t = setTimeout(() => {
+      setRecoveryWindowOpen(false);
+    }, RECOVERY_CONFIRMATION_MS);
     return () => clearTimeout(t);
-  }, [hasIncident, overall]);
+  }, [hasIncident, overall, manuallyDismissed]);
 
-  const visible = !manuallyDismissed && (hasIncident || recoveryWindowOpen);
+  const visible = !dismissalStillCovers && (hasIncident || recoveryWindowOpen);
 
   // Theme tokens for the container chrome, indexed by overall severity.
   const chrome = (() => {
@@ -284,7 +335,12 @@ export function ServiceStatusBanner() {
 
               <button
                 type="button"
-                onClick={() => setManuallyDismissed(true)}
+                onClick={() => {
+                  // Snapshot the currently-failing set; dismissal will
+                  // be voided automatically if any NEW service joins.
+                  dismissedAtFailingRef.current = new Set(failingServices);
+                  setManuallyDismissed(true);
+                }}
                 className="p-1 rounded-md hover:bg-black/10 dark:hover:bg-white/10 transition-colors flex-shrink-0"
                 aria-label="Dismiss service status banner"
               >
