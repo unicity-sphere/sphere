@@ -24001,6 +24001,11 @@ interface SphereCreateOptions {
 interface SphereLoadOptions {
     /** Storage provider instance */
     storage: StorageProvider;
+    /**
+     * Optional read-only fallback storage. See
+     * {@link SphereInitOptions.fallbackStorage} for semantics.
+     */
+    fallbackStorage?: StorageProvider;
     /** Optional token storage provider (for IPFS sync) */
     tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
     /** Transport provider instance */
@@ -24136,6 +24141,18 @@ interface L1Config {
 interface SphereInitOptions {
     /** Storage provider instance */
     storage: StorageProvider;
+    /**
+     * Optional read-only fallback storage consulted when the primary
+     * storage returns null or throws a recoverable error (e.g.
+     * `LoadBlockFailedError` for a missing OrbitDB content block) while
+     * `loadIdentityFromStorage` is reading wallet keys. Intended for
+     * Profile-mode boots where a previously-working legacy
+     * `IndexedDBStorageProvider` still holds the encrypted-with-password
+     * identity material at the same key shape — supplying it lets the
+     * wallet boot from cached local state even if Profile/OrbitDB
+     * has lost the block. Never written to.
+     */
+    fallbackStorage?: StorageProvider;
     /** Transport provider instance */
     transport: TransportProvider;
     /** Oracle provider instance */
@@ -24302,6 +24319,14 @@ declare class Sphere {
     /** Cached PROXY address (computed once when nametag is set) */
     private _cachedProxyAddress;
     private _storage;
+    /**
+     * Read-only fallback storage consulted by `loadIdentityFromStorage`
+     * when the primary returns null or throws a recoverable error for an
+     * identity-key read. See {@link SphereInitOptions.fallbackStorage}.
+     * Set once at construction by the static factories; never mutated
+     * after wallet load. `null` when no fallback was supplied.
+     */
+    private _fallbackStorage;
     private _tokenStorageProviders;
     private _transport;
     private _oracle;

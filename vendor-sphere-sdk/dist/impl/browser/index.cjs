@@ -30,7 +30,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -138,7 +138,7 @@ function createHasher(hashCons, info = {}) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -152,7 +152,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -161,7 +161,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -272,10 +272,10 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -1827,7 +1827,7 @@ var SecretKey = class {
   }
 };
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 init_utils();
 var _HMAC = class {
   oHash;
@@ -1899,7 +1899,7 @@ var _HMAC = class {
 var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
 hmac.create = (hash, key) => new _HMAC(hash, key);
 
-// ../../../node_modules/@noble/hashes/hkdf.js
+// node_modules/@noble/hashes/hkdf.js
 init_utils();
 function extract(hash, ikm, salt) {
   ahash(hash);

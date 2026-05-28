@@ -491,6 +491,16 @@ export function SphereProvider({
             // the migration for 30s+.
             await instance.destroy({ force: true, reason: 'uxf-profile-swap' });
             sphereRef.current = null;
+            // sphere-sdk #309 — preserve the legacy storage reference
+            // before swapping in the Profile storage. We pass it to the
+            // next `Sphere.init({ fallbackStorage: ... })` so identity
+            // reads can fall back to the still-intact legacy IndexedDB
+            // when the Profile/OrbitDB read fails (missing local Helia
+            // block, OpLog head unreachable, etc.). Without this, a
+            // wallet whose Profile state has lost a block is locked out
+            // even though the encrypted-with-password identity material
+            // is still sitting at `sphere_master_key` in `sphere-storage`.
+            const legacyStorageForFallback = browserProviders.storage;
             browserProviders.storage = profileResult.profileStorage;
             browserProviders.tokenStorage = profileResult.profileTokenStorage;
             delete browserProviders.ipfsTokenStorage;
@@ -508,9 +518,12 @@ export function SphereProvider({
 
             // Re-init Sphere with the swapped providers. Token data is
             // already in Profile storage; init reads it from there.
+            // `fallbackStorage` is the still-intact legacy IndexedDB
+            // (see comment above the swap) — sphere-sdk #309.
             setInitProgress({ step: 'initializing', message: 'Loading Profile storage…' });
             const reinit = await Sphere.init({
               ...browserProviders,
+              fallbackStorage: legacyStorageForFallback,
               l1: {},
               discoverAddresses: false,
               onProgress: setInitProgress,
@@ -1022,6 +1035,10 @@ export function SphereProvider({
       await instance.destroy({ force: true, reason: 'user-initiated-uxf-migration' });
       sphereRef.current = null;
       const netConfig = NETWORKS[network] ?? NETWORKS.testnet;
+      // sphere-sdk #309 — keep the legacy IndexedDB storage as a
+      // read-only fallback for the next Sphere.init's identity-load
+      // step. Symmetric with the boot-time path above.
+      const legacyStorageForFallback = providers.storage;
       const swapped: BrowserProviders = {
         ...providers,
         storage: profileResult.profileStorage,
@@ -1036,6 +1053,7 @@ export function SphereProvider({
       setInitProgress({ step: 'initializing', message: 'Loading Profile storage…' });
       const reinit = await Sphere.init({
         ...swapped,
+        fallbackStorage: legacyStorageForFallback,
         l1: {},
         discoverAddresses: false,
         onProgress: setInitProgress,

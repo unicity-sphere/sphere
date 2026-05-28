@@ -900,7 +900,7 @@ var init_errors = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1024,7 +1024,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1038,7 +1038,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1047,7 +1047,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1158,10 +1158,10 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -2708,10 +2708,10 @@ var init_network = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "../../../node_modules/@noble/hashes/hmac.js"() {
+  "node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -41605,10 +41605,10 @@ function createGroupChatModule(config) {
   return new GroupChatModule(config);
 }
 
-// ../../../node_modules/@noble/curves/secp256k1.js
+// node_modules/@noble/curves/secp256k1.js
 init_sha2();
 
-// ../../../node_modules/@noble/curves/utils.js
+// node_modules/@noble/curves/utils.js
 init_utils();
 init_utils();
 var _0n = /* @__PURE__ */ BigInt(0);
@@ -41750,7 +41750,7 @@ function memoized(fn) {
   };
 }
 
-// ../../../node_modules/@noble/curves/abstract/modular.js
+// node_modules/@noble/curves/abstract/modular.js
 var _0n2 = /* @__PURE__ */ BigInt(0);
 var _1n2 = /* @__PURE__ */ BigInt(1);
 var _2n = /* @__PURE__ */ BigInt(2);
@@ -42136,7 +42136,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
   return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// ../../../node_modules/@noble/curves/abstract/curve.js
+// node_modules/@noble/curves/abstract/curve.js
 var _0n3 = /* @__PURE__ */ BigInt(0);
 var _1n3 = /* @__PURE__ */ BigInt(1);
 function negateCt(condition, item) {
@@ -42369,7 +42369,7 @@ function createKeygen(randomSecretKey, getPublicKey2) {
   };
 }
 
-// ../../../node_modules/@noble/curves/abstract/weierstrass.js
+// node_modules/@noble/curves/abstract/weierstrass.js
 init_hmac();
 init_utils();
 var divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n2) / den;
@@ -43243,7 +43243,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   });
 }
 
-// ../../../node_modules/@noble/curves/secp256k1.js
+// node_modules/@noble/curves/secp256k1.js
 var secp256k1_CURVE = {
   p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
   n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -54743,6 +54743,14 @@ var Sphere = class _Sphere {
   _cachedProxyAddress = void 0;
   // Providers
   _storage;
+  /**
+   * Read-only fallback storage consulted by `loadIdentityFromStorage`
+   * when the primary returns null or throws a recoverable error for an
+   * identity-key read. See {@link SphereInitOptions.fallbackStorage}.
+   * Set once at construction by the static factories; never mutated
+   * after wallet load. `null` when no fallback was supplied.
+   */
+  _fallbackStorage = null;
   _tokenStorageProviders = /* @__PURE__ */ new Map();
   _transport;
   _oracle;
@@ -54899,6 +54907,7 @@ var Sphere = class _Sphere {
     if (walletExists) {
       const sphere2 = await _Sphere.load({
         storage: options.storage,
+        fallbackStorage: options.fallbackStorage,
         transport: options.transport,
         oracle: options.oracle,
         tokenStorage: options.tokenStorage,
@@ -55142,8 +55151,20 @@ var Sphere = class _Sphere {
     sphere._password = options.password ?? null;
     sphere._publishToIpfs = options.publishToIpfs ?? null;
     sphere._cidFetchGateways = options.cidFetchGateways ?? null;
+    sphere._fallbackStorage = options.fallbackStorage ?? null;
     if (!options.storage.isConnected()) {
       await options.storage.connect();
+    }
+    if (sphere._fallbackStorage && !sphere._fallbackStorage.isConnected()) {
+      try {
+        await sphere._fallbackStorage.connect();
+      } catch (err) {
+        logger.warn(
+          "Sphere",
+          `fallbackStorage.connect failed; proceeding without fallback: ${err instanceof Error ? err.message : String(err)}`
+        );
+        sphere._fallbackStorage = null;
+      }
     }
     progress?.({ step: "storing_keys", message: "Loading wallet keys..." });
     await sphere.loadIdentityFromStorage();
@@ -58062,14 +58083,40 @@ var Sphere = class _Sphere {
   // Private: Identity Initialization
   // ===========================================================================
   async loadIdentityFromStorage() {
-    const encryptedMnemonic = await this._storage.get(STORAGE_KEYS_GLOBAL.MNEMONIC);
-    const encryptedMasterKey = await this._storage.get(STORAGE_KEYS_GLOBAL.MASTER_KEY);
-    const chainCode = await this._storage.get(STORAGE_KEYS_GLOBAL.CHAIN_CODE);
-    const derivationPath = await this._storage.get(STORAGE_KEYS_GLOBAL.DERIVATION_PATH);
-    const savedBasePath = await this._storage.get(STORAGE_KEYS_GLOBAL.BASE_PATH);
-    const savedDerivationMode = await this._storage.get(STORAGE_KEYS_GLOBAL.DERIVATION_MODE);
-    const savedSource = await this._storage.get(STORAGE_KEYS_GLOBAL.WALLET_SOURCE);
-    const savedAddressIndex = await this._storage.get(STORAGE_KEYS_GLOBAL.CURRENT_ADDRESS_INDEX);
+    const readIdentityKey = async (key) => {
+      let primaryValue = null;
+      let primaryThrew = null;
+      try {
+        primaryValue = await this._storage.get(key);
+      } catch (err) {
+        primaryThrew = err;
+      }
+      if (primaryValue !== null && primaryValue !== void 0) {
+        return primaryValue;
+      }
+      if (!this._fallbackStorage) {
+        if (primaryThrew !== null) throw primaryThrew;
+        return null;
+      }
+      logger.warn(
+        "Sphere",
+        `Identity read for "${key}" missing from primary storage` + (primaryThrew instanceof Error ? ` (threw: ${primaryThrew.message})` : "") + `; consulting fallbackStorage (legacy cached identity).`
+      );
+      const fallbackValue = await this._fallbackStorage.get(key);
+      if (fallbackValue !== null && fallbackValue !== void 0) {
+        return fallbackValue;
+      }
+      if (primaryThrew !== null) throw primaryThrew;
+      return null;
+    };
+    const encryptedMnemonic = await readIdentityKey(STORAGE_KEYS_GLOBAL.MNEMONIC);
+    const encryptedMasterKey = await readIdentityKey(STORAGE_KEYS_GLOBAL.MASTER_KEY);
+    const chainCode = await readIdentityKey(STORAGE_KEYS_GLOBAL.CHAIN_CODE);
+    const derivationPath = await readIdentityKey(STORAGE_KEYS_GLOBAL.DERIVATION_PATH);
+    const savedBasePath = await readIdentityKey(STORAGE_KEYS_GLOBAL.BASE_PATH);
+    const savedDerivationMode = await readIdentityKey(STORAGE_KEYS_GLOBAL.DERIVATION_MODE);
+    const savedSource = await readIdentityKey(STORAGE_KEYS_GLOBAL.WALLET_SOURCE);
+    const savedAddressIndex = await readIdentityKey(STORAGE_KEYS_GLOBAL.CURRENT_ADDRESS_INDEX);
     if (encryptedMnemonic || encryptedMasterKey) {
       const present = [];
       const missing = [];
