@@ -38,9 +38,15 @@ export const STORAGE_KEYS = {
   // Connected Sites (approved dApp origins)
   CONNECTED_SITES: 'sphere_connected_sites',
 
-  // Dev Settings
+  // Dev Settings — custom endpoints for local stacks / e2e / soak tests.
+  // Active values flow through SphereProvider → createBrowserProviders
+  // and are reflected in the header chip + `sphereDev` console helpers.
   DEV_AGGREGATOR_URL: 'sphere_dev_aggregator_url',
   DEV_SKIP_TRUST_BASE: 'sphere_dev_skip_trust_base',
+  DEV_NOSTR_RELAY_URL: 'sphere_dev_nostr_relay_url',
+  DEV_IPFS_GATEWAY_URL: 'sphere_dev_ipfs_gateway_url',
+  DEV_FAUCET_URL: 'sphere_dev_faucet_url',
+  DEV_MARKET_API_URL: 'sphere_dev_market_api_url',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';

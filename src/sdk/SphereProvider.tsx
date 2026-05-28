@@ -22,6 +22,7 @@ import {
 } from '@unicitylabs/sphere-sdk/profile/browser';
 import { IS_UXF_BUILD } from '../config/uxf';
 import { runProfileMigration } from './uxfProfileMigration';
+import { readDevOverrideSnapshot, type DevOverrideSnapshot } from './devOverrides';
 import { hasMaterialContent } from './utils/tokenStorageProbe';
 import { SphereContext } from './SphereContext';
 import type { WalletMode } from './SphereContext';
@@ -65,7 +66,9 @@ function isIpfsEnabled(): boolean {
   return stored !== 'false'; // enabled by default
 }
 
-function getIpfsConfig() {
+function getIpfsConfig(): {
+  tokenSync?: { ipfs?: { enabled: boolean; gateways?: string[] } };
+} {
   if (!isIpfsEnabled()) return {};
   return {
     tokenSync: {
@@ -107,8 +110,46 @@ function getDevOracleOverride():
 }
 
 /**
+ * Dev-mode Nostr relay override → `transport.relays`.
+ *
+ * Returns a single-relay list when `DEV_NOSTR_RELAY_URL` is set so the
+ * SDK uses ONLY the override relay (replaces network defaults
+ * entirely). Returns `undefined` otherwise so the network defaults
+ * apply.
+ */
+function getDevTransportOverride(): { relays: string[] } | undefined {
+  const url = localStorage.getItem(STORAGE_KEYS.DEV_NOSTR_RELAY_URL);
+  if (!url) return undefined;
+  return { relays: [url] };
+}
+
+/**
+ * Dev-mode IPFS gateway override.
+ *
+ * Returns a `tokenSync.ipfs.gateways` override aligned with the
+ * existing `getIpfsConfig()` toggle. When IPFS sync is disabled, the
+ * override is also disabled (no point pointing a turned-off subsystem
+ * at an alternate gateway). When enabled AND `DEV_IPFS_GATEWAY_URL`
+ * is set, the override replaces the network's gateway list entirely
+ * so the wallet talks only to the local stack.
+ */
+function getDevIpfsGatewayOverride(): string | null {
+  return localStorage.getItem(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL);
+}
+
+/**
+ * Dev-mode Market API override → `market.apiUrl`.
+ */
+function getDevMarketOverride(): { apiUrl: string } | undefined {
+  const url = localStorage.getItem(STORAGE_KEYS.DEV_MARKET_API_URL);
+  if (!url) return undefined;
+  return { apiUrl: url };
+}
+
+
+/**
  * Install a small `window.sphereDev` namespace exposing one-line
- * helpers so the dev override is reachable from the browser console
+ * helpers so the dev overrides are reachable from the browser console
  * without users having to remember the exact localStorage keys.
  *
  * Idempotent — re-running on hot-reload or remount overwrites the
@@ -118,38 +159,64 @@ function getDevOracleOverride():
  * Usage from console:
  *
  *   sphereDev.setAggregator('http://127.0.0.1:11003')   // override + reload
- *   sphereDev.setAggregator(null)                       // clear override + reload
+ *   sphereDev.setAggregator(null)                       // clear override
  *   sphereDev.setSkipTrustBase(true)                    // dev-only — bypass verify
+ *   sphereDev.setNostrRelay('ws://127.0.0.1:7777')      // override Nostr relay
+ *   sphereDev.setIpfsGateway('http://127.0.0.1:8080')   // override IPFS gateway
+ *   sphereDev.setFaucet('http://127.0.0.1:9999/api/v1/faucet/request')
+ *   sphereDev.setMarket('http://127.0.0.1:8081')        // override Market API
  *   sphereDev.show()                                    // print current state
+ *   sphereDev.reset()                                   // clear ALL overrides
+ *
+ * Each setter dispatches the `dev-config-changed` event so the header
+ * chip stays in sync, then triggers a wallet reinitialize so the new
+ * provider config takes effect without a manual page reload.
  */
 function installDevConsoleHelpers(triggerReinit: () => void): void {
   if (typeof window === 'undefined') return;
+  // Common setter — null clears the key, otherwise stores the value.
+  // Dispatches dev-config-changed and triggers reinit.
+  const setOverride = (key: string, value: string | null) => {
+    if (value === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value);
+    }
+    window.dispatchEvent(new Event('dev-config-changed'));
+    triggerReinit();
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).sphereDev = {
     setAggregator(url: string | null): void {
-      if (url === null) {
-        localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
-      } else {
-        localStorage.setItem(STORAGE_KEYS.DEV_AGGREGATOR_URL, url);
-      }
-      window.dispatchEvent(new Event('dev-config-changed'));
-      triggerReinit();
+      setOverride(STORAGE_KEYS.DEV_AGGREGATOR_URL, url);
     },
     setSkipTrustBase(enabled: boolean): void {
-      if (enabled) {
-        localStorage.setItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE, 'true');
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE);
-      }
+      setOverride(STORAGE_KEYS.DEV_SKIP_TRUST_BASE, enabled ? 'true' : null);
+    },
+    setNostrRelay(url: string | null): void {
+      setOverride(STORAGE_KEYS.DEV_NOSTR_RELAY_URL, url);
+    },
+    setIpfsGateway(url: string | null): void {
+      setOverride(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL, url);
+    },
+    setFaucet(url: string | null): void {
+      setOverride(STORAGE_KEYS.DEV_FAUCET_URL, url);
+    },
+    setMarket(url: string | null): void {
+      setOverride(STORAGE_KEYS.DEV_MARKET_API_URL, url);
+    },
+    reset(): void {
+      localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
+      localStorage.removeItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE);
+      localStorage.removeItem(STORAGE_KEYS.DEV_NOSTR_RELAY_URL);
+      localStorage.removeItem(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL);
+      localStorage.removeItem(STORAGE_KEYS.DEV_FAUCET_URL);
+      localStorage.removeItem(STORAGE_KEYS.DEV_MARKET_API_URL);
       window.dispatchEvent(new Event('dev-config-changed'));
       triggerReinit();
     },
-    show(): { aggregatorUrl: string | null; skipTrustBase: boolean } {
-      const state = {
-        aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
-        skipTrustBase:
-          localStorage.getItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE) === 'true',
-      };
+    show(): DevOverrideSnapshot {
+      const state = readDevOverrideSnapshot();
       console.log('[sphereDev]', state);
       return state;
     },
@@ -475,27 +542,61 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
-      // Dev-mode oracle override (custom aggregator URL / skip-trust-base).
-      // Set via `sphereDev.setAggregator(...)` from the console, or via
-      // localStorage keys `sphere_dev_aggregator_url` / `sphere_dev_skip_trust_base`.
-      // Header chip in `Header.tsx` reflects the active state.
+      // Dev-mode overrides — see `sphereDev` console helpers and the
+      // header chip for the user-facing surface. Each helper returns
+      // `undefined` when its localStorage key is unset so the network
+      // defaults apply.
       const devOracleOverride = getDevOracleOverride();
-      if (devOracleOverride) {
+      const devTransportOverride = getDevTransportOverride();
+      const devMarketOverride = getDevMarketOverride();
+      const devIpfsGatewayOverride = getDevIpfsGatewayOverride();
+      if (
+        devOracleOverride ||
+        devTransportOverride ||
+        devMarketOverride ||
+        devIpfsGatewayOverride
+      ) {
+        const snapshot = readDevOverrideSnapshot();
         logger.info(
           'SphereProvider',
-          `Dev-mode oracle override active: ` +
-            `url=${devOracleOverride.url ?? '<network default>'} ` +
-            `skipVerification=${devOracleOverride.skipVerification ?? false}`,
+          `Dev-mode overrides active: ` +
+            `aggregator=${snapshot.aggregatorUrl ?? '<default>'} ` +
+            `skipTrustBase=${snapshot.skipTrustBase} ` +
+            `nostr=${snapshot.nostrRelayUrl ?? '<default>'} ` +
+            `ipfs=${snapshot.ipfsGatewayUrl ?? '<default>'} ` +
+            `market=${snapshot.marketApiUrl ?? '<default>'} ` +
+            `faucet=${snapshot.faucetUrl ?? '<default>'}`,
         );
+      }
+
+      // IPFS sync config: if the user enabled it (the default) AND set
+      // a dev gateway override, replace the network's gateway list
+      // with a single-entry list. The merge happens here rather than
+      // inside `getIpfsConfig()` so the toggle and the override are
+      // composable in either order.
+      const ipfsConfig = getIpfsConfig();
+      if (
+        devIpfsGatewayOverride &&
+        ipfsConfig.tokenSync?.ipfs?.enabled
+      ) {
+        ipfsConfig.tokenSync = {
+          ipfs: {
+            enabled: true,
+            gateways: [devIpfsGatewayOverride],
+          },
+        };
       }
 
       const browserProviders = createBrowserProviders({
         network,
         price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
         groupChat: true,
-        market: true,
+        // Market: pass the override apiUrl when set; otherwise enable
+        // with default-resolver shape (`true`).
+        market: devMarketOverride ?? true,
         ...(devOracleOverride ? { oracle: devOracleOverride } : {}),
-        ...getIpfsConfig(),
+        ...(devTransportOverride ? { transport: devTransportOverride } : {}),
+        ...ipfsConfig,
       });
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
@@ -774,11 +875,16 @@ export function SphereProvider({
     // can still use it; they just don't get the hint banner.
     if (import.meta.env.DEV) {
       console.log(
-        '%c[sphereDev]%c custom aggregator helpers loaded.\n' +
-          '  sphereDev.setAggregator("http://127.0.0.1:11003")  // override + reload providers\n' +
-          '  sphereDev.setAggregator(null)                       // clear override\n' +
-          '  sphereDev.setSkipTrustBase(true)                    // dev-only — bypass trust-base verify\n' +
-          '  sphereDev.show()                                    // print current state',
+        '%c[sphereDev]%c dev-mode endpoint overrides loaded. Set any of:\n' +
+          '  sphereDev.setAggregator("http://127.0.0.1:11003")\n' +
+          '  sphereDev.setSkipTrustBase(true)         // bypass trust-base verify\n' +
+          '  sphereDev.setNostrRelay("ws://127.0.0.1:7777")\n' +
+          '  sphereDev.setIpfsGateway("http://127.0.0.1:8080")\n' +
+          '  sphereDev.setFaucet("http://127.0.0.1:9999/api/v1/faucet/request")\n' +
+          '  sphereDev.setMarket("http://127.0.0.1:8081")\n' +
+          '  sphereDev.show()                          // print current state\n' +
+          '  sphereDev.reset()                         // clear ALL overrides\n' +
+          'Pass null to any setter to clear that specific override.',
         'color: #f59e0b; font-weight: bold',
         'color: #888',
       );

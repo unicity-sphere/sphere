@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { STORAGE_KEYS } from '../../../config/storageKeys';
 
 /**
  * IPFS gateway reachability — direct probe.
@@ -22,7 +23,31 @@ import { useEffect, useState, useRef } from 'react';
  */
 export type IpfsGatewayStatus = 'up' | 'down' | 'unknown';
 
-const IPFS_PROBE_URL = 'https://unicity-ipfs1.dyndns.org/ipfs/bafyaabakaieac';
+const DEFAULT_IPFS_GATEWAY = 'https://unicity-ipfs1.dyndns.org';
+/** Empty unixfs directory — universally pinned, ~10 bytes. Same CID
+ *  the SDK's `IpfsPinger` uses. */
+const PROBE_CID = 'bafyaabakaieac';
+
+/**
+ * Resolve the gateway BASE to probe. Honors
+ * `STORAGE_KEYS.DEV_IPFS_GATEWAY_URL` so e2e / soak runs against a
+ * locally-bootstrapped gateway show 'up' when that gateway is alive
+ * (and 'down' when it isn't), instead of always probing the
+ * production default. The gateway value is the BASE URL — the probe
+ * path is appended at fetch time so trailing slashes are normalised.
+ */
+function getProbeGateway(): string {
+  if (typeof window === 'undefined') return DEFAULT_IPFS_GATEWAY;
+  return (
+    localStorage.getItem(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL) ??
+    DEFAULT_IPFS_GATEWAY
+  );
+}
+
+function buildProbeUrl(): string {
+  const gateway = getProbeGateway().replace(/\/+$/, '');
+  return `${gateway}/ipfs/${PROBE_CID}`;
+}
 
 // Backoff: same schedule as the SDK's connectivity manager.
 const BACKOFF_SCHEDULE_MS = [5_000, 15_000, 60_000, 300_000] as const;
@@ -36,7 +61,22 @@ const PROBE_TIMEOUT_MS = 8_000;
  */
 export function useIpfsGatewayStatus(): IpfsGatewayStatus {
   const [status, setStatus] = useState<IpfsGatewayStatus>('unknown');
+  // `epoch` bumps when the dev-config-changed event fires, which
+  // forces the effect to tear down and re-mount — so a fresh probe
+  // fires immediately against the new gateway URL.
+  const [epoch, setEpoch] = useState(0);
   const stepRef = useRef(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => {
+      stepRef.current = 0;
+      setStatus('unknown');
+      setEpoch((e) => e + 1);
+    };
+    window.addEventListener('dev-config-changed', handler);
+    return () => window.removeEventListener('dev-config-changed', handler);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +98,7 @@ export function useIpfsGatewayStatus(): IpfsGatewayStatus {
         // practice, and some gateways serve HEAD redirects oddly.
         // The CORS preflight requirement is identical for both
         // (simple methods, no custom headers).
-        const res = await fetch(IPFS_PROBE_URL, {
+        const res = await fetch(buildProbeUrl(), {
           method: 'GET',
           signal: inflightController.signal,
           credentials: 'omit',
@@ -99,7 +139,9 @@ export function useIpfsGatewayStatus(): IpfsGatewayStatus {
       if (timer) clearTimeout(timer);
       if (inflightController) inflightController.abort();
     };
-  }, []);
+    // `epoch` is in the deps so a dev-config-changed event remounts
+    // the probe cycle and immediately retargets the new gateway URL.
+  }, [epoch]);
 
   return status;
 }
