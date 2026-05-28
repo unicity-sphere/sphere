@@ -77,6 +77,86 @@ function getIpfsConfig() {
 }
 
 /**
+ * Read the dev-mode aggregator override (set from the console or the
+ * header chip). Returns a partial oracle config that callers spread
+ * into `createBrowserProviders({ ..., oracle: ... })`.
+ *
+ *   - `DEV_AGGREGATOR_URL`     → overrides the aggregator JSON-RPC URL.
+ *   - `DEV_SKIP_TRUST_BASE`    → bypasses trust-base verification. ONLY
+ *     useful when the user is pointing at a locally-bootstrapped
+ *     aggregator whose trust base does not match the compiled-in
+ *     `assets/trustbase.ts`.
+ *
+ * Returns `undefined` (caller omits the `oracle` key) when neither
+ * key is set, so the normal per-network defaults apply.
+ *
+ * @see STORAGE_KEYS.DEV_AGGREGATOR_URL
+ * @see STORAGE_KEYS.DEV_SKIP_TRUST_BASE
+ */
+function getDevOracleOverride():
+  | { url?: string; skipVerification?: boolean }
+  | undefined {
+  const url = localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
+  const skipTrustBase =
+    localStorage.getItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE) === 'true';
+  if (!url && !skipTrustBase) return undefined;
+  const override: { url?: string; skipVerification?: boolean } = {};
+  if (url) override.url = url;
+  if (skipTrustBase) override.skipVerification = true;
+  return override;
+}
+
+/**
+ * Install a small `window.sphereDev` namespace exposing one-line
+ * helpers so the dev override is reachable from the browser console
+ * without users having to remember the exact localStorage keys.
+ *
+ * Idempotent — re-running on hot-reload or remount overwrites the
+ * same shape with the same closure (re-binds `reinitialize` to the
+ * latest version, which is what users want after a fast-refresh).
+ *
+ * Usage from console:
+ *
+ *   sphereDev.setAggregator('http://127.0.0.1:11003')   // override + reload
+ *   sphereDev.setAggregator(null)                       // clear override + reload
+ *   sphereDev.setSkipTrustBase(true)                    // dev-only — bypass verify
+ *   sphereDev.show()                                    // print current state
+ */
+function installDevConsoleHelpers(triggerReinit: () => void): void {
+  if (typeof window === 'undefined') return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).sphereDev = {
+    setAggregator(url: string | null): void {
+      if (url === null) {
+        localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
+      } else {
+        localStorage.setItem(STORAGE_KEYS.DEV_AGGREGATOR_URL, url);
+      }
+      window.dispatchEvent(new Event('dev-config-changed'));
+      triggerReinit();
+    },
+    setSkipTrustBase(enabled: boolean): void {
+      if (enabled) {
+        localStorage.setItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE, 'true');
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE);
+      }
+      window.dispatchEvent(new Event('dev-config-changed'));
+      triggerReinit();
+    },
+    show(): { aggregatorUrl: string | null; skipTrustBase: boolean } {
+      const state = {
+        aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
+        skipTrustBase:
+          localStorage.getItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE) === 'true',
+      };
+      console.log('[sphereDev]', state);
+      return state;
+    },
+  };
+}
+
+/**
  * Read sticky wallet-mode preference from localStorage.
  *
  * Returns `null` when the user has not yet expressed a preference (boot
@@ -395,11 +475,26 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
+      // Dev-mode oracle override (custom aggregator URL / skip-trust-base).
+      // Set via `sphereDev.setAggregator(...)` from the console, or via
+      // localStorage keys `sphere_dev_aggregator_url` / `sphere_dev_skip_trust_base`.
+      // Header chip in `Header.tsx` reflects the active state.
+      const devOracleOverride = getDevOracleOverride();
+      if (devOracleOverride) {
+        logger.info(
+          'SphereProvider',
+          `Dev-mode oracle override active: ` +
+            `url=${devOracleOverride.url ?? '<network default>'} ` +
+            `skipVerification=${devOracleOverride.skipVerification ?? false}`,
+        );
+      }
+
       const browserProviders = createBrowserProviders({
         network,
         price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
         groupChat: true,
         market: true,
+        ...(devOracleOverride ? { oracle: devOracleOverride } : {}),
         ...getIpfsConfig(),
       });
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
@@ -658,6 +753,40 @@ export function SphereProvider({
       sphereRef.current = null;
     };
   }, [network]);
+
+  // Dev-mode oracle override: install the `window.sphereDev` helper so
+  // users can flip the aggregator URL / skip-trust-base flag from the
+  // browser console without remembering the localStorage keys, and
+  // subscribe to `dev-config-changed` so the existing header chip
+  // (which dispatches that event on Reset) re-initializes the wallet
+  // automatically. Mount-only — `installDevConsoleHelpers` re-binds
+  // the trigger to the latest `initializeRef.current` closure on each
+  // call, so reinitialize always runs the freshest init logic.
+  useEffect(() => {
+    const triggerReinit = () => {
+      void initializeRef.current();
+    };
+    installDevConsoleHelpers(triggerReinit);
+    const handler = () => triggerReinit();
+    window.addEventListener('dev-config-changed', handler);
+    // One-time hint on first mount in dev mode so users discover the
+    // override path without digging through code. Production builds
+    // can still use it; they just don't get the hint banner.
+    if (import.meta.env.DEV) {
+      console.log(
+        '%c[sphereDev]%c custom aggregator helpers loaded.\n' +
+          '  sphereDev.setAggregator("http://127.0.0.1:11003")  // override + reload providers\n' +
+          '  sphereDev.setAggregator(null)                       // clear override\n' +
+          '  sphereDev.setSkipTrustBase(true)                    // dev-only — bypass trust-base verify\n' +
+          '  sphereDev.show()                                    // print current state',
+        'color: #f59e0b; font-weight: bold',
+        'color: #888',
+      );
+    }
+    return () => {
+      window.removeEventListener('dev-config-changed', handler);
+    };
+  }, []);
 
   const createWallet = useCallback(
     async (options?: CreateWalletOptions) => {
