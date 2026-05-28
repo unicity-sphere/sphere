@@ -16,6 +16,8 @@ export type {
 } from './core/useConnectivity';
 export { useMarketStatus } from './core/useMarketStatus';
 export type { MarketStatus } from './core/useMarketStatus';
+export { useIpfsGatewayStatus } from './core/useIpfsGatewayStatus';
+export type { IpfsGatewayStatus } from './core/useIpfsGatewayStatus';
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';

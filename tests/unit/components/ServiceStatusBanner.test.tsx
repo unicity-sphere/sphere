@@ -33,16 +33,20 @@ import { ServiceStatusBanner } from '../../../src/components/layout/ServiceStatu
 import type { UseConnectivityReturn } from '../../../src/sdk/hooks/core/useConnectivity';
 import type { MarketStatus } from '../../../src/sdk/hooks/core/useMarketStatus';
 
-// Mock the two hooks the banner consumes so each test can drive the
-// status independently of the SDK/CoinGecko probes.
+// Mock the hooks the banner consumes so each test can drive the
+// status independently of the SDK / market-api / IPFS gateway probes.
 const connectivityMock = vi.fn<() => UseConnectivityReturn>();
 const marketMock = vi.fn<() => MarketStatus>();
+const ipfsGatewayMock = vi.fn<() => 'up' | 'down' | 'unknown'>();
 
 vi.mock('../../../src/sdk/hooks/core/useConnectivity', () => ({
   useConnectivity: () => connectivityMock(),
 }));
 vi.mock('../../../src/sdk/hooks/core/useMarketStatus', () => ({
   useMarketStatus: () => marketMock(),
+}));
+vi.mock('../../../src/sdk/hooks/core/useIpfsGatewayStatus', () => ({
+  useIpfsGatewayStatus: () => ipfsGatewayMock(),
 }));
 
 function allUp(): UseConnectivityReturn {
@@ -65,6 +69,18 @@ function withOverrides(
 beforeEach(() => {
   connectivityMock.mockReset();
   marketMock.mockReset();
+  ipfsGatewayMock.mockReset();
+  // Default ipfsGateway mock: mirror connectivity.ipfs so existing
+  // tests written before the direct-probe split (which drove IPFS via
+  // `connectivity.ipfs`) continue to express the SAME IPFS state.
+  // Individual tests can override with `ipfsGatewayMock.mockReturnValue(...)`.
+  ipfsGatewayMock.mockImplementation(() => {
+    try {
+      return connectivityMock().ipfs as 'up' | 'down' | 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  });
 });
 
 afterEach(() => {
