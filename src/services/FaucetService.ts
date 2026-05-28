@@ -1,4 +1,20 @@
-const FAUCET_API_URL = 'https://faucet.unicity.network/api/v1/faucet/request';
+import { STORAGE_KEYS } from '../config/storageKeys';
+
+const DEFAULT_FAUCET_API_URL = 'https://faucet.unicity.network/api/v1/faucet/request';
+
+/**
+ * Resolve the faucet endpoint. Honors the dev-mode override
+ * `STORAGE_KEYS.DEV_FAUCET_URL` (set via `sphereDev.setFaucet(...)` or
+ * the localStorage key directly) so e2e / soak runs can point at a
+ * locally-bootstrapped faucet. Read on every call so the override
+ * picks up live without a page reload.
+ */
+function getFaucetApiUrl(): string {
+  if (typeof window === 'undefined') return DEFAULT_FAUCET_API_URL;
+  return (
+    localStorage.getItem(STORAGE_KEYS.DEV_FAUCET_URL) ?? DEFAULT_FAUCET_API_URL
+  );
+}
 
 export interface FaucetRequest {
   unicityId: string;
@@ -46,7 +62,7 @@ export class FaucetService {
 
       if (import.meta.env.DEV) console.log(`📤 Sending request:`, requestBody);
 
-      const response = await fetch(FAUCET_API_URL, {
+      const response = await fetch(getFaucetApiUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

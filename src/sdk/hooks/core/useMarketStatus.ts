@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { STORAGE_KEYS } from '../../../config/storageKeys';
 
 /**
  * Markets-module reachability status.
@@ -20,7 +21,24 @@ export type MarketStatus = 'up' | 'down' | 'unknown';
  * hits for `getRecentListings()` — when this responds OK the entire
  * Markets module is functional.
  */
-const MARKET_API_PROBE_URL = 'https://market-api.unicity.network/api/feed/recent';
+const DEFAULT_MARKET_API_BASE = 'https://market-api.unicity.network';
+const PROBE_PATH = '/api/feed/recent';
+
+/**
+ * Resolve the Market API base URL. Honors
+ * `STORAGE_KEYS.DEV_MARKET_API_URL` so e2e / soak runs that point the
+ * SDK at a local Markets backend get the same target probed by the
+ * banner. The probe path is appended at fetch time so trailing
+ * slashes are normalised.
+ */
+function buildProbeUrl(): string {
+  const base =
+    typeof window !== 'undefined'
+      ? localStorage.getItem(STORAGE_KEYS.DEV_MARKET_API_URL) ??
+        DEFAULT_MARKET_API_BASE
+      : DEFAULT_MARKET_API_BASE;
+  return `${base.replace(/\/+$/, '')}${PROBE_PATH}`;
+}
 
 // Backoff: same schedule as the SDK's connectivity manager — 5s → 15s → 60s → 5m.
 // On success the schedule resets to step 0.
@@ -42,7 +60,22 @@ const PROBE_TIMEOUT_MS = 8_000;
  */
 export function useMarketStatus(): MarketStatus {
   const [status, setStatus] = useState<MarketStatus>('unknown');
+  // Bumped by the dev-config-changed event so a fresh probe fires
+  // immediately against the new market-api URL when the user flips
+  // `sphereDev.setMarket(...)`.
+  const [epoch, setEpoch] = useState(0);
   const stepRef = useRef(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => {
+      stepRef.current = 0;
+      setStatus('unknown');
+      setEpoch((e) => e + 1);
+    };
+    window.addEventListener('dev-config-changed', handler);
+    return () => window.removeEventListener('dev-config-changed', handler);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +92,7 @@ export function useMarketStatus(): MarketStatus {
 
       let nextStatus: MarketStatus = 'down';
       try {
-        const res = await fetch(MARKET_API_PROBE_URL, {
+        const res = await fetch(buildProbeUrl(), {
           method: 'GET',
           signal: inflightController.signal,
           // Public endpoint; no cookies / referrer needed.
@@ -113,7 +146,9 @@ export function useMarketStatus(): MarketStatus {
       if (timer) clearTimeout(timer);
       if (inflightController) inflightController.abort();
     };
-  }, []);
+    // `epoch` is in the deps so a dev-config-changed event remounts
+    // the probe cycle and immediately retargets the new market URL.
+  }, [epoch]);
 
   return status;
 }

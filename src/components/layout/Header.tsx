@@ -11,6 +11,10 @@ import { DiscordIcon, XIcon } from '../icons/SocialIcons';
 function devReset(): void {
   localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
   localStorage.removeItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE);
+  localStorage.removeItem(STORAGE_KEYS.DEV_NOSTR_RELAY_URL);
+  localStorage.removeItem(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL);
+  localStorage.removeItem(STORAGE_KEYS.DEV_FAUCET_URL);
+  localStorage.removeItem(STORAGE_KEYS.DEV_MARKET_API_URL);
   window.dispatchEvent(new Event("dev-config-changed"));
 }
 import logoUrl from '/Union.svg';
@@ -32,6 +36,10 @@ export function Header() {
   const getDevConfig = () => ({
     aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
     skipTrustBase: localStorage.getItem(STORAGE_KEYS.DEV_SKIP_TRUST_BASE) === 'true',
+    nostrRelayUrl: localStorage.getItem(STORAGE_KEYS.DEV_NOSTR_RELAY_URL),
+    ipfsGatewayUrl: localStorage.getItem(STORAGE_KEYS.DEV_IPFS_GATEWAY_URL),
+    faucetUrl: localStorage.getItem(STORAGE_KEYS.DEV_FAUCET_URL),
+    marketApiUrl: localStorage.getItem(STORAGE_KEYS.DEV_MARKET_API_URL),
   });
   const [devConfig, setDevConfig] = useState(getDevConfig);
 
@@ -126,22 +134,51 @@ export function Header() {
 
               <div className="flex-1" />
 
-              {(devConfig.aggregatorUrl || devConfig.skipTrustBase) && (
-                <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-orange-500/10 border border-orange-500/30 text-[10px] sm:text-xs font-mono mr-3">
+              {(devConfig.aggregatorUrl ||
+                devConfig.skipTrustBase ||
+                devConfig.nostrRelayUrl ||
+                devConfig.ipfsGatewayUrl ||
+                devConfig.faucetUrl ||
+                devConfig.marketApiUrl) && (
+                <div
+                  className="flex items-center gap-2 px-3 py-1 rounded-lg bg-orange-500/10 border border-orange-500/30 text-[10px] sm:text-xs font-mono mr-3"
+                  title={[
+                    devConfig.aggregatorUrl &&
+                      `Aggregator: ${devConfig.aggregatorUrl}`,
+                    devConfig.skipTrustBase && 'Trust-base verification: OFF',
+                    devConfig.nostrRelayUrl &&
+                      `Nostr: ${devConfig.nostrRelayUrl}`,
+                    devConfig.ipfsGatewayUrl &&
+                      `IPFS gateway: ${devConfig.ipfsGatewayUrl}`,
+                    devConfig.marketApiUrl &&
+                      `Market API: ${devConfig.marketApiUrl}`,
+                    devConfig.faucetUrl && `Faucet: ${devConfig.faucetUrl}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n')}
+                >
                   <span className="text-orange-500 font-semibold">DEV</span>
-                  <span className="text-orange-400/80 hidden sm:inline">
-                    {devConfig.aggregatorUrl && (
-                      <span title={devConfig.aggregatorUrl}>
-                        {getHostname(devConfig.aggregatorUrl)}
-                      </span>
-                    )}
-                    {devConfig.aggregatorUrl && devConfig.skipTrustBase && " | "}
-                    {devConfig.skipTrustBase && "TB:OFF"}
+                  <span className="text-orange-400/80 hidden sm:inline flex items-center gap-1">
+                    {[
+                      devConfig.aggregatorUrl &&
+                        `agg:${getHostname(devConfig.aggregatorUrl)}`,
+                      devConfig.skipTrustBase && 'TB:OFF',
+                      devConfig.nostrRelayUrl &&
+                        `nostr:${getHostname(devConfig.nostrRelayUrl)}`,
+                      devConfig.ipfsGatewayUrl &&
+                        `ipfs:${getHostname(devConfig.ipfsGatewayUrl)}`,
+                      devConfig.marketApiUrl &&
+                        `mkt:${getHostname(devConfig.marketApiUrl)}`,
+                      devConfig.faucetUrl &&
+                        `faucet:${getHostname(devConfig.faucetUrl)}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' | ')}
                   </span>
                   <button
                     onClick={devReset}
                     className="ml-1 px-1.5 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/30 text-orange-500 font-semibold transition-colors"
-                    title="Reset dev settings to production defaults"
+                    title="Reset ALL dev settings to production defaults"
                   >
                     RESET
                   </button>
