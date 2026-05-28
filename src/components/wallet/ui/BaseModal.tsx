@@ -36,11 +36,11 @@ export function BaseModal({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-100 bg-black/60 dark:bg-black/80 backdrop-blur-sm"
+            className="fixed inset-0 z-[200] bg-black/60 dark:bg-black/80 backdrop-blur-sm"
           />
 
           {/* Modal Container — full-screen on mobile, centered dialog on desktop */}
-          <div className="fixed inset-0 z-100 flex items-end sm:items-center justify-center sm:p-6 pointer-events-none">
+          <div className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center sm:p-6 pointer-events-none">
             <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
