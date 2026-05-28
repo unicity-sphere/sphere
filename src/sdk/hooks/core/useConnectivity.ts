@@ -76,6 +76,23 @@ export function useConnectivity(): UseConnectivityReturn {
       });
     });
 
+    // Production-observed issue: after a Sphere re-init (mode switch,
+    // mnemonic re-import, etc.), the SDK's per-backend pingers may
+    // have been bumped to their long backoff (15s → 60s → 5m) by
+    // probes that fired during the transient disconnect window. The
+    // banner would then show IPFS/Nostr as 'down' for minutes after
+    // the underlying transports recovered. Forcing an immediate ping
+    // here pulls fresh probe results within seconds, regardless of
+    // where the backoff schedule currently is.
+    //
+    // Fire-and-forget: any throw from .ping() is best-effort and
+    // surfaces through the SDK's own event bus.
+    try {
+      void sphere.connectivity.ping('all').catch(() => undefined);
+    } catch {
+      // sphere.connectivity stub may not implement ping; ignore.
+    }
+
     return unsubscribe;
   }, [sphere]);
 
