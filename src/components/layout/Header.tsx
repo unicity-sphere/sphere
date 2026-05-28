@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Menu, X, Github, Linkedin } from 'lucide-react';
+import { Menu, X, Github, Linkedin, Settings as SettingsIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
 import { IpfsSyncIndicator } from './IpfsSyncIndicator';
+import { SettingsModal } from './SettingsModal';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
 
@@ -32,6 +33,7 @@ export function Header() {
   const navigate = useNavigate();
   const { showDesktop } = useDesktopState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const getDevConfig = () => ({
     aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
@@ -196,6 +198,19 @@ export function Header() {
             <div className="h-0.5 bg-neutral-300 dark:bg-[#fefefe] rounded-[10px]" />
           </div>
 
+          {/* Settings (gear) — visible on every viewport, placed
+              immediately before the hamburger on mobile and to the
+              right of the IpfsSyncIndicator on desktop. The dev
+              overrides surface is keyboard / pointer reachable
+              without touching the console. */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Open settings"
+            className="shrink-0 p-2 hover:bg-neutral-100 dark:hover:bg-brand-orange-dim rounded-lg transition-all sm:ml-2 sm:translate-y-1/2 relative z-10"
+          >
+            <SettingsIcon className="w-6 h-6 text-neutral-500 dark:text-neutral-400" />
+          </button>
+
           {/* Mobile hamburger */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -295,6 +310,10 @@ export function Header() {
         </>
       )}
     </AnimatePresence>
+
+    {/* Settings (dev overrides) — mounted outside the header tree so the
+        backdrop covers the full viewport regardless of header z-index. */}
+    <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
     </>
   );
