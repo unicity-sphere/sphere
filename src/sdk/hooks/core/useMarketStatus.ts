@@ -1,16 +1,26 @@
 import { useEffect, useState, useRef } from 'react';
 
 /**
- * Market-data backend status (CoinGecko).
+ * Markets-module reachability status.
  *
- * The SDK's `sphere.connectivity` surface does not include CoinGecko in
- * its probe set (issue #312 explicitly scopes to aggregator / IPFS /
- * Nostr). This hook polls CoinGecko's free `/ping` endpoint directly so
- * the service-status banner can show market alongside the other three.
+ * "Market" in the Sphere context is the **intents database for trading
+ * agents** — `modules/market/MarketModule.ts` in sphere-sdk, exposed as
+ * `sphere.market`, backed by `https://market-api.unicity.network`. It
+ * is NOT the CoinGecko price feed (that's the separate
+ * `CoinGeckoPriceProvider` accessed via `sphere.payments.getAssets()`).
+ *
+ * The SDK's `sphere.connectivity` surface (issue #312) only covers
+ * aggregator / IPFS / Nostr, so the banner probes market-api directly.
  */
 export type MarketStatus = 'up' | 'down' | 'unknown';
 
-const COINGECKO_PING_URL = 'https://api.coingecko.com/api/v3/ping';
+/**
+ * Mirrors `DEFAULT_MARKET_API_URL` in
+ * `modules/market/MarketModule.ts`. The REST endpoint the app already
+ * hits for `getRecentListings()` — when this responds OK the entire
+ * Markets module is functional.
+ */
+const MARKET_API_PROBE_URL = 'https://market-api.unicity.network/api/feed/recent';
 
 // Backoff: same schedule as the SDK's connectivity manager — 5s → 15s → 60s → 5m.
 // On success the schedule resets to step 0.
@@ -20,12 +30,15 @@ const BACKOFF_SCHEDULE_MS = [5_000, 15_000, 60_000, 300_000] as const;
 const PROBE_TIMEOUT_MS = 8_000;
 
 /**
- * Hook that probes CoinGecko on a backoff schedule and exposes the
- * current up/down/unknown status. The first probe is `'unknown'`
+ * Hook that probes the Markets API on a backoff schedule and exposes
+ * the current up/down/unknown status. The first probe is `'unknown'`
  * until it settles.
  *
- * On unmount the pending probe is aborted and any pending timer is
- * cleared — no work continues after the component is gone.
+ * The same endpoint is used by `useMarketFeed` for initial listings
+ * fetch; the Markets module's WebSocket reconnect logic already paces
+ * itself, so this lightweight probe runs independently without
+ * doubling traffic during normal operation. On unmount the pending
+ * probe is aborted and any pending timer is cleared.
  */
 export function useMarketStatus(): MarketStatus {
   const [status, setStatus] = useState<MarketStatus>('unknown');
@@ -44,47 +57,28 @@ export function useMarketStatus(): MarketStatus {
         PROBE_TIMEOUT_MS,
       );
 
-      // 'preserve' is an internal signal that the public `status`
-      // should NOT change for this round (used for 429 rate-limit:
-      // the API is reachable, we just hit a quota cap — flipping to
-      // 'down' would be misleading).
-      let nextStatus: MarketStatus | 'preserve' = 'down';
+      let nextStatus: MarketStatus = 'down';
       try {
-        const res = await fetch(COINGECKO_PING_URL, {
+        const res = await fetch(MARKET_API_PROBE_URL, {
           method: 'GET',
           signal: inflightController.signal,
-          // Send no cookies / referrer — this is an unauthenticated
-          // public ping and the wallet origin is not relevant to it.
+          // Public endpoint; no cookies / referrer needed.
           credentials: 'omit',
           referrerPolicy: 'no-referrer',
+          // Cache hint: the recent-listings endpoint already has its
+          // own TTL on the server side; we don't need the browser to
+          // bypass it.
+          cache: 'no-cache',
         });
-        if (res.status === 429) {
-          // Rate-limited. The API is reachable; we just hit a quota.
-          // Preserve current status to avoid flapping to 'down' on
-          // every quota hit during shared-IP / multi-tab scenarios.
-          // The backoff still advances so we don't keep hammering.
-          nextStatus = 'preserve';
-        } else if (res.ok) {
-          // Steelman: HTTP 200 is not enough — captive portals and
-          // corporate proxies return 200 with an HTML login page.
-          // The real /ping response is JSON with a `gecko_says` string.
-          // Validate the body shape to defend against false-positive 'up'.
-          try {
-            const body = await res.json();
-            const looksValid =
-              body !== null &&
-              typeof body === 'object' &&
-              typeof (body as { gecko_says?: unknown }).gecko_says === 'string';
-            nextStatus = looksValid ? 'up' : 'down';
-          } catch {
-            // Body wasn't JSON (e.g. captive portal HTML).
-            nextStatus = 'down';
-          }
-        } else {
-          nextStatus = 'down';
-        }
+        // 2xx — Markets API is alive AND serving expected data.
+        // 5xx — server reachable but not serving (treat as down so
+        //       the operator surface flags it).
+        // 4xx — same: e.g., a 401 on the public endpoint indicates a
+        //       backend misconfiguration that warrants alerting.
+        nextStatus = res.ok ? 'up' : 'down';
       } catch {
-        // Network error, abort, CORS — all treated as 'down'.
+        // Network error, DNS failure, abort/timeout, CORS rejection.
+        // All treated as 'down' — genuine unreachability.
         nextStatus = 'down';
       } finally {
         clearTimeout(timeoutTimer);
@@ -92,12 +86,9 @@ export function useMarketStatus(): MarketStatus {
 
       if (cancelled) return;
 
-      if (nextStatus !== 'preserve') {
-        setStatus(nextStatus);
-      }
+      setStatus(nextStatus);
 
-      // Reset backoff on success, advance on failure (and on 'preserve'
-      // — a 429 should slow us down without flipping the status).
+      // Reset backoff on success, advance on failure.
       stepRef.current =
         nextStatus === 'up'
           ? 0
