@@ -992,6 +992,11 @@ function hexToBytes2(hex) {
   }
   return array;
 }
+function utf8ToBytes(str) {
+  if (typeof str !== "string")
+    throw new Error("string expected");
+  return new Uint8Array(new TextEncoder().encode(str));
+}
 function concatBytes(...arrays) {
   let sum = 0;
   for (let i = 0; i < arrays.length; i++) {
@@ -1035,6 +1040,131 @@ var init_utils = __esm({
     oidNist = (suffix) => ({
       oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
     });
+  }
+});
+
+// profile/aggregator-pointer/errors.ts
+var AggregatorPointerErrorCode, AggregatorPointerError;
+var init_errors2 = __esm({
+  "profile/aggregator-pointer/errors.ts"() {
+    "use strict";
+    AggregatorPointerErrorCode = {
+      CONFLICT: "AGGREGATOR_POINTER_CONFLICT",
+      STALE: "AGGREGATOR_POINTER_STALE",
+      CORRUPT: "AGGREGATOR_POINTER_CORRUPT",
+      NOT_FOUND: "AGGREGATOR_POINTER_NOT_FOUND",
+      PARTIAL: "AGGREGATOR_POINTER_PARTIAL",
+      REJECTED: "AGGREGATOR_POINTER_REJECTED",
+      RETRY_EXHAUSTED: "AGGREGATOR_POINTER_RETRY_EXHAUSTED",
+      CID_TOO_LARGE: "AGGREGATOR_POINTER_CID_TOO_LARGE",
+      VERSION_OUT_OF_RANGE: "AGGREGATOR_POINTER_VERSION_OUT_OF_RANGE",
+      DISCOVERY_OVERFLOW: "AGGREGATOR_POINTER_DISCOVERY_OVERFLOW",
+      NETWORK_ERROR: "AGGREGATOR_POINTER_NETWORK_ERROR",
+      UNTRUSTED_PROOF: "AGGREGATOR_POINTER_UNTRUSTED_PROOF",
+      UNREACHABLE_RECOVERY_BLOCKED: "AGGREGATOR_POINTER_UNREACHABLE_RECOVERY_BLOCKED",
+      MARKER_CORRUPT: "AGGREGATOR_POINTER_MARKER_CORRUPT",
+      CAR_TOO_LARGE: "AGGREGATOR_POINTER_CAR_TOO_LARGE",
+      CAR_FETCH_TIMEOUT: "AGGREGATOR_POINTER_CAR_FETCH_TIMEOUT",
+      CAR_UNAVAILABLE: "AGGREGATOR_POINTER_CAR_UNAVAILABLE",
+      CORRUPT_STREAK: "AGGREGATOR_POINTER_CORRUPT_STREAK",
+      SECURITY_ORIGIN_MISMATCH: "SECURITY_ORIGIN_MISMATCH",
+      UNSUPPORTED_RUNTIME: "AGGREGATOR_POINTER_UNSUPPORTED_RUNTIME",
+      PUBLISH_BUSY: "AGGREGATOR_POINTER_PUBLISH_BUSY",
+      TRUST_BASE_STALE: "AGGREGATOR_POINTER_TRUST_BASE_STALE",
+      CAR_UNEXPECTED_ENCODING: "AGGREGATOR_POINTER_CAR_UNEXPECTED_ENCODING",
+      AGGREGATOR_REJECTED: "AGGREGATOR_POINTER_AGGREGATOR_REJECTED",
+      PROTOCOL_ERROR: "AGGREGATOR_POINTER_PROTOCOL_ERROR",
+      WALKBACK_FLOOR: "AGGREGATOR_POINTER_WALKBACK_FLOOR",
+      CAPABILITY_DENIED: "AGGREGATOR_POINTER_CAPABILITY_DENIED"
+    };
+    AggregatorPointerError = class extends Error {
+      code;
+      details;
+      constructor(code2, message, details, options) {
+        super(message ?? code2, options);
+        this.name = "AggregatorPointerError";
+        this.code = code2;
+        this.details = details;
+      }
+    };
+  }
+});
+
+// node_modules/@noble/hashes/hmac.js
+var _HMAC, hmac;
+var init_hmac = __esm({
+  "node_modules/@noble/hashes/hmac.js"() {
+    "use strict";
+    init_utils();
+    _HMAC = class {
+      oHash;
+      iHash;
+      blockLen;
+      outputLen;
+      finished = false;
+      destroyed = false;
+      constructor(hash, key) {
+        ahash(hash);
+        abytes(key, void 0, "key");
+        this.iHash = hash.create();
+        if (typeof this.iHash.update !== "function")
+          throw new Error("Expected instance of class which extends utils.Hash");
+        this.blockLen = this.iHash.blockLen;
+        this.outputLen = this.iHash.outputLen;
+        const blockLen = this.blockLen;
+        const pad2 = new Uint8Array(blockLen);
+        pad2.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+        for (let i = 0; i < pad2.length; i++)
+          pad2[i] ^= 54;
+        this.iHash.update(pad2);
+        this.oHash = hash.create();
+        for (let i = 0; i < pad2.length; i++)
+          pad2[i] ^= 54 ^ 92;
+        this.oHash.update(pad2);
+        clean(pad2);
+      }
+      update(buf) {
+        aexists(this);
+        this.iHash.update(buf);
+        return this;
+      }
+      digestInto(out) {
+        aexists(this);
+        abytes(out, this.outputLen, "output");
+        this.finished = true;
+        this.iHash.digestInto(out);
+        this.oHash.update(out);
+        this.oHash.digestInto(out);
+        this.destroy();
+      }
+      digest() {
+        const out = new Uint8Array(this.oHash.outputLen);
+        this.digestInto(out);
+        return out;
+      }
+      _cloneInto(to) {
+        to ||= Object.create(Object.getPrototypeOf(this), {});
+        const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+        to = to;
+        to.finished = finished;
+        to.destroyed = destroyed;
+        to.blockLen = blockLen;
+        to.outputLen = outputLen;
+        to.oHash = oHash._cloneInto(to.oHash);
+        to.iHash = iHash._cloneInto(to.iHash);
+        return to;
+      }
+      clone() {
+        return this._cloneInto();
+      }
+      destroy() {
+        this.destroyed = true;
+        this.oHash.destroy();
+        this.iHash.destroy();
+      }
+    };
+    hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
+    hmac.create = (hash, key) => new _HMAC(hash, key);
   }
 });
 
@@ -1316,6 +1446,244 @@ var init_sha2 = __esm({
   }
 });
 
+// profile/aggregator-pointer/originated-tag.ts
+function assertOriginTagLocal(entryType, originated) {
+  if (typeof originated !== "string") {
+    throw new AggregatorPointerError(
+      AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
+      `OpLog entry type "${entryType}" is missing the originated tag (fail-closed; SPEC \xA710.2.3).`,
+      { entryType, originated }
+    );
+  }
+  if (USER_ACTION_SET.has(entryType)) {
+    if (originated !== "user") {
+      throw new AggregatorPointerError(
+        AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
+        `Local user-action entry type "${entryType}" must carry originated='user', got '${originated}'.`,
+        { entryType, originated }
+      );
+    }
+    return;
+  }
+  if (SYSTEM_ACTION_SET.has(entryType)) {
+    if (originated !== "system") {
+      throw new AggregatorPointerError(
+        AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
+        `Local system entry type "${entryType}" must carry originated='system', got '${originated}'.`,
+        { entryType, originated }
+      );
+    }
+    return;
+  }
+  throw new AggregatorPointerError(
+    AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
+    `Unknown OpLog entry type "${entryType}" \u2014 cannot validate originated tag.`,
+    { entryType, originated }
+  );
+}
+var USER_ACTION_TYPES, SYSTEM_ACTION_TYPES, ALL_ENTRY_TYPES, USER_ACTION_SET, SYSTEM_ACTION_SET;
+var init_originated_tag = __esm({
+  "profile/aggregator-pointer/originated-tag.ts"() {
+    "use strict";
+    init_errors2();
+    USER_ACTION_TYPES = [
+      "token_send",
+      "token_receive",
+      "nametag_register",
+      "dm_send",
+      "dm_receive",
+      "invoice_mint",
+      "invoice_pay",
+      "invoice_close",
+      "invoice_cancel",
+      "swap_propose",
+      "swap_accept",
+      "swap_deposit"
+    ];
+    SYSTEM_ACTION_TYPES = [
+      "session_receipt",
+      "cache_index",
+      "last_opened_ts"
+    ];
+    ALL_ENTRY_TYPES = Object.freeze([
+      ...USER_ACTION_TYPES,
+      ...SYSTEM_ACTION_TYPES
+    ]);
+    USER_ACTION_SET = new Set(USER_ACTION_TYPES);
+    SYSTEM_ACTION_SET = new Set(SYSTEM_ACTION_TYPES);
+    for (const t of USER_ACTION_TYPES) {
+      if (SYSTEM_ACTION_SET.has(t)) {
+        throw new Error(
+          `originated-tag: BUG \u2014 "${t}" appears in both USER_ACTION_TYPES and SYSTEM_ACTION_TYPES`
+        );
+      }
+    }
+  }
+});
+
+// profile/aggregator-pointer/win-broadcast.ts
+var win_broadcast_exports = {};
+__export(win_broadcast_exports, {
+  MAX_PAYLOAD_AGE_MS: () => MAX_PAYLOAD_AGE_MS,
+  WIN_BROADCAST_KIND_MARKER: () => WIN_BROADCAST_KIND_MARKER,
+  WIN_BROADCAST_SCHEMA_VERSION: () => WIN_BROADCAST_SCHEMA_VERSION,
+  WIN_BROADCAST_TAG_PREFIX: () => WIN_BROADCAST_TAG_PREFIX,
+  buildWinBroadcastHash: () => buildWinBroadcastHash,
+  buildWinBroadcastTag: () => buildWinBroadcastTag,
+  signWinBroadcastPayload: () => signWinBroadcastPayload,
+  verifyWinBroadcastPayload: () => verifyWinBroadcastPayload
+});
+import { DataHasher } from "@unicitylabs/state-transition-sdk/lib/hash/DataHasher.js";
+import { HashAlgorithm as HashAlgorithm3 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js";
+import { Signature } from "@unicitylabs/state-transition-sdk/lib/sign/Signature.js";
+import { SigningService as SigningService2 } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService.js";
+function buildWinBroadcastTag(signingPubKeyHex) {
+  if (typeof signingPubKeyHex !== "string" || signingPubKeyHex.length === 0) {
+    throw new Error("buildWinBroadcastTag: signingPubKeyHex must be a non-empty string");
+  }
+  return `${WIN_BROADCAST_TAG_PREFIX}${signingPubKeyHex.toLowerCase()}`;
+}
+async function buildWinBroadcastHash(payload) {
+  if (payload.v !== WIN_BROADCAST_SCHEMA_VERSION) {
+    throw new Error(`buildWinBroadcastHash: unsupported schema version ${payload.v}`);
+  }
+  if (!Number.isInteger(payload.version) || payload.version < 0 || payload.version > 4294967295) {
+    throw new Error(`buildWinBroadcastHash: version must be uint32, got ${payload.version}`);
+  }
+  if (!Number.isInteger(payload.ts) || payload.ts < 0 || !Number.isSafeInteger(payload.ts)) {
+    throw new Error(`buildWinBroadcastHash: ts must be a safe integer >= 0, got ${payload.ts}`);
+  }
+  const pubKeyBytes = hexToBytes3(payload.signingPubKey);
+  if (pubKeyBytes.length !== 33) {
+    throw new Error(
+      `buildWinBroadcastHash: signingPubKey must decode to 33 bytes, got ${pubKeyBytes.length}`
+    );
+  }
+  const cidBytes = new TextEncoder().encode(payload.cid);
+  const buf = new Uint8Array(1 + 4 + 8 + 33 + cidBytes.length);
+  let offset = 0;
+  buf[offset] = payload.v;
+  offset += 1;
+  buf[offset] = payload.version >>> 24 & 255;
+  buf[offset + 1] = payload.version >>> 16 & 255;
+  buf[offset + 2] = payload.version >>> 8 & 255;
+  buf[offset + 3] = payload.version & 255;
+  offset += 4;
+  const tsHi = Math.floor(payload.ts / 4294967296);
+  const tsLo = payload.ts >>> 0;
+  buf[offset] = tsHi >>> 24 & 255;
+  buf[offset + 1] = tsHi >>> 16 & 255;
+  buf[offset + 2] = tsHi >>> 8 & 255;
+  buf[offset + 3] = tsHi & 255;
+  buf[offset + 4] = tsLo >>> 24 & 255;
+  buf[offset + 5] = tsLo >>> 16 & 255;
+  buf[offset + 6] = tsLo >>> 8 & 255;
+  buf[offset + 7] = tsLo & 255;
+  offset += 8;
+  buf.set(pubKeyBytes, offset);
+  offset += 33;
+  buf.set(cidBytes, offset);
+  return new DataHasher(HashAlgorithm3.SHA256).update(buf).digest();
+}
+async function signWinBroadcastPayload(signer, unsigned) {
+  if (signer.signingPubKeyHex.toLowerCase() !== unsigned.signingPubKey.toLowerCase()) {
+    throw new Error(
+      `signWinBroadcastPayload: signer pubkey ${signer.signingPubKeyHex} does not match payload signingPubKey ${unsigned.signingPubKey}`
+    );
+  }
+  const hash = await buildWinBroadcastHash(unsigned);
+  const sig = await signer.service.sign(hash);
+  return { ...unsigned, sig: sig.toJSON() };
+}
+async function verifyWinBroadcastPayload(payload, expectedSigningPubKeyHex, nowMs = Date.now()) {
+  try {
+    if (payload._kind !== WIN_BROADCAST_KIND_MARKER) return false;
+    if (payload.v !== WIN_BROADCAST_SCHEMA_VERSION) return false;
+    if (typeof payload.signingPubKey !== "string") return false;
+    if (typeof payload.cid !== "string" || payload.cid.length === 0) return false;
+    if (typeof payload.sig !== "string" || payload.sig.length === 0) return false;
+    if (!Number.isInteger(payload.version) || payload.version < 0) return false;
+    if (!Number.isInteger(payload.ts) || payload.ts < 0) return false;
+    if (payload.signingPubKey.toLowerCase() !== expectedSigningPubKeyHex.toLowerCase()) {
+      return false;
+    }
+    if (Math.abs(nowMs - payload.ts) > MAX_PAYLOAD_AGE_MS) {
+      return false;
+    }
+    const hash = await buildWinBroadcastHash(payload);
+    const sigBytes = parseSignatureHex(payload.sig);
+    if (sigBytes === null) return false;
+    const pubKeyBytes = hexToBytes3(expectedSigningPubKeyHex);
+    if (pubKeyBytes.length !== 33) return false;
+    return await SigningService2.verifyWithPublicKey(hash, sigBytes, pubKeyBytes);
+  } catch {
+    return false;
+  }
+}
+function parseSignatureHex(sigHex) {
+  try {
+    const sig = Signature.decode(hexToBytes3(sigHex));
+    return sig.bytes;
+  } catch {
+    try {
+      return hexToBytes3(sigHex);
+    } catch {
+      return null;
+    }
+  }
+}
+function hexToBytes3(hex) {
+  if (typeof hex !== "string") {
+    throw new Error("hexToBytes: input must be string");
+  }
+  const normalized = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (normalized.length % 2 !== 0) {
+    throw new Error(`hexToBytes: odd length (${normalized.length})`);
+  }
+  const out = new Uint8Array(normalized.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = parseInt(normalized.substr(i * 2, 2), 16);
+    if (Number.isNaN(byte)) {
+      throw new Error(`hexToBytes: non-hex char at offset ${i * 2}`);
+    }
+    out[i] = byte;
+  }
+  return out;
+}
+var MAX_PAYLOAD_AGE_MS, WIN_BROADCAST_TAG_PREFIX, WIN_BROADCAST_KIND_MARKER, WIN_BROADCAST_SCHEMA_VERSION;
+var init_win_broadcast = __esm({
+  "profile/aggregator-pointer/win-broadcast.ts"() {
+    "use strict";
+    MAX_PAYLOAD_AGE_MS = 5 * 60 * 1e3;
+    WIN_BROADCAST_TAG_PREFIX = "pointer-win:";
+    WIN_BROADCAST_KIND_MARKER = "pointer-win-broadcast";
+    WIN_BROADCAST_SCHEMA_VERSION = 1;
+  }
+});
+
+// profile/errors.ts
+var errors_exports = {};
+__export(errors_exports, {
+  ProfileError: () => ProfileError
+});
+var ProfileError;
+var init_errors3 = __esm({
+  "profile/errors.ts"() {
+    "use strict";
+    ProfileError = class extends Error {
+      code;
+      // Note: `cause` is inherited from `Error` when the options bag is used in
+      // super(); we don't redeclare it as a class field (that would shadow the
+      // native getter).
+      constructor(code2, message, cause) {
+        super(`[PROFILE:${code2}] ${message}`, cause !== void 0 ? { cause } : void 0);
+        this.name = "ProfileError";
+        this.code = code2;
+      }
+    };
+  }
+});
+
 // constants.ts
 function getAddressStorageKey(addressId, key) {
   return `${addressId}_${key}`;
@@ -1425,7 +1793,32 @@ var init_constants = __esm({
        * the bundle via the aggregator path). Per-address suffix appended
        * by the Profile provider (`<key>_<addressId>`).
        */
-      PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid"
+      PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid",
+      /**
+       * Issue #313 — local snapshot blob for cold-boot lazy load. Holds the
+       * most recent in-memory state (identity, tokens, bundles, pointer,
+       * timestamps) so the next cold boot can render the wallet UI from
+       * local cache BEFORE connecting to aggregator / remote IPFS. Atomically
+       * replaced after every successful flush + publish and on graceful
+       * shutdown. Per-address suffix appended by the Profile provider
+       * (`<key>_<addressId>`).
+       *
+       * A companion key `<key>_<addressId>_pending` is written first; the
+       * swap to the main key happens via `setMany` (or a sequential fallback
+       * with explicit cleanup). Crash mid-write leaves the previous main
+       * key intact.
+       */
+      PROFILE_SNAPSHOT_BLOB: "profile_snapshot_blob",
+      /**
+       * Issue #313 — last-known aggregator pointer for cold-boot priming.
+       * Mirrors the `pointer` field embedded in the snapshot blob so the
+       * boot path can short-circuit a pointer fetch when the cached version
+       * matches what the aggregator now exposes. Per-address suffix appended
+       * by the Profile provider (`<key>_<addressId>`).
+       *
+       * Stored as JSON: `{ version: number, cid: string, epoch?: number, ts: number }`.
+       */
+      PROFILE_LAST_POINTER: "profile_last_pointer"
     };
     STORAGE_KEYS_ADDRESS = {
       /** Pending transfers for this address */
@@ -1742,7 +2135,7 @@ __export(transfer_payload_exports, {
   encodeTransferPayload: () => encodeTransferPayload,
   extractCarRootCid: () => extractCarRootCid
 });
-import { CarReader } from "@ipld/car";
+import { CarReader as CarReader2 } from "@ipld/car";
 import { bytesReader, readHeader } from "@ipld/car/decoder";
 import { Buffer as Buffer2 } from "buffer";
 function encodeTransferPayload(payload) {
@@ -1802,7 +2195,7 @@ async function extractCarRootCid(carBytes) {
   if (roots === void 0) {
     let reader;
     try {
-      reader = await CarReader.fromBytes(carBytes);
+      reader = await CarReader2.fromBytes(carBytes);
     } catch (cause) {
       throw new SphereError(
         "extractCarRootCid: CAR bytes did not parse",
@@ -2044,13 +2437,13 @@ var init_bech32 = __esm({
 
 // l1/addressToScriptHash.ts
 import CryptoJS from "crypto-js";
-function bytesToHex3(buf) {
+function bytesToHex4(buf) {
   return Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function addressToScriptHash(address) {
   const decoded = decodeBech32(address);
   if (!decoded) throw new SphereError("Invalid bech32 address: " + address, "VALIDATION_ERROR");
-  const scriptHex = "0014" + bytesToHex3(decoded.data);
+  const scriptHex = "0014" + bytesToHex4(decoded.data);
   const sha = CryptoJS.SHA256(CryptoJS.enc.Hex.parse(scriptHex)).toString();
   return sha.match(/../g).reverse().join("");
 }
@@ -2196,7 +2589,7 @@ function privateKeyToAddressInfo(privateKey, prefix = "alpha") {
   const address = publicKeyToAddress(publicKey, prefix);
   return { address, publicKey };
 }
-function hexToBytes3(hex) {
+function hexToBytes4(hex) {
   if (hex.length === 0) return new Uint8Array(0);
   if ((hex.length & 1) !== 0) {
     throw new RangeError(`hexToBytes: odd-length hex string (length=${hex.length})`);
@@ -2210,7 +2603,7 @@ function hexToBytes3(hex) {
   }
   return out;
 }
-function bytesToHex4(bytes) {
+function bytesToHex5(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function randomBytes2(length) {
@@ -2704,107 +3097,6 @@ var init_network = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hmac.js
-var _HMAC, hmac;
-var init_hmac = __esm({
-  "node_modules/@noble/hashes/hmac.js"() {
-    "use strict";
-    init_utils();
-    _HMAC = class {
-      oHash;
-      iHash;
-      blockLen;
-      outputLen;
-      finished = false;
-      destroyed = false;
-      constructor(hash, key) {
-        ahash(hash);
-        abytes(key, void 0, "key");
-        this.iHash = hash.create();
-        if (typeof this.iHash.update !== "function")
-          throw new Error("Expected instance of class which extends utils.Hash");
-        this.blockLen = this.iHash.blockLen;
-        this.outputLen = this.iHash.outputLen;
-        const blockLen = this.blockLen;
-        const pad2 = new Uint8Array(blockLen);
-        pad2.set(key.length > blockLen ? hash.create().update(key).digest() : key);
-        for (let i = 0; i < pad2.length; i++)
-          pad2[i] ^= 54;
-        this.iHash.update(pad2);
-        this.oHash = hash.create();
-        for (let i = 0; i < pad2.length; i++)
-          pad2[i] ^= 54 ^ 92;
-        this.oHash.update(pad2);
-        clean(pad2);
-      }
-      update(buf) {
-        aexists(this);
-        this.iHash.update(buf);
-        return this;
-      }
-      digestInto(out) {
-        aexists(this);
-        abytes(out, this.outputLen, "output");
-        this.finished = true;
-        this.iHash.digestInto(out);
-        this.oHash.update(out);
-        this.oHash.digestInto(out);
-        this.destroy();
-      }
-      digest() {
-        const out = new Uint8Array(this.oHash.outputLen);
-        this.digestInto(out);
-        return out;
-      }
-      _cloneInto(to) {
-        to ||= Object.create(Object.getPrototypeOf(this), {});
-        const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
-        to = to;
-        to.finished = finished;
-        to.destroyed = destroyed;
-        to.blockLen = blockLen;
-        to.outputLen = outputLen;
-        to.oHash = oHash._cloneInto(to.oHash);
-        to.iHash = iHash._cloneInto(to.iHash);
-        return to;
-      }
-      clone() {
-        return this._cloneInto();
-      }
-      destroy() {
-        this.destroyed = true;
-        this.oHash.destroy();
-        this.iHash.destroy();
-      }
-    };
-    hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
-    hmac.create = (hash, key) => new _HMAC(hash, key);
-  }
-});
-
-// profile/errors.ts
-var errors_exports = {};
-__export(errors_exports, {
-  ProfileError: () => ProfileError
-});
-var ProfileError;
-var init_errors2 = __esm({
-  "profile/errors.ts"() {
-    "use strict";
-    ProfileError = class extends Error {
-      code;
-      // Note: `cause` is inherited from `Error` when the options bag is used in
-      // super(); we don't redeclare it as a class field (that would shadow the
-      // native getter).
-      constructor(code2, message, cause) {
-        super(`[PROFILE:${code2}] ${message}`, cause !== void 0 ? { cause } : void 0);
-        this.name = "ProfileError";
-        this.code = code2;
-      }
-    };
-  }
-});
-
 // profile/encryption.ts
 async function importKey(key) {
   return globalThis.crypto.subtle.importKey(
@@ -2891,7 +3183,7 @@ var IV_LENGTH, PROFILE_HKDF_SALT;
 var init_encryption = __esm({
   "profile/encryption.ts"() {
     "use strict";
-    init_errors2();
+    init_errors3();
     IV_LENGTH = 12;
     PROFILE_HKDF_SALT = new TextEncoder().encode("sphere-profile-v1");
   }
@@ -2899,7 +3191,7 @@ var init_encryption = __esm({
 
 // uxf/errors.ts
 var UxfError;
-var init_errors3 = __esm({
+var init_errors4 = __esm({
   "uxf/errors.ts"() {
     "use strict";
     UxfError = class extends Error {
@@ -2924,7 +3216,7 @@ var ELEMENT_TYPE_TOKEN_ROOT, ELEMENT_TYPE_TRANSACTION, ELEMENT_TYPE_INCLUSION_PR
 var init_types = __esm({
   "uxf/types.ts"() {
     "use strict";
-    init_errors3();
+    init_errors4();
     ELEMENT_TYPE_TOKEN_ROOT = "token-root";
     ELEMENT_TYPE_TRANSACTION = "transaction";
     ELEMENT_TYPE_INCLUSION_PROOF = "inclusion-proof";
@@ -2949,7 +3241,7 @@ var init_types = __esm({
 
 // uxf/hash.ts
 import { encode } from "@ipld/dag-cbor";
-function hexToBytes4(hex) {
+function hexToBytes5(hex) {
   if (hex.length % 2 !== 0) {
     throw new UxfError("INVALID_HASH", `Hex string has odd length: ${hex.length}`);
   }
@@ -2975,7 +3267,7 @@ function prepareContentForHashing(type, content) {
         if (h === "") {
           throw new UxfError("INVALID_HASH", "nametagRefs entry must be non-empty ContentHash hex");
         }
-        return hexToBytes4(h);
+        return hexToBytes5(h);
       });
       continue;
     }
@@ -2989,7 +3281,7 @@ function prepareContentForHashing(type, content) {
           result[key] = null;
           continue;
         }
-        const decoded = hexToBytes4(value);
+        const decoded = hexToBytes5(value);
         result[key] = decoded.length === 0 ? null : decoded;
         continue;
       }
@@ -3012,9 +3304,9 @@ function prepareChildrenForHashing(children) {
     if (value === null) {
       result[key] = null;
     } else if (Array.isArray(value)) {
-      result[key] = value.map((h) => hexToBytes4(h));
+      result[key] = value.map((h) => hexToBytes5(h));
     } else {
-      result[key] = hexToBytes4(value);
+      result[key] = hexToBytes5(value);
     }
   }
   return result;
@@ -3024,7 +3316,7 @@ function computeElementHash(element) {
     element.header.representation,
     element.header.semantics,
     element.header.kind,
-    element.header.predecessor !== null ? hexToBytes4(element.header.predecessor) : null
+    element.header.predecessor !== null ? hexToBytes5(element.header.predecessor) : null
   ];
   const typeId = ELEMENT_TYPE_IDS[element.type];
   if (typeId === void 0) {
@@ -3048,7 +3340,7 @@ function computeElementHash(element) {
   };
   const cborBytes = encode(canonical);
   const hashBytes = sha256(cborBytes);
-  return contentHash(bytesToHex4(hashBytes));
+  return contentHash(bytesToHex5(hashBytes));
 }
 var BYTE_FIELDS;
 var init_hash = __esm({
@@ -3057,7 +3349,7 @@ var init_hash = __esm({
     init_sha2();
     init_crypto();
     init_types();
-    init_errors3();
+    init_errors4();
     BYTE_FIELDS = {
       "token-root": /* @__PURE__ */ new Set(["tokenId"]),
       "genesis": /* @__PURE__ */ new Set(),
@@ -3161,7 +3453,7 @@ var init_element_pool = __esm({
   "uxf/element-pool.ts"() {
     "use strict";
     init_hash();
-    init_errors3();
+    init_errors4();
     ElementPool = class _ElementPool {
       /** hash -> element. The canonical store. */
       elements = /* @__PURE__ */ new Map();
@@ -3293,7 +3585,7 @@ var MAX_KIND_LENGTH, KIND_ALLOWED_RE;
 var init_header_validation = __esm({
   "uxf/header-validation.ts"() {
     "use strict";
-    init_errors3();
+    init_errors4();
     MAX_KIND_LENGTH = 64;
     KIND_ALLOWED_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
   }
@@ -3486,7 +3778,7 @@ function mergeInstanceChains(target, source, targetPool) {
 var init_instance_chain = __esm({
   "uxf/instance-chain.ts"() {
     "use strict";
-    init_errors3();
+    init_errors4();
     init_header_validation();
   }
 });
@@ -3805,7 +4097,7 @@ function deconstructToken(pool, token) {
 var init_deconstruct = __esm({
   "uxf/deconstruct.ts"() {
     "use strict";
-    init_errors3();
+    init_errors4();
   }
 });
 
@@ -4134,12 +4426,12 @@ var init_assemble = __esm({
     init_element_pool();
     init_instance_chain();
     init_hash();
-    init_errors3();
+    init_errors4();
   }
 });
 
 // uxf/verify.ts
-import { encode as dagCborEncode } from "@ipld/dag-cbor";
+import { encode as dagCborEncode2 } from "@ipld/dag-cbor";
 function verify(pkg) {
   const errors = [];
   const warnings = [];
@@ -4166,7 +4458,7 @@ function verify(pkg) {
   for (const [hash, element] of pkg.pool) {
     let elementSizeBytes;
     try {
-      const probe = dagCborEncode({
+      const probe = dagCborEncode2({
         content: element.content,
         children: element.children
       });
@@ -4569,7 +4861,7 @@ var init_diff = __esm({
   "uxf/diff.ts"() {
     "use strict";
     init_hash();
-    init_errors3();
+    init_errors4();
   }
 });
 
@@ -5222,7 +5514,7 @@ var init_json = __esm({
     "use strict";
     init_types();
     init_token_join();
-    init_errors3();
+    init_errors4();
     init_hash();
     init_hex();
     init_header_validation();
@@ -5238,14 +5530,14 @@ var init_json = __esm({
 });
 
 // uxf/ipld.ts
-import { encode as dagCborEncode2, decode as dagCborDecode } from "@ipld/dag-cbor";
-import { CID as CID3 } from "multiformats";
-import { CarWriter } from "@ipld/car/writer";
-import { CarReader as CarReader2 } from "@ipld/car";
+import { encode as dagCborEncode3, decode as dagCborDecode2 } from "@ipld/dag-cbor";
+import { CID as CID5 } from "multiformats";
+import { CarWriter as CarWriter2 } from "@ipld/car/writer";
+import { CarReader as CarReader3 } from "@ipld/car";
 function contentHashToCid(hash) {
-  const digestBytes = hexToBytes4(hash);
+  const digestBytes = hexToBytes5(hash);
   const digest = createSha256Digest(digestBytes);
-  return CID3.createV1(DAG_CBOR_CODE, digest);
+  return CID5.createV1(DAG_CBOR_CODE, digest);
 }
 function cidToContentHash(cid) {
   if (cid.multihash.code !== 18) {
@@ -5254,14 +5546,14 @@ function cidToContentHash(cid) {
       `Expected sha2-256 (0x12) multihash, got 0x${cid.multihash.code.toString(16)}`
     );
   }
-  return contentHash(bytesToHex6(cid.multihash.digest));
+  return contentHash(bytesToHex7(cid.multihash.digest));
 }
 function elementToIpldBlock(element) {
   const canonical = buildCanonicalForm(element);
-  const bytes = dagCborEncode2(canonical);
+  const bytes = dagCborEncode3(canonical);
   const hashBytes = sha256Sync(bytes);
   const digest = createSha256Digest(hashBytes);
-  const cid = CID3.createV1(DAG_CBOR_CODE, digest);
+  const cid = CID5.createV1(DAG_CBOR_CODE, digest);
   return { cid, bytes };
 }
 async function exportToCar(pkg) {
@@ -5285,10 +5577,10 @@ async function exportToCar(pkg) {
     manifestTokens[tokenId] = contentHashToCid(rootHash);
   }
   const manifestNode = { tokens: manifestTokens };
-  const manifestBytes = dagCborEncode2(manifestNode);
+  const manifestBytes = dagCborEncode3(manifestNode);
   const manifestHashBytes = sha256Sync(manifestBytes);
   const manifestDigest = createSha256Digest(manifestHashBytes);
-  const manifestCid = CID3.createV1(DAG_CBOR_CODE, manifestDigest);
+  const manifestCid = CID5.createV1(DAG_CBOR_CODE, manifestDigest);
   const envelopeNode = {
     version: pkg.envelope.version,
     createdAt: pkg.envelope.createdAt,
@@ -5301,11 +5593,11 @@ async function exportToCar(pkg) {
   if (pkg.envelope.description !== void 0) {
     envelopeNode.description = pkg.envelope.description;
   }
-  const envelopeBytes = dagCborEncode2(envelopeNode);
+  const envelopeBytes = dagCborEncode3(envelopeNode);
   const envelopeHashBytes = sha256Sync(envelopeBytes);
   const envelopeDigest = createSha256Digest(envelopeHashBytes);
-  const envelopeCid = CID3.createV1(DAG_CBOR_CODE, envelopeDigest);
-  const { writer, out } = CarWriter.create([envelopeCid]);
+  const envelopeCid = CID5.createV1(DAG_CBOR_CODE, envelopeDigest);
+  const { writer, out } = CarWriter2.create([envelopeCid]);
   const chunks = [];
   const collectPromise = (async () => {
     for await (const chunk of out) {
@@ -5364,7 +5656,7 @@ async function importFromCar(car) {
       `CAR exceeds max bytes: ${car.byteLength} > ${CAR_IMPORT_MAX_TOTAL_BYTES}`
     );
   }
-  const reader = await CarReader2.fromBytes(car);
+  const reader = await CarReader3.fromBytes(car);
   const roots = await reader.getRoots();
   if (roots.length === 0) {
     throw new UxfError("INVALID_PACKAGE", "CAR file has no root CID");
@@ -5384,9 +5676,9 @@ async function importFromCar(car) {
     );
   }
   assertBlockHashMatchesCid(envelopeBlock.bytes, envelopeCid, "Envelope");
-  const envelopeNode = dagCborDecode(envelopeBlock.bytes);
+  const envelopeNode = dagCborDecode2(envelopeBlock.bytes);
   const manifestCid = envelopeNode.manifest;
-  if (!(manifestCid instanceof CID3)) {
+  if (!(manifestCid instanceof CID5)) {
     throw new UxfError(
       "SERIALIZATION_ERROR",
       "Envelope does not contain a valid manifest CID link"
@@ -5458,7 +5750,7 @@ async function importFromCar(car) {
     );
   }
   assertBlockHashMatchesCid(manifestBlock.bytes, manifestCid, "Manifest");
-  const manifestNode = dagCborDecode(manifestBlock.bytes);
+  const manifestNode = dagCborDecode2(manifestBlock.bytes);
   const manifestEntries = Object.entries(manifestNode.tokens);
   if (manifestEntries.length > MANIFEST_MAX_SIZE) {
     throw new UxfError(
@@ -5474,7 +5766,7 @@ async function importFromCar(car) {
         `Invalid manifest tokenId: ${tokenId.slice(0, 32)}\u2026`
       );
     }
-    if (!(cid instanceof CID3)) {
+    if (!(cid instanceof CID5)) {
       throw new UxfError(
         "SERIALIZATION_ERROR",
         `Manifest value for tokenId ${tokenId} is not a CID`
@@ -5509,7 +5801,7 @@ async function importFromCar(car) {
       continue;
     }
     const hash = cidToContentHash(block.cid);
-    const node = dagCborDecode(block.bytes);
+    const node = dagCborDecode2(block.bytes);
     const element = decodeIpldElement(node);
     const recomputed = computeElementHash(element);
     if (recomputed !== hash) {
@@ -5565,7 +5857,7 @@ function buildCanonicalHeader(element) {
     element.header.representation,
     element.header.semantics,
     element.header.kind,
-    element.header.predecessor !== null ? hexToBytes4(element.header.predecessor) : null
+    element.header.predecessor !== null ? hexToBytes5(element.header.predecessor) : null
   ];
 }
 function decodeIpldElement(node) {
@@ -5588,7 +5880,7 @@ function decodeIpldElement(node) {
         `IPLD element header[3] (predecessor) must be exactly 32 bytes (sha2-256 digest), got ${predecessor.byteLength}`
       );
     }
-    predecessorHash = contentHash(bytesToHex6(predecessor));
+    predecessorHash = contentHash(bytesToHex7(predecessor));
   } else if (predecessor !== null && predecessor !== void 0) {
     throw new UxfError(
       "SERIALIZATION_ERROR",
@@ -5623,7 +5915,7 @@ function decodeIpldContent(type, content) {
       if (type === "genesis-data" && key === "reason") {
         result[key] = value;
       } else {
-        result[key] = bytesToHex6(value);
+        result[key] = bytesToHex7(value);
       }
     } else if (Array.isArray(value)) {
       result[key] = decodeIpldContentArray(type, key, value);
@@ -5640,16 +5932,16 @@ function decodeIpldContent(type, content) {
 function decodeIpldContentArray(type, key, value) {
   if (type === "transaction-data" && key === "nametagRefs") {
     return value.map(
-      (item) => item instanceof Uint8Array ? bytesToHex6(item) : item
+      (item) => item instanceof Uint8Array ? bytesToHex7(item) : item
     );
   }
   return value.map((item) => {
     if (item instanceof Uint8Array) {
-      return bytesToHex6(item);
+      return bytesToHex7(item);
     }
     if (Array.isArray(item)) {
       return item.map(
-        (sub) => sub instanceof Uint8Array ? bytesToHex6(sub) : sub
+        (sub) => sub instanceof Uint8Array ? bytesToHex7(sub) : sub
       );
     }
     return item;
@@ -5662,14 +5954,14 @@ function decodeIpldChildren(children) {
       result[key] = null;
     } else if (value instanceof Uint8Array) {
       result[key] = decodeChildBytes(value, key);
-    } else if (value instanceof CID3) {
+    } else if (value instanceof CID5) {
       result[key] = cidToContentHash(value);
     } else if (Array.isArray(value)) {
       result[key] = value.map((item, index) => {
         if (item instanceof Uint8Array) {
           return decodeChildBytes(item, `${key}[${index}]`);
         }
-        if (item instanceof CID3) {
+        if (item instanceof CID5) {
           return cidToContentHash(item);
         }
         throw new UxfError(
@@ -5693,7 +5985,7 @@ function decodeChildBytes(bytes, label) {
       `Child reference at "${label}" must be exactly 32 bytes (sha2-256 digest), got ${bytes.byteLength}`
     );
   }
-  return contentHash(bytesToHex6(bytes));
+  return contentHash(bytesToHex7(bytes));
 }
 function rebuildInstanceChains(pool) {
   const chains = /* @__PURE__ */ new Map();
@@ -5788,7 +6080,7 @@ function assertBlockHashMatchesCid(bytes, cid, label) {
     }
   }
 }
-function bytesToHex6(bytes) {
+function bytesToHex7(bytes) {
   let hex = "";
   for (let i = 0; i < bytes.length; i++) {
     hex += bytes[i].toString(16).padStart(2, "0");
@@ -5815,7 +6107,7 @@ var init_ipld = __esm({
     init_sha2();
     init_types();
     init_token_join();
-    init_errors3();
+    init_errors4();
     init_header_validation();
     init_hash();
     init_limits();
@@ -6128,7 +6420,7 @@ var init_UxfPackage = __esm({
   "uxf/UxfPackage.ts"() {
     "use strict";
     init_types();
-    init_errors3();
+    init_errors4();
     init_hash();
     init_element_pool();
     init_instance_chain();
@@ -6453,7 +6745,7 @@ var init_UxfPackage = __esm({
 });
 
 // modules/payments/transfer/limits.ts
-import { CID as CID4 } from "multiformats";
+import { CID as CID6 } from "multiformats";
 function clampInlineCap(userValue) {
   if (!Number.isFinite(userValue) || userValue <= 0) {
     return { value: 1, clamped: true, reason: "below-min" };
@@ -6468,8 +6760,8 @@ function clampInlineCap(userValue) {
   return { value: userValue, clamped: false, reason: "ok" };
 }
 function compareCidV1Binary(a, b) {
-  const aBytes = CID4.parse(a).bytes;
-  const bBytes = CID4.parse(b).bytes;
+  const aBytes = CID6.parse(a).bytes;
+  const bBytes = CID6.parse(b).bytes;
   const len = Math.min(aBytes.length, bBytes.length);
   for (let i = 0; i < len; i++) {
     const ai = aBytes[i];
@@ -6573,128 +6865,6 @@ var init_manifest_cas = __esm({
         }
       }
     };
-  }
-});
-
-// profile/aggregator-pointer/errors.ts
-var AggregatorPointerErrorCode, AggregatorPointerError;
-var init_errors4 = __esm({
-  "profile/aggregator-pointer/errors.ts"() {
-    "use strict";
-    AggregatorPointerErrorCode = {
-      CONFLICT: "AGGREGATOR_POINTER_CONFLICT",
-      STALE: "AGGREGATOR_POINTER_STALE",
-      CORRUPT: "AGGREGATOR_POINTER_CORRUPT",
-      NOT_FOUND: "AGGREGATOR_POINTER_NOT_FOUND",
-      PARTIAL: "AGGREGATOR_POINTER_PARTIAL",
-      REJECTED: "AGGREGATOR_POINTER_REJECTED",
-      RETRY_EXHAUSTED: "AGGREGATOR_POINTER_RETRY_EXHAUSTED",
-      CID_TOO_LARGE: "AGGREGATOR_POINTER_CID_TOO_LARGE",
-      VERSION_OUT_OF_RANGE: "AGGREGATOR_POINTER_VERSION_OUT_OF_RANGE",
-      DISCOVERY_OVERFLOW: "AGGREGATOR_POINTER_DISCOVERY_OVERFLOW",
-      NETWORK_ERROR: "AGGREGATOR_POINTER_NETWORK_ERROR",
-      UNTRUSTED_PROOF: "AGGREGATOR_POINTER_UNTRUSTED_PROOF",
-      UNREACHABLE_RECOVERY_BLOCKED: "AGGREGATOR_POINTER_UNREACHABLE_RECOVERY_BLOCKED",
-      MARKER_CORRUPT: "AGGREGATOR_POINTER_MARKER_CORRUPT",
-      CAR_TOO_LARGE: "AGGREGATOR_POINTER_CAR_TOO_LARGE",
-      CAR_FETCH_TIMEOUT: "AGGREGATOR_POINTER_CAR_FETCH_TIMEOUT",
-      CAR_UNAVAILABLE: "AGGREGATOR_POINTER_CAR_UNAVAILABLE",
-      CORRUPT_STREAK: "AGGREGATOR_POINTER_CORRUPT_STREAK",
-      SECURITY_ORIGIN_MISMATCH: "SECURITY_ORIGIN_MISMATCH",
-      UNSUPPORTED_RUNTIME: "AGGREGATOR_POINTER_UNSUPPORTED_RUNTIME",
-      PUBLISH_BUSY: "AGGREGATOR_POINTER_PUBLISH_BUSY",
-      TRUST_BASE_STALE: "AGGREGATOR_POINTER_TRUST_BASE_STALE",
-      CAR_UNEXPECTED_ENCODING: "AGGREGATOR_POINTER_CAR_UNEXPECTED_ENCODING",
-      AGGREGATOR_REJECTED: "AGGREGATOR_POINTER_AGGREGATOR_REJECTED",
-      PROTOCOL_ERROR: "AGGREGATOR_POINTER_PROTOCOL_ERROR",
-      WALKBACK_FLOOR: "AGGREGATOR_POINTER_WALKBACK_FLOOR",
-      CAPABILITY_DENIED: "AGGREGATOR_POINTER_CAPABILITY_DENIED"
-    };
-    AggregatorPointerError = class extends Error {
-      code;
-      details;
-      constructor(code2, message, details, options) {
-        super(message ?? code2, options);
-        this.name = "AggregatorPointerError";
-        this.code = code2;
-        this.details = details;
-      }
-    };
-  }
-});
-
-// profile/aggregator-pointer/originated-tag.ts
-function assertOriginTagLocal(entryType, originated) {
-  if (typeof originated !== "string") {
-    throw new AggregatorPointerError(
-      AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
-      `OpLog entry type "${entryType}" is missing the originated tag (fail-closed; SPEC \xA710.2.3).`,
-      { entryType, originated }
-    );
-  }
-  if (USER_ACTION_SET.has(entryType)) {
-    if (originated !== "user") {
-      throw new AggregatorPointerError(
-        AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
-        `Local user-action entry type "${entryType}" must carry originated='user', got '${originated}'.`,
-        { entryType, originated }
-      );
-    }
-    return;
-  }
-  if (SYSTEM_ACTION_SET.has(entryType)) {
-    if (originated !== "system") {
-      throw new AggregatorPointerError(
-        AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
-        `Local system entry type "${entryType}" must carry originated='system', got '${originated}'.`,
-        { entryType, originated }
-      );
-    }
-    return;
-  }
-  throw new AggregatorPointerError(
-    AggregatorPointerErrorCode.SECURITY_ORIGIN_MISMATCH,
-    `Unknown OpLog entry type "${entryType}" \u2014 cannot validate originated tag.`,
-    { entryType, originated }
-  );
-}
-var USER_ACTION_TYPES, SYSTEM_ACTION_TYPES, ALL_ENTRY_TYPES, USER_ACTION_SET, SYSTEM_ACTION_SET;
-var init_originated_tag = __esm({
-  "profile/aggregator-pointer/originated-tag.ts"() {
-    "use strict";
-    init_errors4();
-    USER_ACTION_TYPES = [
-      "token_send",
-      "token_receive",
-      "nametag_register",
-      "dm_send",
-      "dm_receive",
-      "invoice_mint",
-      "invoice_pay",
-      "invoice_close",
-      "invoice_cancel",
-      "swap_propose",
-      "swap_accept",
-      "swap_deposit"
-    ];
-    SYSTEM_ACTION_TYPES = [
-      "session_receipt",
-      "cache_index",
-      "last_opened_ts"
-    ];
-    ALL_ENTRY_TYPES = Object.freeze([
-      ...USER_ACTION_TYPES,
-      ...SYSTEM_ACTION_TYPES
-    ]);
-    USER_ACTION_SET = new Set(USER_ACTION_TYPES);
-    SYSTEM_ACTION_SET = new Set(SYSTEM_ACTION_TYPES);
-    for (const t of USER_ACTION_TYPES) {
-      if (SYSTEM_ACTION_SET.has(t)) {
-        throw new Error(
-          `originated-tag: BUG \u2014 "${t}" appears in both USER_ACTION_TYPES and SYSTEM_ACTION_TYPES`
-        );
-      }
-    }
   }
 });
 
@@ -8130,150 +8300,1246 @@ var init_disposition_writer = __esm({
   }
 });
 
-// profile/aggregator-pointer/win-broadcast.ts
-var win_broadcast_exports = {};
-__export(win_broadcast_exports, {
-  MAX_PAYLOAD_AGE_MS: () => MAX_PAYLOAD_AGE_MS,
-  WIN_BROADCAST_KIND_MARKER: () => WIN_BROADCAST_KIND_MARKER,
-  WIN_BROADCAST_SCHEMA_VERSION: () => WIN_BROADCAST_SCHEMA_VERSION,
-  WIN_BROADCAST_TAG_PREFIX: () => WIN_BROADCAST_TAG_PREFIX,
-  buildWinBroadcastHash: () => buildWinBroadcastHash,
-  buildWinBroadcastTag: () => buildWinBroadcastTag,
-  signWinBroadcastPayload: () => signWinBroadcastPayload,
-  verifyWinBroadcastPayload: () => verifyWinBroadcastPayload
-});
-import { DataHasher } from "@unicitylabs/state-transition-sdk/lib/hash/DataHasher.js";
-import { HashAlgorithm as HashAlgorithm7 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js";
-import { Signature } from "@unicitylabs/state-transition-sdk/lib/sign/Signature.js";
-import { SigningService as SigningService2 } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService.js";
-function buildWinBroadcastTag(signingPubKeyHex) {
-  if (typeof signingPubKeyHex !== "string" || signingPubKeyHex.length === 0) {
-    throw new Error("buildWinBroadcastTag: signingPubKeyHex must be a non-empty string");
-  }
-  return `${WIN_BROADCAST_TAG_PREFIX}${signingPubKeyHex.toLowerCase()}`;
-}
-async function buildWinBroadcastHash(payload) {
-  if (payload.v !== WIN_BROADCAST_SCHEMA_VERSION) {
-    throw new Error(`buildWinBroadcastHash: unsupported schema version ${payload.v}`);
-  }
-  if (!Number.isInteger(payload.version) || payload.version < 0 || payload.version > 4294967295) {
-    throw new Error(`buildWinBroadcastHash: version must be uint32, got ${payload.version}`);
-  }
-  if (!Number.isInteger(payload.ts) || payload.ts < 0 || !Number.isSafeInteger(payload.ts)) {
-    throw new Error(`buildWinBroadcastHash: ts must be a safe integer >= 0, got ${payload.ts}`);
-  }
-  const pubKeyBytes = hexToBytes5(payload.signingPubKey);
-  if (pubKeyBytes.length !== 33) {
-    throw new Error(
-      `buildWinBroadcastHash: signingPubKey must decode to 33 bytes, got ${pubKeyBytes.length}`
-    );
-  }
-  const cidBytes = new TextEncoder().encode(payload.cid);
-  const buf = new Uint8Array(1 + 4 + 8 + 33 + cidBytes.length);
-  let offset = 0;
-  buf[offset] = payload.v;
-  offset += 1;
-  buf[offset] = payload.version >>> 24 & 255;
-  buf[offset + 1] = payload.version >>> 16 & 255;
-  buf[offset + 2] = payload.version >>> 8 & 255;
-  buf[offset + 3] = payload.version & 255;
-  offset += 4;
-  const tsHi = Math.floor(payload.ts / 4294967296);
-  const tsLo = payload.ts >>> 0;
-  buf[offset] = tsHi >>> 24 & 255;
-  buf[offset + 1] = tsHi >>> 16 & 255;
-  buf[offset + 2] = tsHi >>> 8 & 255;
-  buf[offset + 3] = tsHi & 255;
-  buf[offset + 4] = tsLo >>> 24 & 255;
-  buf[offset + 5] = tsLo >>> 16 & 255;
-  buf[offset + 6] = tsLo >>> 8 & 255;
-  buf[offset + 7] = tsLo & 255;
-  offset += 8;
-  buf.set(pubKeyBytes, offset);
-  offset += 33;
-  buf.set(cidBytes, offset);
-  return new DataHasher(HashAlgorithm7.SHA256).update(buf).digest();
-}
-async function signWinBroadcastPayload(signer, unsigned) {
-  if (signer.signingPubKeyHex.toLowerCase() !== unsigned.signingPubKey.toLowerCase()) {
-    throw new Error(
-      `signWinBroadcastPayload: signer pubkey ${signer.signingPubKeyHex} does not match payload signingPubKey ${unsigned.signingPubKey}`
-    );
-  }
-  const hash = await buildWinBroadcastHash(unsigned);
-  const sig = await signer.service.sign(hash);
-  return { ...unsigned, sig: sig.toJSON() };
-}
-async function verifyWinBroadcastPayload(payload, expectedSigningPubKeyHex, nowMs = Date.now()) {
-  try {
-    if (payload._kind !== WIN_BROADCAST_KIND_MARKER) return false;
-    if (payload.v !== WIN_BROADCAST_SCHEMA_VERSION) return false;
-    if (typeof payload.signingPubKey !== "string") return false;
-    if (typeof payload.cid !== "string" || payload.cid.length === 0) return false;
-    if (typeof payload.sig !== "string" || payload.sig.length === 0) return false;
-    if (!Number.isInteger(payload.version) || payload.version < 0) return false;
-    if (!Number.isInteger(payload.ts) || payload.ts < 0) return false;
-    if (payload.signingPubKey.toLowerCase() !== expectedSigningPubKeyHex.toLowerCase()) {
-      return false;
-    }
-    if (Math.abs(nowMs - payload.ts) > MAX_PAYLOAD_AGE_MS) {
-      return false;
-    }
-    const hash = await buildWinBroadcastHash(payload);
-    const sigBytes = parseSignatureHex(payload.sig);
-    if (sigBytes === null) return false;
-    const pubKeyBytes = hexToBytes5(expectedSigningPubKeyHex);
-    if (pubKeyBytes.length !== 33) return false;
-    return await SigningService2.verifyWithPublicKey(hash, sigBytes, pubKeyBytes);
-  } catch {
-    return false;
-  }
-}
-function parseSignatureHex(sigHex) {
-  try {
-    const sig = Signature.decode(hexToBytes5(sigHex));
-    return sig.bytes;
-  } catch {
-    try {
-      return hexToBytes5(sigHex);
-    } catch {
-      return null;
-    }
-  }
-}
-function hexToBytes5(hex) {
-  if (typeof hex !== "string") {
-    throw new Error("hexToBytes: input must be string");
-  }
-  const normalized = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  if (normalized.length % 2 !== 0) {
-    throw new Error(`hexToBytes: odd length (${normalized.length})`);
-  }
-  const out = new Uint8Array(normalized.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const byte = parseInt(normalized.substr(i * 2, 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new Error(`hexToBytes: non-hex char at offset ${i * 2}`);
-    }
-    out[i] = byte;
-  }
-  return out;
-}
-var MAX_PAYLOAD_AGE_MS, WIN_BROADCAST_TAG_PREFIX, WIN_BROADCAST_KIND_MARKER, WIN_BROADCAST_SCHEMA_VERSION;
-var init_win_broadcast = __esm({
-  "profile/aggregator-pointer/win-broadcast.ts"() {
-    "use strict";
-    MAX_PAYLOAD_AGE_MS = 5 * 60 * 1e3;
-    WIN_BROADCAST_TAG_PREFIX = "pointer-win:";
-    WIN_BROADCAST_KIND_MARKER = "pointer-win-broadcast";
-    WIN_BROADCAST_SCHEMA_VERSION = 1;
-  }
-});
-
 // core/Sphere.ts
 init_logger();
 init_hex();
 init_errors();
+
+// core/connectivity.ts
+init_logger();
+init_errors();
+var DEFAULT_BACKOFF_SCHEDULE_MS = [
+  5e3,
+  15e3,
+  6e4,
+  3e5
+];
+var DEFAULT_PING_TIMEOUT_MS = 8e3;
+var ConnectivityManager = class {
+  pingers;
+  states;
+  subscribers = /* @__PURE__ */ new Set();
+  schedule;
+  pingTimeoutMs;
+  emitEvent;
+  lastOnlineAt = null;
+  lastChangedAt = Date.now();
+  wasOnline = false;
+  /** Stable null-snapshot returned by `.status()` while no pingers exist. */
+  cachedSnapshot;
+  destroyed = false;
+  started = false;
+  constructor(pingers, config) {
+    this.pingers = /* @__PURE__ */ new Map();
+    this.states = /* @__PURE__ */ new Map();
+    for (const p of pingers) {
+      this.pingers.set(p.backend, p);
+      this.states.set(p.backend, {
+        status: "unknown",
+        backoffStep: 0,
+        timer: null,
+        inFlight: null,
+        abort: null
+      });
+    }
+    this.schedule = config?.backoffScheduleMs ?? DEFAULT_BACKOFF_SCHEDULE_MS;
+    if (this.schedule.length === 0) {
+      throw new SphereError(
+        "ConnectivityManager: backoffScheduleMs must have at least one step",
+        "INVALID_CONFIG"
+      );
+    }
+    this.pingTimeoutMs = config?.pingTimeoutMs ?? DEFAULT_PING_TIMEOUT_MS;
+    this.emitEvent = config?.emitEvent;
+    this.cachedSnapshot = this.buildSnapshot();
+  }
+  /**
+   * Start the periodic probe schedule. Each backend's first probe fires
+   * immediately on a microtask (not a setTimeout) so callers can observe
+   * the initial transition out of `'unknown'` quickly, but the call itself
+   * is sync — it does NOT block on the probe.
+   *
+   * Safe to call more than once; only the first call has effect.
+   */
+  start() {
+    if (this.started || this.destroyed) return;
+    this.started = true;
+    for (const backend of this.pingers.keys()) {
+      queueMicrotask(() => {
+        if (!this.destroyed) {
+          void this.runProbe(backend);
+        }
+      });
+    }
+  }
+  /**
+   * Tear down all schedules and abort any in-flight probes. After stop()
+   * the manager is inert: `.status()` continues to return the last snapshot,
+   * `.subscribe()` returns a no-op unsubscribe, `.ping()` resolves
+   * immediately without scheduling work.
+   */
+  async stop() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    const inFlights = [];
+    for (const state of this.states.values()) {
+      if (state.timer !== null) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (state.abort) {
+        try {
+          state.abort.abort();
+        } catch {
+        }
+      }
+      if (state.inFlight) {
+        inFlights.push(state.inFlight.catch(() => void 0));
+      }
+    }
+    await Promise.all(inFlights);
+    this.subscribers.clear();
+  }
+  status() {
+    return this.cachedSnapshot;
+  }
+  subscribe(fn) {
+    if (this.destroyed) return () => void 0;
+    this.subscribers.add(fn);
+    return () => {
+      this.subscribers.delete(fn);
+    };
+  }
+  async ping(which) {
+    if (this.destroyed) return;
+    const targets = which === "all" ? Array.from(this.pingers.keys()) : this.pingers.has(which) ? [which] : [];
+    const ps = [];
+    for (const backend of targets) {
+      ps.push(this.runProbe(backend));
+    }
+    await Promise.all(ps);
+  }
+  // ===========================================================================
+  // Internal: probe scheduling
+  // ===========================================================================
+  async runProbe(backend) {
+    if (this.destroyed) return;
+    const state = this.states.get(backend);
+    const pinger = this.pingers.get(backend);
+    if (!state || !pinger) return;
+    if (state.inFlight) {
+      await state.inFlight;
+      return;
+    }
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    const abort = new AbortController();
+    state.abort = abort;
+    const probeRun = this.runProbeInner(backend, pinger, abort.signal).finally(() => {
+      state.inFlight = null;
+      state.abort = null;
+      if (!this.destroyed) {
+        this.scheduleNext(backend);
+      }
+    });
+    state.inFlight = probeRun;
+    await probeRun;
+  }
+  async runProbeInner(backend, pinger, signal) {
+    let result = "down";
+    try {
+      result = await this.withTimeout(pinger.ping(signal), this.pingTimeoutMs, signal);
+    } catch (err) {
+      logger.debug("Connectivity", `[${backend}] probe threw: ${safeErr(err)}`);
+      result = "down";
+    }
+    if (this.destroyed) return;
+    this.applyResult(backend, result);
+  }
+  async withTimeout(promise, timeoutMs, signal) {
+    if (signal.aborted) {
+      return await Promise.reject(new Error("aborted"));
+    }
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error("aborted"));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(new Error(`ping timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(
+        (v) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal.removeEventListener("abort", onAbort);
+          resolve(v);
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal.removeEventListener("abort", onAbort);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      );
+    });
+  }
+  scheduleNext(backend) {
+    const state = this.states.get(backend);
+    if (!state || this.destroyed) return;
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    const step = Math.min(state.backoffStep, this.schedule.length - 1);
+    const delay = this.schedule[step];
+    state.backoffStep = Math.min(step + 1, this.schedule.length - 1);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      void this.runProbe(backend);
+    }, delay);
+    const t = state.timer;
+    if (typeof t.unref === "function") {
+      try {
+        t.unref();
+      } catch {
+      }
+    }
+  }
+  applyResult(backend, result) {
+    const state = this.states.get(backend);
+    if (!state) return;
+    const prev = state.status;
+    const next = result;
+    if (result === "up" || result === "degraded") {
+      state.backoffStep = 0;
+    }
+    if (prev === next) {
+      if (this.allUp()) {
+        this.lastOnlineAt = Date.now();
+        this.cachedSnapshot = this.buildSnapshot();
+      }
+      return;
+    }
+    state.status = next;
+    this.lastChangedAt = Date.now();
+    if (this.allUp()) {
+      this.lastOnlineAt = this.lastChangedAt;
+    }
+    this.cachedSnapshot = this.buildSnapshot();
+    const snapshot = this.cachedSnapshot;
+    for (const fn of this.subscribers) {
+      try {
+        fn(snapshot);
+      } catch (err) {
+        logger.warn("Connectivity", `subscriber threw on changed: ${safeErr(err)}`);
+      }
+    }
+    this.safeEmit("connectivity:changed", snapshot);
+    const nowOnline = this.allUp();
+    if (nowOnline && !this.wasOnline) {
+      this.wasOnline = true;
+      this.safeEmit("connectivity:online", snapshot);
+    } else if (!nowOnline && this.wasOnline) {
+      this.wasOnline = false;
+      this.safeEmit("connectivity:offline-degraded", snapshot);
+    }
+  }
+  safeEmit(type, snapshot) {
+    if (!this.emitEvent) return;
+    try {
+      this.emitEvent(type, snapshot);
+    } catch (err) {
+      logger.warn("Connectivity", `emitEvent(${type}) threw: ${safeErr(err)}`);
+    }
+  }
+  allUp() {
+    for (const which of ["aggregator", "ipfs", "nostr"]) {
+      if (!this.pingers.has(which)) continue;
+      const s = this.states.get(which)?.status;
+      if (s !== "up") return false;
+    }
+    return true;
+  }
+  buildSnapshot() {
+    const get = (which) => {
+      if (!this.pingers.has(which)) return "up";
+      return this.states.get(which)?.status ?? "unknown";
+    };
+    return {
+      aggregator: get("aggregator"),
+      ipfs: get("ipfs"),
+      nostr: get("nostr"),
+      lastOnlineAt: this.lastOnlineAt,
+      lastChangedAt: this.lastChangedAt
+    };
+  }
+};
+var AggregatorPinger = class {
+  backend = "aggregator";
+  provider;
+  url;
+  fetchImpl;
+  constructor(opts) {
+    this.provider = opts.provider ?? null;
+    this.url = opts.url ?? "";
+    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  }
+  async ping(signal) {
+    if (signal.aborted) return "down";
+    if (this.provider) {
+      try {
+        const round = await this.provider.getCurrentRound();
+        if (typeof round === "number" && Number.isFinite(round) && round > 0) {
+          return "up";
+        }
+        return "degraded";
+      } catch {
+        return "down";
+      }
+    }
+    if (!this.url) return "down";
+    try {
+      const response = await this.fetchImpl(this.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "get_block_height",
+          params: {}
+        }),
+        signal
+      });
+      if (!response.ok) return "down";
+      try {
+        const body = await response.json();
+        if (body && typeof body === "object" && body.error) {
+          return "degraded";
+        }
+        const result = body && typeof body === "object" ? body.result : null;
+        if (typeof result === "number" || typeof result === "bigint" || typeof result === "string" && result.length > 0 || result !== null && typeof result === "object") {
+          return "up";
+        }
+        return "degraded";
+      } catch {
+        return "degraded";
+      }
+    } catch {
+      return "down";
+    }
+  }
+};
+var IpfsPinger = class _IpfsPinger {
+  constructor(gateways, probeCid = _IpfsPinger.DEFAULT_PROBE_CID, fetchImpl = globalThis.fetch) {
+    this.gateways = gateways;
+    this.probeCid = probeCid;
+    this.fetchImpl = fetchImpl;
+  }
+  backend = "ipfs";
+  /** Empty unixfs directory — universally pinned, ~10 bytes. */
+  static DEFAULT_PROBE_CID = "bafyaabakaieac";
+  async ping(signal) {
+    if (this.gateways.length === 0) {
+      return "up";
+    }
+    let anyReached = false;
+    for (const gw of this.gateways) {
+      if (signal.aborted) break;
+      try {
+        const url = `${gw.replace(/\/$/, "")}/ipfs/${this.probeCid}`;
+        const response = await this.fetchImpl(url, { method: "HEAD", signal });
+        if (response.ok) return "up";
+        anyReached = true;
+      } catch {
+      }
+    }
+    return anyReached ? "degraded" : "down";
+  }
+};
+var NostrPinger = class {
+  constructor(isConnected2) {
+    this.isConnected = isConnected2;
+  }
+  backend = "nostr";
+  async ping(_signal) {
+    try {
+      return this.isConnected() ? "up" : "down";
+    } catch {
+      return "down";
+    }
+  }
+};
+function safeErr(err) {
+  if (err instanceof Error) return err.message;
+  try {
+    return String(err);
+  } catch {
+    return "<unstringifiable>";
+  }
+}
+
+// profile/pointer-wiring.ts
+init_logger();
+init_hex();
+import { CID as CID3 } from "multiformats/cid";
+
+// profile/aggregator-pointer/constants.ts
+init_utils();
+var PROFILE_POINTER_HKDF_INFO = utf8ToBytes("uxf-profile-aggregator-pointer-v1");
+var SIGNING_SEED_INFO = utf8ToBytes("uxf-profile-pointer-sig-v1");
+var XOR_SEED_INFO = utf8ToBytes("uxf-profile-pointer-xor-v1");
+var PAD_SEED_INFO = utf8ToBytes("uxf-profile-pointer-pad-v1");
+var VERSION_MAX = 2 ** 31 - 1;
+var DISCOVERY_HARD_CEILING = 2 ** 22;
+var PUBLISH_BACKOFF_MAX_MS = 4e3;
+var AGGREGATOR_ALG_TAG_SHA256 = new Uint8Array([0, 0]);
+var MAX_CAR_BYTES = 100 * 1024 * 1024;
+var CAR_FETCH_PERSISTENT_RETRY_ATTEMPTS = 12;
+var PUBLISH_REQUEST_TIMEOUT_MS = 3e4;
+var MAX_CUMULATIVE_RETRY_AFTER_MS = 18e4;
+var ATTEMPT_MAX_RETRIES_HARD_CAP = 10;
+var FILE_LOCK_STALE_MARGIN_MS = 6e4;
+var FILE_LOCK_STALE_MS = MAX_CUMULATIVE_RETRY_AFTER_MS + ATTEMPT_MAX_RETRIES_HARD_CAP * (PUBLISH_BACKOFF_MAX_MS * 2 + PUBLISH_REQUEST_TIMEOUT_MS * 2) + FILE_LOCK_STALE_MARGIN_MS;
+var FILE_LOCK_STALE_MS_EXPECTED = 92e4;
+if (FILE_LOCK_STALE_MS !== FILE_LOCK_STALE_MS_EXPECTED) {
+  throw new Error(
+    `pointer-layer constants invariant violated: FILE_LOCK_STALE_MS=${FILE_LOCK_STALE_MS} does NOT match FILE_LOCK_STALE_MS_EXPECTED=${FILE_LOCK_STALE_MS_EXPECTED}. If you changed a component constant or the formula, re-derive the safety property (MAX_CUMULATIVE_RETRY_AFTER_MS + ATTEMPT_MAX_RETRIES_HARD_CAP \xD7 (PUBLISH_BACKOFF_MAX_MS \xD7 2 + PUBLISH_REQUEST_TIMEOUT_MS \xD7 2) + FILE_LOCK_STALE_MARGIN_MS) and update FILE_LOCK_STALE_MS_EXPECTED in constants.ts to match.`
+  );
+}
+
+// profile/aggregator-pointer/index.ts
+init_errors2();
+
+// profile/aggregator-pointer/master-key.ts
+init_errors2();
+var TYPED_ARRAY_FILL = Uint8Array.prototype.fill;
+var ARRAY_BUFFER_SLICE = ArrayBuffer.prototype.slice;
+var NUMBER_IS_INTEGER = Number.isInteger;
+var NUMBER_MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+var KAT_CANONICAL_VECTOR = new Uint8Array(32).fill(1);
+var WEAK_KEY_DENYLIST_BYTES = Object.freeze([
+  // All-zero — structurally invalid secp256k1 scalar.
+  new Uint8Array(32),
+  // All-FF.
+  new Uint8Array(32).fill(255),
+  // secp256k1 curve order N.
+  new Uint8Array([
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    254,
+    186,
+    174,
+    220,
+    230,
+    175,
+    72,
+    160,
+    59,
+    191,
+    210,
+    94,
+    140,
+    208,
+    54,
+    65,
+    65
+  ]),
+  // N-1.
+  new Uint8Array([
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    254,
+    186,
+    174,
+    220,
+    230,
+    175,
+    72,
+    160,
+    59,
+    191,
+    210,
+    94,
+    140,
+    208,
+    54,
+    65,
+    64
+  ]),
+  // N+1.
+  new Uint8Array([
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    255,
+    254,
+    186,
+    174,
+    220,
+    230,
+    175,
+    72,
+    160,
+    59,
+    191,
+    210,
+    94,
+    140,
+    208,
+    54,
+    65,
+    66
+  ])
+]);
+var denylistFingerprintHex = (b) => {
+  let s = "";
+  for (let i = 0; i < b.length; i++) {
+    const v = b[i] ?? 0;
+    s += (v < 16 ? "0" : "") + v.toString(16);
+  }
+  return s;
+};
+var WEAK_KEY_DENYLIST_FINGERPRINT = Object.freeze(
+  WEAK_KEY_DENYLIST_BYTES.map((b) => denylistFingerprintHex(b))
+);
+
+// profile/aggregator-pointer/secret-key.ts
+var REDACTED2 = "[REDACTED SecretKey]";
+var UINT8_ARRAY_CTOR = Uint8Array;
+var SecretKey = class {
+  #bytes;
+  #label;
+  #zeroized = false;
+  constructor(bytes, label) {
+    if (bytes.length === 0) {
+      throw new RangeError("SecretKey cannot wrap empty bytes");
+    }
+    this.#bytes = new UINT8_ARRAY_CTOR(bytes);
+    this.#label = label;
+  }
+  /**
+   * Return a COPY of the bytes. Audit every call site.
+   * Throws after zeroize() to prevent silent-zero correctness bombs.
+   */
+  reveal() {
+    if (this.#zeroized) {
+      throw new Error("SecretKey already zeroized; reveal() would return zeros");
+    }
+    return new UINT8_ARRAY_CTOR(this.#bytes);
+  }
+  get length() {
+    return this.#bytes.length;
+  }
+  get label() {
+    return this.#label;
+  }
+  toString() {
+    return `${REDACTED2} <${this.#label}>`;
+  }
+  toJSON() {
+    return `${REDACTED2} <${this.#label}>`;
+  }
+  // Node.js util.inspect customization — same redaction.
+  // The symbol lookup is string-based to avoid a hard 'util' import in browser.
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `${REDACTED2} <${this.#label}>`;
+  }
+  // Browser devtools / template-literal coercion fallback.
+  [Symbol.toPrimitive](_hint) {
+    return `${REDACTED2} <${this.#label}>`;
+  }
+  /**
+   * Best-effort zeroization: overwrites the underlying buffer with zeros
+   * and flags the wrapper so subsequent reveal() throws. Prior copies
+   * handed out via reveal() are untouched — callers must zeroize their own.
+   */
+  zeroize() {
+    this.#bytes.fill(0);
+    this.#zeroized = true;
+  }
+  isZeroized() {
+    return this.#zeroized;
+  }
+};
+
+// profile/aggregator-pointer/key-derivation.ts
+init_errors2();
+var TYPED_ARRAY_FILL2 = Uint8Array.prototype.fill;
+
+// profile/aggregator-pointer/signing.ts
+import { SigningService } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService.js";
+
+// profile/aggregator-pointer/health-check.ts
+var HEALTH_CHECK_INFO = new TextEncoder().encode("profile-pointer-health-check");
+
+// profile/aggregator-pointer/flag-store.ts
+init_errors2();
+
+// profile/aggregator-pointer/marker.ts
+init_errors2();
+
+// profile/aggregator-pointer/blocked-state.ts
+init_errors2();
+
+// profile/aggregator-pointer/mutex-lock.ts
+init_errors2();
+
+// profile/aggregator-pointer/index.ts
+init_originated_tag();
+
+// profile/aggregator-pointer/aggregator-submit.ts
+import { Authenticator } from "@unicitylabs/state-transition-sdk/lib/api/Authenticator.js";
+import { RequestId } from "@unicitylabs/state-transition-sdk/lib/api/RequestId.js";
+import {
+  SubmitCommitmentStatus
+} from "@unicitylabs/state-transition-sdk/lib/api/SubmitCommitmentResponse.js";
+import { DataHash } from "@unicitylabs/state-transition-sdk/lib/hash/DataHash.js";
+import { HashAlgorithm } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js";
+init_errors2();
+
+// profile/aggregator-pointer/aggregator-probe.ts
+import { RequestId as RequestId2 } from "@unicitylabs/state-transition-sdk/lib/api/RequestId.js";
+import { DataHash as DataHash2 } from "@unicitylabs/state-transition-sdk/lib/hash/DataHash.js";
+import { HashAlgorithm as HashAlgorithm2 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js";
+import { InclusionProofVerificationStatus } from "@unicitylabs/state-transition-sdk/lib/transaction/InclusionProof.js";
+init_errors2();
+
+// profile/aggregator-pointer/trust-base-rotation.ts
+init_errors2();
+
+// profile/aggregator-pointer/ipfs-car-fetch.ts
+init_errors2();
+
+// profile/aggregator-pointer/car-loss-tracker.ts
+init_errors2();
+var MAX_ATTEMPTS_RETAINED = CAR_FETCH_PERSISTENT_RETRY_ATTEMPTS * 4;
+
+// profile/aggregator-pointer/publish-algorithm.ts
+init_errors2();
+
+// profile/aggregator-pointer/discover-algorithm.ts
+init_errors2();
+
+// profile/aggregator-pointer/reconcile-algorithm.ts
+init_errors2();
+
+// profile/aggregator-pointer/config.ts
+init_errors2();
+
+// profile/aggregator-pointer/ProfilePointerLayer.ts
+init_errors2();
+
+// profile/aggregator-pointer/index.ts
+init_win_broadcast();
+
+// profile/pointer-wiring.ts
+init_errors2();
+
+// profile/ipfs-client.ts
+init_sha2();
+init_logger();
+init_errors3();
+import { CID } from "multiformats/cid";
+import * as raw from "multiformats/codecs/raw";
+import { create as createMultihash } from "multiformats/hashes/digest";
+function asHelia(value) {
+  if (value === null || value === void 0) return null;
+  if (typeof value !== "object") return null;
+  const obj = value;
+  if (!obj.blockstore || typeof obj.blockstore !== "object") return null;
+  const bs = obj.blockstore;
+  if (typeof bs.get !== "function" || typeof bs.put !== "function") return null;
+  return value;
+}
+async function putBlockToLocalHelia(helia, cidString, blockBytes) {
+  let parsed;
+  try {
+    parsed = CID.parse(cidString);
+  } catch (err) {
+    logger.warn(
+      "ipfs-client",
+      `local-helia put: cannot parse CID ${cidString}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return false;
+  }
+  try {
+    await helia.blockstore.put(parsed, blockBytes);
+    return true;
+  } catch (err) {
+    logger.warn(
+      "ipfs-client",
+      `local-helia put failed for ${cidString} (continuing with HTTP pin): ${err instanceof Error ? err.message : String(err)}`
+    );
+    return false;
+  }
+}
+async function tryGetBlockFromLocalHelia(helia, cidString) {
+  let parsed;
+  try {
+    parsed = CID.parse(cidString);
+  } catch {
+    return null;
+  }
+  let bytes;
+  try {
+    const got = await helia.blockstore.get(parsed, { offline: true });
+    if (!(got instanceof Uint8Array) || got.byteLength === 0) {
+      return null;
+    }
+    bytes = got;
+  } catch {
+    return null;
+  }
+  try {
+    verifyCidMatchesBytes(cidString, bytes);
+  } catch (err) {
+    logger.warn(
+      "ipfs-client",
+      `local-helia get returned bytes whose sha256 does NOT match ${cidString} (likely on-disk corruption); falling through to HTTP gateways: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return null;
+  }
+  return bytes;
+}
+var MULTIHASH_SHA256 = 18;
+var SHA256_DIGEST_BYTES = 32;
+var CODEC_RAW = 85;
+var CODEC_DAG_CBOR = 113;
+var FETCH_CAR_MAX_BLOCKS = 1e4;
+var DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
+var DEFAULT_PIN_TIMEOUT_MS = 6e4;
+var DEFAULT_FETCH_TIMEOUT_MS = 3e4;
+var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
+var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
+var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
+var SIDECAR_READ_TIMEOUT_MS = 500;
+function submitToSidecarBestEffort(gateway, cid, bytes) {
+  if (typeof gateway !== "string" || gateway.length === 0) return;
+  if (typeof cid !== "string" || cid.length === 0) return;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+  if (bytes.length > SIDECAR_SUBMIT_MAX_BYTES) return;
+  const url = `${gateway.replace(/\/$/, "")}/sidecar/submit?cid=${encodeURIComponent(cid)}`;
+  void fetch(url, {
+    method: "POST",
+    body: bytes,
+    headers: { "Content-Type": "application/octet-stream" },
+    signal: AbortSignal.timeout(SIDECAR_SUBMIT_TIMEOUT_MS)
+  }).then((response) => {
+    if (!response.ok) {
+      logger.debug(
+        "IPFS-Sidecar",
+        `submit ${cid.slice(0, 16)} \u2192 HTTP ${response.status} (${response.statusText}) on ${gateway}`
+      );
+    } else {
+      logger.debug(
+        "IPFS-Sidecar",
+        `submit ${cid.slice(0, 16)} \u2192 200 on ${gateway}`
+      );
+    }
+    response.body?.cancel?.().catch(() => {
+    });
+  }).catch(() => {
+  });
+}
+async function tryReadFromSidecar(gateway, cid) {
+  if (typeof gateway !== "string" || gateway.length === 0) return null;
+  if (typeof cid !== "string" || cid.length === 0) return null;
+  try {
+    const url = `${gateway.replace(/\/$/, "")}/sidecar/blob?cid=${encodeURIComponent(cid)}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/octet-stream" },
+      signal: AbortSignal.timeout(SIDECAR_READ_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      response.body?.cancel?.().catch(() => {
+      });
+      return null;
+    }
+    const ct = (response.headers.get("Content-Type") ?? "").toLowerCase();
+    if (ct && !ct.startsWith("application/octet-stream") && !ct.startsWith("application/vnd.ipld")) {
+      response.body?.cancel?.().catch(() => {
+      });
+      return null;
+    }
+    const buf = await response.arrayBuffer();
+    if (buf.byteLength === 0) return null;
+    logger.debug(
+      "IPFS-Sidecar",
+      `read hit ${cid.slice(0, 16)} (${buf.byteLength} bytes) on ${gateway}`
+    );
+    return new Uint8Array(buf);
+  } catch {
+    return null;
+  }
+}
+async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  let lastError = null;
+  for (const gateway of effectiveGateways) {
+    try {
+      const url = `${gateway.replace(/\/$/, "")}/api/v0/dag/put?input-codec=raw&store-codec=raw&pin=true&hash=sha2-256`;
+      const form = new FormData();
+      form.append("data", new Blob([data]), "data");
+      const response = await fetch(url, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status} ${response.statusText} from ${gateway}`);
+        continue;
+      }
+      const result = await response.json();
+      const returnedCid = result.Cid?.["/"] ?? result.Hash;
+      if (!returnedCid) {
+        lastError = new Error("IPFS pin response did not contain a CID");
+        continue;
+      }
+      const expectedCid = CID.createV1(raw.code, createMultihash(18, sha256(data))).toString();
+      submitToSidecarBestEffort(gateway, expectedCid, data);
+      return expectedCid;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw new ProfileError(
+    "ORBITDB_WRITE_FAILED",
+    `IPFS pin failed on all gateways: ${lastError?.message ?? "unknown error"}`,
+    lastError
+  );
+}
+async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const localHelia = asHelia(helia);
+  if (localHelia !== null) {
+    const local = await tryGetBlockFromLocalHelia(localHelia, cid);
+    if (local !== null) {
+      if (local.byteLength > maxSizeBytes) {
+      } else {
+        return local;
+      }
+    }
+  }
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  let lastError = null;
+  const tryFetchBlock = async (gateway, method) => {
+    const url = `${gateway.replace(/\/$/, "")}/api/v0/block/get?arg=${encodeURIComponent(cid)}`;
+    const response = await fetch(url, {
+      method,
+      headers: { Accept: "application/octet-stream" },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) {
+      const retryAsGet = method === "POST" && (response.status === 405 || response.status === 501);
+      return {
+        bytes: null,
+        reason: `HTTP ${response.status} from ${gateway} (${method})`,
+        retryAsGet
+      };
+    }
+    const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
+    const isHtmlOrJson = contentType.startsWith("text/html") || contentType.startsWith("application/json");
+    if (isHtmlOrJson) {
+      return {
+        bytes: null,
+        reason: `gateway ${gateway} returned ${contentType} for /api/v0/block/get (likely API disabled or wrong endpoint)`,
+        retryAsGet: false
+      };
+    }
+    const contentLength = response.headers.get("Content-Length");
+    if (contentLength != null) {
+      const size = parseInt(contentLength, 10);
+      if (!isNaN(size) && size > maxSizeBytes) {
+        return {
+          bytes: null,
+          reason: `Response size ${size} bytes exceeds limit of ${maxSizeBytes} bytes from ${gateway}`,
+          retryAsGet: false
+        };
+      }
+    }
+    let bytes;
+    if (response.body != null) {
+      bytes = await readStreamWithLimit(response.body, maxSizeBytes, gateway);
+    } else {
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > maxSizeBytes) {
+        throw new ProfileError(
+          "BUNDLE_NOT_FOUND",
+          `Response ${buffer.byteLength} bytes exceeds limit ${maxSizeBytes} from ${gateway}`
+        );
+      }
+      bytes = new Uint8Array(buffer);
+    }
+    return { bytes, reason: null, retryAsGet: false };
+  };
+  if (effectiveGateways.length > 0) {
+    const sidecarBytes = await tryReadFromSidecar(effectiveGateways[0], cid);
+    if (sidecarBytes !== null && sidecarBytes.byteLength <= maxSizeBytes) {
+      try {
+        verifyCidMatchesBytes(cid, sidecarBytes);
+        if (localHelia !== null) {
+          await putBlockToLocalHelia(localHelia, cid, sidecarBytes);
+        }
+        return sidecarBytes;
+      } catch (verifyErr) {
+        logger.warn(
+          "IPFS-Sidecar",
+          `read CID mismatch on ${cid.slice(0, 16)} from ${effectiveGateways[0]} (${sidecarBytes.byteLength} bytes); falling through to /api/v0/block/get. Reason: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`
+        );
+      }
+    }
+  }
+  for (const gateway of effectiveGateways) {
+    try {
+      let bytesOrNull = null;
+      const attempt = await tryFetchBlock(gateway, "POST");
+      if (attempt.bytes !== null) {
+        bytesOrNull = attempt.bytes;
+      } else if (attempt.retryAsGet) {
+        const second = await tryFetchBlock(gateway, "GET");
+        if (second.bytes !== null) {
+          bytesOrNull = second.bytes;
+        } else {
+          lastError = new Error(`${attempt.reason}; GET retry: ${second.reason}`);
+          continue;
+        }
+      } else {
+        lastError = new Error(attempt.reason ?? "unknown gateway error");
+        continue;
+      }
+      try {
+        verifyCidMatchesBytes(cid, bytesOrNull);
+      } catch (verifyErr) {
+        lastError = verifyErr instanceof Error ? verifyErr : new Error(String(verifyErr));
+        continue;
+      }
+      if (localHelia !== null) {
+        await putBlockToLocalHelia(localHelia, cid, bytesOrNull);
+      }
+      return bytesOrNull;
+    } catch (err) {
+      if (err instanceof ProfileError) throw err;
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw new ProfileError(
+    "BUNDLE_NOT_FOUND",
+    `Failed to fetch CAR ${cid} from all gateways: ${lastError?.message ?? "unknown error"}`,
+    lastError
+  );
+}
+async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+  let parsedRoot;
+  try {
+    parsedRoot = CID.parse(rootCid);
+  } catch (err) {
+    throw new ProfileError(
+      "BUNDLE_NOT_FOUND",
+      `fetchCarFromIpfs: cannot parse root CID ${rootCid}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (parsedRoot.code === CODEC_RAW) {
+    return fetchFromIpfs(gateways, rootCid, timeoutMs, maxSizeBytesPerBlock, helia);
+  }
+  if (parsedRoot.code !== CODEC_DAG_CBOR) {
+    throw new ProfileError(
+      "BUNDLE_NOT_FOUND",
+      `fetchCarFromIpfs: unsupported root codec 0x${parsedRoot.code.toString(16)} for ${rootCid} (expected dag-cbor 0x71 or raw 0x55)`
+    );
+  }
+  const { decode: dagCborDecode3 } = await import("@ipld/dag-cbor");
+  const { CarWriter: CarWriter3 } = await import("@ipld/car/writer");
+  const visited = /* @__PURE__ */ new Set();
+  const blocks = [];
+  const queue = [rootCid];
+  while (queue.length > 0) {
+    if (blocks.length >= FETCH_CAR_MAX_BLOCKS) {
+      throw new ProfileError(
+        "BUNDLE_NOT_FOUND",
+        `fetchCarFromIpfs: block count exceeded ${FETCH_CAR_MAX_BLOCKS} walking from ${rootCid} (possible cyclic or maliciously-fanned-out DAG)`
+      );
+    }
+    const cidStr = queue.shift();
+    if (visited.has(cidStr)) continue;
+    visited.add(cidStr);
+    let blockCid;
+    try {
+      blockCid = CID.parse(cidStr);
+    } catch (err) {
+      throw new ProfileError(
+        "BUNDLE_NOT_FOUND",
+        `fetchCarFromIpfs: child CID ${cidStr} (reachable from ${rootCid}) failed to parse: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    const blockBytes = await fetchFromIpfs(
+      gateways,
+      cidStr,
+      timeoutMs,
+      maxSizeBytesPerBlock,
+      helia
+    );
+    blocks.push({ cid: blockCid, bytes: blockBytes });
+    if (blockCid.code === CODEC_DAG_CBOR) {
+      let decoded;
+      try {
+        decoded = dagCborDecode3(blockBytes);
+      } catch (err) {
+        throw new ProfileError(
+          "BUNDLE_NOT_FOUND",
+          `fetchCarFromIpfs: dag-cbor decode failed for ${cidStr} (reachable from ${rootCid}): ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
+      const visit = (childCid) => {
+        const childStr = childCid.toString();
+        if (!visited.has(childStr)) queue.push(childStr);
+      };
+      if (isUxfElement(decoded)) {
+        walkUxfElement(decoded, visit);
+      } else {
+        collectCidLinks(decoded, visit);
+      }
+    }
+  }
+  const { writer, out } = CarWriter3.create([parsedRoot]);
+  const chunks = [];
+  const collectPromise = (async () => {
+    for await (const chunk of out) {
+      chunks.push(chunk);
+    }
+  })();
+  try {
+    for (const block of blocks) {
+      await writer.put(block);
+    }
+  } finally {
+    await writer.close();
+  }
+  await collectPromise;
+  let totalLength = 0;
+  for (const c of chunks) totalLength += c.length;
+  const carBytes = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    carBytes.set(c, offset);
+    offset += c.length;
+  }
+  return carBytes;
+}
+function collectCidLinks(value, visit) {
+  if (value === null || value === void 0) return;
+  if (typeof value !== "object") return;
+  if (value instanceof Uint8Array) return;
+  const asCid = CID.asCID(value);
+  if (asCid !== null) {
+    visit(asCid);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectCidLinks(item, visit);
+    return;
+  }
+  for (const v of Object.values(value)) {
+    collectCidLinks(v, visit);
+  }
+}
+function isUxfElement(value) {
+  if (value === null || typeof value !== "object") return false;
+  if (value instanceof Uint8Array) return false;
+  if (Array.isArray(value)) return false;
+  const obj = value;
+  if (!Array.isArray(obj.header)) return false;
+  if (obj.header.length < 4) return false;
+  if (typeof obj.type !== "number") return false;
+  if (typeof obj.content !== "object" || obj.content === null) return false;
+  if (Array.isArray(obj.content)) return false;
+  if (typeof obj.children !== "object" || obj.children === null) return false;
+  if (Array.isArray(obj.children)) return false;
+  return true;
+}
+function contentHashBytesToCid(bytes) {
+  return CID.createV1(CODEC_DAG_CBOR, createMultihash(MULTIHASH_SHA256, bytes));
+}
+function walkUxfElement(node, visit) {
+  const predecessor = node.header[3];
+  if (predecessor instanceof Uint8Array && predecessor.byteLength === SHA256_DIGEST_BYTES) {
+    visit(contentHashBytesToCid(predecessor));
+  } else {
+    const asCid = predecessor != null ? CID.asCID(predecessor) : null;
+    if (asCid !== null) visit(asCid);
+  }
+  for (const value of Object.values(node.children)) {
+    walkUxfChildValue(value, visit);
+  }
+}
+function walkUxfChildValue(value, visit) {
+  if (value === null || value === void 0) return;
+  if (value instanceof Uint8Array) {
+    if (value.byteLength === SHA256_DIGEST_BYTES) {
+      visit(contentHashBytesToCid(value));
+    }
+    return;
+  }
+  const asCid = CID.asCID(value);
+  if (asCid !== null) {
+    visit(asCid);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) walkUxfChildValue(item, visit);
+  }
+}
+function verifyCidMatchesBytes(cidString, bytes) {
+  let parsed;
+  try {
+    parsed = CID.parse(cidString);
+  } catch (err) {
+    throw new ProfileError(
+      "BUNDLE_NOT_FOUND",
+      `Cannot parse CID ${cidString}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (parsed.multihash.code !== 18) {
+    throw new ProfileError(
+      "BUNDLE_NOT_FOUND",
+      `Unsupported multihash code 0x${parsed.multihash.code.toString(16)} for CID ${cidString}; only sha2-256 is verified`
+    );
+  }
+  const expected = parsed.multihash.digest;
+  const actual = sha256(bytes);
+  if (!bytesEqual(expected, actual)) {
+    throw new ProfileError(
+      "BUNDLE_NOT_FOUND",
+      `CID verification failed for ${cidString}: gateway returned bytes whose sha256 does not match the CID`
+    );
+  }
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+function validateGatewayUrls(gateways) {
+  for (const gateway of gateways) {
+    let u;
+    try {
+      u = new URL(gateway);
+    } catch (err) {
+      throw new Error(
+        `Invalid IPFS gateway URL "${gateway}": ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      throw new Error(
+        `IPFS gateway URL must use http:// or https://, got "${gateway}" (protocol="${u.protocol}")`
+      );
+    }
+    if (u.username !== "" || u.password !== "") {
+      throw new Error(`IPFS gateway URL must not contain userinfo: "${gateway}"`);
+    }
+  }
+}
+async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
+  const reader = body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        reader.cancel();
+        throw new ProfileError(
+          "BUNDLE_NOT_FOUND",
+          `Response from ${gatewayLabel} exceeded size limit of ${maxBytes} bytes (read ${totalBytes} so far)`
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+// profile/profile-lean-snapshot.ts
+import { encode as dagCborEncode, decode as dagCborDecode } from "@ipld/dag-cbor";
+import { CID as CID2 } from "multiformats/cid";
+init_logger();
+init_errors3();
+import { create as createMultihash2 } from "multiformats/hashes/digest";
+import { CarWriter } from "@ipld/car/writer";
+import { CarReader } from "@ipld/car";
+var LEAN_DEFAULT_MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+var EPOCH_RESET_REASON_MAX_BYTES = 256;
+var EPOCH_MAX = 1 << 20;
+var MAX_KV_VALUE_BYTES = 8 * 1024 * 1024;
+var PROFILE_CAR_IMPORT_MAX_BLOCK_BYTES = 1024 * 1024;
+
+// profile/pointer-wiring.ts
+var LOCAL_EPOCH_FLOOR_KEY = "profile.pointer.epoch_floor";
+var LOCAL_EPOCH_RESET_REASON_KEY = "profile.pointer.epoch_reset_reason";
+var LOCAL_EPOCH_RESET_FLUSH_TRIGGER_KEY = "profile.pointer.epoch_reset_flush_trigger";
 
 // transport/MultiAddressTransportMux.ts
 init_logger();
@@ -13856,7 +15122,7 @@ import { TokenState } from "@unicitylabs/state-transition-sdk/lib/token/TokenSta
 import { CoinId } from "@unicitylabs/state-transition-sdk/lib/token/fungible/CoinId";
 import { TokenCoinData } from "@unicitylabs/state-transition-sdk/lib/token/fungible/TokenCoinData";
 import { TokenSplitBuilder } from "@unicitylabs/state-transition-sdk/lib/transaction/split/TokenSplitBuilder";
-import { HashAlgorithm } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm4 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicate } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 import { UnmaskedPredicateReference } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicateReference";
 import { TransferCommitment } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferCommitment";
@@ -13893,7 +15159,7 @@ var TokenSplitExecutor = class {
       tokenToSplit.type,
       this.signingService.algorithm,
       this.signingService.publicKey,
-      HashAlgorithm.SHA256
+      HashAlgorithm4.SHA256
     );
     const senderAddress = await senderAddressRef.toAddress();
     const builder = new TokenSplitBuilder();
@@ -13940,7 +15206,7 @@ var TokenSplitExecutor = class {
     const recipientInfo = mintedTokensInfo.find((t) => t.isForRecipient);
     const senderInfo = mintedTokensInfo.find((t) => !t.isForRecipient);
     const createToken = async (info, label) => {
-      const predicate = await UnmaskedPredicate.create(info.tokenId, tokenToSplit.type, this.signingService, HashAlgorithm.SHA256, info.salt);
+      const predicate = await UnmaskedPredicate.create(info.tokenId, tokenToSplit.type, this.signingService, HashAlgorithm4.SHA256, info.salt);
       const state = new TokenState(predicate, null);
       const token = await Token.mint(this.trustBase, state, info.commitment.toTransaction(info.inclusionProof));
       const verification = await token.verify(this.trustBase);
@@ -14678,7 +15944,7 @@ import { TokenType } from "@unicitylabs/state-transition-sdk/lib/token/TokenType
 import { TokenState as TokenState2 } from "@unicitylabs/state-transition-sdk/lib/token/TokenState";
 import { MintTransactionData } from "@unicitylabs/state-transition-sdk/lib/transaction/MintTransactionData";
 import { MintCommitment } from "@unicitylabs/state-transition-sdk/lib/transaction/MintCommitment";
-import { HashAlgorithm as HashAlgorithm2 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm5 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicate as UnmaskedPredicate2 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 import { waitInclusionProof as waitInclusionProof2 } from "@unicitylabs/state-transition-sdk/lib/util/InclusionProofUtils";
 import { normalizeNametag } from "@unicitylabs/nostr-js-sdk";
@@ -14793,7 +16059,7 @@ var NametagMinter = class {
         nametagTokenId,
         nametagTokenType,
         this.signingService,
-        HashAlgorithm2.SHA256,
+        HashAlgorithm5.SHA256,
         salt
       );
       const tokenState = new TokenState2(nametagPredicate, null);
@@ -14840,548 +16106,8 @@ var NametagMinter = class {
 
 // profile/cid-ref-store.ts
 init_encryption();
-init_errors2();
-import { CID as CID2 } from "multiformats/cid";
-
-// profile/ipfs-client.ts
-init_sha2();
-init_logger();
-init_errors2();
-import { CID } from "multiformats/cid";
-import * as raw from "multiformats/codecs/raw";
-import { create as createMultihash } from "multiformats/hashes/digest";
-function asHelia(value) {
-  if (value === null || value === void 0) return null;
-  if (typeof value !== "object") return null;
-  const obj = value;
-  if (!obj.blockstore || typeof obj.blockstore !== "object") return null;
-  const bs = obj.blockstore;
-  if (typeof bs.get !== "function" || typeof bs.put !== "function") return null;
-  return value;
-}
-async function putBlockToLocalHelia(helia, cidString, blockBytes) {
-  let parsed;
-  try {
-    parsed = CID.parse(cidString);
-  } catch (err) {
-    logger.warn(
-      "ipfs-client",
-      `local-helia put: cannot parse CID ${cidString}: ${err instanceof Error ? err.message : String(err)}`
-    );
-    return false;
-  }
-  try {
-    await helia.blockstore.put(parsed, blockBytes);
-    return true;
-  } catch (err) {
-    logger.warn(
-      "ipfs-client",
-      `local-helia put failed for ${cidString} (continuing with HTTP pin): ${err instanceof Error ? err.message : String(err)}`
-    );
-    return false;
-  }
-}
-async function tryGetBlockFromLocalHelia(helia, cidString) {
-  let parsed;
-  try {
-    parsed = CID.parse(cidString);
-  } catch {
-    return null;
-  }
-  let bytes;
-  try {
-    const got = await helia.blockstore.get(parsed, { offline: true });
-    if (!(got instanceof Uint8Array) || got.byteLength === 0) {
-      return null;
-    }
-    bytes = got;
-  } catch {
-    return null;
-  }
-  try {
-    verifyCidMatchesBytes(cidString, bytes);
-  } catch (err) {
-    logger.warn(
-      "ipfs-client",
-      `local-helia get returned bytes whose sha256 does NOT match ${cidString} (likely on-disk corruption); falling through to HTTP gateways: ${err instanceof Error ? err.message : String(err)}`
-    );
-    return null;
-  }
-  return bytes;
-}
-var MULTIHASH_SHA256 = 18;
-var SHA256_DIGEST_BYTES = 32;
-var CODEC_RAW = 85;
-var CODEC_DAG_CBOR = 113;
-var FETCH_CAR_MAX_BLOCKS = 1e4;
-var DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
-var DEFAULT_PIN_TIMEOUT_MS = 6e4;
-var DEFAULT_FETCH_TIMEOUT_MS = 3e4;
-var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
-var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
-var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
-var SIDECAR_READ_TIMEOUT_MS = 500;
-function submitToSidecarBestEffort(gateway, cid, bytes) {
-  if (typeof gateway !== "string" || gateway.length === 0) return;
-  if (typeof cid !== "string" || cid.length === 0) return;
-  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
-  if (bytes.length > SIDECAR_SUBMIT_MAX_BYTES) return;
-  const url = `${gateway.replace(/\/$/, "")}/sidecar/submit?cid=${encodeURIComponent(cid)}`;
-  void fetch(url, {
-    method: "POST",
-    body: bytes,
-    headers: { "Content-Type": "application/octet-stream" },
-    signal: AbortSignal.timeout(SIDECAR_SUBMIT_TIMEOUT_MS)
-  }).then((response) => {
-    if (!response.ok) {
-      logger.debug(
-        "IPFS-Sidecar",
-        `submit ${cid.slice(0, 16)} \u2192 HTTP ${response.status} (${response.statusText}) on ${gateway}`
-      );
-    } else {
-      logger.debug(
-        "IPFS-Sidecar",
-        `submit ${cid.slice(0, 16)} \u2192 200 on ${gateway}`
-      );
-    }
-    response.body?.cancel?.().catch(() => {
-    });
-  }).catch(() => {
-  });
-}
-async function tryReadFromSidecar(gateway, cid) {
-  if (typeof gateway !== "string" || gateway.length === 0) return null;
-  if (typeof cid !== "string" || cid.length === 0) return null;
-  try {
-    const url = `${gateway.replace(/\/$/, "")}/sidecar/blob?cid=${encodeURIComponent(cid)}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/octet-stream" },
-      signal: AbortSignal.timeout(SIDECAR_READ_TIMEOUT_MS)
-    });
-    if (!response.ok) {
-      response.body?.cancel?.().catch(() => {
-      });
-      return null;
-    }
-    const ct = (response.headers.get("Content-Type") ?? "").toLowerCase();
-    if (ct && !ct.startsWith("application/octet-stream") && !ct.startsWith("application/vnd.ipld")) {
-      response.body?.cancel?.().catch(() => {
-      });
-      return null;
-    }
-    const buf = await response.arrayBuffer();
-    if (buf.byteLength === 0) return null;
-    logger.debug(
-      "IPFS-Sidecar",
-      `read hit ${cid.slice(0, 16)} (${buf.byteLength} bytes) on ${gateway}`
-    );
-    return new Uint8Array(buf);
-  } catch {
-    return null;
-  }
-}
-async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
-  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
-  validateGatewayUrls(effectiveGateways);
-  let lastError = null;
-  for (const gateway of effectiveGateways) {
-    try {
-      const url = `${gateway.replace(/\/$/, "")}/api/v0/dag/put?input-codec=raw&store-codec=raw&pin=true&hash=sha2-256`;
-      const form = new FormData();
-      form.append("data", new Blob([data]), "data");
-      const response = await fetch(url, {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(timeoutMs)
-      });
-      if (!response.ok) {
-        lastError = new Error(`HTTP ${response.status} ${response.statusText} from ${gateway}`);
-        continue;
-      }
-      const result = await response.json();
-      const returnedCid = result.Cid?.["/"] ?? result.Hash;
-      if (!returnedCid) {
-        lastError = new Error("IPFS pin response did not contain a CID");
-        continue;
-      }
-      const expectedCid = CID.createV1(raw.code, createMultihash(18, sha256(data))).toString();
-      submitToSidecarBestEffort(gateway, expectedCid, data);
-      return expectedCid;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-  throw new ProfileError(
-    "ORBITDB_WRITE_FAILED",
-    `IPFS pin failed on all gateways: ${lastError?.message ?? "unknown error"}`,
-    lastError
-  );
-}
-async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
-  const localHelia = asHelia(helia);
-  if (localHelia !== null) {
-    const local = await tryGetBlockFromLocalHelia(localHelia, cid);
-    if (local !== null) {
-      if (local.byteLength > maxSizeBytes) {
-      } else {
-        return local;
-      }
-    }
-  }
-  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
-  validateGatewayUrls(effectiveGateways);
-  let lastError = null;
-  const tryFetchBlock = async (gateway, method) => {
-    const url = `${gateway.replace(/\/$/, "")}/api/v0/block/get?arg=${encodeURIComponent(cid)}`;
-    const response = await fetch(url, {
-      method,
-      headers: { Accept: "application/octet-stream" },
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-    if (!response.ok) {
-      const retryAsGet = method === "POST" && (response.status === 405 || response.status === 501);
-      return {
-        bytes: null,
-        reason: `HTTP ${response.status} from ${gateway} (${method})`,
-        retryAsGet
-      };
-    }
-    const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
-    const isHtmlOrJson = contentType.startsWith("text/html") || contentType.startsWith("application/json");
-    if (isHtmlOrJson) {
-      return {
-        bytes: null,
-        reason: `gateway ${gateway} returned ${contentType} for /api/v0/block/get (likely API disabled or wrong endpoint)`,
-        retryAsGet: false
-      };
-    }
-    const contentLength = response.headers.get("Content-Length");
-    if (contentLength != null) {
-      const size = parseInt(contentLength, 10);
-      if (!isNaN(size) && size > maxSizeBytes) {
-        return {
-          bytes: null,
-          reason: `Response size ${size} bytes exceeds limit of ${maxSizeBytes} bytes from ${gateway}`,
-          retryAsGet: false
-        };
-      }
-    }
-    let bytes;
-    if (response.body != null) {
-      bytes = await readStreamWithLimit(response.body, maxSizeBytes, gateway);
-    } else {
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > maxSizeBytes) {
-        throw new ProfileError(
-          "BUNDLE_NOT_FOUND",
-          `Response ${buffer.byteLength} bytes exceeds limit ${maxSizeBytes} from ${gateway}`
-        );
-      }
-      bytes = new Uint8Array(buffer);
-    }
-    return { bytes, reason: null, retryAsGet: false };
-  };
-  if (effectiveGateways.length > 0) {
-    const sidecarBytes = await tryReadFromSidecar(effectiveGateways[0], cid);
-    if (sidecarBytes !== null && sidecarBytes.byteLength <= maxSizeBytes) {
-      try {
-        verifyCidMatchesBytes(cid, sidecarBytes);
-        if (localHelia !== null) {
-          await putBlockToLocalHelia(localHelia, cid, sidecarBytes);
-        }
-        return sidecarBytes;
-      } catch (verifyErr) {
-        logger.warn(
-          "IPFS-Sidecar",
-          `read CID mismatch on ${cid.slice(0, 16)} from ${effectiveGateways[0]} (${sidecarBytes.byteLength} bytes); falling through to /api/v0/block/get. Reason: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`
-        );
-      }
-    }
-  }
-  for (const gateway of effectiveGateways) {
-    try {
-      let bytesOrNull = null;
-      const attempt = await tryFetchBlock(gateway, "POST");
-      if (attempt.bytes !== null) {
-        bytesOrNull = attempt.bytes;
-      } else if (attempt.retryAsGet) {
-        const second = await tryFetchBlock(gateway, "GET");
-        if (second.bytes !== null) {
-          bytesOrNull = second.bytes;
-        } else {
-          lastError = new Error(`${attempt.reason}; GET retry: ${second.reason}`);
-          continue;
-        }
-      } else {
-        lastError = new Error(attempt.reason ?? "unknown gateway error");
-        continue;
-      }
-      try {
-        verifyCidMatchesBytes(cid, bytesOrNull);
-      } catch (verifyErr) {
-        lastError = verifyErr instanceof Error ? verifyErr : new Error(String(verifyErr));
-        continue;
-      }
-      if (localHelia !== null) {
-        await putBlockToLocalHelia(localHelia, cid, bytesOrNull);
-      }
-      return bytesOrNull;
-    } catch (err) {
-      if (err instanceof ProfileError) throw err;
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-  throw new ProfileError(
-    "BUNDLE_NOT_FOUND",
-    `Failed to fetch CAR ${cid} from all gateways: ${lastError?.message ?? "unknown error"}`,
-    lastError
-  );
-}
-async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
-  let parsedRoot;
-  try {
-    parsedRoot = CID.parse(rootCid);
-  } catch (err) {
-    throw new ProfileError(
-      "BUNDLE_NOT_FOUND",
-      `fetchCarFromIpfs: cannot parse root CID ${rootCid}: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  if (parsedRoot.code === CODEC_RAW) {
-    return fetchFromIpfs(gateways, rootCid, timeoutMs, maxSizeBytesPerBlock, helia);
-  }
-  if (parsedRoot.code !== CODEC_DAG_CBOR) {
-    throw new ProfileError(
-      "BUNDLE_NOT_FOUND",
-      `fetchCarFromIpfs: unsupported root codec 0x${parsedRoot.code.toString(16)} for ${rootCid} (expected dag-cbor 0x71 or raw 0x55)`
-    );
-  }
-  const { decode: dagCborDecode2 } = await import("@ipld/dag-cbor");
-  const { CarWriter: CarWriter2 } = await import("@ipld/car/writer");
-  const visited = /* @__PURE__ */ new Set();
-  const blocks = [];
-  const queue = [rootCid];
-  while (queue.length > 0) {
-    if (blocks.length >= FETCH_CAR_MAX_BLOCKS) {
-      throw new ProfileError(
-        "BUNDLE_NOT_FOUND",
-        `fetchCarFromIpfs: block count exceeded ${FETCH_CAR_MAX_BLOCKS} walking from ${rootCid} (possible cyclic or maliciously-fanned-out DAG)`
-      );
-    }
-    const cidStr = queue.shift();
-    if (visited.has(cidStr)) continue;
-    visited.add(cidStr);
-    let blockCid;
-    try {
-      blockCid = CID.parse(cidStr);
-    } catch (err) {
-      throw new ProfileError(
-        "BUNDLE_NOT_FOUND",
-        `fetchCarFromIpfs: child CID ${cidStr} (reachable from ${rootCid}) failed to parse: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    const blockBytes = await fetchFromIpfs(
-      gateways,
-      cidStr,
-      timeoutMs,
-      maxSizeBytesPerBlock,
-      helia
-    );
-    blocks.push({ cid: blockCid, bytes: blockBytes });
-    if (blockCid.code === CODEC_DAG_CBOR) {
-      let decoded;
-      try {
-        decoded = dagCborDecode2(blockBytes);
-      } catch (err) {
-        throw new ProfileError(
-          "BUNDLE_NOT_FOUND",
-          `fetchCarFromIpfs: dag-cbor decode failed for ${cidStr} (reachable from ${rootCid}): ${err instanceof Error ? err.message : String(err)}`,
-          err
-        );
-      }
-      const visit = (childCid) => {
-        const childStr = childCid.toString();
-        if (!visited.has(childStr)) queue.push(childStr);
-      };
-      if (isUxfElement(decoded)) {
-        walkUxfElement(decoded, visit);
-      } else {
-        collectCidLinks(decoded, visit);
-      }
-    }
-  }
-  const { writer, out } = CarWriter2.create([parsedRoot]);
-  const chunks = [];
-  const collectPromise = (async () => {
-    for await (const chunk of out) {
-      chunks.push(chunk);
-    }
-  })();
-  try {
-    for (const block of blocks) {
-      await writer.put(block);
-    }
-  } finally {
-    await writer.close();
-  }
-  await collectPromise;
-  let totalLength = 0;
-  for (const c of chunks) totalLength += c.length;
-  const carBytes = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const c of chunks) {
-    carBytes.set(c, offset);
-    offset += c.length;
-  }
-  return carBytes;
-}
-function collectCidLinks(value, visit) {
-  if (value === null || value === void 0) return;
-  if (typeof value !== "object") return;
-  if (value instanceof Uint8Array) return;
-  const asCid = CID.asCID(value);
-  if (asCid !== null) {
-    visit(asCid);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectCidLinks(item, visit);
-    return;
-  }
-  for (const v of Object.values(value)) {
-    collectCidLinks(v, visit);
-  }
-}
-function isUxfElement(value) {
-  if (value === null || typeof value !== "object") return false;
-  if (value instanceof Uint8Array) return false;
-  if (Array.isArray(value)) return false;
-  const obj = value;
-  if (!Array.isArray(obj.header)) return false;
-  if (obj.header.length < 4) return false;
-  if (typeof obj.type !== "number") return false;
-  if (typeof obj.content !== "object" || obj.content === null) return false;
-  if (Array.isArray(obj.content)) return false;
-  if (typeof obj.children !== "object" || obj.children === null) return false;
-  if (Array.isArray(obj.children)) return false;
-  return true;
-}
-function contentHashBytesToCid(bytes) {
-  return CID.createV1(CODEC_DAG_CBOR, createMultihash(MULTIHASH_SHA256, bytes));
-}
-function walkUxfElement(node, visit) {
-  const predecessor = node.header[3];
-  if (predecessor instanceof Uint8Array && predecessor.byteLength === SHA256_DIGEST_BYTES) {
-    visit(contentHashBytesToCid(predecessor));
-  } else {
-    const asCid = predecessor != null ? CID.asCID(predecessor) : null;
-    if (asCid !== null) visit(asCid);
-  }
-  for (const value of Object.values(node.children)) {
-    walkUxfChildValue(value, visit);
-  }
-}
-function walkUxfChildValue(value, visit) {
-  if (value === null || value === void 0) return;
-  if (value instanceof Uint8Array) {
-    if (value.byteLength === SHA256_DIGEST_BYTES) {
-      visit(contentHashBytesToCid(value));
-    }
-    return;
-  }
-  const asCid = CID.asCID(value);
-  if (asCid !== null) {
-    visit(asCid);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) walkUxfChildValue(item, visit);
-  }
-}
-function verifyCidMatchesBytes(cidString, bytes) {
-  let parsed;
-  try {
-    parsed = CID.parse(cidString);
-  } catch (err) {
-    throw new ProfileError(
-      "BUNDLE_NOT_FOUND",
-      `Cannot parse CID ${cidString}: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  if (parsed.multihash.code !== 18) {
-    throw new ProfileError(
-      "BUNDLE_NOT_FOUND",
-      `Unsupported multihash code 0x${parsed.multihash.code.toString(16)} for CID ${cidString}; only sha2-256 is verified`
-    );
-  }
-  const expected = parsed.multihash.digest;
-  const actual = sha256(bytes);
-  if (!bytesEqual(expected, actual)) {
-    throw new ProfileError(
-      "BUNDLE_NOT_FOUND",
-      `CID verification failed for ${cidString}: gateway returned bytes whose sha256 does not match the CID`
-    );
-  }
-}
-function bytesEqual(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-function validateGatewayUrls(gateways) {
-  for (const gateway of gateways) {
-    let u;
-    try {
-      u = new URL(gateway);
-    } catch (err) {
-      throw new Error(
-        `Invalid IPFS gateway URL "${gateway}": ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    if (u.protocol !== "http:" && u.protocol !== "https:") {
-      throw new Error(
-        `IPFS gateway URL must use http:// or https://, got "${gateway}" (protocol="${u.protocol}")`
-      );
-    }
-    if (u.username !== "" || u.password !== "") {
-      throw new Error(`IPFS gateway URL must not contain userinfo: "${gateway}"`);
-    }
-  }
-}
-async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
-  const reader = body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  try {
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        reader.cancel();
-        throw new ProfileError(
-          "BUNDLE_NOT_FOUND",
-          `Response from ${gatewayLabel} exceeded size limit of ${maxBytes} bytes (read ${totalBytes} so far)`
-        );
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const result = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return result;
-}
-
-// profile/cid-ref-store.ts
+init_errors3();
+import { CID as CID4 } from "multiformats/cid";
 var CID_REF_SCHEMA_VERSION = 1;
 var FETCH_SIZE_TOLERANCE_BYTES = 128;
 var CidRefStore = class {
@@ -15576,7 +16302,7 @@ var CidRefStore = class {
     if (r.v !== CID_REF_SCHEMA_VERSION) return null;
     if (typeof r.cid !== "string" || r.cid.length === 0) return null;
     try {
-      CID2.parse(r.cid);
+      CID4.parse(r.cid);
     } catch {
       return null;
     }
@@ -15613,7 +16339,7 @@ function validateRef(ref) {
     throw new ProfileError("CID_REF_CORRUPT", `CidRef has invalid cid "${String(ref.cid)}".`);
   }
   try {
-    CID2.parse(ref.cid);
+    CID4.parse(ref.cid);
   } catch (err) {
     throw new ProfileError(
       "CID_REF_CORRUPT",
@@ -16108,7 +16834,7 @@ function coinIdsMatch(a, b) {
 
 // serialization/txf-serializer.ts
 init_constants();
-function bytesToHex5(bytes) {
+function bytesToHex6(bytes) {
   const arr = Array.isArray(bytes) ? bytes : Array.from(bytes);
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -16119,10 +16845,10 @@ function normalizeToHex(value) {
   if (value && typeof value === "object") {
     const obj = value;
     if ("bytes" in obj && (Array.isArray(obj.bytes) || obj.bytes instanceof Uint8Array)) {
-      return bytesToHex5(obj.bytes);
+      return bytesToHex6(obj.bytes);
     }
     if (obj.type === "Buffer" && Array.isArray(obj.data)) {
-      return bytesToHex5(obj.data);
+      return bytesToHex6(obj.data);
     }
   }
   return String(value);
@@ -17693,7 +18419,7 @@ function cryptoRandomUUID() {
 
 // modules/payments/transfer/conservative-source-finalize.ts
 import { PredicateEngineService } from "@unicitylabs/state-transition-sdk/lib/predicate/PredicateEngineService";
-import { RequestId } from "@unicitylabs/state-transition-sdk/lib/api/RequestId";
+import { RequestId as RequestId3 } from "@unicitylabs/state-transition-sdk/lib/api/RequestId";
 import { TransferTransactionData } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferTransactionData";
 function extractPendingChainFromSdkData(sdkDataJson) {
   let parsed;
@@ -17740,7 +18466,7 @@ async function derivePendingTxDescriptor(pendingTx) {
     );
   }
   const sourceStateHash = await txData.sourceState.calculateHash();
-  const reqIdObj = await RequestId.create(senderPubkey, sourceStateHash);
+  const reqIdObj = await RequestId3.create(senderPubkey, sourceStateHash);
   const requestId2 = reqIdObj.toJSON();
   return { requestId: requestId2, transactionHash };
 }
@@ -18598,7 +19324,7 @@ init_errors();
 init_errors();
 init_uxf_transfer();
 init_UxfPackage();
-init_errors3();
+init_errors4();
 init_transfer_payload();
 
 // modules/payments/transfer/bundle-verifier.ts
@@ -18718,7 +19444,7 @@ function parseTokenRoot(hash, element) {
 }
 
 // modules/payments/transfer/bundle-acquirer.ts
-init_errors2();
+init_errors3();
 init_limits2();
 var INLINE_BASE64_SLACK_BYTES = 16;
 var RECIPIENT_MAX_INLINE_CARBASE64_LENGTH = Math.ceil(RELAY_SAFE_CAP_BYTES * 4 / 3) + INLINE_BASE64_SLACK_BYTES;
@@ -22313,26 +23039,26 @@ async function runSubmitPhase(ctx) {
       return { kind: "submitted" };
     }
     if (outcome.kind === "AUTHENTICATOR_VERIFICATION_FAILED") {
-      const safeErr = outcome.error ? sanitizeReasonString(outcome.error) : "";
+      const safeErr2 = outcome.error ? sanitizeReasonString(outcome.error) : "";
       return {
         kind: "hard-fail",
         reason: "belief-divergence",
         skipCascade: false,
-        message: `belief-divergence: aggregator rejected authenticator for ${ctx.subjectPhrase}${safeErr ? ` (${safeErr})` : ""}`
+        message: `belief-divergence: aggregator rejected authenticator for ${ctx.subjectPhrase}${safeErr2 ? ` (${safeErr2})` : ""}`
       };
     }
     if (outcome.kind === "REQUEST_ID_MISMATCH") {
-      const safeErr = outcome.error ? sanitizeReasonString(outcome.error) : "";
+      const safeErr2 = outcome.error ? sanitizeReasonString(outcome.error) : "";
       ctx.emit("transfer:operator-alert", {
         code: "client-error",
         tokenId: ctx.tokenId,
-        message: `REQUEST_ID_MISMATCH on submit: client computed an inconsistent (requestId, sourceState, transactionHash) tuple for ${ctx.subjectPhrase}${safeErr ? ` (${safeErr})` : ""}`
+        message: `REQUEST_ID_MISMATCH on submit: client computed an inconsistent (requestId, sourceState, transactionHash) tuple for ${ctx.subjectPhrase}${safeErr2 ? ` (${safeErr2})` : ""}`
       });
       return {
         kind: "hard-fail",
         reason: "client-error",
         skipCascade: true,
-        message: `client-error: REQUEST_ID_MISMATCH on submit for ${ctx.subjectPhrase}${safeErr ? ` (${safeErr})` : ""}`
+        message: `client-error: REQUEST_ID_MISMATCH on submit for ${ctx.subjectPhrase}${safeErr2 ? ` (${safeErr2})` : ""}`
       };
     }
     lastError = outcome.error;
@@ -22450,12 +23176,12 @@ async function runPollPhase(ctx, ctxResolved) {
     if (pollOutcome.kind === "PATH_INVALID") {
       pathInvalidRetries++;
       if (pathInvalidRetries >= ctx.maxProofErrorRetries) {
-        const safeErr = pollOutcome.error ? sanitizeReasonString(pollOutcome.error) : "";
+        const safeErr2 = pollOutcome.error ? sanitizeReasonString(pollOutcome.error) : "";
         return {
           kind: "hard-fail",
           reason: "proof-invalid",
           skipCascade: false,
-          message: `PATH_INVALID after ${pathInvalidRetries} retries: ${ctx.subjectEqPhrase}${safeErr ? ` (${safeErr})` : ""}`
+          message: `PATH_INVALID after ${pathInvalidRetries} retries: ${ctx.subjectEqPhrase}${safeErr2 ? ` (${safeErr2})` : ""}`
         };
       }
       continue;
@@ -26248,7 +26974,7 @@ import { TokenState as TokenState3 } from "@unicitylabs/state-transition-sdk/lib
 import { CoinId as CoinId3 } from "@unicitylabs/state-transition-sdk/lib/token/fungible/CoinId";
 import { TokenCoinData as TokenCoinData2 } from "@unicitylabs/state-transition-sdk/lib/token/fungible/TokenCoinData";
 import { TokenSplitBuilder as TokenSplitBuilder2 } from "@unicitylabs/state-transition-sdk/lib/transaction/split/TokenSplitBuilder";
-import { HashAlgorithm as HashAlgorithm3 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm6 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicate as UnmaskedPredicate3 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 import { UnmaskedPredicateReference as UnmaskedPredicateReference2 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicateReference";
 import { TransferCommitment as TransferCommitment2 } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferCommitment";
@@ -26304,7 +27030,7 @@ var InstantSplitExecutor = class {
       tokenToSplit.type,
       this.signingService.algorithm,
       this.signingService.publicKey,
-      HashAlgorithm3.SHA256
+      HashAlgorithm6.SHA256
     );
     const senderAddress = await senderAddressRef.toAddress();
     const builder = new TokenSplitBuilder2();
@@ -26387,7 +27113,7 @@ var InstantSplitExecutor = class {
       recipientTokenId,
       tokenToSplit.type,
       this.signingService,
-      HashAlgorithm3.SHA256,
+      HashAlgorithm6.SHA256,
       recipientSalt
     );
     const mintedState = new TokenState3(mintedPredicate, null);
@@ -26625,7 +27351,7 @@ var InstantSplitExecutor = class {
         context.senderTokenId,
         context.tokenType,
         context.signingService,
-        HashAlgorithm3.SHA256,
+        HashAlgorithm6.SHA256,
         context.senderSalt
       );
       const state = new TokenState3(predicate, null);
@@ -26736,7 +27462,7 @@ var InstantSplitExecutor = class {
       mintData.tokenId,
       mintData.tokenType,
       signingService,
-      HashAlgorithm3.SHA256,
+      HashAlgorithm6.SHA256,
       mintData.salt
     );
     const state = new TokenState3(predicate, null);
@@ -26804,7 +27530,7 @@ var InstantSplitExecutor = class {
           context.senderTokenId,
           context.tokenType,
           context.signingService,
-          HashAlgorithm3.SHA256,
+          HashAlgorithm6.SHA256,
           context.senderSalt
         );
         const state = new TokenState3(predicate, null);
@@ -26890,7 +27616,7 @@ init_hex();
 import { Token as Token4 } from "@unicitylabs/state-transition-sdk/lib/token/Token";
 import { TokenState as TokenState4 } from "@unicitylabs/state-transition-sdk/lib/token/TokenState";
 import { TokenType as TokenType2 } from "@unicitylabs/state-transition-sdk/lib/token/TokenType";
-import { HashAlgorithm as HashAlgorithm4 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm7 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicate as UnmaskedPredicate4 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 import { TransferCommitment as TransferCommitment3 } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferCommitment";
 import { TransferTransaction } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferTransaction";
@@ -27021,7 +27747,7 @@ var InstantSplitProcessor = class {
         mintData.tokenId,
         tokenType,
         signingService,
-        HashAlgorithm4.SHA256,
+        HashAlgorithm7.SHA256,
         transferSalt
       );
       const finalRecipientState = new TokenState4(finalRecipientPredicate, null);
@@ -27149,7 +27875,7 @@ var InstantSplitProcessor = class {
         mintData.tokenId,
         tokenType,
         signingService,
-        HashAlgorithm4.SHA256,
+        HashAlgorithm7.SHA256,
         recipientSalt
       );
       const recipientState = new TokenState4(recipientPredicate, null);
@@ -27179,7 +27905,7 @@ var InstantSplitProcessor = class {
         mintData.tokenId,
         tokenType,
         signingService,
-        HashAlgorithm4.SHA256,
+        HashAlgorithm7.SHA256,
         transferSalt
       );
       const finalState = new TokenState4(finalPredicate, null);
@@ -27325,11 +28051,11 @@ import { Token as SdkToken2 } from "@unicitylabs/state-transition-sdk/lib/token/
 import { CoinId as CoinId4 } from "@unicitylabs/state-transition-sdk/lib/token/fungible/CoinId";
 import { TransferCommitment as TransferCommitment4 } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferCommitment";
 import { TransferTransaction as TransferTransaction2 } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferTransaction";
-import { SigningService } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService";
+import { SigningService as SigningService3 } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService";
 import { AddressScheme } from "@unicitylabs/state-transition-sdk/lib/address/AddressScheme";
 import { UnmaskedPredicate as UnmaskedPredicate5 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 import { TokenState as TokenState5 } from "@unicitylabs/state-transition-sdk/lib/token/TokenState";
-import { HashAlgorithm as HashAlgorithm5 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm8 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { TokenType as TokenType3 } from "@unicitylabs/state-transition-sdk/lib/token/TokenType";
 import { MintCommitment as MintCommitment3 } from "@unicitylabs/state-transition-sdk/lib/transaction/MintCommitment";
 import { MintTransactionData as MintTransactionData3 } from "@unicitylabs/state-transition-sdk/lib/transaction/MintTransactionData";
@@ -27338,8 +28064,8 @@ import { InclusionProof } from "@unicitylabs/state-transition-sdk/lib/transactio
 import { InvalidJsonStructureError } from "@unicitylabs/state-transition-sdk/lib/InvalidJsonStructureError";
 import { VerificationError } from "@unicitylabs/state-transition-sdk/lib/verification/VerificationError";
 import { TransferTransactionData as TransferTransactionData2 } from "@unicitylabs/state-transition-sdk/lib/transaction/TransferTransactionData";
-import { RequestId as RequestId2 } from "@unicitylabs/state-transition-sdk/lib/api/RequestId";
-import { Authenticator } from "@unicitylabs/state-transition-sdk/lib/api/Authenticator";
+import { RequestId as RequestId4 } from "@unicitylabs/state-transition-sdk/lib/api/RequestId";
+import { Authenticator as Authenticator2 } from "@unicitylabs/state-transition-sdk/lib/api/Authenticator";
 function isUxfV1Payload(value) {
   if (value === null || typeof value !== "object") return false;
   const kind = value.kind;
@@ -27846,6 +28572,22 @@ var PaymentsModule = class _PaymentsModule {
   spendQueue;
   /** Cache of parsed SdkToken data for synchronous queue re-evaluation */
   parsedTokenCache = /* @__PURE__ */ new Map();
+  /**
+   * Issue #312 — advisory connectivity hint (NOT a send-path gate). When
+   * wired, every `send()` call reads this getter once at the top of the
+   * public entry point. A `'down'` return is LOGGED as a warning but
+   * does not block the send — the state-transition-sdk pattern is to
+   * call the real op and let transport surface a `JsonRpcNetworkError`
+   * on failure. ST-SDK has no health/ping API, so any preflight probe
+   * is a Sphere-SDK invention without an upstream contract; refusing
+   * preemptively would block sends that the aggregator would actually
+   * accept (e.g. recovery between probe and submit).
+   *
+   * Wired by `Sphere.initializeModules()` via
+   * {@link configureConnectivityGate}. Null = unwired (no advisory log);
+   * the module behaves exactly as it did pre-#312.
+   */
+  _connectivityGate = null;
   constructor(config) {
     this.moduleConfig = {
       autoSync: config?.autoSync ?? true,
@@ -27969,6 +28711,25 @@ var PaymentsModule = class _PaymentsModule {
    */
   getFeatures() {
     return this.features;
+  }
+  /**
+   * Issue #312 — wire the advisory connectivity hint.
+   *
+   * Sphere calls this once during `initializeModules()` with a getter
+   * that reads `sphere.connectivity.status().aggregator`. The getter is
+   * invoked once per `send()` call at the very top of the public entry
+   * point. A `'down'` return is LOGGED as a warning; it does NOT abort
+   * the send. The real op (submitCommitment via state-transition-sdk)
+   * is the authoritative health signal — if the aggregator is truly
+   * unreachable, transport throws `JsonRpcNetworkError` and the SDK's
+   * retry/recovery layer handles it.
+   *
+   * Pass `null` to unwire (no advisory log; exactly as pre-#312).
+   * Wired callers MAY replace the gate at runtime — the latest call
+   * wins.
+   */
+  configureConnectivityGate(fn) {
+    this._connectivityGate = fn;
   }
   /**
    * Register a callback to be notified when a token is added or updated.
@@ -28381,7 +29142,7 @@ var PaymentsModule = class _PaymentsModule {
                   sourceToken.id,
                   sourceToken.type,
                   signingService,
-                  HashAlgorithm5.SHA256,
+                  HashAlgorithm8.SHA256,
                   transferSalt
                 );
                 const recipientState = new TokenState5(recipientPredicate, null);
@@ -28413,7 +29174,7 @@ var PaymentsModule = class _PaymentsModule {
                       );
                     }
                     const sourceStateHash = await txData.sourceState.calculateHash();
-                    const reqIdObj = await RequestId2.create(senderPubkey, sourceStateHash);
+                    const reqIdObj = await RequestId4.create(senderPubkey, sourceStateHash);
                     const reqIdHex = reqIdObj.toJSON();
                     const authenticatorJsonStr = "";
                     pendingFinalizationCtx = {
@@ -30255,6 +31016,24 @@ var PaymentsModule = class _PaymentsModule {
    */
   async send(originalRequest, internal) {
     this.ensureInitialized();
+    if (this._connectivityGate) {
+      let gateValue = "unknown";
+      try {
+        gateValue = this._connectivityGate();
+      } catch (err) {
+        logger.warn(
+          "PaymentsModule",
+          `Connectivity gate threw (treating as 'unknown'): ${err instanceof Error ? err.message : String(err)}`
+        );
+        gateValue = "unknown";
+      }
+      if (gateValue === "down") {
+        logger.warn(
+          "PaymentsModule",
+          "Connectivity gate reports aggregator 'down'; proceeding with send and letting transport surface any real failure"
+        );
+      }
+    }
     const __span = logger.time("payments:send", "send", {
       recipient: originalRequest.recipient?.slice(0, 16),
       coinId: originalRequest.coinId?.slice(0, 16),
@@ -32538,8 +33317,8 @@ var PaymentsModule = class _PaymentsModule {
     const getTransferCommitmentJson = async () => {
       if (inputs) {
         try {
-          const auth = Authenticator.fromJSON(inputs.transferAuthenticatorJson);
-          const requestId2 = await RequestId2.create(auth.publicKey, auth.stateHash);
+          const auth = Authenticator2.fromJSON(inputs.transferAuthenticatorJson);
+          const requestId2 = await RequestId4.create(auth.publicKey, auth.stateHash);
           return {
             requestId: requestId2.toJSON(),
             transactionData: inputs.transferTransactionDataJson,
@@ -32702,8 +33481,8 @@ var PaymentsModule = class _PaymentsModule {
     let transferCommitment;
     if (inputs) {
       try {
-        const auth = Authenticator.fromJSON(inputs.transferAuthenticatorJson);
-        const requestId2 = await RequestId2.create(auth.publicKey, auth.stateHash);
+        const auth = Authenticator2.fromJSON(inputs.transferAuthenticatorJson);
+        const requestId2 = await RequestId4.create(auth.publicKey, auth.stateHash);
         transferCommitment = await TransferCommitment4.fromJSON({
           requestId: requestId2.toJSON(),
           transactionData: inputs.transferTransactionDataJson,
@@ -32731,7 +33510,7 @@ var PaymentsModule = class _PaymentsModule {
       mintData.tokenId,
       tokenType,
       signingService,
-      HashAlgorithm5.SHA256,
+      HashAlgorithm8.SHA256,
       transferSalt
     );
     const recipientState = new TokenState5(recipientPredicate, null);
@@ -33010,7 +33789,7 @@ var PaymentsModule = class _PaymentsModule {
           continue;
         }
         const sourceStateHash = await txData.sourceState.calculateHash();
-        const requestId2 = await RequestId2.create(senderPubkey, sourceStateHash);
+        const requestId2 = await RequestId4.create(senderPubkey, sourceStateHash);
         const requestIdHex = requestId2.toJSON();
         const sourceTokenJsonObj = {
           ...parsed,
@@ -33620,7 +34399,7 @@ var PaymentsModule = class _PaymentsModule {
     let pendingTokens;
     if (ref) {
       if (!this.deps.cidRefStore) {
-        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
         throw new ProfileError2(
           "CID_REF_UNREADABLE",
           `PaymentsModule.loadPendingV5Tokens: KV at ${STORAGE_KEYS_ADDRESS.PENDING_V5_TOKENS} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. Pending V5 transfers cannot be restored without IPFS access. Check PaymentsModule init \u2014 is cidRefStore provided?`
@@ -34407,7 +35186,7 @@ var PaymentsModule = class _PaymentsModule {
         tokenType,
         signingService.algorithm,
         signingService.publicKey,
-        HashAlgorithm5.SHA256
+        HashAlgorithm8.SHA256
       );
       const ownerAddress = await addressRef.toAddress();
       const minter = new NametagMinter({
@@ -34491,7 +35270,7 @@ var PaymentsModule = class _PaymentsModule {
         tokenType,
         signingService.algorithm,
         signingService.publicKey,
-        HashAlgorithm5.SHA256
+        HashAlgorithm8.SHA256
       );
       const ownerAddress = await addressRef.toAddress();
       const salt = new Uint8Array(32);
@@ -34532,7 +35311,7 @@ var PaymentsModule = class _PaymentsModule {
         tokenId,
         tokenType,
         signingService,
-        HashAlgorithm5.SHA256,
+        HashAlgorithm8.SHA256,
         salt
       );
       const tokenState = new TokenState5(predicate, null);
@@ -36828,7 +37607,7 @@ var PaymentsModule = class _PaymentsModule {
   async createSigningService() {
     const privateKeyHex = this.deps.identity.privateKey;
     const privateKeyBytes = hexToBytes(privateKeyHex);
-    const signingService = await SigningService.createFromSecret(privateKeyBytes);
+    const signingService = await SigningService3.createFromSecret(privateKeyBytes);
     if (this._signingPublicKeyHex === null) {
       try {
         const pkBytes = signingService.publicKey;
@@ -36862,7 +37641,7 @@ var PaymentsModule = class _PaymentsModule {
       tokenType,
       "secp256k1",
       pubkeyBytes,
-      HashAlgorithm5.SHA256
+      HashAlgorithm8.SHA256
     );
     return addressRef.toAddress();
   }
@@ -37017,7 +37796,7 @@ var PaymentsModule = class _PaymentsModule {
       sourceToken.id,
       sourceToken.type,
       chosenSigner,
-      HashAlgorithm5.SHA256,
+      HashAlgorithm8.SHA256,
       transferSalt
     );
     const recipientState = new TokenState5(recipientPredicate, null);
@@ -37043,7 +37822,7 @@ var PaymentsModule = class _PaymentsModule {
         sourceToken.id,
         sourceToken.type,
         signingService,
-        HashAlgorithm5.SHA256,
+        HashAlgorithm8.SHA256,
         transferSalt
       );
       const reference = await predicate.getReference();
@@ -37120,7 +37899,7 @@ var PaymentsModule = class _PaymentsModule {
       }
       let candidateSigner;
       try {
-        candidateSigner = await SigningService.createFromSecret(
+        candidateSigner = await SigningService3.createFromSecret(
           hexToBytes(addressInfo.privateKey)
         );
       } catch (err) {
@@ -37822,7 +38601,7 @@ var PaymentsModule = class _PaymentsModule {
     const ref = CidRefStore.tryParseRef(data);
     if (ref) {
       if (!this.deps.cidRefStore) {
-        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
         throw new ProfileError2(
           "CID_REF_UNREADABLE",
           `PaymentsModule.loadOutbox: KV at ${STORAGE_KEYS_ADDRESS.OUTBOX} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. Outbox cannot be restored without IPFS access. Check PaymentsModule init \u2014 is cidRefStore provided?`
@@ -38972,7 +39751,7 @@ import { TokenId as TokenId4 } from "@unicitylabs/state-transition-sdk/lib/token
 import { TokenState as TokenState6 } from "@unicitylabs/state-transition-sdk/lib/token/TokenState";
 import { TokenType as TokenType4 } from "@unicitylabs/state-transition-sdk/lib/token/TokenType";
 import { CoinId as CoinId6 } from "@unicitylabs/state-transition-sdk/lib/token/fungible/CoinId";
-import { HashAlgorithm as HashAlgorithm6 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm9 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicate as UnmaskedPredicate6 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate";
 
 // modules/communications/CommunicationsModule.ts
@@ -39227,7 +40006,7 @@ var CommunicationsModule = class _CommunicationsModule {
     const ref = CidRefStore.tryParseRef(data);
     if (ref) {
       if (!this.deps.cidRefStore) {
-        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
         throw new ProfileError2(
           "CID_REF_UNREADABLE",
           `CommunicationsModule.load: KV at ${keyForDiagnostic} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. DMs cannot be restored without IPFS access. Check CommunicationsModule init \u2014 is cidRefStore provided?`
@@ -40065,7 +40844,7 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
           throw new ProfileError2(
             "CID_REF_UNREADABLE",
             `GroupChatModule.load: groups key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. Check module init.`
@@ -40108,7 +40887,7 @@ var GroupChatModule = class {
       let assembledMessages = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
           throw new ProfileError2(
             "CID_REF_UNREADABLE",
             `GroupChatModule.load: messages:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
@@ -40267,7 +41046,7 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
           throw new ProfileError2(
             "CID_REF_UNREADABLE",
             `GroupChatModule.load: members:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
@@ -40350,7 +41129,7 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
           throw new ProfileError2(
             "CID_REF_UNREADABLE",
             `GroupChatModule.load: processedEvents key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
@@ -45641,15 +46420,15 @@ var AccountingModule = class _AccountingModule {
       const { TokenType: TokenType6 } = await import("@unicitylabs/state-transition-sdk/lib/token/TokenType.js");
       const { MintTransactionData: MintTransactionData4 } = await import("@unicitylabs/state-transition-sdk/lib/transaction/MintTransactionData.js");
       const { MintCommitment: MintCommitment4 } = await import("@unicitylabs/state-transition-sdk/lib/transaction/MintCommitment.js");
-      const { SigningService: SigningService4 } = await import("@unicitylabs/state-transition-sdk/lib/sign/SigningService.js");
-      const { HashAlgorithm: HashAlgorithm9 } = await import("@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js");
+      const { SigningService: SigningService5 } = await import("@unicitylabs/state-transition-sdk/lib/sign/SigningService.js");
+      const { HashAlgorithm: HashAlgorithm11 } = await import("@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js");
       const { DataHasher: DataHasher2 } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHasher.js");
       const { UnmaskedPredicate: UnmaskedPredicate7 } = await import("@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicate.js");
       const { UnmaskedPredicateReference: UnmaskedPredicateReference4 } = await import("@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicateReference.js");
       const { TokenState: TokenState7 } = await import("@unicitylabs/state-transition-sdk/lib/token/TokenState.js");
       const { Token: SdkToken5 } = await import("@unicitylabs/state-transition-sdk/lib/token/Token.js");
       const { waitInclusionProof: waitInclusionProof6 } = await import("@unicitylabs/state-transition-sdk/lib/util/InclusionProofUtils.js");
-      const hash = await new DataHasher2(HashAlgorithm9.SHA256).update(invoiceBytesEncoded).digest();
+      const hash = await new DataHasher2(HashAlgorithm11.SHA256).update(invoiceBytesEncoded).digest();
       const invoiceTokenId = new TokenId5(hash.imprint);
       const invoiceId = invoiceTokenId.toJSON();
       if (this.invoiceTermsCache.has(invoiceId)) {
@@ -45661,12 +46440,12 @@ var AccountingModule = class _AccountingModule {
       const invoiceTokenType = new TokenType6(
         Buffer.from(INVOICE_TOKEN_TYPE_HEX, "hex")
       );
-      const signingService = await SigningService4.createFromSecret(signingKeyBytes);
+      const signingService = await SigningService5.createFromSecret(signingKeyBytes);
       const addressRef = await UnmaskedPredicateReference4.create(
         invoiceTokenType,
         signingService.algorithm,
         signingService.publicKey,
-        HashAlgorithm9.SHA256
+        HashAlgorithm11.SHA256
       );
       const ownerAddress = await addressRef.toAddress();
       const mintData = await MintTransactionData4.create(
@@ -45751,7 +46530,7 @@ var AccountingModule = class _AccountingModule {
         invoiceTokenId,
         invoiceTokenType,
         signingService,
-        HashAlgorithm9.SHA256,
+        HashAlgorithm11.SHA256,
         salt
       );
       const tokenState = new TokenState7(invoicePredicate, null);
@@ -46180,10 +46959,10 @@ var AccountingModule = class _AccountingModule {
     }
     {
       const { DataHasher: DataHasher2 } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHasher.js");
-      const { HashAlgorithm: HashAlgorithm9 } = await import("@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js");
+      const { HashAlgorithm: HashAlgorithm11 } = await import("@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm.js");
       const { TokenId: TokenId5 } = await import("@unicitylabs/state-transition-sdk/lib/token/TokenId.js");
       const reSerializedBytes = new TextEncoder().encode(canonicalSerialize(terms));
-      const hash = await new DataHasher2(HashAlgorithm9.SHA256).update(reSerializedBytes).digest();
+      const hash = await new DataHasher2(HashAlgorithm11.SHA256).update(reSerializedBytes).digest();
       const reTokenId = new TokenId5(hash.imprint).toJSON();
       if (reTokenId !== tokenId) {
         throw new SphereError(
@@ -50106,7 +50885,7 @@ var AccountingModule = class _AccountingModule {
     const ref = CidRefStore.tryParseRef(raw2);
     if (ref) {
       if (!this.deps.cidRefStore) {
-        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors2(), errors_exports));
+        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
         throw new ProfileError2(
           "CID_REF_UNREADABLE",
           `AccountingModule._parseLedgerPayload: ledger for invoice ${invoiceId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. Invoice payments cannot be restored without IPFS access. Check AccountingModule init \u2014 is cidRefStore provided?`
@@ -54575,7 +55354,7 @@ init_errors();
 import CryptoJS8 from "crypto-js";
 init_crypto();
 function uint8ArrayToWordArray(u8arr) {
-  const hex = bytesToHex4(u8arr);
+  const hex = bytesToHex5(u8arr);
   return CryptoJS8.enc.Hex.parse(hex);
 }
 function isSQLiteDatabase(data) {
@@ -54640,7 +55419,7 @@ function findWpkhDescriptor(data) {
 }
 function extractChainCodeFromXpub(xpubString) {
   const decoded = base58Decode(xpubString);
-  return bytesToHex4(decoded.slice(13, 45));
+  return bytesToHex5(decoded.slice(13, 45));
 }
 function findMasterChainCode(data) {
   const xpubPattern = new TextEncoder().encode("xpub");
@@ -54665,7 +55444,7 @@ function findMasterChainCode(data) {
         const decoded = base58Decode(xpubStr);
         const depth = decoded[4];
         if (depth === 0) {
-          return bytesToHex4(decoded.slice(13, 45));
+          return bytesToHex5(decoded.slice(13, 45));
         }
       } catch {
       }
@@ -54682,7 +55461,7 @@ function extractDescriptorKeys(data) {
     for (let checkPos = index + descriptorKeyPattern.length; checkPos < Math.min(index + descriptorKeyPattern.length + 200, data.length - 40); checkPos++) {
       if (data[checkPos] === 211 && data[checkPos + 1] === 2 && data[checkPos + 2] === 1 && data[checkPos + 3] === 1 && data[checkPos + 4] === 4 && data[checkPos + 5] === 32) {
         const privKey = data.slice(checkPos + 6, checkPos + 38);
-        const privKeyHex = bytesToHex4(privKey);
+        const privKeyHex = bytesToHex5(privKey);
         if (isValidPrivateKey(privKeyHex)) {
           keys.push(privKeyHex);
           break;
@@ -54702,7 +55481,7 @@ function extractLegacyKeys(data) {
     for (let i = index; i < Math.min(index + 200, data.length - 34); i++) {
       if (data[i] === searchPattern[0] && data[i + 1] === searchPattern[1]) {
         const privKey = data.slice(i + 2, i + 34);
-        const privKeyHex = bytesToHex4(privKey);
+        const privKeyHex = bytesToHex5(privKey);
         if (isValidPrivateKey(privKeyHex)) {
           keys.push(privKeyHex);
           break;
@@ -54737,8 +55516,8 @@ function findEncryptedKeyForDescriptor(data, descriptorId) {
 }
 async function decryptCMasterKey(cmk, password, onProgress) {
   const { encryptedKey, salt, iterations } = cmk;
-  const passwordHex = bytesToHex4(new TextEncoder().encode(password));
-  const saltHex = bytesToHex4(salt);
+  const passwordHex = bytesToHex5(new TextEncoder().encode(password));
+  const saltHex = bytesToHex5(salt);
   const inputHex = passwordHex + saltHex;
   let hash = CryptoJS8.SHA512(CryptoJS8.enc.Hex.parse(inputHex));
   const BATCH_SIZE = 1e3;
@@ -54923,9 +55702,9 @@ async function parseAndDecryptWalletDat(data, password, onProgress) {
 }
 
 // core/Sphere.ts
-import { SigningService as SigningService3 } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService";
+import { SigningService as SigningService4 } from "@unicitylabs/state-transition-sdk/lib/sign/SigningService";
 import { TokenType as TokenType5 } from "@unicitylabs/state-transition-sdk/lib/token/TokenType";
-import { HashAlgorithm as HashAlgorithm8 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
+import { HashAlgorithm as HashAlgorithm10 } from "@unicitylabs/state-transition-sdk/lib/hash/HashAlgorithm";
 import { UnmaskedPredicateReference as UnmaskedPredicateReference3 } from "@unicitylabs/state-transition-sdk/lib/predicate/embedded/UnmaskedPredicateReference";
 import { normalizeNametag as normalizeNametag2, isPhoneNumber } from "@unicitylabs/nostr-js-sdk";
 function isValidNametag2(nametag) {
@@ -54933,16 +55712,18 @@ function isValidNametag2(nametag) {
   return /^[a-z0-9_-]{3,20}$/.test(nametag);
 }
 var UNICITY_TOKEN_TYPE_HEX2 = "f8aa13834268d29355ff12183066f0cb902003629bbc5eb9ef0efbe397867509";
+var RESET_EPOCH_DISCOVERY_TIMEOUT_MS = 15e3;
+var RESET_EPOCH_PUBLISH_TIMEOUT_MS = 3e4;
 async function deriveL3PredicateAddress(privateKey) {
   const secret = hexToBytes(privateKey);
-  const signingService = await SigningService3.createFromSecret(secret);
+  const signingService = await SigningService4.createFromSecret(secret);
   const tokenTypeBytes = Buffer.from(UNICITY_TOKEN_TYPE_HEX2, "hex");
   const tokenType = new TokenType5(tokenTypeBytes);
   const predicateRef = UnmaskedPredicateReference3.create(
     tokenType,
     signingService.algorithm,
     signingService.publicKey,
-    HashAlgorithm8.SHA256
+    HashAlgorithm10.SHA256
   );
   return (await (await predicateRef).toAddress()).toString();
 }
@@ -55006,6 +55787,25 @@ var Sphere = class _Sphere {
    * after wallet load. `null` when no fallback was supplied.
    */
   _fallbackStorage = null;
+  /**
+   * Issue #309 review — set when `fallbackStorage.connect()` failed
+   * during load/init. The fallback is demoted to `null` so the rest of
+   * the boot proceeds; this field preserves the original error for
+   * forensics. `null` when there's no fallback or the connect succeeded.
+   */
+  _fallbackStorageError = null;
+  /**
+   * Issue #330 — read-only fallback TOKEN storage consulted by the
+   * primary token-storage provider on read miss or eviction. Set once
+   * at construction by the static factories. `null` when no fallback
+   * was supplied. Token-side analogue of `_fallbackStorage`.
+   *
+   * Wired into ProfileTokenStorageProvider via the
+   * `fallbackTokenStorage` option so the provider can consult the
+   * legacy `IndexedDBTokenStorageProvider` when a Profile block read
+   * fails (e.g. `[CRITICAL-BLOCK-EVICTED]`). Never written to.
+   */
+  _fallbackTokenStorage = null;
   _tokenStorageProviders = /* @__PURE__ */ new Map();
   _transport;
   _oracle;
@@ -55041,6 +55841,24 @@ var Sphere = class _Sphere {
   _market = null;
   _accounting = null;
   _swap = null;
+  /**
+   * Issue #312 — unified connectivity surface. Construction is deferred to
+   * `initializeModules()` so the manager binds to the same OracleProvider /
+   * TransportProvider / IPFS gateways already wired into payments. The
+   * manager's initial state is `'unknown'` for all backends; the first
+   * probe fires async, so `sphere.connectivity.status()` is usable
+   * immediately after `Sphere.init()` returns but reports `'unknown'`
+   * until the first probes land.
+   *
+   * Null in two cases:
+   *   - The Sphere is mid-construction (before `initializeModules()` ran).
+   *   - The wallet was created with no connectivity-eligible backends
+   *     (currently impossible in practice — every wallet has at least an
+   *     oracle and a transport).
+   *
+   * Accessed via {@link Sphere.connectivity}.
+   */
+  _connectivity = null;
   // Per-address module instances (Phase 2: independent parallel operation)
   _addressModules = /* @__PURE__ */ new Map();
   _transportMux = null;
@@ -55163,6 +55981,7 @@ var Sphere = class _Sphere {
       const sphere2 = await _Sphere.load({
         storage: options.storage,
         fallbackStorage: options.fallbackStorage,
+        fallbackTokenStorage: options.fallbackTokenStorage,
         transport: options.transport,
         oracle: options.oracle,
         tokenStorage: options.tokenStorage,
@@ -55407,6 +56226,29 @@ var Sphere = class _Sphere {
     sphere._publishToIpfs = options.publishToIpfs ?? null;
     sphere._cidFetchGateways = options.cidFetchGateways ?? null;
     sphere._fallbackStorage = options.fallbackStorage ?? null;
+    sphere._fallbackTokenStorage = options.fallbackTokenStorage ?? null;
+    if (sphere._fallbackTokenStorage === null) {
+      try {
+        if (typeof options.storage.isConnected === "function" && options.storage.isConnected() && typeof options.storage.get === "function") {
+          const markerValue = await options.storage.get("migration.migratedAt");
+          if (typeof markerValue === "string" && markerValue.length > 0) {
+            logger.warn(
+              "Sphere",
+              "Issue #330: legacy-migration marker detected on storage but no `fallbackTokenStorage` was provided to Sphere.init/load. Tokens that were durable in the legacy IndexedDB before Profile migration are NOT recoverable from this session. Use `createBrowserProfileProvidersAuto` (or wire a legacy `IndexedDBTokenStorageProvider` as `fallbackTokenStorage` manually) to close this gap."
+            );
+          }
+        }
+      } catch {
+      }
+    }
+    if (sphere._fallbackTokenStorage !== null) {
+      for (const provider of sphere._tokenStorageProviders.values()) {
+        const setter = provider.setFallbackTokenStorage;
+        if (typeof setter === "function") {
+          setter.call(provider, sphere._fallbackTokenStorage);
+        }
+      }
+    }
     if (!options.storage.isConnected()) {
       await options.storage.connect();
     }
@@ -55414,11 +56256,18 @@ var Sphere = class _Sphere {
       try {
         await sphere._fallbackStorage.connect();
       } catch (err) {
-        logger.warn(
+        const errMessage6 = err instanceof Error ? err.message : String(err);
+        logger.error(
           "Sphere",
-          `fallbackStorage.connect failed; proceeding without fallback: ${err instanceof Error ? err.message : String(err)}`
+          `fallbackStorage.connect failed; proceeding WITHOUT fallback (identity recovery will not be attempted from legacy storage): ${errMessage6}`
         );
         sphere._fallbackStorage = null;
+        sphere._fallbackStorageError = err instanceof Error ? err : new Error(errMessage6);
+        sphere.emitEvent("storage:fallback-demoted", {
+          reason: "connect-failed",
+          error: errMessage6,
+          at: Date.now()
+        });
       }
     }
     progress?.({ step: "storing_keys", message: "Loading wallet keys..." });
@@ -55605,6 +56454,9 @@ var Sphere = class _Sphere {
    * await Sphere.clear({
    *   storage: providers.storage,
    *   tokenStorage: providers.tokenStorage,
+   *   // Issue #330 — pass the legacy fallback if the wallet was
+   *   // migrated, so the resurrection footgun is closed.
+   *   fallbackTokenStorage: providers.fallbackTokenStorage,
    * });
    *
    * @example
@@ -55614,6 +56466,7 @@ var Sphere = class _Sphere {
   static async clear(storageOrOptions) {
     const storage = "get" in storageOrOptions ? storageOrOptions : storageOrOptions.storage;
     const tokenStorage = "get" in storageOrOptions ? void 0 : storageOrOptions.tokenStorage;
+    const fallbackTokenStorage = "get" in storageOrOptions ? void 0 : storageOrOptions.fallbackTokenStorage;
     if (_Sphere.instance) {
       logger.debug("Sphere", "Destroying Sphere instance...");
       await _Sphere.instance.destroy();
@@ -55633,6 +56486,18 @@ var Sphere = class _Sphere {
       }
     } else {
       logger.debug("Sphere", "No token storage provider to clear");
+    }
+    if (fallbackTokenStorage?.clear) {
+      logger.debug("Sphere", "Clearing fallback (legacy) token storage...");
+      try {
+        if (typeof fallbackTokenStorage.isConnected === "function" && !fallbackTokenStorage.isConnected() && typeof fallbackTokenStorage.connect === "function") {
+          await fallbackTokenStorage.connect();
+        }
+        await fallbackTokenStorage.clear();
+        logger.debug("Sphere", "Fallback token storage cleared");
+      } catch (err) {
+        logger.warn("Sphere", "Fallback token storage clear failed:", err);
+      }
     }
     logger.debug("Sphere", "Clearing KV storage...");
     if (!storage.isConnected()) {
@@ -55703,6 +56568,416 @@ var Sphere = class _Sphere {
   get swap() {
     return this._swap;
   }
+  /**
+   * Issue #310 — Profile-mode public API surface.
+   *
+   * Returns a {@link SphereProfileHandle} when the wallet's
+   * StorageProvider is a Profile-backed adapter (duck-typed via the
+   * presence of `getPointerLayer`). Returns `null` for legacy
+   * (IndexedDB / File) storage — callers MUST null-check.
+   *
+   * The handle's primary method is `resetEpoch({ reason })`, which
+   * bumps the wallet's permanent OpLog epoch floor by +1 and triggers
+   * a republish so all clients refuse to walk back to any prior epoch.
+   * See `profile/profile-handle.ts` for the full contract.
+   */
+  get profile() {
+    const storage = this._storage;
+    if (typeof storage.getPointerLayer !== "function") {
+      return null;
+    }
+    return this.buildProfileHandle();
+  }
+  /**
+   * Lazily-constructed (per-call) handle so it picks up identity /
+   * storage rebinds across `Sphere.load()` reattach cycles. The handle
+   * is a thin lambda that closes over `this` — no state lives inside
+   * it.
+   */
+  buildProfileHandle() {
+    return {
+      resetEpoch: (params) => this.resetEpochImpl(params),
+      getEpochFloor: () => this.getEpochFloorImpl()
+    };
+  }
+  /**
+   * Issue #310 — read the wallet's persisted epoch floor. Returns 0
+   * if the wallet has never observed a higher epoch on-chain AND has
+   * never called `resetEpoch`.
+   */
+  async getEpochFloorImpl() {
+    const raw2 = await this._storage.get(LOCAL_EPOCH_FLOOR_KEY);
+    if (raw2 === null) return 0;
+    const parsed = Number.parseInt(raw2, 10);
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+      return 0;
+    }
+    return parsed;
+  }
+  /**
+   * Issue #310 — serialization guard for concurrent `resetEpoch` calls
+   * on the same Sphere instance. Two concurrent invocations could
+   * otherwise both observe floor=N, both write floor=N+1, and emit
+   * two events for what is logically one epoch bump (the second
+   * caller's intent is silently merged into the first). Holding a
+   * per-instance promise serializes the read-modify-write cycle.
+   *
+   * This guard does NOT protect against concurrent SENDS / OpLog
+   * writes from PaymentsModule — those run through the OrbitDB
+   * adapter directly and are subject to OrbitDB's own write
+   * serialization. A concurrent send while resetEpoch is wiping the
+   * OpLog surfaces as a write error from PaymentsModule (caught by
+   * the dispatcher's retry path). Callers SHOULD quiesce sends
+   * externally; this is documented on `SphereProfileHandle.resetEpoch`.
+   */
+  _resetEpochInFlight = null;
+  /**
+   * Issue #310 — bump the wallet's OpLog epoch floor by +1, kick off a
+   * republish, and emit `'profile:epoch-reset'`. See
+   * `SphereProfileHandle.resetEpoch` for the full contract.
+   */
+  async resetEpochImpl(params) {
+    const storage = this._storage;
+    if (typeof storage.getPointerLayer !== "function") {
+      throw new SphereError(
+        "sphere.profile.resetEpoch requires Profile-mode storage (got non-Profile StorageProvider).",
+        "NOT_PROFILE_MODE"
+      );
+    }
+    if (typeof params.reason !== "string" || params.reason.length === 0) {
+      throw new SphereError(
+        "sphere.profile.resetEpoch: reason must be a non-empty string.",
+        "INVALID_CONFIG"
+      );
+    }
+    const reasonBytes = new TextEncoder().encode(params.reason);
+    if (reasonBytes.byteLength > EPOCH_RESET_REASON_MAX_BYTES) {
+      throw new SphereError(
+        `sphere.profile.resetEpoch: reason ${reasonBytes.byteLength} bytes exceeds cap ${EPOCH_RESET_REASON_MAX_BYTES}.`,
+        "INVALID_CONFIG"
+      );
+    }
+    const prior = this._resetEpochInFlight;
+    const promise = (async () => {
+      if (prior !== null) {
+        try {
+          await prior;
+        } catch {
+        }
+      }
+      return this.resetEpochCore(params);
+    })();
+    this._resetEpochInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this._resetEpochInFlight === promise) {
+        this._resetEpochInFlight = null;
+      }
+    }
+  }
+  /**
+   * Issue #310 — core read-modify-write cycle for a single resetEpoch
+   * call. Wrapped by `resetEpochImpl` with the mutex.
+   *
+   * PR #316 F1 fix — the floor bump now consults the on-chain epoch
+   * floor (`pointer.discoverLatestVersion().pickedEpoch`) before
+   * computing `newEpoch = max(local, discovered) + 1`. This closes
+   * the cross-device monotonicity gap: two devices that both observe
+   * `localFloor=N` will each discover the same `chainFloor=N` (or
+   * better) and both bump to N+1; whichever device's publish lands
+   * first wins, and the loser's subsequent publish forces a re-
+   * discovery (now seeing the winner's N+1) so its NEXT bump goes
+   * to N+2.
+   */
+  async resetEpochCore(params) {
+    const ts = Date.now();
+    try {
+      const currentEpoch = await this.getEpochFloorImpl();
+      const discoveryTimeoutMs = params.discoveryTimeoutMs ?? RESET_EPOCH_DISCOVERY_TIMEOUT_MS;
+      let discoveredEpoch = 0;
+      let discoveryConsulted = false;
+      let discoveryError = null;
+      if (discoveryTimeoutMs > 0) {
+        try {
+          discoveredEpoch = await this.discoverChainEpochFloor(
+            discoveryTimeoutMs
+          );
+          discoveryConsulted = true;
+        } catch (err) {
+          discoveryError = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            "Sphere",
+            `resetEpoch: discovery failed (continuing with local floor only \u2014 new epoch is PROVISIONAL): ${discoveryError}`
+          );
+        }
+      }
+      const baseEpoch = Math.max(currentEpoch, discoveredEpoch);
+      const newEpoch = baseEpoch + 1;
+      await this._storage.set(LOCAL_EPOCH_FLOOR_KEY, String(newEpoch));
+      await this._storage.set(LOCAL_EPOCH_RESET_REASON_KEY, params.reason);
+      try {
+        const storageWithAdapter = this._storage;
+        const adapter = storageWithAdapter.getOrbitDbAdapter?.() ?? null;
+        if (adapter !== null && typeof adapter.resetCorruptedLog === "function") {
+          await adapter.resetCorruptedLog({
+            context: `sphere.profile.resetEpoch: ${params.reason}`
+          });
+        }
+      } catch (err) {
+        logger.warn(
+          "Sphere",
+          `resetEpoch: OpLog wipe threw (continuing with epoch bump): ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      try {
+        await this._storage.set(
+          LOCAL_EPOCH_RESET_FLUSH_TRIGGER_KEY,
+          String(newEpoch)
+        );
+      } catch (err) {
+        logger.warn(
+          "Sphere",
+          `resetEpoch: flush-trigger sentinel write failed (epoch bump still persisted): ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      const publishTimeoutMs = params.publishTimeoutMs ?? RESET_EPOCH_PUBLISH_TIMEOUT_MS;
+      const publishedVersionWaiter = publishTimeoutMs > 0 ? this.armResetEpochPublishWaiter(publishTimeoutMs) : null;
+      const publishedVersionWaiterRanAndTimedOut = {
+        value: false
+      };
+      try {
+        for (const provider of this._tokenStorageProviders.values()) {
+          const dirtyTrigger = provider.notifyProfileDirty;
+          if (typeof dirtyTrigger === "function") {
+            dirtyTrigger.call(provider);
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          "Sphere",
+          `resetEpoch: notifyProfileDirty threw (epoch bump still persisted): ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      let publishedVersion = 0;
+      if (publishedVersionWaiter !== null) {
+        try {
+          publishedVersion = await publishedVersionWaiter.promise;
+        } catch {
+          publishedVersionWaiterRanAndTimedOut.value = true;
+        } finally {
+          publishedVersionWaiter.cancel();
+        }
+      }
+      this.emitEvent("profile:epoch-reset", {
+        newEpoch,
+        reason: params.reason,
+        ts
+      });
+      if (!discoveryConsulted && discoveryError !== null) {
+        this.emitEvent("profile:epoch-reset-discovery-skipped", {
+          newEpoch,
+          reason: params.reason,
+          discoveryError,
+          ts
+        });
+      }
+      if (publishedVersionWaiterRanAndTimedOut.value) {
+        this.emitEvent("profile:epoch-reset-publish-pending", {
+          newEpoch,
+          reason: params.reason,
+          timeoutMs: publishTimeoutMs,
+          ts
+        });
+      }
+      return {
+        newEpoch,
+        reason: params.reason,
+        ts,
+        publishedVersion,
+        discoveryConsulted
+      };
+    } catch (err) {
+      if (err instanceof SphereError) throw err;
+      throw new SphereError(
+        `sphere.profile.resetEpoch failed: ${err instanceof Error ? err.message : String(err)}`,
+        "PROFILE_RESET_FAILED",
+        err
+      );
+    }
+  }
+  /**
+   * PR #316 F2 fix — arm a one-shot waiter on every token-storage
+   * provider's `'storage:pointer-published'` event. Returns a
+   * `{promise, cancel}` pair: the promise resolves with the FIRST
+   * observed `version` across any provider, or rejects on timeout.
+   * `cancel()` unsubscribes every listener and clears the timer
+   * (safe to call multiple times). Callers MUST always call
+   * `cancel()` in a `finally` so the listener set does not pin
+   * across the next event cycle.
+   *
+   * The event fires unconditionally on every successful publish (per
+   * the lifecycle-manager change in this PR), so the waiter does NOT
+   * depend on the `enablePointerWinBroadcasts` capability flag.
+   */
+  armResetEpochPublishWaiter(timeoutMs) {
+    const eligible = [];
+    for (const provider of this._tokenStorageProviders.values()) {
+      const onEvent = provider.onEvent;
+      if (typeof onEvent !== "function") continue;
+      eligible.push({ onEvent, provider });
+    }
+    if (eligible.length === 0) {
+      return null;
+    }
+    const cleanups = [];
+    let settled = false;
+    const timerHolder = {
+      value: null
+    };
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const teardown = () => {
+      if (timerHolder.value !== null) clearTimeout(timerHolder.value);
+      for (const fn of cleanups) {
+        try {
+          fn();
+        } catch {
+        }
+      }
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      teardown();
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      teardown();
+      reject(
+        new Error(
+          `resetEpoch: storage:pointer-published not observed within ${timeoutMs}ms`
+        )
+      );
+    }, timeoutMs);
+    timerHolder.value = timer;
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    for (const { onEvent, provider } of eligible) {
+      const unsub = onEvent.call(provider, (event) => {
+        if (settled) return;
+        if (event?.type !== "storage:pointer-published") return;
+        const version = event?.data?.version;
+        if (typeof version !== "number" || !Number.isFinite(version) || !Number.isInteger(version) || version < 0) {
+          return;
+        }
+        settled = true;
+        teardown();
+        resolve(version);
+      });
+      if (typeof unsub === "function") {
+        cleanups.push(unsub);
+      }
+    }
+    return { promise, cancel };
+  }
+  /**
+   * PR #316 F1 fix — best-effort discovery of the on-chain epoch
+   * floor. Runs `pointer.discoverLatestVersion()` with a
+   * caller-supplied wall-clock budget and returns the
+   * `pickedEpoch` value. Throws on any failure (RPC timeout,
+   * aggregator down, pointer layer missing) — the caller logs the
+   * error, emits the `'profile:epoch-reset-discovery-skipped'`
+   * event, and falls back to the local floor alone.
+   *
+   * Returns 0 for a fresh wallet that has never observed an
+   * on-chain epoch (the discovery returns `pickedEpoch: 0` in that
+   * case, which is correct — `max(local=0, discovered=0) + 1 = 1`).
+   */
+  async discoverChainEpochFloor(timeoutMs) {
+    const storageWithPointer = this._storage;
+    const pointer = storageWithPointer.getPointerLayer?.() ?? null;
+    if (pointer === null || typeof pointer.discoverLatestVersion !== "function") {
+      throw new Error(
+        "pointer layer unavailable (discoverLatestVersion missing)"
+      );
+    }
+    const abortController = new AbortController();
+    let deadlineTimer;
+    try {
+      deadlineTimer = setTimeout(() => {
+        try {
+          abortController.abort();
+        } catch {
+        }
+      }, timeoutMs);
+      if (deadlineTimer !== void 0 && typeof deadlineTimer.unref === "function") {
+        deadlineTimer.unref();
+      }
+      const result = await pointer.discoverLatestVersion(void 0, {
+        abortSignal: abortController.signal
+      });
+      const picked = result?.pickedEpoch;
+      if (typeof picked !== "number" || !Number.isFinite(picked) || picked < 0) {
+        return 0;
+      }
+      return picked;
+    } finally {
+      if (deadlineTimer !== void 0) {
+        clearTimeout(deadlineTimer);
+      }
+    }
+  }
+  /**
+   * Issue #312 — unified connectivity surface for the
+   * `aggregator | ipfs | nostr` backends. The handle exposes:
+   *
+   *   - `status()`   — sync snapshot of per-backend reachability.
+   *   - `subscribe(fn)` — per-transition callback (returns unsubscribe).
+   *   - `ping(which)` — force-probe one or all backends.
+   *
+   * The wallet fires `'connectivity:changed'`, `'connectivity:online'`, and
+   * `'connectivity:offline-degraded'` on the Sphere event bus on every
+   * transition — bind via `sphere.on(...)` for the UI banner.
+   *
+   * Advisory only: `payments.send()` reads this status once at entry and
+   * logs a warning if `status().aggregator === 'down'`, but DOES NOT
+   * refuse the send. The state-transition-sdk transport is the
+   * authoritative health signal — it surfaces `JsonRpcNetworkError` on
+   * real transport failures, and ST-SDK exposes no health/ping API,
+   * so any preflight refuse is a Sphere-SDK invention that risks
+   * blocking sends a recovered aggregator would have accepted.
+   *
+   * Returns a no-op stub if accessed before `initializeModules()` ran —
+   * production callers go through `Sphere.init()`, which calls
+   * `initializeModules()` before resolving, so this stub is only visible
+   * in degenerate test setups.
+   */
+  get connectivity() {
+    if (this._connectivity) return this._connectivity;
+    return _Sphere.UNINITIALIZED_CONNECTIVITY;
+  }
+  /**
+   * Singleton "uninitialized" connectivity handle. See {@link connectivity}
+   * for rationale.
+   */
+  static UNINITIALIZED_CONNECTIVITY = {
+    status: () => ({
+      aggregator: "unknown",
+      ipfs: "unknown",
+      nostr: "unknown",
+      lastOnlineAt: null,
+      lastChangedAt: 0
+    }),
+    subscribe: () => () => void 0,
+    ping: async () => void 0
+  };
   // ===========================================================================
   // Public Properties - State
   // ===========================================================================
@@ -55821,6 +57096,12 @@ var Sphere = class _Sphere {
   async addTokenStorageProvider(provider) {
     if (this._tokenStorageProviders.has(provider.id)) {
       throw new SphereError(`Token storage provider '${provider.id}' already exists`, "INVALID_CONFIG");
+    }
+    if (this._fallbackTokenStorage !== null) {
+      const setter = provider.setFallbackTokenStorage;
+      if (typeof setter === "function") {
+        setter.call(provider, this._fallbackTokenStorage);
+      }
     }
     if (this._identity) {
       provider.setIdentity(this._identity);
@@ -58116,6 +59397,14 @@ var Sphere = class _Sphere {
     const skipFlush = options?.skipFlush === true;
     const flushTimeoutMs = options?.flushTimeoutMs ?? 3e4;
     this.cleanupProviderEventSubscriptions();
+    if (this._connectivity) {
+      try {
+        await this._connectivity.stop();
+      } catch (err) {
+        logger.warn("Sphere", "ConnectivityManager stop failed:", err);
+      }
+      this._connectivity = null;
+    }
     try {
       await this._swap?.destroy();
     } catch (err) {
@@ -58357,11 +59646,33 @@ var Sphere = class _Sphere {
         "Sphere",
         `Identity read for "${key}" missing from primary storage` + (primaryThrew instanceof Error ? ` (threw: ${primaryThrew.message})` : "") + `; consulting fallbackStorage (legacy cached identity).`
       );
-      const fallbackValue = await this._fallbackStorage.get(key);
+      let fallbackValue = null;
+      let fallbackThrew = null;
+      try {
+        fallbackValue = await this._fallbackStorage.get(key);
+      } catch (err) {
+        fallbackThrew = err;
+      }
       if (fallbackValue !== null && fallbackValue !== void 0) {
         return fallbackValue;
       }
-      if (primaryThrew !== null) throw primaryThrew;
+      if (primaryThrew !== null) {
+        if (fallbackThrew !== null && primaryThrew instanceof Error && fallbackThrew instanceof Error && primaryThrew.cause === void 0) {
+          try {
+            Object.defineProperty(primaryThrew, "cause", {
+              value: fallbackThrew,
+              enumerable: false,
+              writable: true,
+              configurable: true
+            });
+          } catch {
+          }
+        }
+        throw primaryThrew;
+      }
+      if (fallbackThrew !== null) {
+        throw fallbackThrew;
+      }
       return null;
     };
     const encryptedMnemonic = await readIdentityKey(STORAGE_KEYS_GLOBAL.MNEMONIC);
@@ -59029,6 +60340,69 @@ var Sphere = class _Sphere {
       tokenStorageProviders: new Map(this._tokenStorageProviders),
       initialized: true
     });
+    try {
+      this._connectivity = this.buildConnectivityManager();
+      this._connectivity.start();
+    } catch (err) {
+      logger.warn(
+        "Sphere",
+        `Failed to build ConnectivityManager (sphere.connectivity will be inert): ${safeErrorMessage(err)}`
+      );
+      this._connectivity = null;
+    }
+    try {
+      const paymentsForGate = this._payments;
+      if (typeof paymentsForGate.configureConnectivityGate === "function") {
+        paymentsForGate.configureConnectivityGate(
+          () => this._connectivity ? this._connectivity.status().aggregator : "unknown"
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        "Sphere",
+        `Failed to wire connectivity gate into PaymentsModule (sends will not gate on OFFLINE): ${safeErrorMessage(err)}`
+      );
+    }
+  }
+  /**
+   * Issue #312 — build the per-wallet ConnectivityManager.
+   *
+   * Pingers wired:
+   *   - `aggregator`: probes `oracle.getCurrentRound()` (cheap JSON-RPC).
+   *   - `ipfs`: HEAD-probes the configured gateways (skipped when no
+   *      gateways are wired — wallet stays "fully online" w.r.t. IPFS).
+   *   - `nostr`: reads `transport.isConnected()` (the transport owns its
+   *      reconnect loop; we don't open a parallel subscription).
+   *
+   * Returns a freshly-built manager; the caller is responsible for
+   * `.start()` and `.stop()`.
+   */
+  buildConnectivityManager() {
+    const emitEvent = this.emitEvent.bind(this);
+    const aggregatorPinger = new AggregatorPinger({
+      provider: {
+        getCurrentRound: () => this._oracle.getCurrentRound()
+      }
+    });
+    const ipfsGateways = this._cidFetchGateways ?? [];
+    const pingers = [aggregatorPinger];
+    if (ipfsGateways.length > 0) {
+      pingers.push(new IpfsPinger(ipfsGateways));
+    }
+    pingers.push(
+      new NostrPinger(() => {
+        try {
+          return this._transport.isConnected();
+        } catch {
+          return false;
+        }
+      })
+    );
+    return new ConnectivityManager(pingers, {
+      emitEvent: (type, payload) => {
+        emitEvent(type, payload);
+      }
+    });
   }
   // ===========================================================================
   // Private: Helpers
@@ -59569,11 +60943,11 @@ var TokenValidator = class {
       }
     }
     try {
-      const { RequestId: RequestId3 } = await import("@unicitylabs/state-transition-sdk/lib/api/RequestId");
-      const { DataHash } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHash");
+      const { RequestId: RequestId5 } = await import("@unicitylabs/state-transition-sdk/lib/api/RequestId");
+      const { DataHash: DataHash3 } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHash");
       const pubKeyBytes = hexToBytes(publicKey);
-      const stateHashObj = DataHash.fromJSON(stateHash);
-      const requestId2 = await RequestId3.create(pubKeyBytes, stateHashObj);
+      const stateHashObj = DataHash3.fromJSON(stateHash);
+      const requestId2 = await RequestId5.create(pubKeyBytes, stateHashObj);
       const response = await this.aggregatorClient.getInclusionProof(requestId2);
       let isSpent = false;
       if (response.inclusionProof) {
@@ -59618,7 +60992,7 @@ var TokenValidator = class {
     const total = tokens.length;
     let completed = 0;
     const { Token: SdkToken5 } = await import("@unicitylabs/state-transition-sdk/lib/token/Token");
-    const { RequestId: RequestId3 } = await import("@unicitylabs/state-transition-sdk/lib/api/RequestId");
+    const { RequestId: RequestId5 } = await import("@unicitylabs/state-transition-sdk/lib/api/RequestId");
     const pubKeyBytes = hexToBytes(publicKey);
     for (let i = 0; i < tokens.length; i += batchSize) {
       const batch = tokens.slice(i, i + batchSize);
@@ -59643,9 +61017,9 @@ var TokenValidator = class {
                 return { tokenId, localId: token.id, stateHash: calculatedStateHashStr, spent: false };
               }
             }
-            const { DataHash } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHash");
-            const stateHashObj = DataHash.fromJSON(calculatedStateHashStr);
-            const requestId2 = await RequestId3.create(pubKeyBytes, stateHashObj);
+            const { DataHash: DataHash3 } = await import("@unicitylabs/state-transition-sdk/lib/hash/DataHash");
+            const stateHashObj = DataHash3.fromJSON(calculatedStateHashStr);
+            const requestId2 = await RequestId5.create(pubKeyBytes, stateHashObj);
             const response = await this.aggregatorClient.getInclusionProof(requestId2);
             let isSpent = false;
             if (response.inclusionProof) {
@@ -60055,7 +61429,7 @@ export {
   base58Encode2 as base58Encode,
   buildManifest,
   buildTxfStorageData,
-  bytesToHex4 as bytesToHex,
+  bytesToHex5 as bytesToHex,
   checkNetworkHealth,
   clearSinks,
   coinIdsMatch,
@@ -60129,7 +61503,7 @@ export {
   hashAddressForTag,
   hashNametag,
   hashSignMessage,
-  hexToBytes3 as hexToBytes,
+  hexToBytes4 as hexToBytes,
   hexToWIF,
   identityFromMnemonicSync,
   initSphere,

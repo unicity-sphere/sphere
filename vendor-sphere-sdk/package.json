@@ -1,6 +1,6 @@
 {
   "name": "@unicitylabs/sphere-sdk",
-  "version": "0.7.5-sdk-8ebba68",
+  "version": "0.7.5-sdk-eea87ca",
   "description": "Modular TypeScript SDK for Unicity wallet operations",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -173,6 +173,7 @@
     "async-mutex": "^0.5.0",
     "bip39": "^3.1.0",
     "blockstore-fs": "^4.0.1",
+    "blockstore-idb": "^4.0.1",
     "buffer": "^6.0.3",
     "canonicalize": "^3.0.0",
     "crypto-js": "^4.2.0",
