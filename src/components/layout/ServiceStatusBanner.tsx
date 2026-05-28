@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, CheckCircle2, Cloud, MessageCircle, TrendingUp, Wifi, X } from 'lucide-react';
 import { useConnectivity, type ConnectivityBackendStatus } from '../../sdk/hooks/core/useConnectivity';
 import { useMarketStatus, type MarketStatus } from '../../sdk/hooks/core/useMarketStatus';
+import { useIpfsGatewayStatus, type IpfsGatewayStatus } from '../../sdk/hooks/core/useIpfsGatewayStatus';
 
 /**
  * Time (ms) the banner stays visible after the last service recovers,
@@ -18,10 +19,12 @@ interface ServiceRow {
   label: string;
   shortLabel: string; // shown on mobile when space is tight
   icon: typeof Cloud;
-  status: ConnectivityBackendStatus | MarketStatus;
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus;
 }
 
-function severityOf(status: ConnectivityBackendStatus | MarketStatus): Severity {
+function severityOf(
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus,
+): Severity {
   switch (status) {
     case 'up':
       return 'ok';
@@ -49,7 +52,9 @@ function dotClassFor(severity: Severity): string {
   }
 }
 
-function statusLabelFor(status: ConnectivityBackendStatus | MarketStatus): string {
+function statusLabelFor(
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus,
+): string {
   switch (status) {
     case 'up':
       return 'OK';
@@ -114,6 +119,12 @@ function headlineFor(severity: Severity, downCount: number, degradedCount: numbe
 export function ServiceStatusBanner() {
   const connectivity = useConnectivity();
   const market = useMarketStatus();
+  // Production-observed: the SDK's `IpfsPinger` reports `'down'` even
+  // when the data path (`[IPFS-HTTP] Fetched`, `[IPNS-WS] connected`)
+  // is clearly functional. We bypass `connectivity.ipfs` and use a
+  // direct same-CID probe to the canonical Unicity IPFS gateway —
+  // matching the truth users actually experience.
+  const ipfsGateway = useIpfsGatewayStatus();
   const [manuallyDismissed, setManuallyDismissed] = useState(false);
   const [recoveryWindowOpen, setRecoveryWindowOpen] = useState(false);
   // Tracks whether the PREVIOUS render had a live incident. Only the
@@ -145,7 +156,8 @@ export function ServiceStatusBanner() {
         label: 'IPFS',
         shortLabel: 'IPFS',
         icon: Cloud,
-        status: connectivity.ipfs,
+        // Direct gateway probe — see comment on `ipfsGateway` above.
+        status: ipfsGateway,
       },
       {
         key: 'nostr',
@@ -162,7 +174,7 @@ export function ServiceStatusBanner() {
         status: market,
       },
     ],
-    [connectivity.aggregator, connectivity.ipfs, connectivity.nostr, market],
+    [connectivity.aggregator, connectivity.nostr, ipfsGateway, market],
   );
 
   const severities = rows.map((r) => severityOf(r.status));
