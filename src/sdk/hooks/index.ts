@@ -9,6 +9,13 @@ export type { UseNametagReturn } from './core/useNametag';
 export { useSphereEvents } from './core/useSphereEvents';
 export { useIpfsSync } from './core/useIpfsSync';
 export type { IpfsSyncStatus, IpfsSyncState, UseIpfsSyncReturn } from './core/useIpfsSync';
+export { useConnectivity } from './core/useConnectivity';
+export type {
+  ConnectivityBackendStatus,
+  UseConnectivityReturn,
+} from './core/useConnectivity';
+export { useMarketStatus } from './core/useMarketStatus';
+export type { MarketStatus } from './core/useMarketStatus';
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';
