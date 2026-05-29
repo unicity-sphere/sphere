@@ -10862,7 +10862,7 @@ async function drainGenerator(source) {
 function isMissError(err) {
   if (err === null || typeof err !== "object") return false;
   const e = err;
-  return e.name === "NotFoundError" || e.code === "ERR_NOT_FOUND" || e.name === "InvalidConfigurationError" || e.code === "ERR_NO_BLOCK_BROKERS";
+  return e.name === "NotFoundError" || e.code === "ERR_NOT_FOUND" || e.name === "InvalidConfigurationError" || e.code === "ERR_NO_BLOCK_BROKERS" || e.name === "PutFailedError" || e.code === "ERR_PUT_FAILED";
 }
 function cidKey(cid) {
   if (cid == null) return null;
@@ -10976,6 +10976,143 @@ function installHeliaBlockstoreGetShim(blockstore, options) {
   };
 }
 
+// profile/helia-blockstore-pin-shim.ts
+init_logger();
+function installHeliaBlockstorePinShim(helia) {
+  let pinAttempted = 0;
+  let pinSucceeded = 0;
+  let pinFailed = 0;
+  let pinSkipped = 0;
+  const pinnedCids = /* @__PURE__ */ new Set();
+  const handle = {
+    getCounters: () => ({ pinAttempted, pinSucceeded, pinFailed, pinSkipped }),
+    getPinnedCids: () => Array.from(pinnedCids)
+  };
+  const blockstore = helia.blockstore;
+  if (!blockstore || typeof blockstore.put !== "function") {
+    pinSkipped++;
+    return handle;
+  }
+  const pins = helia.pins;
+  if (!pins || typeof pins.add !== "function") {
+    logger.warn(
+      "ProfilePinShim",
+      "helia.pins.add unavailable \u2014 OpLog blocks will not be pinned. Wallet remains functional but is exposed to browser-storage GC."
+    );
+    return handle;
+  }
+  const sentinel = "__sphereProfilePinShimInstalled__";
+  const blockstoreAny = blockstore;
+  if (blockstoreAny[sentinel] === true) {
+    return handle;
+  }
+  try {
+    Object.defineProperty(blockstoreAny, sentinel, {
+      value: true,
+      writable: false,
+      configurable: false,
+      enumerable: false
+    });
+  } catch {
+  }
+  const originalPut = blockstore.put.bind(blockstore);
+  blockstore.put = function pinningPut(cid, val, options) {
+    const putResult = originalPut(cid, val, options);
+    schedulePin(cid, pins, putResult).then((outcome) => {
+      if (outcome === "pinned") {
+        pinSucceeded++;
+      } else if (outcome === "skipped") {
+        pinSkipped++;
+      } else {
+        pinFailed++;
+      }
+    }).catch(() => {
+      pinFailed++;
+    });
+    pinAttempted++;
+    return putResult;
+  };
+  if (typeof blockstore.putMany === "function") {
+    const originalPutMany = blockstore.putMany.bind(blockstore);
+    blockstore.putMany = function pinningPutMany(source, options) {
+      const upstream = originalPutMany(source, options);
+      return (async function* pinningPutManyGen() {
+        for await (const yieldedCid of upstream) {
+          pinAttempted++;
+          schedulePin(yieldedCid, pins, Promise.resolve()).then((outcome) => {
+            if (outcome === "pinned") pinSucceeded++;
+            else if (outcome === "skipped") pinSkipped++;
+            else pinFailed++;
+          }).catch(() => {
+            pinFailed++;
+          });
+          yield yieldedCid;
+        }
+      })();
+    };
+  }
+  return handle;
+  async function schedulePin(cid, pinsApi, putResult) {
+    try {
+      if (putResult && typeof putResult.then === "function") {
+        await putResult;
+      }
+    } catch {
+      return "skipped";
+    }
+    let cidStr;
+    try {
+      cidStr = typeof cid === "string" ? cid : typeof cid.toString === "function" ? String(cid.toString()) : "";
+    } catch {
+      return "skipped";
+    }
+    if (cidStr.length === 0) {
+      return "skipped";
+    }
+    if (pinnedCids.has(cidStr)) {
+      return "pinned";
+    }
+    try {
+      const result = pinsApi.add(cid);
+      if (result && typeof result[Symbol.asyncIterator] === "function") {
+        for await (const _entry of result) {
+          void _entry;
+        }
+      } else if (result && typeof result.then === "function") {
+        await result;
+      }
+      pinnedCids.add(cidStr);
+      return "pinned";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already pinned/i.test(msg)) {
+        pinnedCids.add(cidStr);
+        return "pinned";
+      }
+      logger.warn(
+        "ProfilePinShim",
+        `helia.pins.add failed for ${cidStr.slice(0, 16)}\u2026: ${msg}`
+      );
+      return "failed";
+    }
+  }
+}
+async function requestPersistentStorage() {
+  if (typeof navigator === "undefined") {
+    return { granted: false, supported: false };
+  }
+  const storage = navigator.storage;
+  if (!storage || typeof storage.persist !== "function") {
+    return { granted: false, supported: false };
+  }
+  try {
+    const granted = await storage.persist();
+    return { granted: granted === true, supported: true };
+  } catch {
+    return { granted: false, supported: true };
+  }
+}
+
 // profile/orbitdb-adapter.ts
 init_oplog_entry();
 var OrbitDbAdapter = class {
@@ -11038,6 +11175,25 @@ var OrbitDbAdapter = class {
    * `helia.stop()` race and the `onSettle` null-out.
    */
   shuttingDown = false;
+  /**
+   * Issue #311 — handle to the pin shim installed over
+   * `helia.blockstore.put`. Exposed via `getPinShimCounters()` for
+   * tests and operator diagnostics. Null until `connectInner()` has
+   * installed the shim; cleared on `cleanupOnError()` and `closeInner()`.
+   */
+  pinShim = null;
+  /**
+   * Issue #311 — listener invoked exactly once during `connectInner()`
+   * AFTER the `navigator.storage.persist()` outcome is known. Tests
+   * subscribe to assert the boot path fired the event; production
+   * wiring (the factory) plumbs it into `tokenStorage.emitEvent` so
+   * it surfaces on the public `onEvent` surface as
+   * `profile:storage-persistence`.
+   *
+   * `null` (default) means the adapter still calls `requestPersistentStorage`
+   * but does not surface the result — useful for tests that don't care.
+   */
+  storagePersistenceListener = null;
   // ---------- ProfileDatabase implementation ----------
   async connect(config) {
     if (this.closeInFlight) {
@@ -11119,6 +11275,16 @@ var OrbitDbAdapter = class {
   }
   async connectInner(config) {
     this.shuttingDown = false;
+    void requestPersistentStorage().then((result) => {
+      const listener = this.storagePersistenceListener;
+      if (listener !== null) {
+        try {
+          listener(result);
+        } catch {
+        }
+      }
+    }).catch(() => {
+    });
     let orbitdbModule;
     try {
       orbitdbModule = await import("@orbitdb/core");
@@ -11160,6 +11326,33 @@ var OrbitDbAdapter = class {
             heliaOptions.blockstore = new FsBlockstoreCtor(`${config.directory}/blocks`);
           }
         } catch {
+        }
+      } else if (isBrowserEnvironment()) {
+        try {
+          const blockstoreIdbModule = await import("blockstore-idb");
+          const IDBBlockstoreCtor = blockstoreIdbModule.IDBBlockstore ?? blockstoreIdbModule.default?.IDBBlockstore;
+          if (typeof IDBBlockstoreCtor === "function") {
+            const dbName2 = typeof config.browserBlockstorePath === "string" && config.browserBlockstorePath.length > 0 ? config.browserBlockstorePath : "sphere-helia-blocks";
+            const idbBlockstore = new IDBBlockstoreCtor(dbName2);
+            if (typeof idbBlockstore.open === "function") {
+              await Promise.race([
+                idbBlockstore.open(),
+                new Promise(
+                  (_, reject) => setTimeout(
+                    () => reject(new Error("blockstore-idb open() timed out after 5_000ms")),
+                    5e3
+                  )
+                )
+              ]);
+            }
+            heliaOptions.blockstore = idbBlockstore;
+          }
+        } catch (err) {
+          if (typeof console !== "undefined" && console.warn) {
+            console.warn(
+              `[OrbitDB] IDBBlockstore install failed; falling back to Helia MemoryBlockstore. Browser wallet durability across reloads is degraded. cause=${err instanceof Error ? err.message : String(err)}`
+            );
+          }
         }
       }
       if (gossipsubFactory && typeof libp2pDefaults === "function") {
@@ -11227,6 +11420,7 @@ var OrbitDbAdapter = class {
       if (heliaInstance?.blockstore && typeof heliaInstance.blockstore.get === "function") {
         installHeliaBlockstoreGetShim(heliaInstance.blockstore);
       }
+      this.pinShim = installHeliaBlockstorePinShim(heliaInstance);
       const createOrbitDB = orbitdbModule.createOrbitDB ?? orbitdbModule.default?.createOrbitDB;
       if (typeof createOrbitDB !== "function") {
         throw new Error("Could not resolve createOrbitDB from @orbitdb/core");
@@ -11535,6 +11729,7 @@ var OrbitDbAdapter = class {
     await closeWithBudget("helia.stop", () => this.helia?.stop(), () => {
       this.helia = null;
     });
+    this.pinShim = null;
     this.connected = false;
     this.shuttingDown = false;
   }
@@ -11586,6 +11781,37 @@ var OrbitDbAdapter = class {
     if (this.shuttingDown) return null;
     return this.helia ?? null;
   }
+  /**
+   * Issue #311 — register a listener fired exactly once per `connect()`
+   * call with the result of `navigator.storage.persist()`. Must be set
+   * BEFORE `connect()` to be observed (the listener fires from inside
+   * `connectInner`). Pass `null` to disable.
+   *
+   * Production wiring routes this into the token-storage provider's
+   * `emitEvent` so it surfaces as a `profile:storage-persistence`
+   * StorageEvent. Tests use it directly to assert the call fired.
+   */
+  setStoragePersistenceListener(listener) {
+    this.storagePersistenceListener = listener;
+  }
+  /**
+   * Issue #311 — snapshot of the pin-shim counters. Null when the
+   * adapter has not yet connected (or has been closed). Test-observable.
+   */
+  getPinShimCounters() {
+    if (this.pinShim === null) return null;
+    return this.pinShim.getCounters();
+  }
+  /**
+   * Issue #311 — snapshot of pinned CIDs known to the shim. Null when
+   * not yet connected. Test-observable; production callers should not
+   * rely on this for correctness (the source of truth is
+   * `helia.pins.ls()`).
+   */
+  getPinnedCids() {
+    if (this.pinShim === null) return null;
+    return this.pinShim.getPinnedCids();
+  }
   // ---------- Private helpers ----------
   /**
    * Throws `ProfileError` if the adapter is not connected.
@@ -11623,6 +11849,7 @@ var OrbitDbAdapter = class {
     this.db = null;
     this.orbitdb = null;
     this.helia = null;
+    this.pinShim = null;
     this.connected = false;
     this.currentConfig = null;
   }
@@ -11938,7 +12165,32 @@ var STORAGE_KEYS_GLOBAL = {
    * the bundle via the aggregator path). Per-address suffix appended
    * by the Profile provider (`<key>_<addressId>`).
    */
-  PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid"
+  PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid",
+  /**
+   * Issue #313 — local snapshot blob for cold-boot lazy load. Holds the
+   * most recent in-memory state (identity, tokens, bundles, pointer,
+   * timestamps) so the next cold boot can render the wallet UI from
+   * local cache BEFORE connecting to aggregator / remote IPFS. Atomically
+   * replaced after every successful flush + publish and on graceful
+   * shutdown. Per-address suffix appended by the Profile provider
+   * (`<key>_<addressId>`).
+   *
+   * A companion key `<key>_<addressId>_pending` is written first; the
+   * swap to the main key happens via `setMany` (or a sequential fallback
+   * with explicit cleanup). Crash mid-write leaves the previous main
+   * key intact.
+   */
+  PROFILE_SNAPSHOT_BLOB: "profile_snapshot_blob",
+  /**
+   * Issue #313 — last-known aggregator pointer for cold-boot priming.
+   * Mirrors the `pointer` field embedded in the snapshot blob so the
+   * boot path can short-circuit a pointer fetch when the cached version
+   * matches what the aggregator now exposes. Per-address suffix appended
+   * by the Profile provider (`<key>_<addressId>`).
+   *
+   * Stored as JSON: `{ version: number, cid: string, epoch?: number, ts: number }`.
+   */
+  PROFILE_LAST_POINTER: "profile_last_pointer"
 };
 var STORAGE_KEYS_ADDRESS = {
   /** Pending transfers for this address */
@@ -15600,6 +15852,15 @@ var KNOWN_BLOCKED_REASONS = /* @__PURE__ */ new Set([
   "marker_corrupt",
   "rejected"
 ]);
+var TRANSIENT_RECOVERY_REASONS = /* @__PURE__ */ new Set([
+  "retry_exhausted",
+  "network_timeout",
+  "dns_failure",
+  "tls_failure"
+]);
+function isTransientRecoveryReason(reason) {
+  return TRANSIENT_RECOVERY_REASONS.has(reason);
+}
 async function isBlocked(store) {
   const raw2 = await store.get(BLOCKED_KEY);
   if (raw2 === null) return { blocked: false };
@@ -17074,6 +17335,27 @@ async function publishOnceAtVersion(input, attemptOpts = { maxRetries: PUBLISH_R
   }
 }
 
+// profile/aggregator-pointer/epoch-floor.ts
+function normalizeEpoch(claimed) {
+  if (claimed === void 0) return 0;
+  if (typeof claimed !== "number" || !Number.isFinite(claimed) || !Number.isInteger(claimed) || claimed < 0) {
+    throw new TypeError(
+      `epoch-floor: claimed epoch must be a non-negative integer or undefined; got ${String(claimed)}`
+    );
+  }
+  return claimed;
+}
+function pickEpochFloor(priorFloor, candidateEpoch) {
+  const normalized = normalizeEpoch(candidateEpoch);
+  const normalizedFloor = normalizeEpoch(priorFloor);
+  return normalized > normalizedFloor ? normalized : normalizedFloor;
+}
+function shouldSkipForEpochFloor(floor, candidateEpoch) {
+  const normalized = normalizeEpoch(candidateEpoch);
+  const normalizedFloor = normalizeEpoch(floor);
+  return normalized < normalizedFloor;
+}
+
 // profile/aggregator-pointer/discover-algorithm.ts
 init_errors2();
 async function findLatestValidVersion(input) {
@@ -17168,6 +17450,19 @@ async function findLatestValidVersionInner(input, registerCleanup) {
   const probeVersions = [];
   const walkbackUnfetchableSkipped = [];
   const skipUnfetchable = input.skipUnfetchableInWalkback !== false;
+  const walkbackEpochSkipped = [];
+  let epochFloor = (() => {
+    const initial = input.initialEpochFloor ?? 0;
+    if (typeof initial !== "number" || !Number.isFinite(initial) || !Number.isInteger(initial) || initial < 0) {
+      throw new AggregatorPointerError(
+        AggregatorPointerErrorCode.PROTOCOL_ERROR,
+        `Discovery: initialEpochFloor must be a non-negative integer; got ${String(initial)}.`,
+        { initialEpochFloor: initial }
+      );
+    }
+    return initial;
+  })();
+  const inspectEpoch = input.inspectSnapshotEpoch;
   const probeAndRecord = async (v) => {
     checkDeadline();
     probeVersions.push(v);
@@ -17233,11 +17528,30 @@ async function findLatestValidVersionInner(input, registerCleanup) {
       abortSignal: discoveryAbort.signal
     });
     if (status === "VALID") {
+      if (inspectEpoch !== void 0) {
+        let candidateEpoch;
+        try {
+          candidateEpoch = await inspectEpoch(candidate, new Uint8Array(0));
+        } catch {
+          candidate = candidate - 1;
+          walked += 1;
+          continue;
+        }
+        if (shouldSkipForEpochFloor(epochFloor, candidateEpoch)) {
+          walkbackEpochSkipped.push(candidate);
+          candidate = candidate - 1;
+          walked += 1;
+          continue;
+        }
+        epochFloor = pickEpochFloor(epochFloor, candidateEpoch);
+      }
       return {
         validV: candidate,
         includedV,
         probeVersions,
-        walkbackUnfetchableSkipped
+        walkbackUnfetchableSkipped,
+        walkbackEpochSkipped,
+        pickedEpoch: epochFloor
       };
     }
     if (status === "SEMANTICALLY_INVALID") {
@@ -17269,17 +17583,21 @@ async function findLatestValidVersionInner(input, registerCleanup) {
       validV: 0,
       includedV,
       probeVersions,
-      walkbackUnfetchableSkipped
+      walkbackUnfetchableSkipped,
+      walkbackEpochSkipped,
+      pickedEpoch: epochFloor
     };
   }
   throw new AggregatorPointerError(
     AggregatorPointerErrorCode.CORRUPT_STREAK,
-    `Phase 3 walkback exhausted walkbackLimit=${walkbackLimit} without finding a VALID version (includedV=${includedV}, candidate=${candidate}, unfetchableSkipped=${walkbackUnfetchableSkipped.length}). Operator may invoke acceptCorruptStreak(walkbackLimit) to override.`,
+    `Phase 3 walkback exhausted walkbackLimit=${walkbackLimit} without finding a VALID version (includedV=${includedV}, candidate=${candidate}, unfetchableSkipped=${walkbackUnfetchableSkipped.length}, epochSkipped=${walkbackEpochSkipped.length}, pickedEpoch=${epochFloor}). Operator may invoke acceptCorruptStreak(walkbackLimit) to override.`,
     {
       includedV,
       walkbackLimit,
       walkedSoFar: walked,
-      unfetchableSkippedCount: walkbackUnfetchableSkipped.length
+      unfetchableSkippedCount: walkbackUnfetchableSkipped.length,
+      epochSkippedCount: walkbackEpochSkipped.length,
+      pickedEpoch: epochFloor
     }
   );
 }
@@ -17883,6 +18201,17 @@ var ProfilePointerLayer = class {
       throw err;
     }
     const currentLocalVersion = await this.#init.readLocalVersion();
+    let initialEpochFloor = 0;
+    if (this.#init.readEpochFloor) {
+      try {
+        const stored = await this.#init.readEpochFloor();
+        if (typeof stored === "number" && Number.isFinite(stored) && Number.isInteger(stored) && stored >= 0) {
+          initialEpochFloor = stored;
+        }
+      } catch {
+      }
+    }
+    const inspectEpochCb = this.#init.inspectSnapshotEpoch;
     const result = await findLatestValidVersion({
       currentLocalVersion,
       keyMaterial: this.#init.keyMaterial,
@@ -17892,8 +18221,16 @@ var ProfilePointerLayer = class {
       decodeCid: this.#init.decodeCid,
       fetchCar: this.#init.fetchCar,
       walkbackLimit,
-      abortSignal
+      abortSignal,
+      initialEpochFloor,
+      inspectSnapshotEpoch: inspectEpochCb ? (v, _cidBytes) => inspectEpochCb(v) : void 0
     });
+    if (this.#init.persistEpochFloor && typeof result.pickedEpoch === "number" && result.pickedEpoch > initialEpochFloor) {
+      try {
+        await this.#init.persistEpochFloor(result.pickedEpoch);
+      } catch {
+      }
+    }
     if (result.probeVersions.length > 0) {
       this.#lastProbeVersions = result.probeVersions;
     }
@@ -18007,6 +18344,78 @@ var ProfilePointerLayer = class {
       assertOperatorOverridesAllowed(this.#config, "clearBlocked");
     }
     await clearBlocked(this.#init.flagStore);
+  }
+  // ── clearBlockedIfTransient ──────────────────────────────────────────────
+  /**
+   * Issue #319 — auto-clear the BLOCKED flag iff the current reason is a
+   * transient-connectivity class (see {@link isTransientRecoveryReason}).
+   * Intended to be invoked by the pointer-poll worker AFTER a successful
+   * `recoverLatest()` round-trip, on the principle that a working
+   * aggregator response refutes any prior "I can't reach the aggregator"
+   * BLOCKED reason.
+   *
+   * Categorical safety rules:
+   *
+   *   - Does NOT consult `allowOperatorOverrides`. This is not an
+   *     operator-initiated clear — it is a self-healing clear gated on
+   *     the narrow predicate that the reason itself is transient. The
+   *     existing operator-override gate is reserved for `clearBlocked()`
+   *     which must remain capable of clearing ANY reason (including
+   *     persistent ones like `rejected` / `marker_corrupt`).
+   *
+   *   - Treats a CORRUPT blocked-state record as "do not clear". A
+   *     tampered or malformed record must surface to the operator via
+   *     the existing CORRUPT paths.
+   *
+   *   - Treats no-block-set (`{ blocked: false }`) as a no-op success.
+   *
+   *   - Persistent-class reasons (`aggregator_rejected`, `protocol_error`,
+   *     `marker_corrupt`, `rejected`) are LEFT UNTOUCHED and reported back
+   *     via the return value's `reason` field so callers can surface them.
+   *
+   * Race window: between the read (`isBlocked`) and the destructive
+   * `clearBlockedFlag`, a sibling process MAY rewrite the BLOCKED record
+   * with a persistent reason. The transient/persistent classification is
+   * a property of the SPEC reason taxonomy, so the worst-case outcome of
+   * such a race is that we clear a persistent block whose persistent
+   * status was being established. We accept this because (a) the sibling
+   * race is exceptionally narrow and (b) the next failed publish will
+   * immediately re-set BLOCKED with the persistent reason. The mutex on
+   * publish prevents the AUTOMATED case (poll + publish overlap) entirely.
+   *
+   * @returns `{ cleared: true, reason }` when the flag was removed,
+   *   `{ cleared: false }` when nothing was cleared, or
+   *   `{ cleared: false, reason }` when a non-transient block remains in place.
+   */
+  async clearBlockedIfTransient() {
+    this.#assertNotShuttingDown("clearBlockedIfTransient");
+    return this.#tracked(this.#clearBlockedIfTransientInner());
+  }
+  async #clearBlockedIfTransientInner() {
+    let state;
+    try {
+      state = await isBlocked(this.#init.flagStore);
+    } catch (err) {
+      if (err instanceof AggregatorPointerError && err.code === AggregatorPointerErrorCode.CORRUPT) {
+        return { cleared: false };
+      }
+      throw err;
+    }
+    if (!state.blocked) return { cleared: false };
+    const reason = state.reason;
+    if (!reason || !isTransientRecoveryReason(reason)) {
+      return { cleared: false, reason };
+    }
+    const stateAfter = await isBlocked(this.#init.flagStore);
+    if (!stateAfter.blocked) {
+      return { cleared: false };
+    }
+    const reasonAfter = stateAfter.reason;
+    if (!reasonAfter || !isTransientRecoveryReason(reasonAfter) || reasonAfter !== reason) {
+      return { cleared: false, reason: reasonAfter };
+    }
+    await clearBlocked(this.#init.flagStore);
+    return { cleared: true, reason };
   }
   // ── clearPendingMarker ───────────────────────────────────────────────────
   /**
@@ -18217,6 +18626,8 @@ function groupKeyFor(key) {
   return m !== null ? m[1] : LEAN_PROFILE_SNAPSHOT_GLOBAL_GROUP_KEY;
 }
 var LEAN_DEFAULT_MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+var EPOCH_RESET_REASON_MAX_BYTES = 256;
+var EPOCH_MAX = 1 << 20;
 var MAX_KV_ENTRIES = 1e5;
 var MAX_KV_VALUE_BYTES = 8 * 1024 * 1024;
 var PROFILE_CAR_IMPORT_MAX_BLOCK_BYTES = 1024 * 1024;
@@ -18358,7 +18769,7 @@ function buildEntryGroupBlocks(entries) {
 }
 async function assembleCarBytes(snapshot, maxSizeBytes) {
   const { groupRefs, groupBlocks } = buildEntryGroupBlocks(snapshot.entries);
-  const rootBytes = dagCborEncode({
+  const rootDoc = {
     version: LEAN_PROFILE_SNAPSHOT_VERSION,
     chainPubkey: snapshot.chainPubkey,
     network: snapshot.network,
@@ -18380,7 +18791,14 @@ async function assembleCarBytes(snapshot, maxSizeBytes) {
       if (b.tokenCount !== void 0) obj.tokenCount = b.tokenCount;
       return obj;
     })
-  });
+  };
+  if (snapshot.epoch !== void 0) {
+    rootDoc.epoch = snapshot.epoch;
+  }
+  if (snapshot.epochResetReason !== void 0) {
+    rootDoc.epochResetReason = snapshot.epochResetReason;
+  }
+  const rootBytes = dagCborEncode(rootDoc);
   if (rootBytes.byteLength > PROFILE_CAR_IMPORT_MAX_BLOCK_BYTES) {
     throw new ProfileError(
       "PROFILE_NOT_INITIALIZED",
@@ -18430,11 +18848,40 @@ async function buildLeanProfileSnapshot(options) {
   }
   const entries = await readAllKvEntries(options.storage);
   const bundles = await readBundleRefs(options.tokenStorage);
+  let normalizedEpoch;
+  if (options.epoch !== void 0) {
+    if (typeof options.epoch !== "number" || !Number.isFinite(options.epoch) || !Number.isInteger(options.epoch) || options.epoch < 0 || options.epoch > EPOCH_MAX) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: epoch must be integer in [0, ${EPOCH_MAX}]; got ${String(options.epoch)}`
+      );
+    }
+    normalizedEpoch = options.epoch;
+  }
+  let normalizedReason;
+  if (options.epochResetReason !== void 0) {
+    if (typeof options.epochResetReason !== "string") {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: epochResetReason must be a string`
+      );
+    }
+    const reasonBytes = new TextEncoder().encode(options.epochResetReason);
+    if (reasonBytes.byteLength > EPOCH_RESET_REASON_MAX_BYTES) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: epochResetReason ${reasonBytes.byteLength} bytes exceeds cap ${EPOCH_RESET_REASON_MAX_BYTES}`
+      );
+    }
+    normalizedReason = options.epochResetReason;
+  }
   const snapshot = {
     version: LEAN_PROFILE_SNAPSHOT_VERSION,
     chainPubkey: options.chainPubkey,
     network: options.network,
     createdAt: options.createdAt ?? Date.now(),
+    ...normalizedEpoch !== void 0 ? { epoch: normalizedEpoch } : {},
+    ...normalizedReason !== void 0 ? { epochResetReason: normalizedReason } : {},
     entries,
     entryGroups: [],
     bundles
@@ -18474,6 +18921,9 @@ async function parseLeanProfileSnapshotFromRootBlock(rootBlockBytes, fetcher) {
       chainPubkey: validated.chainPubkey,
       network: validated.network,
       createdAt: validated.createdAt,
+      // Issue #310 — propagate epoch / epochResetReason iff present.
+      ...validated.epoch !== void 0 ? { epoch: validated.epoch } : {},
+      ...validated.epochResetReason !== void 0 ? { epochResetReason: validated.epochResetReason } : {},
       entries: [],
       entryGroups: validated.entryGroups,
       bundles: validated.bundles
@@ -18488,6 +18938,9 @@ async function parseLeanProfileSnapshotFromRootBlock(rootBlockBytes, fetcher) {
     chainPubkey: validated.chainPubkey,
     network: validated.network,
     createdAt: validated.createdAt,
+    // Issue #310 — propagate epoch / epochResetReason iff present.
+    ...validated.epoch !== void 0 ? { epoch: validated.epoch } : {},
+    ...validated.epochResetReason !== void 0 ? { epochResetReason: validated.epochResetReason } : {},
     entries,
     entryGroups: validated.entryGroups,
     bundles: validated.bundles
@@ -18639,11 +19092,42 @@ function validateLeanSnapshotShape(decoded) {
   }
   const entryGroups = parseV3EntryGroups(obj.entryGroups);
   const bundles = parseBundleEntries(obj.bundles);
+  let epoch;
+  if (obj.epoch !== void 0) {
+    const e = obj.epoch;
+    if (typeof e !== "number" || !Number.isFinite(e) || !Number.isInteger(e) || e < 0 || e > EPOCH_MAX) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: invalid epoch ${String(e)} (must be integer in [0, ${EPOCH_MAX}])`
+      );
+    }
+    epoch = e;
+  }
+  let epochResetReason;
+  if (obj.epochResetReason !== void 0) {
+    const r = obj.epochResetReason;
+    if (typeof r !== "string") {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: invalid epochResetReason ${typeof r} (must be string)`
+      );
+    }
+    const rBytes = new TextEncoder().encode(r);
+    if (rBytes.byteLength > EPOCH_RESET_REASON_MAX_BYTES) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Lean snapshot: epochResetReason ${rBytes.byteLength} bytes exceeds cap ${EPOCH_RESET_REASON_MAX_BYTES}`
+      );
+    }
+    epochResetReason = r;
+  }
   const result = {
     version: LEAN_PROFILE_SNAPSHOT_VERSION,
     chainPubkey,
     network,
     createdAt,
+    ...epoch !== void 0 ? { epoch } : {},
+    ...epochResetReason !== void 0 ? { epochResetReason } : {},
     entries: [],
     entryGroups,
     bundles
@@ -18787,6 +19271,8 @@ function parseBundleEntries(bundlesRaw) {
 // profile/pointer-wiring.ts
 var CAR_FETCH_TOTAL_BUDGET_MS = 6e4;
 var LOCAL_VERSION_KEY = "profile.pointer.version";
+var LOCAL_EPOCH_FLOOR_KEY = "profile.pointer.epoch_floor";
+var LOCAL_EPOCH_RESET_REASON_KEY = "profile.pointer.epoch_reset_reason";
 async function extractCarRootCid(carBytes) {
   try {
     const { CarReader: CarReader5 } = await import("@ipld/car");
@@ -19012,6 +19498,21 @@ async function buildProfilePointerLayer(input) {
     const persistLocalVersion = async (v) => {
       await input.localCache.set(LOCAL_VERSION_KEY, String(v));
     };
+    const readEpochFloor = async () => {
+      const raw2 = await input.localCache.get(LOCAL_EPOCH_FLOOR_KEY);
+      if (raw2 === null) return 0;
+      const parsed = Number.parseInt(raw2, 10);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+        return 0;
+      }
+      return parsed;
+    };
+    const persistEpochFloor = async (epoch) => {
+      if (typeof epoch !== "number" || !Number.isFinite(epoch) || !Number.isInteger(epoch) || epoch < 0) {
+        return;
+      }
+      await input.localCache.set(LOCAL_EPOCH_FLOOR_KEY, String(epoch));
+    };
     const resolveRemoteCid = buildResolveRemoteCid({
       keyMaterial,
       signer,
@@ -19019,6 +19520,48 @@ async function buildProfilePointerLayer(input) {
       trustBase,
       decodeCid
     });
+    const inspectSnapshotEpoch = async (version) => {
+      const cidBytes = await resolveRemoteCid(version);
+      if (input.ipfsGateways.length === 0) {
+        throw new Error(
+          `inspectSnapshotEpoch: no IPFS gateways configured for v=${version}`
+        );
+      }
+      let cidString;
+      try {
+        cidString = CID4.decode(cidBytes).toString();
+      } catch (err) {
+        throw new Error(
+          `inspectSnapshotEpoch: invalid CID bytes at v=${version}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      const rootBlockBytes = await fetchFromIpfs(
+        [...input.ipfsGateways],
+        cidString
+      );
+      const { decode: cborDecode2 } = await import("@ipld/dag-cbor");
+      let decoded;
+      try {
+        decoded = cborDecode2(rootBlockBytes);
+      } catch (err) {
+        throw new Error(
+          `inspectSnapshotEpoch: dag-cbor decode failed at v=${version}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+        throw new Error(
+          `inspectSnapshotEpoch: root block decoded to non-object at v=${version}`
+        );
+      }
+      const epoch = decoded.epoch;
+      if (epoch === void 0) return void 0;
+      if (typeof epoch !== "number" || !Number.isFinite(epoch) || !Number.isInteger(epoch) || epoch < 0) {
+        throw new Error(
+          `inspectSnapshotEpoch: invalid epoch ${String(epoch)} at v=${version}`
+        );
+      }
+      return epoch;
+    };
     const fetchAndJoin = buildFetchAndJoin({
       gateways: input.ipfsGateways,
       persistLocalVersion,
@@ -19037,6 +19580,10 @@ async function buildProfilePointerLayer(input) {
       readLocalVersion,
       persistLocalVersion,
       resolveRemoteCid,
+      // Issue #310 — wire OpLog epoch-floor primitives.
+      readEpochFloor,
+      persistEpochFloor,
+      inspectSnapshotEpoch,
       config: input.config
     });
     log(`constructed for pubkey ${signer.signingPubKeyHex.slice(0, 8)}\u2026`);
@@ -19381,6 +19928,20 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
   setEnvelopeFallbackNotifier(notifier) {
     this.envelopeFallbackNotifier = notifier;
   }
+  /**
+   * Issue #311 — register a listener fired when the read path detects
+   * an evicted critical block (Helia "Failed to load block for <CID>"
+   * pattern). The factory routes this into `tokenStorage.emitEvent`
+   * so it surfaces as a `profile:critical-block-evicted` StorageEvent.
+   * Pass `null` to disable.
+   *
+   * Dedup is applied per `(cid, key)` pair to a bounded cap so a
+   * persistent missing block does not spam the event surface on every
+   * subsequent read.
+   */
+  setCriticalBlockEvictedNotifier(notifier) {
+    this.criticalBlockEvictedNotifier = notifier;
+  }
   envelopeFallbackNotifier = null;
   /**
    * Issue #280 — dedup set for {@link envelopeFallbackNotifier}.
@@ -19390,6 +19951,24 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
    */
   envelopeFallbackSeen = /* @__PURE__ */ new Set();
   static ENVELOPE_FALLBACK_DEDUP_CAP = 1024;
+  /**
+   * Issue #311 — listener invoked when the read path observes a
+   * "Failed to load block for <CID>" error from Helia. The factory
+   * wires this into the token-storage provider's `emitEvent` so it
+   * surfaces as `profile:critical-block-evicted` on the public event
+   * surface. `null` (default) disables the surface but does NOT
+   * disable the warn-log path below.
+   */
+  criticalBlockEvictedNotifier = null;
+  /**
+   * Issue #311 — dedup set for `criticalBlockEvictedNotifier`. Limits
+   * a single `(cid, key)` pair to fire the notifier (and log the
+   * warning) once per provider instance. Bounded to the same cap as
+   * the envelope-fallback set; same adversarial-amplification
+   * considerations apply (see `handleEnvelopeFallback`).
+   */
+  criticalBlockEvictedSeen = /* @__PURE__ */ new Set();
+  static CRITICAL_BLOCK_EVICTED_DEDUP_CAP = 1024;
   // ===========================================================================
   // BaseProvider Implementation
   // ===========================================================================
@@ -19583,6 +20162,22 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
    */
   getPointerLayer() {
     return this.pointerLayer;
+  }
+  /**
+   * Issue #310 — expose the underlying OrbitDB adapter (read-only,
+   * not mutable) so the `sphere.profile.resetEpoch` API can invoke
+   * `resetCorruptedLog` without leaking the inner state machine.
+   *
+   * Returns `null` when the adapter exposes no `resetCorruptedLog`
+   * method (test stub / pre-#305 fork). Callers MUST treat null as
+   * "wipe unavailable" and proceed with the epoch bump alone.
+   */
+  getOrbitDbAdapter() {
+    const db = this.db;
+    if (typeof db.resetCorruptedLog === "function") {
+      return db;
+    }
+    return null;
   }
   /**
    * Steelman accessor: the pointer-build state machine viewed from the
@@ -20086,12 +20681,56 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
    * defense regardless of which side hits the corruption first.
    */
   async readEnvelopePayload(profileKey) {
-    if (this.supportsEnvelopes()) {
-      return getEnvelopePayload(this.db, profileKey, (info) => {
-        this.handleEnvelopeFallback(info);
-      });
+    try {
+      if (this.supportsEnvelopes()) {
+        return await getEnvelopePayload(this.db, profileKey, (info) => {
+          this.handleEnvelopeFallback(info);
+        });
+      }
+      return await this.db.get(profileKey);
+    } catch (err) {
+      const lostCid = extractLostHeadCid(err);
+      if (lostCid !== null) {
+        this.handleCriticalBlockEvicted({
+          cid: lostCid,
+          key: profileKey,
+          attemptedAt: Date.now()
+        });
+      }
+      throw err;
     }
-    return this.db.get(profileKey);
+  }
+  /**
+   * Issue #311 — dispatcher for the critical-block-evicted hook.
+   *
+   * Logs at WARN level on the first sighting of a unique `(cid, key)`
+   * pair AND invokes the user-supplied notifier (if any) so consumers
+   * can route the signal into typed events / metrics / alerts.
+   *
+   * Dedup uses the same bounded-cap + early-return pattern as
+   * `handleEnvelopeFallback`. The cap protects against adversarial
+   * input that would otherwise flood the event surface; the
+   * trade-off ("lost signal beyond cap" vs "no unbounded amplification")
+   * is identical and we choose the same answer.
+   */
+  handleCriticalBlockEvicted(info) {
+    const cidKey2 = info.cid ?? "";
+    const dedupKey = `${cidKey2}${info.key}`;
+    if (this.criticalBlockEvictedSeen.has(dedupKey)) return;
+    if (this.criticalBlockEvictedSeen.size >= _ProfileStorageProvider.CRITICAL_BLOCK_EVICTED_DEDUP_CAP) {
+      return;
+    }
+    this.criticalBlockEvictedSeen.add(dedupKey);
+    logger.warn(
+      "ProfileStorage",
+      `[CRITICAL-BLOCK-EVICTED] Helia could not load block for key="${redactProfileKey(info.key)}" cid="${info.cid ?? "<unknown>"}". The block was evicted from the local blockstore between sessions. If this fires on a fresh-load read, the wallet may need to re-sync from remote storage.`
+    );
+    if (this.criticalBlockEvictedNotifier !== null) {
+      try {
+        this.criticalBlockEvictedNotifier(info);
+      } catch {
+      }
+    }
   }
   /**
    * Issue #280 — dispatcher for the envelope-fallback hook. Logs at
@@ -21500,6 +22139,11 @@ var FlushScheduler = class {
         timestamp: Date.now(),
         data: { cid, tokenCount: tokens.size }
       });
+      void this.host.writeLocalSnapshot("flush").catch((err) => {
+        this.host.log(
+          `writeLocalSnapshot (flush) threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
       if (publishThrew !== void 0) {
         throw publishThrew;
       }
@@ -21897,9 +22541,19 @@ var LifecycleManager = class {
       return false;
     }
     this.host.setStatus("connecting");
+    let snapshotSeeded = false;
+    try {
+      snapshotSeeded = await this.host.readLocalSnapshot();
+    } catch (err) {
+      this.host.log(
+        `readLocalSnapshot threw unexpectedly (continuing with slow boot): ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
     try {
       if (!this.host.db.isConnected()) {
-        this.host.log("OrbitDB not connected; skipping bundle load until connected");
+        this.host.log(
+          `OrbitDB not connected; skipping bundle load until connected` + (snapshotSeeded ? " (snapshot seeded for offline render)" : "")
+        );
         this.host.setStatus("connected");
         this.host.setInitialized(true);
         return true;
@@ -21988,6 +22642,13 @@ var LifecycleManager = class {
           `Shutdown (force): stamped pending-publish marker for cold-start retry: cid=${lastSnapshot}` + (options?.reason ? ` reason=${options.reason}` : "")
         );
       }
+    }
+    try {
+      await this.host.writeLocalSnapshot("shutdown");
+    } catch (err) {
+      this.host.log(
+        `Shutdown snapshot write threw unexpectedly (best-effort): ${err instanceof Error ? err.message : String(err)}`
+      );
     }
     const unsub = this.host.getReplicationUnsub();
     if (unsub) {
@@ -22523,6 +23184,22 @@ var LifecycleManager = class {
       try {
         const cidBytes = CID9.parse(cidString).bytes;
         const result = await pointer.publish(async () => cidBytes);
+        const inlineGateMs = this.host.options?.pointerPublishDurabilityGateMs ?? 0;
+        if (inlineGateMs > 0) {
+          try {
+            await this.verifyFlushDurability(cidString, null, inlineGateMs);
+          } catch (verifyErr) {
+            this.host.setPendingPublishCid(cidString);
+            this.host.log(
+              `Pointer publish ok (aggregator) but IPFS HEAD-verify timed out within ${inlineGateMs}ms gate for cid=${cidString} \u2014 keeping pendingPublishCid for retry. Local state is durable; cross-device recovery is held until gateway propagation completes. verifyErr=${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`
+            );
+            return {
+              ok: false,
+              transient: true,
+              code: "IPFS_NOT_YET_DURABLE"
+            };
+          }
+        }
         this.host.setLastDiscoveredPointerCid(cidString);
         this.host.setPendingPublishCid(null);
         if (this.walkbackFloorThrottleSkipCount > 0) {
@@ -22571,6 +23248,8 @@ var LifecycleManager = class {
           );
           winBroadcastsOn = false;
         }
+        let signedPayloadJson;
+        let broadcastTag;
         if (winBroadcastsOn) {
           try {
             const signerHandle = pointer.getSignerForWinBroadcast();
@@ -22582,17 +23261,8 @@ var LifecycleManager = class {
               signingPubKey: signerHandle.signingPubKeyHex,
               ts: Date.now()
             });
-            this.host.emitEvent({
-              type: "storage:pointer-published",
-              timestamp: Date.now(),
-              data: {
-                cid: cidString,
-                version: result.version,
-                attemptsUsed: result.attemptsUsed,
-                signedPayloadJson: JSON.stringify(signed),
-                broadcastTag: buildWinBroadcastTag(signerHandle.signingPubKeyHex)
-              }
-            });
+            signedPayloadJson = JSON.stringify(signed);
+            broadcastTag = buildWinBroadcastTag(signerHandle.signingPubKeyHex);
           } catch (broadcastErr) {
             const errMsg2 = broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr);
             this.host.log(
@@ -22600,6 +23270,17 @@ var LifecycleManager = class {
             );
           }
         }
+        this.host.emitEvent({
+          type: "storage:pointer-published",
+          timestamp: Date.now(),
+          data: {
+            cid: cidString,
+            version: result.version,
+            attemptsUsed: result.attemptsUsed,
+            ...signedPayloadJson !== void 0 ? { signedPayloadJson } : {},
+            ...broadcastTag !== void 0 ? { broadcastTag } : {}
+          }
+        });
         return { ok: true, transient: false };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -22931,6 +23612,7 @@ var LifecycleManager = class {
     if (this.host.getIsShuttingDown()) return;
     const getPointerLayer = this.host.options?.getPointerLayer;
     if (!getPointerLayer) return;
+    const pollStartedAt = Date.now();
     let nextBackoffMultiplier = 1;
     const pointer = getPointerLayer() ?? null;
     if (!pointer) {
@@ -22959,6 +23641,45 @@ var LifecycleManager = class {
       }
       this.scheduleNextPointerPoll(nextBackoffMultiplier);
       return;
+    }
+    try {
+      const clearResult = await pointer.clearBlockedIfTransient();
+      if (clearResult.cleared && clearResult.reason) {
+        this.host.log(
+          `Pointer poll: auto-cleared BLOCKED (reason=${clearResult.reason}) after successful recoverLatest \u2014 transient connectivity resolved.`
+        );
+        try {
+          await this.retryPendingPublishIfAny();
+        } catch (retryErr) {
+          this.host.log(
+            `Pointer poll: post-unblock pending-publish retry threw (best-effort): ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+          );
+        }
+        let immediatelyReblocked = false;
+        try {
+          immediatelyReblocked = await pointer.isPublishBlocked();
+        } catch {
+          immediatelyReblocked = false;
+        }
+        if (!immediatelyReblocked) {
+          this.host.emitEvent({
+            type: "storage:blocked-auto-cleared",
+            timestamp: Date.now(),
+            data: {
+              clearedReason: clearResult.reason,
+              clearedAt: Date.now()
+            }
+          });
+        } else {
+          this.host.log(
+            `Pointer poll: auto-cleared BLOCKED (${clearResult.reason}) but the same-tick retry re-blocked the wallet; suppressing storage:blocked-auto-cleared event to avoid UI flicker.`
+          );
+        }
+      }
+    } catch (err) {
+      this.host.log(
+        `Pointer poll: clearBlockedIfTransient threw (best-effort): ${err instanceof Error ? err.message : String(err)}`
+      );
     }
     if (!recovered) {
       this.scheduleNextPointerPoll(nextBackoffMultiplier);
@@ -23026,6 +23747,14 @@ var LifecycleManager = class {
           );
         }
       }
+      const durationMs = Date.now() - pollStartedAt;
+      void this.host.writeLocalSnapshot("background-sync", {
+        durationMs
+      }).catch((err2) => {
+        this.host.log(
+          `Pointer poll: writeLocalSnapshot threw unexpectedly: ${err2 instanceof Error ? err2.message : String(err2)}`
+        );
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.host.log(`Pointer poll: applySnapshotIfWired failed: ${msg}`);
@@ -23047,6 +23776,153 @@ var LifecycleManager = class {
     }, intervalMs);
   }
 };
+
+// profile/profile-snapshot-cache.ts
+init_sha2();
+var PROFILE_SNAPSHOT_SCHEMA_VERSION = 1;
+function getSnapshotBlobKey(addressId) {
+  return `${STORAGE_KEYS_GLOBAL.PROFILE_SNAPSHOT_BLOB}_${addressId}`;
+}
+function getSnapshotPendingKey(addressId) {
+  return `${getSnapshotBlobKey(addressId)}_pending`;
+}
+function computeContentHash(blob) {
+  const preimage = JSON.stringify({
+    version: blob.version,
+    walletId: blob.walletId,
+    addressId: blob.addressId,
+    network: blob.network,
+    ts: blob.ts,
+    epoch: blob.epoch,
+    pointer: blob.pointer,
+    bundleCids: blob.bundleCids,
+    data: blob.data
+  });
+  const bytes = new TextEncoder().encode(preimage);
+  const hash = sha256(bytes);
+  let hex = "";
+  for (let i = 0; i < hash.length; i++) {
+    hex += hash[i].toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+async function writeSnapshot(storage, input) {
+  const ts = (input.now ?? Date.now)();
+  const blobNoHash = {
+    version: PROFILE_SNAPSHOT_SCHEMA_VERSION,
+    walletId: input.walletId,
+    addressId: input.addressId,
+    network: input.network,
+    ts,
+    epoch: input.epoch,
+    pointer: input.pointer,
+    bundleCids: input.bundleCids,
+    data: input.data
+  };
+  const contentHash2 = computeContentHash(blobNoHash);
+  const blob = { ...blobNoHash, contentHash: contentHash2 };
+  const serialized = JSON.stringify(blob);
+  const mainKey = getSnapshotBlobKey(input.addressId);
+  const pendingKey = getSnapshotPendingKey(input.addressId);
+  if (typeof storage.setMany === "function") {
+    await storage.setMany([
+      [pendingKey, serialized],
+      [mainKey, serialized]
+    ]);
+    try {
+      await storage.remove(pendingKey);
+    } catch {
+    }
+    return ts;
+  }
+  await storage.set(pendingKey, serialized);
+  await storage.set(mainKey, serialized);
+  try {
+    await storage.remove(pendingKey);
+  } catch {
+  }
+  return ts;
+}
+async function readSnapshot(storage, addressId, expectedWalletId, now2 = Date.now) {
+  const mainKey = getSnapshotBlobKey(addressId);
+  let raw2;
+  try {
+    raw2 = await storage.get(mainKey);
+  } catch (err) {
+    return {
+      kind: "corrupt",
+      reason: `storage-error: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (raw2 === null || raw2.length === 0) {
+    return { kind: "absent" };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw2);
+  } catch (err) {
+    return {
+      kind: "corrupt",
+      reason: `parse-error: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (parsed === null || typeof parsed !== "object" || typeof parsed.version !== "number") {
+    return { kind: "corrupt", reason: "shape-invalid" };
+  }
+  const blob = parsed;
+  if (blob.version !== PROFILE_SNAPSHOT_SCHEMA_VERSION) {
+    return {
+      kind: "corrupt",
+      reason: `schema-mismatch: blob.version=${blob.version} expected=${PROFILE_SNAPSHOT_SCHEMA_VERSION}`,
+      walletId: blob.walletId
+    };
+  }
+  if (typeof blob.walletId !== "string" || typeof blob.addressId !== "string" || typeof blob.network !== "string" || typeof blob.ts !== "number" || !Array.isArray(blob.bundleCids) || blob.data === void 0 || blob.data === null || typeof blob.contentHash !== "string") {
+    return {
+      kind: "corrupt",
+      reason: "field-types-invalid",
+      walletId: blob.walletId
+    };
+  }
+  if (blob.walletId !== expectedWalletId) {
+    return {
+      kind: "corrupt",
+      reason: `walletId-mismatch: blob=${blob.walletId.slice(0, 16)}... expected=${expectedWalletId.slice(0, 16)}...`,
+      walletId: blob.walletId
+    };
+  }
+  const expected = computeContentHash({
+    version: blob.version,
+    walletId: blob.walletId,
+    addressId: blob.addressId,
+    network: blob.network,
+    ts: blob.ts,
+    epoch: blob.epoch ?? null,
+    pointer: blob.pointer ?? null,
+    bundleCids: blob.bundleCids,
+    data: blob.data
+  });
+  if (expected !== blob.contentHash) {
+    return {
+      kind: "corrupt",
+      reason: "contentHash-mismatch",
+      walletId: blob.walletId
+    };
+  }
+  return { kind: "ok", blob, ageMs: Math.max(0, now2() - blob.ts) };
+}
+async function clearSnapshot(storage, addressId) {
+  const mainKey = getSnapshotBlobKey(addressId);
+  const pendingKey = getSnapshotPendingKey(addressId);
+  try {
+    await storage.remove(mainKey);
+  } catch {
+  }
+  try {
+    await storage.remove(pendingKey);
+  } catch {
+  }
+}
 
 // profile/profile-token-storage-provider.ts
 var DEFAULT_FLUSH_DEBOUNCE_MS = 2e3;
@@ -23220,6 +24096,18 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
   // confused by stale data on cache-key downgrade. Guard with a flag
   // so we don't attempt the delete on every save.
   legacyKeysCleaned = false;
+  // ---------------------------------------------------------------------------
+  // Issue #330 — read-only fallback token storage (legacy IDB)
+  //
+  // When the Profile load path returns empty or fails on a wallet that
+  // was migrated from a legacy `IndexedDBTokenStorageProvider`, this
+  // fallback is consulted as a last-resort read source. Wired by
+  // `Sphere.load()` after construction via {@link setFallbackTokenStorage}.
+  //
+  // Strictly read-only: never written to. If a successful primary load
+  // observes tokens, the fallback is NOT consulted for that call.
+  // ---------------------------------------------------------------------------
+  fallbackTokenStorage = null;
   // --- Sub-modules (Phase 8 facade refactor) ---
   bundleIndex;
   historyStore;
@@ -23379,7 +24267,13 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       // point for FlushScheduler. Delegates to LifecycleManager which
       // runs HEAD-verify + aggregator read-back legs in parallel and
       // throws on deadline. See ProfileTokenStorageHost.verifyFlushDurability.
-      verifyFlushDurability: (bundleCid, snapshotCid, deadlineMs) => this.verifyFlushDurability(bundleCid, snapshotCid, deadlineMs)
+      verifyFlushDurability: (bundleCid, snapshotCid, deadlineMs) => this.verifyFlushDurability(bundleCid, snapshotCid, deadlineMs),
+      // Issue #313 — lazy-load snapshot cache. Write hooks fire after
+      // flush completion and on shutdown; read hook runs at the head of
+      // LifecycleManager.initialize() to seed the in-memory state before
+      // any OrbitDB / aggregator round-trip.
+      writeLocalSnapshot: (trigger, options) => this.writeLocalSnapshot(trigger, options),
+      readLocalSnapshot: () => this.readLocalSnapshot()
     };
   }
   /**
@@ -23666,6 +24560,24 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     this.lifecycleManager.setIdentity(identity);
   }
   /**
+   * Issue #330 — install a read-only fallback token-storage provider.
+   *
+   * Consulted by `load()` when the primary path returns empty (no
+   * bundles + no cached seed) or fails (e.g. `[CRITICAL-BLOCK-EVICTED]`).
+   * Token-side analogue of `Sphere.fallbackStorage` (which only covers
+   * identity keys). Set once at startup; subsequent calls overwrite.
+   * Pass `null` to clear.
+   *
+   * The fallback is strictly read-only: this provider NEVER writes to
+   * it. Migration from legacy IDB to Profile no longer wipes the
+   * legacy DB (see `migration.ts` step 5c) precisely so it can serve
+   * as a last-resort recovery source for tokens that were durable in
+   * legacy before the Profile blockstore lost them.
+   */
+  setFallbackTokenStorage(fallback) {
+    this.fallbackTokenStorage = fallback;
+  }
+  /**
    * Item #15 Phase C.3 — public read accessor for the bound identity.
    * Returns `null` until {@link setIdentity} has been called.
    *
@@ -23867,6 +24779,44 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     return { success: true, timestamp };
   }
   // ---------------------------------------------------------------------------
+  // Issue #330 — fallback-load helper
+  //
+  // Consult `fallbackTokenStorage` (if wired) as a last-resort read
+  // source. Returns the fallback's full load result only when it
+  // contains at least one token key; otherwise returns null so the
+  // caller's normal "empty" path runs (avoids masking a legitimately-
+  // empty wallet with stale fallback junk).
+  //
+  // Never throws — any error from the fallback is logged and treated
+  // as "no fallback data available." The fallback is strictly read-
+  // only; this helper never invokes `save`.
+  // ---------------------------------------------------------------------------
+  async tryFallbackLoad(reason) {
+    const fallback = this.fallbackTokenStorage;
+    if (!fallback) return null;
+    try {
+      if (typeof fallback.isConnected === "function" && !fallback.isConnected()) {
+        if (typeof fallback.connect === "function") {
+          await fallback.connect();
+        }
+      }
+      const result = await fallback.load();
+      if (!result.success || !result.data) return null;
+      const data = result.data;
+      const hasTokens = Object.keys(data).some((k) => isTokenKey(k));
+      if (!hasTokens) return null;
+      this.log(
+        `fallback-load: consulted fallbackTokenStorage (reason=${reason}); recovered ${Object.keys(data).filter(isTokenKey).length} token key(s).`
+      );
+      return data;
+    } catch (err) {
+      this.log(
+        `fallback-load: fallbackTokenStorage.load() threw (reason=${reason}): ${err instanceof Error ? err.message : String(err)}`
+      );
+      return null;
+    }
+  }
+  // ---------------------------------------------------------------------------
   // load() -- Multi-bundle merge
   // ---------------------------------------------------------------------------
   async load(_identifier) {
@@ -23897,6 +24847,29 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     try {
       const activeBundles = await this.bundleIndex.listActiveBundles();
       if (activeBundles.size === 0) {
+        const seedHasTokens = this.lastLoadedData !== null && Object.keys(this.lastLoadedData).some((k) => isTokenKey(k));
+        if (seedHasTokens) {
+          this.emitEvent({ type: "storage:loaded", timestamp: Date.now() });
+          return {
+            success: true,
+            data: this.lastLoadedData,
+            source: "cache",
+            timestamp: Date.now()
+          };
+        }
+        const fallback = await this.tryFallbackLoad("no-bundles");
+        if (fallback !== null) {
+          this.lastLoadedData = fallback;
+          this.lastLoadedFromBundleCids = /* @__PURE__ */ new Set();
+          this.lastTokenManifest = /* @__PURE__ */ new Map();
+          this.emitEvent({ type: "storage:loaded", timestamp: Date.now() });
+          return {
+            success: true,
+            data: fallback,
+            source: "cache",
+            timestamp: Date.now()
+          };
+        }
         const emptyData = this.buildEmptyTxfData();
         this.lastLoadedData = emptyData;
         this.lastLoadedFromBundleCids = /* @__PURE__ */ new Set();
@@ -23924,6 +24897,20 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
           loadedBundles.push({ cid, pkg });
         } catch (err) {
           this.log(`Failed to load bundle ${cid}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (loadedBundles.length === 0 && activeBundles.size > 0) {
+        const fallback = await this.tryFallbackLoad("no-bundles-fetched");
+        if (fallback !== null) {
+          this.lastLoadedData = fallback;
+          this.lastTokenManifest = /* @__PURE__ */ new Map();
+          this.emitEvent({ type: "storage:loaded", timestamp: Date.now() });
+          return {
+            success: true,
+            data: fallback,
+            source: "cache",
+            timestamp: Date.now()
+          };
         }
       }
       let verifiedProofs = void 0;
@@ -23985,6 +24972,18 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.emitEvent(this.buildErrorEvent("storage:error", err));
+      const fallback = await this.tryFallbackLoad("load-error");
+      if (fallback !== null) {
+        this.lastLoadedData = fallback;
+        this.lastTokenManifest = /* @__PURE__ */ new Map();
+        this.emitEvent({ type: "storage:loaded", timestamp: Date.now() });
+        return {
+          success: true,
+          data: fallback,
+          source: "cache",
+          timestamp: Date.now()
+        };
+      }
       return {
         success: false,
         error: errorMsg,
@@ -25020,6 +26019,153 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       );
     }
   }
+  // ---------------------------------------------------------------------------
+  // Issue #313 — local snapshot cache (lazy-load)
+  // ---------------------------------------------------------------------------
+  /**
+   * Issue #313 — atomic-write the lazy-load snapshot blob.
+   *
+   * Reads the live in-memory state (identity, pendingData ∪
+   * lastLoadedData, knownBundleCids, lastDiscoveredPointerCid) and
+   * persists it via {@link writeSnapshot} (temp-key + swap with
+   * `setMany`). Best-effort: any failure is caught and surfaced via
+   * `storage:error` (`PROFILE_SNAPSHOT_WRITE_FAILED`) without
+   * propagating; the snapshot is a perf optimisation, not a correctness
+   * gate.
+   *
+   * No-ops when:
+   *   - no `localCache` is wired (provider constructed without cache);
+   *   - identity is not yet bound (cold-start);
+   *   - no in-memory state to snapshot (fresh wallet);
+   *   - the network identifier is not configured (defensive).
+   */
+  async writeLocalSnapshot(trigger, options) {
+    if (!this.localCache) return;
+    if (!this.identity) return;
+    const addressId = this.getAddressId();
+    if (!addressId || addressId === "default") {
+      return;
+    }
+    const data = this.pendingData ?? this.lastLoadedData;
+    if (!data) return;
+    const network = this.options?.config?.network ?? null;
+    if (!network) return;
+    const pointer = this.lastDiscoveredPointerCid ? {
+      version: 0,
+      cid: this.lastDiscoveredPointerCid,
+      ts: Date.now()
+    } : null;
+    try {
+      const ts = await writeSnapshot(this.localCache, {
+        walletId: this.identity.chainPubkey,
+        addressId,
+        network,
+        epoch: null,
+        // OpLog epoch wiring is owned by issue #310's reset primitive
+        pointer,
+        bundleCids: Array.from(this.knownBundleCids),
+        data
+      });
+      this.emitEvent({
+        type: "profile:snapshot-refreshed",
+        timestamp: ts,
+        data: {
+          trigger,
+          from: options?.previousPointerVersion ?? null,
+          to: pointer?.version ?? null,
+          durationMs: options?.durationMs
+        }
+      });
+    } catch (err) {
+      this.log(
+        `writeLocalSnapshot (${trigger}) failed (best-effort): ${err instanceof Error ? err.message : String(err)}`
+      );
+      this.emitEvent(
+        this.buildErrorEvent(
+          "storage:error",
+          err,
+          "PROFILE_SNAPSHOT_WRITE_FAILED"
+        )
+      );
+    }
+  }
+  /**
+   * Issue #313 — read the lazy-load snapshot blob and SEED the
+   * in-memory state from it.
+   *
+   * Called by `LifecycleManager.initialize()` BEFORE the OrbitDB
+   * connect + bundle-index refresh. On a successful seed the wallet
+   * has renderable state (`lastLoadedData`, `knownBundleCids`,
+   * `lastDiscoveredPointerCid`) and `profile:snapshot-loaded` is
+   * emitted; the lifecycle still runs the full initialize flow which
+   * acts as a background sync (replication subscription, aggregator
+   * pointer recovery, periodic-poll arming).
+   *
+   * On corruption the blob is removed and `profile:snapshot-corrupt`
+   * is emitted; boot continues via the slow path.
+   *
+   * Returns true if a valid snapshot was applied; false otherwise.
+   */
+  async readLocalSnapshot() {
+    if (!this.localCache) return false;
+    if (!this.identity) return false;
+    const addressId = this.getAddressId();
+    if (!addressId || addressId === "default") return false;
+    let result;
+    try {
+      result = await readSnapshot(
+        this.localCache,
+        addressId,
+        this.identity.chainPubkey
+      );
+    } catch (err) {
+      this.log(
+        `readLocalSnapshot failed (best-effort): ${err instanceof Error ? err.message : String(err)}`
+      );
+      return false;
+    }
+    switch (result.kind) {
+      case "absent":
+        return false;
+      case "corrupt":
+        this.log(
+          `Local snapshot corrupt (${result.reason}); cleaning + falling through to OpLog walk`
+        );
+        await clearSnapshot(this.localCache, addressId);
+        this.emitEvent({
+          type: "profile:snapshot-corrupt",
+          timestamp: Date.now(),
+          data: {
+            reason: result.reason,
+            walletId: result.walletId
+          }
+        });
+        return false;
+      case "ok": {
+        this.lastLoadedData = result.blob.data;
+        this.lastLoadedFromBundleCids = new Set(result.blob.bundleCids);
+        this.knownBundleCids = new Set(result.blob.bundleCids);
+        if (result.blob.pointer) {
+          this.lastDiscoveredPointerCid = result.blob.pointer.cid;
+        }
+        const tokenCount = Object.keys(result.blob.data).filter(isTokenKey).length;
+        this.emitEvent({
+          type: "profile:snapshot-loaded",
+          timestamp: Date.now(),
+          data: {
+            ageMs: result.ageMs,
+            tokenCount,
+            bundleCount: result.blob.bundleCids.length,
+            pointerVersion: result.blob.pointer?.version ?? null
+          }
+        });
+        this.log(
+          `Loaded local snapshot: tokens=${tokenCount} bundles=${result.blob.bundleCids.length} ageMs=${result.ageMs}`
+        );
+        return true;
+      }
+    }
+  }
   /**
    * Refresh the merged-bundle baseline (`lastLoadedFromBundleCids`)
    * and the cached `lastLoadedData` by running a fresh `load()`.
@@ -25469,6 +26615,26 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     }
   }
   /**
+   * Issue #311 — narrow public emit hook for events sourced OUTSIDE
+   * the token-storage provider's own write/read paths. Used by the
+   * factory to route `profile:storage-persistence` and
+   * `profile:critical-block-evicted` events (sourced from the
+   * OrbitDbAdapter / ProfileStorageProvider boundary) into the
+   * provider's `onEvent` surface so consumers have a single
+   * subscription point.
+   *
+   * Restricted to the two `profile:*` event types added by issue #311
+   * to prevent misuse — every other event class has a canonical
+   * emitter site inside this provider. Unknown types are silently
+   * dropped (defense in depth).
+   */
+  emitExternalProfileEvent(event) {
+    if (event.type !== "profile:storage-persistence" && event.type !== "profile:critical-block-evicted") {
+      return;
+    }
+    this.emitEvent(event);
+  }
+  /**
    * Steelman³⁸ warning: build an event payload that preserves typed
    * error codes (AggregatorPointerError.code, ProfileError.code,
    * UxfError.code, SphereError.code) instead of flattening to a string.
@@ -25705,11 +26871,31 @@ function createProfileProviders(config, cacheStorage, oracle) {
         );
       }
       const retentionMs = resolvedConfig.tombstoneRetentionMs ?? DEFAULT_PROFILE_TOMBSTONE_RETENTION_MS;
+      let epoch;
+      let epochResetReason;
+      try {
+        const rawEpoch = await cacheStorage.get(LOCAL_EPOCH_FLOOR_KEY);
+        if (rawEpoch !== null) {
+          const parsed = Number.parseInt(rawEpoch, 10);
+          if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+            epoch = parsed;
+            const rawReason = await cacheStorage.get(
+              LOCAL_EPOCH_RESET_REASON_KEY
+            );
+            if (rawReason !== null && rawReason.length > 0) {
+              epochResetReason = rawReason;
+            }
+          }
+        }
+      } catch {
+      }
       return buildLeanProfileSnapshot({
         storage,
         tokenStorage: tokenStorage2,
         chainPubkey,
         network,
+        ...epoch !== void 0 ? { epoch } : {},
+        ...epochResetReason !== void 0 ? { epochResetReason } : {},
         gcExpiredTombstones: () => runProfileTombstoneGc({
           listKeys: () => storage.keys(),
           buildOutboxWriter: (addressId) => storage.buildOutboxWriter(addressId),
@@ -25765,6 +26951,12 @@ function createProfileProviders(config, cacheStorage, oracle) {
     // HEAD retries; the factory override above is what gives real
     // wallets the verification contract.
     flushVerificationDeadlineMs: resolvedConfig.flushVerificationDeadlineMs ?? 3e4,
+    // Issue #330 — propagate the inline durability gate on
+    // `publishAggregatorPointerBestEffort`. Default 5_000 ms for the
+    // factory (production wallets); direct-construction default in
+    // the provider is 0 (off) for test compatibility. See
+    // `ProfileTokenStorageProviderOptions.pointerPublishDurabilityGateMs`.
+    pointerPublishDurabilityGateMs: resolvedConfig.pointerPublishDurabilityGateMs ?? 5e3,
     oracle,
     // Lazy accessor: the pointer layer is built inside
     // `storage.doConnect()` after OrbitDB attach, long after the
@@ -25785,6 +26977,30 @@ function createProfileProviders(config, cacheStorage, oracle) {
     cacheStorage
   );
   tokenStorageHolder.current = tokenStorage;
+  const dbWithPersistenceHook = db;
+  if (typeof dbWithPersistenceHook.setStoragePersistenceListener === "function") {
+    dbWithPersistenceHook.setStoragePersistenceListener((result) => {
+      tokenStorage.emitExternalProfileEvent({
+        type: "profile:storage-persistence",
+        timestamp: Date.now(),
+        data: { granted: result.granted, supported: result.supported }
+      });
+    });
+  }
+  const storageWithCriticalHook = storage;
+  if (typeof storageWithCriticalHook.setCriticalBlockEvictedNotifier === "function") {
+    storageWithCriticalHook.setCriticalBlockEvictedNotifier((info) => {
+      tokenStorage.emitExternalProfileEvent({
+        type: "profile:critical-block-evicted",
+        timestamp: Date.now(),
+        data: {
+          cid: info.cid,
+          key: info.key,
+          attemptedAt: info.attemptedAt
+        }
+      });
+    });
+  }
   storage.setProfileDirtyNotifier(() => tokenStorage.notifyProfileDirty());
   const dispatchParsedSnapshot = (snapshot) => runProfileSnapshotApply(snapshot, {
     writersFor: (addressId) => {

@@ -2246,7 +2246,141 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * `profile:recovered`; both are emitted on every auto-reset attempt
  * (one before, one after).
  */
- | 'profile:oplog-auto-resetting';
+ | 'profile:oplog-auto-resetting'
+/**
+ * Issue #311 — emitted once during browser profile factory boot to
+ * report the outcome of `navigator.storage.persist()`. Operators (and
+ * the wallet UI) use this to detect when persistence was DENIED so
+ * they can warn the user that the wallet may need to re-sync from
+ * remote storage after a browser-driven eviction.
+ *
+ * `data` carries `{ granted, supported }`:
+ *   - `supported: false` — the runtime has no `navigator.storage.persist`
+ *     (Node, SSR, legacy Safari, embedded WebViews). `granted` is also
+ *     false in this case.
+ *   - `supported: true, granted: false` — the platform supports the
+ *     API but the request was denied (user policy, permissions
+ *     policy, or the promise was rejected).
+ *   - `supported: true, granted: true` — the wallet's origin storage
+ *     is marked persistent and is NOT eligible for the browser's
+ *     opportunistic eviction sweep.
+ *
+ * Informational only — the wallet continues to operate regardless;
+ * `false` simply signals reduced durability guarantees.
+ */
+ | 'profile:storage-persistence'
+/**
+ * Issue #311 — emitted when the Profile read path observed a
+ * "Failed to load block for <CID>" signature. This indicates that
+ * a block reachable from the live OpLog head (or a referenced
+ * snapshot) was evicted from the local Helia blockstore and the
+ * read could not be served. The companion `profile:oplog-auto-resetting`
+ * event will typically follow on the flush path; this event fires
+ * EARLIER and from the read path so operators see the eviction the
+ * moment it manifests, not after a write-side trigger.
+ *
+ * `data` carries `{ cid, key, attemptedAt }`:
+ *   - `cid` — the missing block CID extracted from the Helia error
+ *     message (matches the `bafy[a-z0-9]+` pattern via
+ *     {@link extractLostHeadCid}; null when the error carried no
+ *     identifiable CID).
+ *   - `key` — the profile key whose read triggered the error (e.g.
+ *     `outbox.<addr>.<entryId>`). May be redacted in logs.
+ *   - `attemptedAt` — UNIX ms timestamp of the failed read.
+ *
+ * Dedup: the provider tracks a bounded set of (cid, key) pairs and
+ * fires the event at most once per pair per provider instance so a
+ * persistent missing block does not spam the event surface on every
+ * subsequent read attempt.
+ */
+ | 'profile:critical-block-evicted'
+/**
+ * Issue #311 — emitted when the adapter's best-effort
+ * `helia.pins.add(cid)` call fails for a freshly written OpLog
+ * entry. Distinct from `storage:error` (terminal): a pin failure is
+ * additive — the underlying write still succeeded and the block was
+ * stored — but the durability invariant ("every OpLog block reachable
+ * from the live head is pinned") was weakened for this one CID.
+ * `data` carries `{ cid, errorMessage }`.
+ */
+ | 'profile:oplog-pin-failed'
+/**
+ * Issue #313 — emitted by `LifecycleManager.initialize()` when a
+ * valid cached snapshot blob has been read and used to seed the
+ * in-memory state. Fires BEFORE OrbitDB connect + bundle-index
+ * refresh; UI consumers can render the wallet from cached state
+ * immediately (no aggregator / remote IPFS round trips).
+ *
+ * `data` carries:
+ *   - `ageMs: number`           how stale the snapshot is (now - ts)
+ *   - `tokenCount: number`      number of tokens reconstituted from snapshot
+ *   - `bundleCount: number`     number of bundle CIDs primed
+ *   - `pointerVersion?: number` the cached pointer version (if any)
+ *
+ * Distinct from `storage:loaded` (which fires after a full OpLog walk).
+ * When no snapshot is present (fresh wallet, post-clear, or corrupt
+ * blob) this event is NOT emitted and boot falls through to the
+ * standard OpLog walk path.
+ */
+ | 'profile:snapshot-loaded'
+/**
+ * Issue #313 — emitted after the snapshot blob has been atomically
+ * written (after a successful flush, after a background remote sync,
+ * or during graceful shutdown). Lets UI surfaces show a
+ * "last-saved" indicator without polling storage directly.
+ *
+ * `data` carries:
+ *   - `from?: number`     previous pointer version (if cached)
+ *   - `to?: number`       new pointer version (if any)
+ *   - `durationMs?: number` wall-clock time spent on sync (for refreshes)
+ *   - `trigger: 'flush' | 'shutdown' | 'background-sync'`
+ */
+ | 'profile:snapshot-refreshed'
+/**
+ * Issue #313 — emitted when the cold-boot snapshot read detected a
+ * corrupt or schema-incompatible blob and fell through to the OpLog
+ * walk path. The corrupt blob has been removed; the wallet still
+ * boots normally (degraded performance only). Operator-visible
+ * signal that a previous shutdown left a partial-write or the
+ * schema version changed (post-upgrade first boot).
+ *
+ * `data` carries `{ reason: string, walletId?: string }`.
+ */
+ | 'profile:snapshot-corrupt'
+/**
+ * Issue #319 — emitted by the pointer-poll worker when it observed a
+ * successful `recoverLatest()` round-trip against the aggregator AND
+ * the wallet was in a BLOCKED state with a transient-connectivity
+ * reason (`retry_exhausted`, `network_timeout`, `dns_failure`,
+ * `tls_failure`). The flag has been cleared automatically; subsequent
+ * publish attempts will proceed without the operator having to call
+ * `recoverLatest()` from a console.
+ *
+ * Persistent BLOCKED reasons (`aggregator_rejected`, `protocol_error`,
+ * `marker_corrupt`, `rejected`) are NEVER auto-cleared and never
+ * trigger this event — those still require an explicit operator
+ * decision per SPEC §10.2.4.
+ *
+ * Suppressed when the same-tick post-clear retry immediately re-set
+ * BLOCKED — the operator-visible signal would otherwise flicker
+ * between "wallet recovered" and "wallet blocked" with no durable
+ * progress. The next successful poll will surface the auto-clear
+ * once the underlying connectivity actually stabilises.
+ *
+ * `data` carries:
+ *   - `clearedReason: BlockedReason`   the transient reason that
+ *                                      WAS cleared (past tense — the
+ *                                      wallet is no longer blocked)
+ *   - `clearedAt: number`              UNIX ms timestamp
+ *
+ * Informational only. UIs may use this to dismiss a previously-shown
+ * "wallet blocked" banner.
+ *
+ * Operator note: `clearedReason` is operational metadata, not user-
+ * identifying data, but telemetry pipelines that forward these events
+ * upstream SHOULD scrub or aggregate per their privacy policy.
+ */
+ | 'storage:blocked-auto-cleared';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;

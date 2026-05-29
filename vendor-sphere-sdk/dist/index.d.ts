@@ -709,7 +709,141 @@ type StorageEventType = 'storage:saving' | 'storage:saved' | 'storage:loading' |
  * `profile:recovered`; both are emitted on every auto-reset attempt
  * (one before, one after).
  */
- | 'profile:oplog-auto-resetting';
+ | 'profile:oplog-auto-resetting'
+/**
+ * Issue #311 — emitted once during browser profile factory boot to
+ * report the outcome of `navigator.storage.persist()`. Operators (and
+ * the wallet UI) use this to detect when persistence was DENIED so
+ * they can warn the user that the wallet may need to re-sync from
+ * remote storage after a browser-driven eviction.
+ *
+ * `data` carries `{ granted, supported }`:
+ *   - `supported: false` — the runtime has no `navigator.storage.persist`
+ *     (Node, SSR, legacy Safari, embedded WebViews). `granted` is also
+ *     false in this case.
+ *   - `supported: true, granted: false` — the platform supports the
+ *     API but the request was denied (user policy, permissions
+ *     policy, or the promise was rejected).
+ *   - `supported: true, granted: true` — the wallet's origin storage
+ *     is marked persistent and is NOT eligible for the browser's
+ *     opportunistic eviction sweep.
+ *
+ * Informational only — the wallet continues to operate regardless;
+ * `false` simply signals reduced durability guarantees.
+ */
+ | 'profile:storage-persistence'
+/**
+ * Issue #311 — emitted when the Profile read path observed a
+ * "Failed to load block for <CID>" signature. This indicates that
+ * a block reachable from the live OpLog head (or a referenced
+ * snapshot) was evicted from the local Helia blockstore and the
+ * read could not be served. The companion `profile:oplog-auto-resetting`
+ * event will typically follow on the flush path; this event fires
+ * EARLIER and from the read path so operators see the eviction the
+ * moment it manifests, not after a write-side trigger.
+ *
+ * `data` carries `{ cid, key, attemptedAt }`:
+ *   - `cid` — the missing block CID extracted from the Helia error
+ *     message (matches the `bafy[a-z0-9]+` pattern via
+ *     {@link extractLostHeadCid}; null when the error carried no
+ *     identifiable CID).
+ *   - `key` — the profile key whose read triggered the error (e.g.
+ *     `outbox.<addr>.<entryId>`). May be redacted in logs.
+ *   - `attemptedAt` — UNIX ms timestamp of the failed read.
+ *
+ * Dedup: the provider tracks a bounded set of (cid, key) pairs and
+ * fires the event at most once per pair per provider instance so a
+ * persistent missing block does not spam the event surface on every
+ * subsequent read attempt.
+ */
+ | 'profile:critical-block-evicted'
+/**
+ * Issue #311 — emitted when the adapter's best-effort
+ * `helia.pins.add(cid)` call fails for a freshly written OpLog
+ * entry. Distinct from `storage:error` (terminal): a pin failure is
+ * additive — the underlying write still succeeded and the block was
+ * stored — but the durability invariant ("every OpLog block reachable
+ * from the live head is pinned") was weakened for this one CID.
+ * `data` carries `{ cid, errorMessage }`.
+ */
+ | 'profile:oplog-pin-failed'
+/**
+ * Issue #313 — emitted by `LifecycleManager.initialize()` when a
+ * valid cached snapshot blob has been read and used to seed the
+ * in-memory state. Fires BEFORE OrbitDB connect + bundle-index
+ * refresh; UI consumers can render the wallet from cached state
+ * immediately (no aggregator / remote IPFS round trips).
+ *
+ * `data` carries:
+ *   - `ageMs: number`           how stale the snapshot is (now - ts)
+ *   - `tokenCount: number`      number of tokens reconstituted from snapshot
+ *   - `bundleCount: number`     number of bundle CIDs primed
+ *   - `pointerVersion?: number` the cached pointer version (if any)
+ *
+ * Distinct from `storage:loaded` (which fires after a full OpLog walk).
+ * When no snapshot is present (fresh wallet, post-clear, or corrupt
+ * blob) this event is NOT emitted and boot falls through to the
+ * standard OpLog walk path.
+ */
+ | 'profile:snapshot-loaded'
+/**
+ * Issue #313 — emitted after the snapshot blob has been atomically
+ * written (after a successful flush, after a background remote sync,
+ * or during graceful shutdown). Lets UI surfaces show a
+ * "last-saved" indicator without polling storage directly.
+ *
+ * `data` carries:
+ *   - `from?: number`     previous pointer version (if cached)
+ *   - `to?: number`       new pointer version (if any)
+ *   - `durationMs?: number` wall-clock time spent on sync (for refreshes)
+ *   - `trigger: 'flush' | 'shutdown' | 'background-sync'`
+ */
+ | 'profile:snapshot-refreshed'
+/**
+ * Issue #313 — emitted when the cold-boot snapshot read detected a
+ * corrupt or schema-incompatible blob and fell through to the OpLog
+ * walk path. The corrupt blob has been removed; the wallet still
+ * boots normally (degraded performance only). Operator-visible
+ * signal that a previous shutdown left a partial-write or the
+ * schema version changed (post-upgrade first boot).
+ *
+ * `data` carries `{ reason: string, walletId?: string }`.
+ */
+ | 'profile:snapshot-corrupt'
+/**
+ * Issue #319 — emitted by the pointer-poll worker when it observed a
+ * successful `recoverLatest()` round-trip against the aggregator AND
+ * the wallet was in a BLOCKED state with a transient-connectivity
+ * reason (`retry_exhausted`, `network_timeout`, `dns_failure`,
+ * `tls_failure`). The flag has been cleared automatically; subsequent
+ * publish attempts will proceed without the operator having to call
+ * `recoverLatest()` from a console.
+ *
+ * Persistent BLOCKED reasons (`aggregator_rejected`, `protocol_error`,
+ * `marker_corrupt`, `rejected`) are NEVER auto-cleared and never
+ * trigger this event — those still require an explicit operator
+ * decision per SPEC §10.2.4.
+ *
+ * Suppressed when the same-tick post-clear retry immediately re-set
+ * BLOCKED — the operator-visible signal would otherwise flicker
+ * between "wallet recovered" and "wallet blocked" with no durable
+ * progress. The next successful poll will surface the auto-clear
+ * once the underlying connectivity actually stabilises.
+ *
+ * `data` carries:
+ *   - `clearedReason: BlockedReason`   the transient reason that
+ *                                      WAS cleared (past tense — the
+ *                                      wallet is no longer blocked)
+ *   - `clearedAt: number`              UNIX ms timestamp
+ *
+ * Informational only. UIs may use this to dismiss a previously-shown
+ * "wallet blocked" banner.
+ *
+ * Operator note: `clearedReason` is operational metadata, not user-
+ * identifying data, but telemetry pipelines that forward these events
+ * upstream SHOULD scrub or aggregate per their privacy policy.
+ */
+ | 'storage:blocked-auto-cleared';
 interface StorageEvent {
     type: StorageEventType;
     timestamp: number;
@@ -4391,7 +4525,7 @@ declare function isNftAsset<T extends AdditionalAsset | AssetTarget>(asset: T): 
  * }
  * ```
  */
-type SphereErrorCode = 'NOT_INITIALIZED' | 'ALREADY_INITIALIZED' | 'INVALID_CONFIG' | 'INVALID_IDENTITY' | 'INSUFFICIENT_BALANCE' | 'INVALID_RECIPIENT' | 'TRANSFER_FAILED' | 'UNSUPPORTED_TRANSFER_MODE' | 'OVER_TRANSFER_GUARD' | 'OWNERSHIP_VERIFICATION_FAILED' | 'DUPLICATE_BUNDLE_MEMBERSHIP' | 'OUTBOX_ENTRY_TOMBSTONED' | 'STATE_ALREADY_SPENT_BY_OTHER' | 'STORAGE_ERROR' | 'STORAGE_CORRUPTED' | 'TRANSPORT_ERROR' | 'AGGREGATOR_ERROR' | 'VALIDATION_ERROR' | 'NAMETAG_CONFLICT' | 'NAMETAG_TAKEN' | 'NETWORK_ERROR' | 'TIMEOUT' | 'DECRYPTION_ERROR' | 'MODULE_NOT_AVAILABLE' | 'SIGNING_ERROR' | 'SEND_QUEUE_TIMEOUT' | 'SEND_INSUFFICIENT_BALANCE' | 'SEND_RESERVATION_CANCELLED' | 'SEND_QUEUE_FULL' | 'MODULE_DESTROYED' | 'REENTRANT_GATE' | 'INVOICE_NO_TARGETS' | 'INVOICE_INVALID_ADDRESS' | 'INVOICE_NO_ASSETS' | 'INVOICE_INVALID_ASSET' | 'INVOICE_INVALID_AMOUNT' | 'INVOICE_INVALID_COIN' | 'INVOICE_INVALID_NFT' | 'INVOICE_PAST_DUE_DATE' | 'INVOICE_DUPLICATE_ADDRESS' | 'INVOICE_DUPLICATE_COIN' | 'INVOICE_DUPLICATE_NFT' | 'INVOICE_MINT_FAILED' | 'INVOICE_INVALID_PROOF' | 'INVOICE_WRONG_TOKEN_TYPE' | 'INVOICE_INVALID_DATA' | 'INVOICE_ALREADY_EXISTS' | 'INVOICE_NOT_FOUND' | 'INVOICE_NOT_TARGET' | 'INVOICE_ALREADY_CLOSED' | 'INVOICE_ALREADY_CANCELLED' | 'INVOICE_ORACLE_REQUIRED' | 'INVOICE_TERMINATED' | 'INVOICE_INVALID_TARGET' | 'INVOICE_INVALID_ASSET_INDEX' | 'INVOICE_RETURN_EXCEEDS_BALANCE' | 'INVOICE_INVALID_DELIVERY_METHOD' | 'INVOICE_INVALID_REFUND_ADDRESS' | 'INVOICE_INVALID_CONTACT' | 'INVOICE_INVALID_ID' | 'INVOICE_TOO_MANY_TARGETS' | 'INVOICE_TOO_MANY_ASSETS' | 'INVOICE_MEMO_TOO_LONG' | 'INVOICE_TERMS_TOO_LARGE' | 'INVOICE_NOT_TERMINATED' | 'INVOICE_NOT_CANCELLED' | 'INVOICE_STORAGE_FAILED' | 'INVOICE_DELIVERY_FAILED' | 'RATE_LIMITED' | 'COMMUNICATIONS_UNAVAILABLE' | 'SWAP_INVALID_DEAL' | 'SWAP_INVALID_MANIFEST' | 'SWAP_NOT_FOUND' | 'SWAP_WRONG_STATE' | 'SWAP_RESOLVE_FAILED' | 'SWAP_DM_SEND_FAILED' | 'SWAP_ESCROW_REJECTED' | 'SWAP_DEPOSIT_FAILED' | 'SWAP_PAYOUT_VERIFICATION_FAILED' | 'SWAP_ALREADY_EXISTS' | 'SWAP_ALREADY_COMPLETED' | 'SWAP_ALREADY_CANCELLED' | 'SWAP_TIMEOUT' | 'SWAP_LIMIT_EXCEEDED' | 'SWAP_ALREADY_INITIALIZED' | 'SWAP_MODULE_DESTROYED' | 'SWAP_NOT_INITIALIZED' | 'BUNDLE_REJECTED_MALFORMED_ENVELOPE' | 'BUNDLE_REJECTED_MULTI_ROOT' | 'BUNDLE_REJECTED_INVALID_CAR' | 'BUNDLE_REJECTED_ROOT_CID_MISMATCH' | 'BUNDLE_REJECTED_CHAIN_DEPTH_EXCEEDED' | 'BUNDLE_REJECTED_UNCLAIMED_ROOT_COUNT_EXCEEDED' | 'BUNDLE_REJECTED_CID_MODE_NOT_YET_SUPPORTED' | 'BUNDLE_REJECTED_INLINE_CAP_EXCEEDED' | 'BUNDLE_REJECTED_VERIFY_FAILED' | 'INLINE_CAR_TOO_LARGE' | 'INVALID_INLINE_CAP'
+type SphereErrorCode = 'NOT_INITIALIZED' | 'ALREADY_INITIALIZED' | 'INVALID_CONFIG' | 'INVALID_IDENTITY' | 'INSUFFICIENT_BALANCE' | 'INVALID_RECIPIENT' | 'TRANSFER_FAILED' | 'UNSUPPORTED_TRANSFER_MODE' | 'OVER_TRANSFER_GUARD' | 'OWNERSHIP_VERIFICATION_FAILED' | 'DUPLICATE_BUNDLE_MEMBERSHIP' | 'OUTBOX_ENTRY_TOMBSTONED' | 'STATE_ALREADY_SPENT_BY_OTHER' | 'STORAGE_ERROR' | 'STORAGE_CORRUPTED' | 'NOT_PROFILE_MODE' | 'PROFILE_RESET_FAILED' | 'TRANSPORT_ERROR' | 'AGGREGATOR_ERROR' | 'VALIDATION_ERROR' | 'NAMETAG_CONFLICT' | 'NAMETAG_TAKEN' | 'NETWORK_ERROR' | 'TIMEOUT' | 'DECRYPTION_ERROR' | 'MODULE_NOT_AVAILABLE' | 'SIGNING_ERROR' | 'SEND_QUEUE_TIMEOUT' | 'SEND_INSUFFICIENT_BALANCE' | 'SEND_RESERVATION_CANCELLED' | 'SEND_QUEUE_FULL' | 'MODULE_DESTROYED' | 'REENTRANT_GATE' | 'INVOICE_NO_TARGETS' | 'INVOICE_INVALID_ADDRESS' | 'INVOICE_NO_ASSETS' | 'INVOICE_INVALID_ASSET' | 'INVOICE_INVALID_AMOUNT' | 'INVOICE_INVALID_COIN' | 'INVOICE_INVALID_NFT' | 'INVOICE_PAST_DUE_DATE' | 'INVOICE_DUPLICATE_ADDRESS' | 'INVOICE_DUPLICATE_COIN' | 'INVOICE_DUPLICATE_NFT' | 'INVOICE_MINT_FAILED' | 'INVOICE_INVALID_PROOF' | 'INVOICE_WRONG_TOKEN_TYPE' | 'INVOICE_INVALID_DATA' | 'INVOICE_ALREADY_EXISTS' | 'INVOICE_NOT_FOUND' | 'INVOICE_NOT_TARGET' | 'INVOICE_ALREADY_CLOSED' | 'INVOICE_ALREADY_CANCELLED' | 'INVOICE_ORACLE_REQUIRED' | 'INVOICE_TERMINATED' | 'INVOICE_INVALID_TARGET' | 'INVOICE_INVALID_ASSET_INDEX' | 'INVOICE_RETURN_EXCEEDS_BALANCE' | 'INVOICE_INVALID_DELIVERY_METHOD' | 'INVOICE_INVALID_REFUND_ADDRESS' | 'INVOICE_INVALID_CONTACT' | 'INVOICE_INVALID_ID' | 'INVOICE_TOO_MANY_TARGETS' | 'INVOICE_TOO_MANY_ASSETS' | 'INVOICE_MEMO_TOO_LONG' | 'INVOICE_TERMS_TOO_LARGE' | 'INVOICE_NOT_TERMINATED' | 'INVOICE_NOT_CANCELLED' | 'INVOICE_STORAGE_FAILED' | 'INVOICE_DELIVERY_FAILED' | 'RATE_LIMITED' | 'COMMUNICATIONS_UNAVAILABLE' | 'SWAP_INVALID_DEAL' | 'SWAP_INVALID_MANIFEST' | 'SWAP_NOT_FOUND' | 'SWAP_WRONG_STATE' | 'SWAP_RESOLVE_FAILED' | 'SWAP_DM_SEND_FAILED' | 'SWAP_ESCROW_REJECTED' | 'SWAP_DEPOSIT_FAILED' | 'SWAP_PAYOUT_VERIFICATION_FAILED' | 'SWAP_ALREADY_EXISTS' | 'SWAP_ALREADY_COMPLETED' | 'SWAP_ALREADY_CANCELLED' | 'SWAP_TIMEOUT' | 'SWAP_LIMIT_EXCEEDED' | 'SWAP_ALREADY_INITIALIZED' | 'SWAP_MODULE_DESTROYED' | 'SWAP_NOT_INITIALIZED' | 'BUNDLE_REJECTED_MALFORMED_ENVELOPE' | 'BUNDLE_REJECTED_MULTI_ROOT' | 'BUNDLE_REJECTED_INVALID_CAR' | 'BUNDLE_REJECTED_ROOT_CID_MISMATCH' | 'BUNDLE_REJECTED_CHAIN_DEPTH_EXCEEDED' | 'BUNDLE_REJECTED_UNCLAIMED_ROOT_COUNT_EXCEEDED' | 'BUNDLE_REJECTED_CID_MODE_NOT_YET_SUPPORTED' | 'BUNDLE_REJECTED_INLINE_CAP_EXCEEDED' | 'BUNDLE_REJECTED_VERIFY_FAILED' | 'INLINE_CAR_TOO_LARGE' | 'INVALID_INLINE_CAP'
 /** Observed remote Lamport > 2 × max(localKnownLamports). Defends against
  *  a malicious/buggy replica publishing an absurdly large Lamport (e.g.
  *  near `2^53`) to force everyone past JS safe-integer range. The bound
@@ -4667,7 +4801,28 @@ type SphereErrorCode = 'NOT_INITIALIZED' | 'ALREADY_INITIALIZED' | 'INVALID_CONF
  * sub-module is disabled). This code signals a SPECIFIC integration
  * point inside an otherwise-functional payments module.
  */
- | 'OPERATOR_ESCAPE_HATCH_NOT_CONFIGURED';
+ | 'OPERATOR_ESCAPE_HATCH_NOT_CONFIGURED'
+/**
+ * Issue #312 — offline-mode send-path gate.
+ *
+ * `PaymentsModule.send()` throws this code BEFORE any state mutation
+ * (no aggregator call, no Nostr publish, no token reservation) when
+ * the aggregator backend is observed `'down'` by the connectivity
+ * manager. Callers receive a structured `context` payload:
+ *
+ *     { which: 'aggregator' }
+ *
+ * The `'degraded'` aggregator state does NOT trigger this gate: the
+ * SDK's retry layer already handles slow / partially-failing
+ * aggregators, and the UX cost of blocking sends under `'degraded'`
+ * is worse than letting the retry complete.
+ *
+ * IPFS and Nostr are NOT gated by this code. An IPFS outage means
+ * the send may downgrade to inline delivery (under the relay-safe
+ * cap), and a Nostr outage means delivery may be queued for retry —
+ * neither is a hard offline condition.
+ */
+ | 'OFFLINE';
 declare class SphereError extends Error {
     readonly code: SphereErrorCode;
     /**
@@ -5986,7 +6141,25 @@ interface TrackedAddress extends TrackedAddressEntry {
     /** Primary nametag (from nametag cache, without @ prefix) */
     readonly nametag?: string;
 }
-type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update'
+type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:submitted' | 'transfer:cascade-risk-warning' | 'transfer:failed' | 'transfer:finalization-trigger-failed' | 'transfer:operator-alert' | 'transfer:fetch-failed' | 'transfer:ingest-queue-full' | 'transfer:cascade-failed' | 'transfer:trustbase-warning' | 'transfer:security-alert' | 'transfer:proof-superseded' | 'transfer:override-applied' | 'transfer:capability-warning' | 'transfer:recovery-republished' | 'transfer:orphan-spending-detected' | 'transfer:orphan-recovered' | 'transfer:sent-reconciliation-recovered' | 'transfer:sent-reconciliation-failed' | 'transfer:retention-warning' | 'transfer:retention-republish-rearmed' | 'transfer:retention-republish-skipped' | 'transfer:double-spend-detected' | 'transfer:off-record-spent' | 'payment_request:incoming' | 'payment_request:accepted' | 'payment_request:rejected' | 'payment_request:paid' | 'payment_request:response' | 'message:dm' | 'message:read' | 'message:typing' | 'composing:started' | 'message:broadcast' | 'sync:started' | 'sync:completed' | 'sync:provider' | 'sync:error' | 'connection:changed'
+/**
+ * Issue #312 — connectivity surface. Emitted on every transition of
+ * any per-backend (`aggregator | ipfs | nostr`) reachability state.
+ * Payload is the full {@link ConnectivityStatusPayload} snapshot.
+ */
+ | 'connectivity:changed'
+/**
+ * Issue #312 — fires when all three backends transition from a state
+ * where at least one was `'down'` / `'unknown'` to all `'up'`. Pairs
+ * with `'connectivity:offline-degraded'`.
+ */
+ | 'connectivity:online'
+/**
+ * Issue #312 — fires when at least one backend transitions to `'down'`
+ * while the wallet was previously fully online. `'degraded'` alone
+ * does not trigger this event (the send-path retry layer absorbs it).
+ */
+ | 'connectivity:offline-degraded' | 'nametag:registered' | 'nametag:recovered' | 'identity:changed' | 'address:activated' | 'address:hidden' | 'address:unhidden' | 'sync:remote-update'
 /**
  * Issue #264 — Sphere bridge of the provider-level
  * `storage:monotonicity-recovered` event. Fires when the
@@ -6003,7 +6176,47 @@ type SphereEventType = 'transfer:incoming' | 'transfer:confirmed' | 'transfer:su
  * alarms. Observability hook for dashboards plotting recovery rates,
  * not a paging signal.
  */
- | 'storage:monotonicity-recovered' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received';
+ | 'storage:monotonicity-recovered'
+/**
+ * Issue #309 — Fires when the caller-supplied `fallbackStorage`
+ * (typically the legacy IndexedDB) fails to connect during Sphere
+ * load/init. The fallback is demoted to `null` so the rest of the
+ * boot proceeds, but identity-key reads that would have consulted it
+ * are now strictly bound to the primary's success. UI surfaces and
+ * monitoring dashboards listen for this so they can warn users that
+ * a Profile-mode wallet whose primary state has lost a block will
+ * not recover from cache on this boot.
+ */
+ | 'storage:fallback-demoted' | 'groupchat:message' | 'groupchat:joined' | 'groupchat:left' | 'groupchat:kicked' | 'groupchat:group_deleted' | 'groupchat:updated' | 'groupchat:connection' | 'groupchat:ready' | 'communications:ready' | 'history:updated' | 'invoice:created' | 'invoice:payment' | 'invoice:asset_covered' | 'invoice:target_covered' | 'invoice:covered' | 'invoice:closed' | 'invoice:cancelled' | 'invoice:expired' | 'invoice:unknown_reference' | 'invoice:overpayment' | 'invoice:irrelevant' | 'invoice:auto_returned' | 'invoice:auto_return_failed' | 'invoice:return_received' | 'invoice:over_refund_warning' | 'invoice:receipt_sent' | 'invoice:receipt_received' | 'invoice:cancellation_sent' | 'invoice:cancellation_received' | 'swap:proposal_received' | 'swap:proposed' | 'swap:accepted' | 'swap:rejected' | 'swap:announced' | 'swap:deposit_sent' | 'swap:deposit_confirmed' | 'swap:deposits_covered' | 'swap:concluding' | 'swap:payout_received' | 'swap:completed' | 'swap:cancelled' | 'swap:failed' | 'swap:deposit_returned' | 'swap:bounce_received'
+/**
+ * Issue #310 — fires AFTER `sphere.profile.resetEpoch()` persists
+ * the new epoch floor locally. Payload: `{ newEpoch, reason, ts }`.
+ */
+ | 'profile:epoch-reset'
+/**
+ * Issue #310 / PR #316 F1 fix — fires when `resetEpoch` could NOT
+ * consult the on-chain epoch floor (aggregator/discovery failure).
+ * The local epoch was still bumped from `localFloor + 1`, but the
+ * new epoch is PROVISIONAL — if a sibling device's higher epoch
+ * exists on-chain, the two devices may collide. The next discovery
+ * cycle (periodic poll or explicit `recoverLatest`) will surface
+ * the conflict via the normal walkback-floor path.
+ *
+ * Payload: `{ newEpoch, reason, discoveryError, ts }`.
+ */
+ | 'profile:epoch-reset-discovery-skipped'
+/**
+ * Issue #310 / PR #316 F2 fix — fires when `resetEpoch` timed out
+ * waiting for the aggregator-pointer publish to land. The local
+ * epoch floor IS already persisted; the periodic-poll retry or
+ * next dirty-flush will republish in the background. Callers
+ * monitoring for the post-reset publish should keep watching
+ * `'storage:pointer-published'` events (or re-call
+ * `getEpochFloor()` after a few seconds).
+ *
+ * Payload: `{ newEpoch, reason, timeoutMs, ts }`.
+ */
+ | 'profile:epoch-reset-publish-pending';
 interface SphereEventMap {
     'transfer:incoming': IncomingTransfer;
     'transfer:confirmed': TransferResult;
@@ -6748,6 +6961,9 @@ interface SphereEventMap {
         enabled?: boolean;
         error?: string;
     };
+    'connectivity:changed': ConnectivityStatusPayload;
+    'connectivity:online': ConnectivityStatusPayload;
+    'connectivity:offline-degraded': ConnectivityStatusPayload;
     'nametag:registered': {
         nametag: string;
         addressIndex: number;
@@ -6794,6 +7010,11 @@ interface SphereEventMap {
         recoveredOutboxIdsDroppedAsSent: string[];
         recoveredOutboxIdsDroppedAsSentCount: number;
         truncated: boolean;
+    };
+    'storage:fallback-demoted': {
+        reason: 'connect-failed' | 'isConnected-false-after-connect';
+        error: string;
+        at: number;
     };
     'groupchat:message': GroupMessageData;
     'groupchat:joined': {
@@ -6983,6 +7204,43 @@ interface SphereEventMap {
         returnedAmount: string;
         returnedCurrency: string;
     };
+    /**
+     * Issue #310 — payload for `'profile:epoch-reset'`. `newEpoch` is the
+     * post-reset value (strictly `prev + 1`). `reason` is the
+     * operator-supplied triage string. `ts` is the wall-clock instant
+     * (ms epoch) of the reset.
+     */
+    'profile:epoch-reset': {
+        newEpoch: number;
+        reason: string;
+        ts: number;
+    };
+    /**
+     * Issue #310 / PR #316 F1 fix — payload for
+     * `'profile:epoch-reset-discovery-skipped'`. `newEpoch` is the
+     * bumped local floor (provisional — see event-type doc).
+     * `discoveryError` is a short diagnostic string suitable for
+     * operator triage; the underlying error is also logged.
+     */
+    'profile:epoch-reset-discovery-skipped': {
+        newEpoch: number;
+        reason: string;
+        discoveryError: string;
+        ts: number;
+    };
+    /**
+     * Issue #310 / PR #316 F2 fix — payload for
+     * `'profile:epoch-reset-publish-pending'`. Fires when the publish
+     * step did not land within the bounded timeout. The wallet's local
+     * floor is unchanged from the corresponding `'profile:epoch-reset'`
+     * event; the publish will be retried by the periodic poll.
+     */
+    'profile:epoch-reset-publish-pending': {
+        newEpoch: number;
+        reason: string;
+        timeoutMs: number;
+        ts: number;
+    };
 }
 type SphereEventHandler<T extends SphereEventType> = (data: SphereEventMap[T]) => void;
 interface SphereConfig {
@@ -7114,6 +7372,34 @@ interface NetworkHealthResult {
     };
     /** Total time to complete all checks (ms) */
     totalTimeMs: number;
+}
+/**
+ * Per-backend reachability state. Mirrors `ConnectivityBackendStatus`
+ * in `core/connectivity.ts`, re-declared here so it can be referenced from
+ * the central event-map typings without a runtime import cycle.
+ *
+ * `'unknown'` is the pre-probe state right after Sphere.init() — the
+ * manager fires the first probe asynchronously, so any caller that reads
+ * `sphere.connectivity.status()` immediately after `init()` sees `'unknown'`
+ * for every backend.
+ */
+type ConnectivityBackendStatusType = 'up' | 'down' | 'degraded' | 'unknown';
+/**
+ * Snapshot of the connectivity surface, emitted as the payload of
+ * `connectivity:changed` / `connectivity:online` /
+ * `connectivity:offline-degraded`.
+ */
+interface ConnectivityStatusPayload {
+    /** Aggregator (L3 state-transition oracle) reachability. */
+    readonly aggregator: ConnectivityBackendStatusType;
+    /** IPFS gateway reachability. */
+    readonly ipfs: ConnectivityBackendStatusType;
+    /** Nostr relay reachability. */
+    readonly nostr: ConnectivityBackendStatusType;
+    /** ms-epoch of the most recent fully-online moment, or null if never. */
+    readonly lastOnlineAt: number | null;
+    /** ms-epoch of the most recent backend transition (any direction). */
+    readonly lastChangedAt: number;
 }
 /** Role of a provider in the system */
 type ProviderRole = 'storage' | 'token-storage' | 'transport' | 'oracle' | 'l1' | 'price';
@@ -8919,6 +9205,19 @@ interface OrbitDbConfig {
     readonly dbNameOverride?: string;
     /** Local storage directory for OrbitDB data (Node.js only) */
     readonly directory?: string;
+    /**
+     * Issue #330 — IndexedDB database name for Helia's blockstore in the
+     * browser. When `directory` is not set and the runtime is a browser,
+     * the adapter installs `blockstore-idb` so OpLog + CAR blocks persist
+     * across page reloads (the pre-fix default was Helia's
+     * `MemoryBlockstore`, which evaporates on tab unload — root cause
+     * of #330). Defaults to `'sphere-helia-blocks'` when omitted; set
+     * a per-wallet name (e.g. `sphere-helia-blocks-<addressId>`) for
+     * full isolation between wallets sharing one origin.
+     *
+     * Ignored on Node (FsBlockstore is used instead).
+     */
+    readonly browserBlockstorePath?: string;
     /** libp2p bootstrap peers for peer discovery */
     readonly bootstrapPeers?: string[];
     /** Enable libp2p pubsub for replication (default: true) */
@@ -9016,6 +9315,30 @@ interface ProfileConfig {
      * for full semantics.
      */
     readonly flushVerificationDeadlineMs?: number;
+    /**
+     * Issue #330 — inline durability gate on `publishAggregatorPointerBestEffort`.
+     *
+     * When set to a positive number, the publish path performs an inline
+     * HEAD-verify of the just-published snapshot CID against the configured
+     * IPFS gateways *before* clearing `pendingPublishCid`. If HEAD-verify
+     * does not confirm the CID within the deadline, the marker is kept
+     * (publish is treated as transient-failure for retry purposes) and a
+     * `storage:pending-publish` event fires.
+     *
+     * Distinct from `flushVerificationDeadlineMs` (which PR #272 moved off
+     * the critical path to background): this gate is on the marker-clear,
+     * not the flush completion. It enforces "the pointer never advertises
+     * a CID that isn't durably remote." The at-least-once Nostr ack gate
+     * is unaffected — the flush still completes; only the pending-publish
+     * retry marker is held until durability is confirmed.
+     *
+     * Default: 0 (no gate, preserves pre-#330 behaviour). The wallet
+     * factories (`createBrowserProfileProviders`, `createNodeProfileProviders`)
+     * override to a sensible production value (5 000 ms).
+     *
+     * Pass `0` to opt out (tests, dev fixtures, stub pointers).
+     */
+    readonly pointerPublishDurabilityGateMs?: number;
     /**
      * Item #15 Phase F — retention window (in ms) for OUTBOX/SENT
      * tombstones before they are GC'd at snapshot-build time. Tombstones
@@ -17004,6 +17327,22 @@ declare class PaymentsModule {
     private spendQueue;
     /** Cache of parsed SdkToken data for synchronous queue re-evaluation */
     private readonly parsedTokenCache;
+    /**
+     * Issue #312 — advisory connectivity hint (NOT a send-path gate). When
+     * wired, every `send()` call reads this getter once at the top of the
+     * public entry point. A `'down'` return is LOGGED as a warning but
+     * does not block the send — the state-transition-sdk pattern is to
+     * call the real op and let transport surface a `JsonRpcNetworkError`
+     * on failure. ST-SDK has no health/ping API, so any preflight probe
+     * is a Sphere-SDK invention without an upstream contract; refusing
+     * preemptively would block sends that the aggregator would actually
+     * accept (e.g. recovery between probe and submit).
+     *
+     * Wired by `Sphere.initializeModules()` via
+     * {@link configureConnectivityGate}. Null = unwired (no advisory log);
+     * the module behaves exactly as it did pre-#312.
+     */
+    private _connectivityGate;
     constructor(config?: PaymentsModuleConfig);
     /**
      * Get the current module configuration (excluding L1 config).
@@ -17017,6 +17356,23 @@ declare class PaymentsModule {
      * verify the configured rollout state.
      */
     getFeatures(): Readonly<Required<UxfTransferFeatures>>;
+    /**
+     * Issue #312 — wire the advisory connectivity hint.
+     *
+     * Sphere calls this once during `initializeModules()` with a getter
+     * that reads `sphere.connectivity.status().aggregator`. The getter is
+     * invoked once per `send()` call at the very top of the public entry
+     * point. A `'down'` return is LOGGED as a warning; it does NOT abort
+     * the send. The real op (submitCommitment via state-transition-sdk)
+     * is the authoritative health signal — if the aggregator is truly
+     * unreachable, transport throws `JsonRpcNetworkError` and the SDK's
+     * retry/recovery layer handles it.
+     *
+     * Pass `null` to unwire (no advisory log; exactly as pre-#312).
+     * Wired callers MAY replace the gate at runtime — the latest call
+     * wins.
+     */
+    configureConnectivityGate(fn: (() => 'up' | 'down' | 'degraded' | 'unknown') | null): void;
     /**
      * Register a callback to be notified when a token is added or updated.
      *
@@ -19577,6 +19933,287 @@ declare class PaymentsModule {
 declare function createPaymentsModule(config?: PaymentsModuleConfig): PaymentsModule;
 
 /**
+ * Connectivity Manager (Issue #312)
+ *
+ * A unified `sphere.connectivity` surface that tells the UI whether each
+ * backend is reachable, gates the send-path when the user is offline, and
+ * re-pings on backoff so the wallet transitions to online as soon as all
+ * backends recover.
+ *
+ * Backends in scope: `aggregator`, `ipfs`, `nostr`. Fulcrum / L1 is
+ * explicitly out of scope per the project owner.
+ *
+ * Each backend has a dedicated {@link Pinger} that runs a cheap probe on a
+ * backoff schedule: 5 s → 15 s → 60 s → 5 m, reset to 5 s on success. The
+ * manager aggregates per-pinger status into a {@link ConnectivityStatus}
+ * snapshot and notifies subscribers + emits events on the Sphere bus on
+ * every transition.
+ *
+ * Construction does NOT block — initial status is `'unknown'` until the
+ * first probe lands, and `start()` schedules the first probe asynchronously.
+ */
+type ConnectivityBackend = 'aggregator' | 'ipfs' | 'nostr';
+type ConnectivityBackendStatus = 'up' | 'down' | 'degraded' | 'unknown';
+/**
+ * Snapshot of per-backend reachability state.
+ *
+ * `lastOnlineAt` is the ms-epoch of the most recent moment where all three
+ * backends were simultaneously `'up'`. Null until that has ever happened in
+ * this Sphere lifetime.
+ *
+ * `lastChangedAt` is the ms-epoch of the most recent backend transition
+ * (any backend, any direction).
+ */
+interface ConnectivityStatus {
+    readonly aggregator: ConnectivityBackendStatus;
+    readonly ipfs: ConnectivityBackendStatus;
+    readonly nostr: ConnectivityBackendStatus;
+    readonly lastOnlineAt: number | null;
+    readonly lastChangedAt: number;
+}
+/** A no-arg subscriber that receives the new status on every transition. */
+type ConnectivitySubscriber = (status: ConnectivityStatus) => void;
+interface ConnectivityManagerHandle {
+    /** Current snapshot. Sync, never throws. */
+    status(): ConnectivityStatus;
+    /** Subscribe to per-transition snapshots. Returns an unsubscribe fn. */
+    subscribe(fn: ConnectivitySubscriber): () => void;
+    /**
+     * Force an immediate probe of one or all backends. The returned promise
+     * resolves when the probe(s) have settled. Force-probes do not bypass
+     * the backoff schedule — they simply piggy-back on the next-fire slot
+     * and reset the backoff on success.
+     */
+    ping(which: ConnectivityBackend | 'all'): Promise<void>;
+}
+
+/**
+ * Issue #310 — Profile-mode-only public API surface exposed on
+ * `sphere.profile`.
+ *
+ * The handle is created by `Sphere` and bound to:
+ *   - `ProfileStorageProvider` (for OrbitDB adapter + pointer-layer access)
+ *   - the per-storage encryption context (so the snapshot built by
+ *     the resets-publishCallback is encrypted with the wallet's
+ *     own keys)
+ *
+ * When the wallet is not in Profile mode (e.g., legacy IndexedDB-only
+ * storage), `Sphere.profile` returns `null`. Callers MUST null-check.
+ *
+ * Today's public surface:
+ *
+ *   - `resetEpoch({ reason })` — wipes the local OpLog, mints a new
+ *     synthetic genesis carrying the in-memory snapshot, bumps the
+ *     epoch by exactly +1, and publishes a new aggregator pointer
+ *     so all clients refuse to walk back past the new floor.
+ *
+ *   - `getEpochFloor()` — read the wallet's currently-persisted
+ *     epoch floor (the highest epoch ever observed on-chain OR
+ *     produced via `resetEpoch`).
+ *
+ * @module profile/profile-handle
+ */
+
+/**
+ * Result of `sphere.profile.resetEpoch()`.
+ */
+interface ResetEpochResult {
+    /**
+     * The new epoch stamped into the freshly-minted OpLog snapshot.
+     * Strictly `max(localFloor, discoveredFloor) + 1`, where
+     * `discoveredFloor` is the highest epoch observed on-chain at
+     * call time (PR #316 F1 fix). Persisted into the wallet's local
+     * epoch-floor cache so subsequent walkback inspections refuse to
+     * load any predecessor with `epoch < newEpoch`.
+     */
+    readonly newEpoch: number;
+    /** The reason string supplied by the caller (truncated/validated). */
+    readonly reason: string;
+    /** Wall-clock timestamp of the reset (ms since epoch). */
+    readonly ts: number;
+    /**
+     * PR #316 F2 fix — the aggregator-pointer version the post-reset
+     * publish landed at. Populated when the publish completed within
+     * the bounded `publishTimeoutMs` window (default 30 000 ms); `0`
+     * otherwise.
+     *
+     * `publishedVersion === 0` is a SOFT signal, NOT a failure:
+     * `'profile:epoch-reset-publish-pending'` is emitted with the same
+     * `newEpoch`, and the periodic-poll / next dirty-flush will land
+     * the publish on the wallet's behalf. Callers can also subscribe
+     * to `'storage:pointer-published'` to observe the eventual landing.
+     *
+     * The wait is implemented as a one-shot listener on the storage
+     * provider's `'storage:pointer-published'` event (which fires
+     * UNCONDITIONALLY on every successful publish — see lifecycle-
+     * manager). Set `publishTimeoutMs: 0` in {@link ResetEpochParams}
+     * to skip the wait entirely.
+     */
+    readonly publishedVersion: number;
+    /**
+     * PR #316 F1 fix — `true` when the on-chain epoch floor was
+     * consulted before bumping. `false` when the discovery RPC failed
+     * (network / aggregator down): the bump was computed from the
+     * local floor alone and is PROVISIONAL.
+     *
+     * A `false` result is rare — discovery uses the same RPC stack as
+     * the publish path, so a `false` here is usually accompanied by a
+     * `publishedVersion: 0` result (publish also failed). Callers in
+     * sibling-device deployments SHOULD surface a warning when this is
+     * `false`, since cross-device monotonicity was not verified at
+     * mint time.
+     */
+    readonly discoveryConsulted: boolean;
+}
+/**
+ * Parameters accepted by `sphere.profile.resetEpoch()`.
+ */
+interface ResetEpochParams {
+    /**
+     * Operator triage reason captured into the post-reset snapshot's
+     * `epochResetReason` field. Free-form ASCII; capped at
+     * `EPOCH_RESET_REASON_MAX_BYTES`. REQUIRED — callers MUST supply
+     * a reason to make the audit trail actionable.
+     *
+     * Examples:
+     *   - `'oplog-corruption-recovery'`
+     *   - `'user-initiated-from-settings'`
+     *   - `'cidref-missing-block-bafyreih...'`
+     */
+    readonly reason: string;
+    /**
+     * PR #316 F1 fix — bounded timeout (ms) for the pre-bump
+     * discovery RPC. Default: 15 000. On timeout, the bump proceeds
+     * from the local floor alone and is PROVISIONAL (see
+     * `discoveryConsulted` in {@link ResetEpochResult}). Set to
+     * `0` to skip discovery entirely (test-only escape hatch — NOT
+     * recommended in production because cross-device monotonicity
+     * cannot then be enforced).
+     */
+    readonly discoveryTimeoutMs?: number;
+    /**
+     * PR #316 F2 fix — bounded timeout (ms) for the post-bump publish
+     * await. Default: 30 000. On timeout,
+     * `'profile:epoch-reset-publish-pending'` is emitted and
+     * `publishedVersion: 0` is returned; the periodic-poll path will
+     * republish in the background. Set to `0` to skip the await
+     * entirely (caller does not need the version).
+     */
+    readonly publishTimeoutMs?: number;
+}
+/**
+ * Issue #310 — Profile-mode-only API handle.
+ *
+ * Returned by `Sphere.profile` when (and only when) the wallet's
+ * StorageProvider is a `ProfileStorageProvider`. Legacy / non-Profile
+ * wallets see `null` and MUST surface a clear "this operation requires
+ * Profile mode" message in the UI.
+ */
+interface SphereProfileHandle {
+    /**
+     * Wipe the local OpLog and start a fresh one with a permanent
+     * floor that all clients (this device AND any second device
+     * replicating the same wallet) honor.
+     *
+     * Operation:
+     *   1. (PR #316 F1 fix) **Consult the on-chain epoch floor.** Run a
+     *      best-effort `pointer.discoverLatestVersion()` with a bounded
+     *      timeout to capture `discoveredFloor = pickedEpoch` from
+     *      Phase-3 walkback. On RPC failure the discovered floor is
+     *      treated as 0 and `'profile:epoch-reset-discovery-skipped'`
+     *      is emitted; the bump proceeds from the local floor alone
+     *      and is PROVISIONAL.
+     *   2. Compute `newEpoch = max(localFloor, discoveredFloor) + 1`.
+     *   3. Snapshot in-memory state (identity, tokens, tracked
+     *      addresses) into a transient buffer.
+     *   4. Wipe the local OrbitDB OpLog via
+     *      `OrbitDbAdapter.resetCorruptedLog`.
+     *   5. Mint a fresh OpLog. Write the snapshot's KV entries back
+     *      via the normal storage-provider write path (which lands
+     *      them in the fresh OpLog).
+     *   6a. Persist the new epoch floor.
+     *   6b. (PR #316 F3 fix) **Write a sentinel KV** under
+     *       `LOCAL_EPOCH_RESET_FLUSH_TRIGGER_KEY` AFTER the OpLog
+     *       wipe so the snapshot builder has concrete OpLog dirty
+     *       state even when no other writers have mutated yet. The
+     *       sentinel is a single slot — overwritten on every reset,
+     *       never accumulates.
+     *   6c. Trigger a dirty-flush so the next snapshot's root block
+     *       carries `epoch = newEpoch` and the new aggregator-pointer
+     *       version publishes.
+     *   7. (PR #316 F2 fix) **Await the publish** via the
+     *      `'storage:pointer-published'` event with a bounded timeout
+     *      (default 30 000 ms; configurable via `publishTimeoutMs`).
+     *      On observe, `publishedVersion` is set to the landed pointer
+     *      version. On timeout,
+     *      `'profile:epoch-reset-publish-pending'` is emitted and
+     *      `publishedVersion === 0` is returned — the periodic poll
+     *      will republish.
+     *   8. Emit `profile:epoch-reset` on the Sphere event bus.
+     *
+     * Idempotency: calling `resetEpoch` a second time lands a NEW
+     * +1 epoch — it does NOT skip. Each invocation is a distinct
+     * user-affirmed reset.
+     *
+     * Crash-safety: every step persists durably before the next runs.
+     * A crash between steps leaves the wallet in a state where the
+     * next `Sphere.load()` either resumes from the half-reset (and
+     * the next dirty-flush completes the publish) or — in the worst
+     * case — re-runs the reset on operator request. Partial-reset
+     * MUST NOT leave the wallet unloadable.
+     *
+     * Cross-device monotonicity (PR #316 F1 fix). Two devices A and B
+     * sharing the same wallet identity that both call `resetEpoch`
+     * concurrently SHOULD each observe the same `discoveredFloor`
+     * (assuming the aggregator's read-replica lag is below
+     * `discoveryTimeoutMs`). Each device bumps to
+     * `max(local, discovered) + 1` — if A is already at epoch N and B
+     * is at N, both bump to N+1. The first to land the publish wins;
+     * the second hits `WALKBACK_FLOOR` on its next publish attempt
+     * and re-discovers (now seeing the winner's N+1 on-chain), so its
+     * NEXT bump goes to N+2. The convergence window is bounded by the
+     * aggregator's read-replica lag. For DEVICES with disjoint
+     * aggregator views (network partition), this fix cannot prevent
+     * a temporary divergence — the cross-device walkback floor on the
+     * pointer-pointer (see `epoch-floor.ts`) eventually catches up.
+     *
+     * Concurrent calls: a per-instance mutex serializes concurrent
+     * `resetEpoch` invocations on the same `Sphere` so each call
+     * lands its OWN +1 bump (consistent with the
+     * idempotency-against-re-runs contract). The two calls are NOT
+     * deduplicated.
+     *
+     * Concurrent SENDS: this method does NOT block sends from the
+     * surrounding PaymentsModule. A send in-flight while the OpLog is
+     * being wiped surfaces as a write error from the dispatcher's
+     * retry path; the user-facing operation either fails or retries
+     * automatically against the fresh OpLog. Callers SHOULD quiesce
+     * the wallet (stop active sends, pause the swap module) before
+     * invoking `resetEpoch` to keep the recovery deterministic; a UI
+     * implementation should surface a confirmation dialog that gates
+     * the call on a quiesced state. The SDK does not enforce this
+     * because no general-purpose "stop all writes" primitive exists at
+     * the Sphere level.
+     *
+     * @throws SphereError('NOT_PROFILE_MODE') if called when not in
+     *         Profile mode (this should never happen — `Sphere.profile`
+     *         returns `null` for non-Profile wallets, so the API is
+     *         unreachable; the defensive throw guards against
+     *         operator misuse via reflection).
+     * @throws SphereError('PROFILE_RESET_FAILED', { cause }) if any
+     *         step throws. The wallet is left in the half-reset state
+     *         described above; the next `Sphere.load()` will resume.
+     */
+    resetEpoch(params: ResetEpochParams): Promise<ResetEpochResult>;
+    /**
+     * Read the wallet's currently-persisted epoch floor. Returns 0 for
+     * a pre-#310 wallet that has never observed a higher epoch on-chain
+     * AND has never invoked `resetEpoch`.
+     */
+    getEpochFloor(): Promise<number>;
+}
+
+/**
  * Group Chat Module (NIP-29)
  *
  * Relay-based group chat using NIP-29 protocol on a dedicated Nostr relay.
@@ -21231,6 +21868,31 @@ declare const STORAGE_KEYS_GLOBAL: {
      * by the Profile provider (`<key>_<addressId>`).
      */
     readonly PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid";
+    /**
+     * Issue #313 — local snapshot blob for cold-boot lazy load. Holds the
+     * most recent in-memory state (identity, tokens, bundles, pointer,
+     * timestamps) so the next cold boot can render the wallet UI from
+     * local cache BEFORE connecting to aggregator / remote IPFS. Atomically
+     * replaced after every successful flush + publish and on graceful
+     * shutdown. Per-address suffix appended by the Profile provider
+     * (`<key>_<addressId>`).
+     *
+     * A companion key `<key>_<addressId>_pending` is written first; the
+     * swap to the main key happens via `setMany` (or a sequential fallback
+     * with explicit cleanup). Crash mid-write leaves the previous main
+     * key intact.
+     */
+    readonly PROFILE_SNAPSHOT_BLOB: "profile_snapshot_blob";
+    /**
+     * Issue #313 — last-known aggregator pointer for cold-boot priming.
+     * Mirrors the `pointer` field embedded in the snapshot blob so the
+     * boot path can short-circuit a pointer fetch when the cached version
+     * matches what the aggregator now exposes. Per-address suffix appended
+     * by the Profile provider (`<key>_<addressId>`).
+     *
+     * Stored as JSON: `{ version: number, cid: string, epoch?: number, ts: number }`.
+     */
+    readonly PROFILE_LAST_POINTER: "profile_last_pointer";
 };
 /**
  * Per-address storage keys (one per derived address)
@@ -21455,6 +22117,31 @@ declare const STORAGE_KEYS: {
      * by the Profile provider (`<key>_<addressId>`).
      */
     readonly PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid";
+    /**
+     * Issue #313 — local snapshot blob for cold-boot lazy load. Holds the
+     * most recent in-memory state (identity, tokens, bundles, pointer,
+     * timestamps) so the next cold boot can render the wallet UI from
+     * local cache BEFORE connecting to aggregator / remote IPFS. Atomically
+     * replaced after every successful flush + publish and on graceful
+     * shutdown. Per-address suffix appended by the Profile provider
+     * (`<key>_<addressId>`).
+     *
+     * A companion key `<key>_<addressId>_pending` is written first; the
+     * swap to the main key happens via `setMany` (or a sequential fallback
+     * with explicit cleanup). Crash mid-write leaves the previous main
+     * key intact.
+     */
+    readonly PROFILE_SNAPSHOT_BLOB: "profile_snapshot_blob";
+    /**
+     * Issue #313 — last-known aggregator pointer for cold-boot priming.
+     * Mirrors the `pointer` field embedded in the snapshot blob so the
+     * boot path can short-circuit a pointer fetch when the cached version
+     * matches what the aggregator now exposes. Per-address suffix appended
+     * by the Profile provider (`<key>_<addressId>`).
+     *
+     * Stored as JSON: `{ version: number, cid: string, epoch?: number, ts: number }`.
+     */
+    readonly PROFILE_LAST_POINTER: "profile_last_pointer";
 };
 /**
  * Build a per-address storage key using address identifier
@@ -22787,6 +23474,20 @@ interface SphereLoadOptions {
     fallbackStorage?: StorageProvider;
     /** Optional token storage provider (for IPFS sync) */
     tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+    /**
+     * Issue #330 — Optional read-only fallback TOKEN storage consulted by
+     * Profile-mode token reads when the primary (OrbitDB-backed) read
+     * returns nothing or fails (e.g. `CRITICAL-BLOCK-EVICTED`). Intended
+     * for Profile-mode boots where a previously-working legacy
+     * `IndexedDBTokenStorageProvider` still holds tokens from before the
+     * migration to Profile. Token-side analogue of `fallbackStorage`.
+     * Never written to.
+     *
+     * Use `migrateLegacyToProfileBrowser` / `migrateLegacyToProfile` to
+     * write a "migrated" marker so legacy is preserved as read-only
+     * fallback (the post-#330 default) rather than wiped (pre-#330).
+     */
+    fallbackTokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
     /** Transport provider instance */
     transport: TransportProvider;
     /** Oracle provider instance */
@@ -22930,8 +23631,18 @@ interface SphereInitOptions {
      * identity material at the same key shape — supplying it lets the
      * wallet boot from cached local state even if Profile/OrbitDB
      * has lost the block. Never written to.
+     *
+     * NOT applicable to `Sphere.create()` / `Sphere.import()` — those
+     * flows write a fresh identity to the primary storage; a fallback
+     * read makes no sense there. Intentionally omitted from those
+     * option types.
      */
     fallbackStorage?: StorageProvider;
+    /**
+     * Issue #330 — Optional read-only fallback TOKEN storage. See
+     * {@link SphereLoadOptions.fallbackTokenStorage} for semantics.
+     */
+    fallbackTokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
     /** Transport provider instance */
     transport: TransportProvider;
     /** Oracle provider instance */
@@ -23106,6 +23817,25 @@ declare class Sphere {
      * after wallet load. `null` when no fallback was supplied.
      */
     private _fallbackStorage;
+    /**
+     * Issue #309 review — set when `fallbackStorage.connect()` failed
+     * during load/init. The fallback is demoted to `null` so the rest of
+     * the boot proceeds; this field preserves the original error for
+     * forensics. `null` when there's no fallback or the connect succeeded.
+     */
+    private _fallbackStorageError;
+    /**
+     * Issue #330 — read-only fallback TOKEN storage consulted by the
+     * primary token-storage provider on read miss or eviction. Set once
+     * at construction by the static factories. `null` when no fallback
+     * was supplied. Token-side analogue of `_fallbackStorage`.
+     *
+     * Wired into ProfileTokenStorageProvider via the
+     * `fallbackTokenStorage` option so the provider can consult the
+     * legacy `IndexedDBTokenStorageProvider` when a Profile block read
+     * fails (e.g. `[CRITICAL-BLOCK-EVICTED]`). Never written to.
+     */
+    private _fallbackTokenStorage;
     private _tokenStorageProviders;
     private _transport;
     private _oracle;
@@ -23140,6 +23870,24 @@ declare class Sphere {
     private _market;
     private _accounting;
     private _swap;
+    /**
+     * Issue #312 — unified connectivity surface. Construction is deferred to
+     * `initializeModules()` so the manager binds to the same OracleProvider /
+     * TransportProvider / IPFS gateways already wired into payments. The
+     * manager's initial state is `'unknown'` for all backends; the first
+     * probe fires async, so `sphere.connectivity.status()` is usable
+     * immediately after `Sphere.init()` returns but reports `'unknown'`
+     * until the first probes land.
+     *
+     * Null in two cases:
+     *   - The Sphere is mid-construction (before `initializeModules()` ran).
+     *   - The wallet was created with no connectivity-eligible backends
+     *     (currently impossible in practice — every wallet has at least an
+     *     oracle and a transport).
+     *
+     * Accessed via {@link Sphere.connectivity}.
+     */
+    private _connectivity;
     private _addressModules;
     private _transportMux;
     /** Fallback DM since timestamp from init options, forwarded to mux on creation. */
@@ -23267,6 +24015,9 @@ declare class Sphere {
      * await Sphere.clear({
      *   storage: providers.storage,
      *   tokenStorage: providers.tokenStorage,
+     *   // Issue #330 — pass the legacy fallback if the wallet was
+     *   // migrated, so the resurrection footgun is closed.
+     *   fallbackTokenStorage: providers.fallbackTokenStorage,
      * });
      *
      * @example
@@ -23276,6 +24027,14 @@ declare class Sphere {
     static clear(storageOrOptions: StorageProvider | {
         storage: StorageProvider;
         tokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
+        /**
+         * Issue #330 — read-only fallback token storage that was
+         * passed to `Sphere.init`/`load`. If supplied, `clear()`
+         * wipes it too. Without this, a user calling `clear()` and
+         * then re-running `init()` with the same mnemonic would see
+         * pre-clear tokens resurrected from the legacy IDB.
+         */
+        fallbackTokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
     }): Promise<void>;
     /**
      * Get current instance
@@ -23306,6 +24065,131 @@ declare class Sphere {
     get accounting(): AccountingModule | null;
     /** Swap module (atomic token swaps). Null if not configured. */
     get swap(): SwapModule | null;
+    /**
+     * Issue #310 — Profile-mode public API surface.
+     *
+     * Returns a {@link SphereProfileHandle} when the wallet's
+     * StorageProvider is a Profile-backed adapter (duck-typed via the
+     * presence of `getPointerLayer`). Returns `null` for legacy
+     * (IndexedDB / File) storage — callers MUST null-check.
+     *
+     * The handle's primary method is `resetEpoch({ reason })`, which
+     * bumps the wallet's permanent OpLog epoch floor by +1 and triggers
+     * a republish so all clients refuse to walk back to any prior epoch.
+     * See `profile/profile-handle.ts` for the full contract.
+     */
+    get profile(): SphereProfileHandle | null;
+    /**
+     * Lazily-constructed (per-call) handle so it picks up identity /
+     * storage rebinds across `Sphere.load()` reattach cycles. The handle
+     * is a thin lambda that closes over `this` — no state lives inside
+     * it.
+     */
+    private buildProfileHandle;
+    /**
+     * Issue #310 — read the wallet's persisted epoch floor. Returns 0
+     * if the wallet has never observed a higher epoch on-chain AND has
+     * never called `resetEpoch`.
+     */
+    private getEpochFloorImpl;
+    /**
+     * Issue #310 — serialization guard for concurrent `resetEpoch` calls
+     * on the same Sphere instance. Two concurrent invocations could
+     * otherwise both observe floor=N, both write floor=N+1, and emit
+     * two events for what is logically one epoch bump (the second
+     * caller's intent is silently merged into the first). Holding a
+     * per-instance promise serializes the read-modify-write cycle.
+     *
+     * This guard does NOT protect against concurrent SENDS / OpLog
+     * writes from PaymentsModule — those run through the OrbitDB
+     * adapter directly and are subject to OrbitDB's own write
+     * serialization. A concurrent send while resetEpoch is wiping the
+     * OpLog surfaces as a write error from PaymentsModule (caught by
+     * the dispatcher's retry path). Callers SHOULD quiesce sends
+     * externally; this is documented on `SphereProfileHandle.resetEpoch`.
+     */
+    private _resetEpochInFlight;
+    /**
+     * Issue #310 — bump the wallet's OpLog epoch floor by +1, kick off a
+     * republish, and emit `'profile:epoch-reset'`. See
+     * `SphereProfileHandle.resetEpoch` for the full contract.
+     */
+    private resetEpochImpl;
+    /**
+     * Issue #310 — core read-modify-write cycle for a single resetEpoch
+     * call. Wrapped by `resetEpochImpl` with the mutex.
+     *
+     * PR #316 F1 fix — the floor bump now consults the on-chain epoch
+     * floor (`pointer.discoverLatestVersion().pickedEpoch`) before
+     * computing `newEpoch = max(local, discovered) + 1`. This closes
+     * the cross-device monotonicity gap: two devices that both observe
+     * `localFloor=N` will each discover the same `chainFloor=N` (or
+     * better) and both bump to N+1; whichever device's publish lands
+     * first wins, and the loser's subsequent publish forces a re-
+     * discovery (now seeing the winner's N+1) so its NEXT bump goes
+     * to N+2.
+     */
+    private resetEpochCore;
+    /**
+     * PR #316 F2 fix — arm a one-shot waiter on every token-storage
+     * provider's `'storage:pointer-published'` event. Returns a
+     * `{promise, cancel}` pair: the promise resolves with the FIRST
+     * observed `version` across any provider, or rejects on timeout.
+     * `cancel()` unsubscribes every listener and clears the timer
+     * (safe to call multiple times). Callers MUST always call
+     * `cancel()` in a `finally` so the listener set does not pin
+     * across the next event cycle.
+     *
+     * The event fires unconditionally on every successful publish (per
+     * the lifecycle-manager change in this PR), so the waiter does NOT
+     * depend on the `enablePointerWinBroadcasts` capability flag.
+     */
+    private armResetEpochPublishWaiter;
+    /**
+     * PR #316 F1 fix — best-effort discovery of the on-chain epoch
+     * floor. Runs `pointer.discoverLatestVersion()` with a
+     * caller-supplied wall-clock budget and returns the
+     * `pickedEpoch` value. Throws on any failure (RPC timeout,
+     * aggregator down, pointer layer missing) — the caller logs the
+     * error, emits the `'profile:epoch-reset-discovery-skipped'`
+     * event, and falls back to the local floor alone.
+     *
+     * Returns 0 for a fresh wallet that has never observed an
+     * on-chain epoch (the discovery returns `pickedEpoch: 0` in that
+     * case, which is correct — `max(local=0, discovered=0) + 1 = 1`).
+     */
+    private discoverChainEpochFloor;
+    /**
+     * Issue #312 — unified connectivity surface for the
+     * `aggregator | ipfs | nostr` backends. The handle exposes:
+     *
+     *   - `status()`   — sync snapshot of per-backend reachability.
+     *   - `subscribe(fn)` — per-transition callback (returns unsubscribe).
+     *   - `ping(which)` — force-probe one or all backends.
+     *
+     * The wallet fires `'connectivity:changed'`, `'connectivity:online'`, and
+     * `'connectivity:offline-degraded'` on the Sphere event bus on every
+     * transition — bind via `sphere.on(...)` for the UI banner.
+     *
+     * Advisory only: `payments.send()` reads this status once at entry and
+     * logs a warning if `status().aggregator === 'down'`, but DOES NOT
+     * refuse the send. The state-transition-sdk transport is the
+     * authoritative health signal — it surfaces `JsonRpcNetworkError` on
+     * real transport failures, and ST-SDK exposes no health/ping API,
+     * so any preflight refuse is a Sphere-SDK invention that risks
+     * blocking sends a recovered aggregator would have accepted.
+     *
+     * Returns a no-op stub if accessed before `initializeModules()` ran —
+     * production callers go through `Sphere.init()`, which calls
+     * `initializeModules()` before resolving, so this stub is only visible
+     * in degenerate test setups.
+     */
+    get connectivity(): ConnectivityManagerHandle;
+    /**
+     * Singleton "uninitialized" connectivity handle. See {@link connectivity}
+     * for rationale.
+     */
+    private static readonly UNINITIALIZED_CONNECTIVITY;
     /** Current identity (public info only) */
     get identity(): Identity | null;
     /** Is ready */
@@ -24078,6 +24962,20 @@ declare class Sphere {
     private emitConnectionChanged;
     private cleanupProviderEventSubscriptions;
     private initializeModules;
+    /**
+     * Issue #312 — build the per-wallet ConnectivityManager.
+     *
+     * Pingers wired:
+     *   - `aggregator`: probes `oracle.getCurrentRound()` (cheap JSON-RPC).
+     *   - `ipfs`: HEAD-probes the configured gateways (skipped when no
+     *      gateways are wired — wallet stays "fully online" w.r.t. IPFS).
+     *   - `nostr`: reads `transport.isConnected()` (the transport owns its
+     *      reconnect loop; we don't open a parallel subscription).
+     *
+     * Returns a freshly-built manager; the caller is responsible for
+     * `.start()` and `.stop()`.
+     */
+    private buildConnectivityManager;
     private ensureReady;
     private emitEvent;
     private encrypt;
@@ -26030,4 +26928,4 @@ declare function addressesMatch(a: string, b: string): boolean;
  */
 type UxfErrorCode = 'INVALID_HASH' | 'MISSING_ELEMENT' | 'TOKEN_NOT_FOUND' | 'STATE_INDEX_OUT_OF_RANGE' | 'TYPE_MISMATCH' | 'INVALID_INSTANCE_CHAIN' | 'DUPLICATE_TOKEN' | 'SERIALIZATION_ERROR' | 'VERIFICATION_FAILED' | 'CYCLE_DETECTED' | 'INVALID_PACKAGE' | 'INVALID_INPUT' | 'LIMIT_EXCEEDED' | 'NOT_IMPLEMENTED';
 
-export { AUDIT_STATUSES, type AdditionalAsset, type AddressInfo, type AddressMode, type AddressType, type AggregatorClient, type AggregatorEvent, type AggregatorEventCallback, type AggregatorEventType, type AggregatorProvider, type AggregatorProviderConfig, type Asset, type AssetTarget, type AuditEntry, type AuditStatus, BUILTIN_IPFS_GATEWAYS, type BackgroundProgressStatus, type BaseProvider, type BroadcastHandler, type BroadcastMessage, type BuildSplitBundleResult, type CMasterKeyData, COIN_TYPES, type CheckNetworkHealthOptions, CoinGeckoPriceProvider, type CombinedTransferBundleV6, CommunicationsModule, type CommunicationsModuleConfig, type CommunicationsModuleDependencies, type ComposingIndicator, type ConsolidationPendingState, type ContentHash, type ConversationPage, type CreateGroupOptions, type CreateInvoiceRequest, DEFAULT_AGGREGATOR_TIMEOUT, DEFAULT_AGGREGATOR_URL, DEFAULT_DERIVATION_PATH, DEFAULT_ELECTRUM_URL, DEFAULT_GROUP_RELAYS, DEFAULT_IPFS_BOOTSTRAP_PEERS, DEFAULT_IPFS_GATEWAYS, DEFAULT_MARKET_API_URL, DEFAULT_NOSTR_RELAYS, DEV_AGGREGATOR_URL, DISPOSITION_REASONS, type DecryptionProgressCallback, type DeliveryStrategy, type DerivationMode, type DirectMessage, type DirectTokenEntry, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type DispositionReason, type DispositionRecord, type EncryptedData, type ExtendedValidationResult, type FullIdentity, type GetConversationPageOptions, type GetInvoicesOptions, type GetSwapsFilter, GroupChatModule, type GroupChatModuleConfig, type GroupChatModuleDependencies, type GroupData, type GroupMemberData, type GroupMessageData, GroupRole, GroupVisibility, type HealthCheckFn, type Identity, type IdentityConfig, type InclusionProof, type IncomingBroadcast, type IncomingMessage, type IncomingPaymentRequest, type IncomingTokenTransfer, type IncomingTransfer, type InitProgress, type InitProgressCallback, type InitProgressStep, type InstanceChainEntry, type InstanceChainIndex, type InstanceSelectionStrategy, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitOptions, type InstantSplitProcessResult, type InstantSplitResult, type InstantSplitV5RecoveryMetadata, type IntentStatus, type IntentType, type InternalTransferMode, type InvalidEntry, type InvalidatedNametagEntry, type InvoiceRequestedAsset, index as L1, type L1Balance, L1PaymentsModule, type L1PaymentsModuleConfig, type L1PaymentsModuleDependencies, type L1SendRequest, type L1SendResult, type L1Transaction, type L1Utxo, LIMITS, type LegacyCombinedTransferPayload, type LegacyFileImportOptions, type LegacyFileInfo, type LegacyFileParseResult, type LegacyFileParsedData, type LegacyFileType, type LegacyInstantSplitPayload, type LegacySdkPayload, type LegacySphereTxfPayload, type LegacyTokenTransferPayload, type LoadResult, type LogHandler, type LogLevel, type LogRecord, type LogSink, type LoggerConfig, type LoggingConfig, type ManifestAuxiliary, type ManifestEntry, type ManifestEntryDelta, type ManifestFields, type ManifestSignatures, type MarketIntent, MarketModule, type MarketModuleConfig, type MarketModuleDependencies, type MessageHandler, type MigrationPhase, type MigrationResult, type MintOutboxEntry, type MintParams, type MintResult, NETWORKS, NIP29_KINDS, NOSTR_EVENT_KINDS, type NamespacedLogger, type NametagBindingProof, type NametagData, type NetworkHealthResult, type NetworkType, type OracleEvent, type OracleEventCallback, type OracleEventType, type OracleProvider, type OutboxEntry, type OutgoingPaymentRequest, type ParsedAddress, type ParsedStorageData, type PayInvoiceParams, type PaymentRequest, type PaymentRequestHandler, type PaymentRequestResponse, type PaymentRequestResponseHandler, type PaymentRequestResponseType, type PaymentRequestResult, type PaymentRequestStatus, type PaymentSession, type PaymentSessionDirection, type PaymentSessionError, type PaymentSessionErrorCode, type PaymentSessionStatus, PaymentsModule, type PaymentsModuleConfig, type PaymentsModuleDependencies, type PeerInfo, type PendingV5Finalization, type PostIntentRequest, type PostIntentResult, type PricePlatform, type PriceProvider, type PriceProviderConfig, type ProfileConfig, type ProfileEncryptionConfig, type ProfileErrorCode, type ProviderMetadata, type ProviderRole, type ProviderStatus, type ProviderStatusInfo, type ReceiveOptions, type ReceiveResult, type RegistryNetwork, type ReturnPaymentParams, type RingBufferSink, SIGN_MESSAGE_PREFIX, STORAGE_KEYS, STORAGE_KEYS_ADDRESS, STORAGE_KEYS_GLOBAL, STORAGE_PREFIX, type SaveResult, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type SearchFilters, type SearchIntentResult, type SearchOptions, type SearchResult, type ServiceHealthResult, type Span, type SpentTokenInfo, type SpentTokenResult, Sphere, type SphereConfig, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereEventHandler, type SphereEventMap, type SphereEventType, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, type SphereStatus, type SplitPaymentSession, type SplitRecoveryResult, type StorageEvent, type StorageEventCallback, type StorageEventType, type StorageProvider, type StorageProviderConfig, type SubmitResult, type SwapDeal, type SwapManifest, SwapModule, type SwapModuleConfig, type SwapProgress, type SwapProposalResult, type SwapRef, type SwapRole, type SyncResult$1 as SyncResult, TEST_AGGREGATOR_URL, TEST_ELECTRUM_URL, TEST_NOSTR_RELAYS, TIMEOUTS, type Token, type TokenDefinition, type TokenIcon, type TokenPrice, TokenRegistry, type TokenState, type TokenStatus, type TokenStorageProvider, type TokenTransferDetail, type TokenTransferHandler, type TokenTransferPayload, type ValidationResult as TokenValidationResult, TokenValidator, type TombstoneEntry, type TrackedAddress, type TrackedAddressEntry, type TransactionHistoryEntry, type TransferCommitment, type TransferMode, type TransferRequest, type TransferResult, type TransferStatus, type TransportEvent, type TransportEventCallback, type TransportEventType, type TransportProvider, type TransportProviderConfig, type TrustBaseLoader, type TxfAuthenticator, type TxfGenesis, type TxfGenesisData, type TxfInclusionProof, type TxfIntegrity, type TxfInvalidEntry, type TxfMerkleStep, type TxfMerkleTreePath, type TxfMeta, type TxfOutboxEntry, type TxfSentEntry, type TxfState, type TxfStorageData, type TxfStorageDataBase, type TxfToken, type TxfTombstone, type TxfTransaction, type UnconfirmedResolutionResult, type UxfBundleRef, type UxfDelta, type UxfElement, type UxfElementContent, type UxfElementHeader, type UxfElementType, type UxfEnvelope, type UxfErrorCode, type UxfIndexes, type UxfInstanceKind, type UxfManifest, type UxfPackageData, type UxfStorageAdapter, type UxfTransferPayload, type UxfTransferPayloadBase, type UxfTransferPayloadCar, type UxfTransferPayloadCid, type UxfVerificationIssue, type UxfVerificationResult, type V5FinalizationStage, type ValidationAction, type ValidationIssue, type ValidationResult$1 as ValidationResult, type WaitOptions, type WalletDatInfo, type WalletInfo, type WalletJSON$1 as WalletJSON, type WalletJSONExportOptions$1 as WalletJSONExportOptions, type WalletSource, addSink, addressesMatch, archivedKeyFromTokenId, base58Decode, base58Encode, buildManifest, buildTxfStorageData, bytesToHex, checkNetworkHealth, clearSinks, coinIdsMatch, computeSwapId, countCommittedTransactions, createAddress, createCommunicationsModule, createGroupChatModule, createKeyPair, createL1PaymentsModule, createMarketModule, createNametagBinding, createPaymentSession, createPaymentSessionError, createPaymentsModule, createPriceProvider, createRingBufferSink, createSphere, createSplitPaymentSession, createSwapModule, createTokenValidator, decodeBech32, decrypt$1 as decrypt, decryptCMasterKey, decryptJson, decryptMnemonic, decryptPrivateKey, decryptSimple, decryptTextFormatKey, decryptWallet, decryptWithSalt, deriveAddressInfo, deriveChildKey$1 as deriveChildKey, deriveKeyAtPath$1 as deriveKeyAtPath, disableDebug, doubleSha256, encodeBech32, encrypt$1 as encrypt, encryptMnemonic, encryptSimple, encryptWallet, extractFromText, findPattern, forkedKeyFromTokenIdAndState, formatAmount, generateAddressFromMasterKey, generateMasterKey, generateMnemonic, generatePrivateKey, getAddressHrp, getAddressId, getAddressStorageKey, getCoinIdByName, getCoinIdBySymbol, getCurrentStateHash, getLogger, getPublicKey, getSphere, getTokenDecimals, getTokenDefinition, getTokenIconUrl, getTokenId, getTokenName, getTokenSymbol, hasMissingNewStateHash, hasUncommittedTransactions, hasValidTxfData, hash160, hashSignMessage, hexToBytes, hexToWIF, identityFromMnemonicSync, initSphere, isArchivedKey, isAuditStatus, isCoinAsset, isCombinedTransferBundleV6, isDispositionReason, isForkedKey, isInstantSplitBundle, isInstantSplitBundleV4, isInstantSplitBundleV5, isKnownToken, isLegacyTokenTransferPayload, isNftAsset, isPaymentSessionTerminal, isPaymentSessionTimedOut, isSQLiteDatabase, isSphereError, isTextWalletEncrypted, isTokenKey, isUxfTransferPayload, isUxfTransferPayloadCar, isUxfTransferPayloadCid, isValidAddress, isValidBech32, isValidDirectAddress, isValidNametag, isValidPrivateKey, isValidTokenId, isWalletDatEncrypted, isWalletTextFormat, keyFromTokenId, listDebug, loadSphere, logger, mnemonicToSeedSync, normalizeAddress, normalizeCoinId, normalizeSdkTokenToStorage, objectToTxf, parseAddress, parseAndDecryptWalletDat, parseAndDecryptWalletText, parseForkedKey, parseTxfStorageData, parseWalletDat, parseWalletText, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, setDebug, sha256, signMessage, signSwapManifest, sleep, sphereExists, toHumanReadable, toSmallestUnit, tokenIdFromArchivedKey, tokenIdFromKey, tokenToTxf, txfToToken, validateManifest, validateMnemonic, verifyManifestIntegrity, verifyNametagBinding, verifySignedMessage, verifySwapSignature, withSpan };
+export { AUDIT_STATUSES, type AdditionalAsset, type AddressInfo, type AddressMode, type AddressType, type AggregatorClient, type AggregatorEvent, type AggregatorEventCallback, type AggregatorEventType, type AggregatorProvider, type AggregatorProviderConfig, type Asset, type AssetTarget, type AuditEntry, type AuditStatus, BUILTIN_IPFS_GATEWAYS, type BackgroundProgressStatus, type BaseProvider, type BroadcastHandler, type BroadcastMessage, type BuildSplitBundleResult, type CMasterKeyData, COIN_TYPES, type CheckNetworkHealthOptions, CoinGeckoPriceProvider, type CombinedTransferBundleV6, CommunicationsModule, type CommunicationsModuleConfig, type CommunicationsModuleDependencies, type ComposingIndicator, type ConnectivityBackendStatusType, type ConnectivityStatusPayload, type ConsolidationPendingState, type ContentHash, type ConversationPage, type CreateGroupOptions, type CreateInvoiceRequest, DEFAULT_AGGREGATOR_TIMEOUT, DEFAULT_AGGREGATOR_URL, DEFAULT_DERIVATION_PATH, DEFAULT_ELECTRUM_URL, DEFAULT_GROUP_RELAYS, DEFAULT_IPFS_BOOTSTRAP_PEERS, DEFAULT_IPFS_GATEWAYS, DEFAULT_MARKET_API_URL, DEFAULT_NOSTR_RELAYS, DEV_AGGREGATOR_URL, DISPOSITION_REASONS, type DecryptionProgressCallback, type DeliveryStrategy, type DerivationMode, type DirectMessage, type DirectTokenEntry, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type DispositionReason, type DispositionRecord, type EncryptedData, type ExtendedValidationResult, type FullIdentity, type GetConversationPageOptions, type GetInvoicesOptions, type GetSwapsFilter, GroupChatModule, type GroupChatModuleConfig, type GroupChatModuleDependencies, type GroupData, type GroupMemberData, type GroupMessageData, GroupRole, GroupVisibility, type HealthCheckFn, type Identity, type IdentityConfig, type InclusionProof, type IncomingBroadcast, type IncomingMessage, type IncomingPaymentRequest, type IncomingTokenTransfer, type IncomingTransfer, type InitProgress, type InitProgressCallback, type InitProgressStep, type InstanceChainEntry, type InstanceChainIndex, type InstanceSelectionStrategy, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitOptions, type InstantSplitProcessResult, type InstantSplitResult, type InstantSplitV5RecoveryMetadata, type IntentStatus, type IntentType, type InternalTransferMode, type InvalidEntry, type InvalidatedNametagEntry, type InvoiceRequestedAsset, index as L1, type L1Balance, L1PaymentsModule, type L1PaymentsModuleConfig, type L1PaymentsModuleDependencies, type L1SendRequest, type L1SendResult, type L1Transaction, type L1Utxo, LIMITS, type LegacyCombinedTransferPayload, type LegacyFileImportOptions, type LegacyFileInfo, type LegacyFileParseResult, type LegacyFileParsedData, type LegacyFileType, type LegacyInstantSplitPayload, type LegacySdkPayload, type LegacySphereTxfPayload, type LegacyTokenTransferPayload, type LoadResult, type LogHandler, type LogLevel, type LogRecord, type LogSink, type LoggerConfig, type LoggingConfig, type ManifestAuxiliary, type ManifestEntry, type ManifestEntryDelta, type ManifestFields, type ManifestSignatures, type MarketIntent, MarketModule, type MarketModuleConfig, type MarketModuleDependencies, type MessageHandler, type MigrationPhase, type MigrationResult, type MintOutboxEntry, type MintParams, type MintResult, NETWORKS, NIP29_KINDS, NOSTR_EVENT_KINDS, type NamespacedLogger, type NametagBindingProof, type NametagData, type NetworkHealthResult, type NetworkType, type OracleEvent, type OracleEventCallback, type OracleEventType, type OracleProvider, type OutboxEntry, type OutgoingPaymentRequest, type ParsedAddress, type ParsedStorageData, type PayInvoiceParams, type PaymentRequest, type PaymentRequestHandler, type PaymentRequestResponse, type PaymentRequestResponseHandler, type PaymentRequestResponseType, type PaymentRequestResult, type PaymentRequestStatus, type PaymentSession, type PaymentSessionDirection, type PaymentSessionError, type PaymentSessionErrorCode, type PaymentSessionStatus, PaymentsModule, type PaymentsModuleConfig, type PaymentsModuleDependencies, type PeerInfo, type PendingV5Finalization, type PostIntentRequest, type PostIntentResult, type PricePlatform, type PriceProvider, type PriceProviderConfig, type ProfileConfig, type ProfileEncryptionConfig, type ProfileErrorCode, type ProviderMetadata, type ProviderRole, type ProviderStatus, type ProviderStatusInfo, type ReceiveOptions, type ReceiveResult, type RegistryNetwork, type ReturnPaymentParams, type RingBufferSink, SIGN_MESSAGE_PREFIX, STORAGE_KEYS, STORAGE_KEYS_ADDRESS, STORAGE_KEYS_GLOBAL, STORAGE_PREFIX, type SaveResult, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type SearchFilters, type SearchIntentResult, type SearchOptions, type SearchResult, type ServiceHealthResult, type Span, type SpentTokenInfo, type SpentTokenResult, Sphere, type SphereConfig, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereEventHandler, type SphereEventMap, type SphereEventType, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, type SphereStatus, type SplitPaymentSession, type SplitRecoveryResult, type StorageEvent, type StorageEventCallback, type StorageEventType, type StorageProvider, type StorageProviderConfig, type SubmitResult, type SwapDeal, type SwapManifest, SwapModule, type SwapModuleConfig, type SwapProgress, type SwapProposalResult, type SwapRef, type SwapRole, type SyncResult$1 as SyncResult, TEST_AGGREGATOR_URL, TEST_ELECTRUM_URL, TEST_NOSTR_RELAYS, TIMEOUTS, type Token, type TokenDefinition, type TokenIcon, type TokenPrice, TokenRegistry, type TokenState, type TokenStatus, type TokenStorageProvider, type TokenTransferDetail, type TokenTransferHandler, type TokenTransferPayload, type ValidationResult as TokenValidationResult, TokenValidator, type TombstoneEntry, type TrackedAddress, type TrackedAddressEntry, type TransactionHistoryEntry, type TransferCommitment, type TransferMode, type TransferRequest, type TransferResult, type TransferStatus, type TransportEvent, type TransportEventCallback, type TransportEventType, type TransportProvider, type TransportProviderConfig, type TrustBaseLoader, type TxfAuthenticator, type TxfGenesis, type TxfGenesisData, type TxfInclusionProof, type TxfIntegrity, type TxfInvalidEntry, type TxfMerkleStep, type TxfMerkleTreePath, type TxfMeta, type TxfOutboxEntry, type TxfSentEntry, type TxfState, type TxfStorageData, type TxfStorageDataBase, type TxfToken, type TxfTombstone, type TxfTransaction, type UnconfirmedResolutionResult, type UxfBundleRef, type UxfDelta, type UxfElement, type UxfElementContent, type UxfElementHeader, type UxfElementType, type UxfEnvelope, type UxfErrorCode, type UxfIndexes, type UxfInstanceKind, type UxfManifest, type UxfPackageData, type UxfStorageAdapter, type UxfTransferPayload, type UxfTransferPayloadBase, type UxfTransferPayloadCar, type UxfTransferPayloadCid, type UxfVerificationIssue, type UxfVerificationResult, type V5FinalizationStage, type ValidationAction, type ValidationIssue, type ValidationResult$1 as ValidationResult, type WaitOptions, type WalletDatInfo, type WalletInfo, type WalletJSON$1 as WalletJSON, type WalletJSONExportOptions$1 as WalletJSONExportOptions, type WalletSource, addSink, addressesMatch, archivedKeyFromTokenId, base58Decode, base58Encode, buildManifest, buildTxfStorageData, bytesToHex, checkNetworkHealth, clearSinks, coinIdsMatch, computeSwapId, countCommittedTransactions, createAddress, createCommunicationsModule, createGroupChatModule, createKeyPair, createL1PaymentsModule, createMarketModule, createNametagBinding, createPaymentSession, createPaymentSessionError, createPaymentsModule, createPriceProvider, createRingBufferSink, createSphere, createSplitPaymentSession, createSwapModule, createTokenValidator, decodeBech32, decrypt$1 as decrypt, decryptCMasterKey, decryptJson, decryptMnemonic, decryptPrivateKey, decryptSimple, decryptTextFormatKey, decryptWallet, decryptWithSalt, deriveAddressInfo, deriveChildKey$1 as deriveChildKey, deriveKeyAtPath$1 as deriveKeyAtPath, disableDebug, doubleSha256, encodeBech32, encrypt$1 as encrypt, encryptMnemonic, encryptSimple, encryptWallet, extractFromText, findPattern, forkedKeyFromTokenIdAndState, formatAmount, generateAddressFromMasterKey, generateMasterKey, generateMnemonic, generatePrivateKey, getAddressHrp, getAddressId, getAddressStorageKey, getCoinIdByName, getCoinIdBySymbol, getCurrentStateHash, getLogger, getPublicKey, getSphere, getTokenDecimals, getTokenDefinition, getTokenIconUrl, getTokenId, getTokenName, getTokenSymbol, hasMissingNewStateHash, hasUncommittedTransactions, hasValidTxfData, hash160, hashSignMessage, hexToBytes, hexToWIF, identityFromMnemonicSync, initSphere, isArchivedKey, isAuditStatus, isCoinAsset, isCombinedTransferBundleV6, isDispositionReason, isForkedKey, isInstantSplitBundle, isInstantSplitBundleV4, isInstantSplitBundleV5, isKnownToken, isLegacyTokenTransferPayload, isNftAsset, isPaymentSessionTerminal, isPaymentSessionTimedOut, isSQLiteDatabase, isSphereError, isTextWalletEncrypted, isTokenKey, isUxfTransferPayload, isUxfTransferPayloadCar, isUxfTransferPayloadCid, isValidAddress, isValidBech32, isValidDirectAddress, isValidNametag, isValidPrivateKey, isValidTokenId, isWalletDatEncrypted, isWalletTextFormat, keyFromTokenId, listDebug, loadSphere, logger, mnemonicToSeedSync, normalizeAddress, normalizeCoinId, normalizeSdkTokenToStorage, objectToTxf, parseAddress, parseAndDecryptWalletDat, parseAndDecryptWalletText, parseForkedKey, parseTxfStorageData, parseWalletDat, parseWalletText, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, setDebug, sha256, signMessage, signSwapManifest, sleep, sphereExists, toHumanReadable, toSmallestUnit, tokenIdFromArchivedKey, tokenIdFromKey, tokenToTxf, txfToToken, validateManifest, validateMnemonic, verifyManifestIntegrity, verifyNametagBinding, verifySignedMessage, verifySwapSignature, withSpan };

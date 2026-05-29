@@ -1159,7 +1159,32 @@ var STORAGE_KEYS_GLOBAL = {
    * the bundle via the aggregator path). Per-address suffix appended
    * by the Profile provider (`<key>_<addressId>`).
    */
-  PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid"
+  PROFILE_PENDING_PUBLISH_CID: "profile_pending_publish_cid",
+  /**
+   * Issue #313 — local snapshot blob for cold-boot lazy load. Holds the
+   * most recent in-memory state (identity, tokens, bundles, pointer,
+   * timestamps) so the next cold boot can render the wallet UI from
+   * local cache BEFORE connecting to aggregator / remote IPFS. Atomically
+   * replaced after every successful flush + publish and on graceful
+   * shutdown. Per-address suffix appended by the Profile provider
+   * (`<key>_<addressId>`).
+   *
+   * A companion key `<key>_<addressId>_pending` is written first; the
+   * swap to the main key happens via `setMany` (or a sequential fallback
+   * with explicit cleanup). Crash mid-write leaves the previous main
+   * key intact.
+   */
+  PROFILE_SNAPSHOT_BLOB: "profile_snapshot_blob",
+  /**
+   * Issue #313 — last-known aggregator pointer for cold-boot priming.
+   * Mirrors the `pointer` field embedded in the snapshot blob so the
+   * boot path can short-circuit a pointer fetch when the cached version
+   * matches what the aggregator now exposes. Per-address suffix appended
+   * by the Profile provider (`<key>_<addressId>`).
+   *
+   * Stored as JSON: `{ version: number, cid: string, epoch?: number, ts: number }`.
+   */
+  PROFILE_LAST_POINTER: "profile_last_pointer"
 };
 var STORAGE_KEYS_ADDRESS = {
   /** Pending transfers for this address */
