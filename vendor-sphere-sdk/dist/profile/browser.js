@@ -11069,6 +11069,9 @@ function installHeliaBlockstorePinShim(helia) {
     if (cidStr.length === 0) {
       return "skipped";
     }
+    if (pinnedCids.has(cidStr)) {
+      return "pinned";
+    }
     try {
       const result = pinsApi.add(cid);
       if (result && typeof result[Symbol.asyncIterator] === "function") {
@@ -11081,9 +11084,14 @@ function installHeliaBlockstorePinShim(helia) {
       pinnedCids.add(cidStr);
       return "pinned";
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already pinned/i.test(msg)) {
+        pinnedCids.add(cidStr);
+        return "pinned";
+      }
       logger.warn(
         "ProfilePinShim",
-        `helia.pins.add failed for ${cidStr.slice(0, 16)}\u2026: ${err instanceof Error ? err.message : String(err)}`
+        `helia.pins.add failed for ${cidStr.slice(0, 16)}\u2026: ${msg}`
       );
       return "failed";
     }
