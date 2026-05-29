@@ -888,10 +888,26 @@ export function SphereProvider({
     // at-least-once Nostr replay + pendingPublishCid retry — so dropping
     // mid-flight writes here is recoverable.
     //
+    // Review-feedback fixes:
+    //   - `e.persisted === true` means the page is being bfcache-frozen
+    //     for resume on back/forward navigation. Destroying Helia +
+    //     libp2p + Nostr in that case is worse than the original freeze:
+    //     `pageshow` will then have to cold-init everything from
+    //     scratch, defeating the bfcache and producing a flash of
+    //     uninitialized UI. Skip teardown in that case — the browser
+    //     keeps the JS heap intact.
+    //   - Null `sphereRef.current` BEFORE awaiting destroy so the React
+    //     unmount cleanup below (which also calls `.destroy()`) does
+    //     not race a second concurrent teardown on the same instance.
+    //     `Sphere.destroy()` is not idempotent in the vendored SDK.
+    //
     // Note: `void` swallows the destroy promise — `pagehide` handlers
     // cannot await, the page is going away regardless.
-    const onPageHide = () => {
-      void sphereRef.current?.destroy({
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      const instance = sphereRef.current;
+      sphereRef.current = null;
+      void instance?.destroy({
         force: true,
         skipFlush: true,
         reason: 'page-hide',
@@ -901,7 +917,9 @@ export function SphereProvider({
 
     return () => {
       window.removeEventListener('pagehide', onPageHide);
-      // Cleanup on unmount
+      // Cleanup on unmount — guard against the case where `pagehide`
+      // already nulled the ref (race with browser navigation that
+      // triggers both pagehide and React's unmount in sequence).
       sphereRef.current?.destroy();
       sphereRef.current = null;
     };
