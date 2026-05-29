@@ -63,7 +63,24 @@ if (import.meta.env.DEV) {
 
 function isIpfsEnabled(): boolean {
   const stored = localStorage.getItem(STORAGE_KEYS.IPFS_ENABLED);
-  return stored !== 'false'; // enabled by default
+  // DISABLED by default (page-freeze 2026-05-29). The legacy
+  // `IpfsStorageProvider` (impl/shared/ipfs/ipfs-storage-provider.ts) is
+  // `@deprecated` per its own file header; in the field it publishes IPNS
+  // records whose `_meta.lastCid` is read from its own in-memory cache and
+  // never re-fetched from the sidecar. When the sidecar's view advances
+  // (multi-tab, post-reload, missed update), every publish is born
+  // chain-broken; `executeFlush` rearms every 2s with no backoff and no
+  // sidecar refresh, producing the freeze symptom (14,575 sidecar CHAIN
+  // BREAK DETECTED rejections per 30 minutes observed live on
+  // unicity-ipfs1.dyndns.org). The Profile pointer layer supersedes this
+  // path and already has live aggregator state, bounded retries,
+  // PointerMutex, and a BLOCKED state machine.
+  //
+  // Users on machines where IPFS sync was previously running and is now
+  // load-bearing can re-enable explicitly with
+  //   localStorage.setItem('IPFS_ENABLED', 'true')
+  // until the deprecated provider is removed.
+  return stored === 'true';
 }
 
 function getIpfsConfig(): {
@@ -848,7 +865,42 @@ export function SphereProvider({
 
   useEffect(() => {
     initializeRef.current();
+
+    // Hard-unload teardown (page-freeze 2026-05-29).
+    //
+    // React's unmount cleanup below runs when this provider component
+    // unmounts (route change, conditional render), NOT on hard page
+    // navigation, tab close, or reload — those skip React lifecycle
+    // entirely. Without an explicit unload handler, the previous tab's
+    // Helia + libp2p + gossipsub + OrbitDB + Nostr WebSocket + IDBBlockstore
+    // stay alive while the new tab's `Sphere.init()` spawns a second of
+    // each. Two libp2p gossipsub heartbeats (1Hz), two identify handshakes,
+    // and two IDB connections sharing the same origin produce the dual-
+    // instance CPU spike that pegs cores at ~95% on reload (top suspect
+    // per review-agent leak-hunt).
+    //
+    // `pagehide` is preferred over `beforeunload` because it fires for
+    // both navigation AND bfcache eviction, and doesn't trip the
+    // "are you sure you want to leave" prompt. `skipFlush: true` is
+    // critical: a full flush would race the browser's unload timeout
+    // (~5s typical, browser-dependent) and hold the page hostage. The
+    // SDK already replays unflushed writes on next load via the
+    // at-least-once Nostr replay + pendingPublishCid retry — so dropping
+    // mid-flight writes here is recoverable.
+    //
+    // Note: `void` swallows the destroy promise — `pagehide` handlers
+    // cannot await, the page is going away regardless.
+    const onPageHide = () => {
+      void sphereRef.current?.destroy({
+        force: true,
+        skipFlush: true,
+        reason: 'page-hide',
+      });
+    };
+    window.addEventListener('pagehide', onPageHide);
+
     return () => {
+      window.removeEventListener('pagehide', onPageHide);
       // Cleanup on unmount
       sphereRef.current?.destroy();
       sphereRef.current = null;
