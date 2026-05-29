@@ -983,7 +983,7 @@ var init_http_block_broker = __esm({
   }
 });
 
-// node_modules/@noble/hashes/utils.js
+// ../../../node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1112,7 +1112,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "node_modules/@noble/hashes/utils.js"() {
+  "../../../node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1126,7 +1126,7 @@ var init_utils = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_md.js
+// ../../../node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1135,7 +1135,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV, SHA224_IV, SHA384_IV, SHA512_IV;
 var init_md = __esm({
-  "node_modules/@noble/hashes/_md.js"() {
+  "../../../node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1292,7 +1292,7 @@ var init_md = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_u64.js
+// ../../../node_modules/@noble/hashes/_u64.js
 function fromBig(n, le = false) {
   if (le)
     return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
@@ -1314,7 +1314,7 @@ function add(Ah, Al, Bh, Bl) {
 }
 var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
-  "node_modules/@noble/hashes/_u64.js"() {
+  "../../../node_modules/@noble/hashes/_u64.js"() {
     "use strict";
     U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
     _32n = /* @__PURE__ */ BigInt(32);
@@ -1333,7 +1333,7 @@ var init_u64 = __esm({
   }
 });
 
-// node_modules/@noble/hashes/sha2.js
+// ../../../node_modules/@noble/hashes/sha2.js
 var sha2_exports = {};
 __export(sha2_exports, {
   _SHA224: () => _SHA224,
@@ -1351,7 +1351,7 @@ __export(sha2_exports, {
 });
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, _SHA224, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA2_64B, _SHA512, _SHA384, T224_IV, T256_IV, _SHA512_224, _SHA512_256, sha256, sha224, sha512, sha384, sha512_256, sha512_224;
 var init_sha2 = __esm({
-  "node_modules/@noble/hashes/sha2.js"() {
+  "../../../node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_u64();
@@ -1841,7 +1841,7 @@ var init_sha2 = __esm({
   }
 });
 
-// node_modules/@noble/curves/utils.js
+// ../../../node_modules/@noble/curves/utils.js
 function abool(value, title = "") {
   if (typeof value !== "boolean") {
     const prefix = title && `"${title}" `;
@@ -1993,7 +1993,7 @@ function memoized(fn) {
 }
 var _0n, _1n, isPosBig, bitMask;
 var init_utils2 = __esm({
-  "node_modules/@noble/curves/utils.js"() {
+  "../../../node_modules/@noble/curves/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
@@ -2004,7 +2004,7 @@ var init_utils2 = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/modular.js
+// ../../../node_modules/@noble/curves/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
   return result >= _0n2 ? result : b + result;
@@ -2227,7 +2227,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
 }
 var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, FIELD_FIELDS, _Field;
 var init_modular = __esm({
-  "node_modules/@noble/curves/abstract/modular.js"() {
+  "../../../node_modules/@noble/curves/abstract/modular.js"() {
     "use strict";
     init_utils2();
     _0n2 = /* @__PURE__ */ BigInt(0);
@@ -2397,7 +2397,7 @@ var init_modular = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/curve.js
+// ../../../node_modules/@noble/curves/abstract/curve.js
 function negateCt(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
@@ -2496,7 +2496,7 @@ function createKeygen(randomSecretKey, getPublicKey) {
 }
 var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
-  "node_modules/@noble/curves/abstract/curve.js"() {
+  "../../../node_modules/@noble/curves/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -2638,7 +2638,7 @@ var init_curve = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/hash-to-curve.js
+// ../../../node_modules/@noble/curves/abstract/hash-to-curve.js
 function i2osp(value, length) {
   asafenumber(value);
   asafenumber(length);
@@ -2799,7 +2799,7 @@ function createHasher2(Point, mapToCurve, defaults) {
 }
 var os2ip, _DST_scalar;
 var init_hash_to_curve = __esm({
-  "node_modules/@noble/curves/abstract/hash-to-curve.js"() {
+  "../../../node_modules/@noble/curves/abstract/hash-to-curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -2808,10 +2808,10 @@ var init_hash_to_curve = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hmac.js
+// ../../../node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "node_modules/@noble/hashes/hmac.js"() {
+  "../../../node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -2886,7 +2886,7 @@ var init_hmac = __esm({
   }
 });
 
-// node_modules/@noble/curves/abstract/weierstrass.js
+// ../../../node_modules/@noble/curves/abstract/weierstrass.js
 function _splitEndoScalar(k, basis, n) {
   const [[a1, b1], [a2, b2]] = basis;
   const c1 = divNearest(b2 * k, n);
@@ -3749,7 +3749,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
 }
 var divNearest, DERErr, DER, _0n4, _1n4, _2n2, _3n2, _4n2;
 var init_weierstrass = __esm({
-  "node_modules/@noble/curves/abstract/weierstrass.js"() {
+  "../../../node_modules/@noble/curves/abstract/weierstrass.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -3870,7 +3870,7 @@ var init_weierstrass = __esm({
   }
 });
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 var secp256k1_exports = {};
 __export(secp256k1_exports, {
   schnorr: () => schnorr,
@@ -3975,7 +3975,7 @@ function schnorrVerify(signature, message, publicKey) {
 }
 var secp256k1_CURVE, secp256k1_ENDO, _0n5, _2n3, Fpk1, Pointk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, hasEven, num, schnorr, isoMap, mapSWU, secp256k1_hasher;
 var init_secp256k1 = __esm({
-  "node_modules/@noble/curves/secp256k1.js"() {
+  "../../../node_modules/@noble/curves/secp256k1.js"() {
     "use strict";
     init_sha2();
     init_utils();
@@ -4090,7 +4090,7 @@ var init_secp256k1 = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hkdf.js
+// ../../../node_modules/@noble/hashes/hkdf.js
 function extract(hash, ikm, salt) {
   ahash(hash);
   if (salt === void 0)
@@ -4125,7 +4125,7 @@ function expand(hash, prk, info, length = 32) {
 }
 var HKDF_COUNTER, EMPTY_BUFFER, hkdf;
 var init_hkdf = __esm({
-  "node_modules/@noble/hashes/hkdf.js"() {
+  "../../../node_modules/@noble/hashes/hkdf.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -4272,10 +4272,13 @@ async function getEnvelopePayload(db, key, onFallback) {
       return null;
     } catch (err) {
       if (onFallback !== void 0) {
+        const details = err?.details;
+        const isCborDecodeError = details?.cborError === true;
         try {
           onFallback({
             key,
-            errorMessage: err instanceof Error ? err.message : String(err)
+            errorMessage: err instanceof Error ? err.message : String(err),
+            isCborDecodeError
           });
         } catch {
         }
@@ -10084,7 +10087,7 @@ var init_ipfs_http_client = __esm({
   }
 });
 
-// node_modules/@ipld/dag-pb/src/pb-decode.js
+// ../../../node_modules/@ipld/dag-pb/src/pb-decode.js
 function decodeVarint(bytes, offset) {
   let v = 0;
   for (let shift = 0; ; shift += 7) {
@@ -10215,16 +10218,16 @@ function decodeNode(bytes) {
 }
 var textDecoder;
 var init_pb_decode = __esm({
-  "node_modules/@ipld/dag-pb/src/pb-decode.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/pb-decode.js"() {
     "use strict";
     textDecoder = new TextDecoder();
   }
 });
 
-// node_modules/@ipld/dag-pb/src/pb-encode.js
+// ../../../node_modules/@ipld/dag-pb/src/pb-encode.js
 var textEncoder, maxInt32, maxUInt32;
 var init_pb_encode = __esm({
-  "node_modules/@ipld/dag-pb/src/pb-encode.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/pb-encode.js"() {
     "use strict";
     textEncoder = new TextEncoder();
     maxInt32 = 2 ** 32;
@@ -10232,7 +10235,7 @@ var init_pb_encode = __esm({
   }
 });
 
-// node_modules/@ipld/dag-pb/src/util.js
+// ../../../node_modules/@ipld/dag-pb/src/util.js
 function toByteView(buf) {
   if (buf instanceof ArrayBuffer) {
     return new Uint8Array(buf, 0, buf.byteLength);
@@ -10241,14 +10244,14 @@ function toByteView(buf) {
 }
 var import_cid5, textEncoder2;
 var init_util = __esm({
-  "node_modules/@ipld/dag-pb/src/util.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/util.js"() {
     "use strict";
     import_cid5 = require("multiformats/cid");
     textEncoder2 = new TextEncoder();
   }
 });
 
-// node_modules/@ipld/dag-pb/src/index.js
+// ../../../node_modules/@ipld/dag-pb/src/index.js
 function decode2(bytes) {
   const buf = toByteView(bytes);
   const pbn = decodeNode(buf);
@@ -10279,7 +10282,7 @@ function decode2(bytes) {
 }
 var import_cid6;
 var init_src = __esm({
-  "node_modules/@ipld/dag-pb/src/index.js"() {
+  "../../../node_modules/@ipld/dag-pb/src/index.js"() {
     "use strict";
     import_cid6 = require("multiformats/cid");
     init_pb_decode();
@@ -14775,6 +14778,257 @@ var SentLedgerWriter = class {
     return parsed;
   }
 };
+
+// profile/single-blob-sync-writer.ts
+init_encryption();
+init_oplog_envelope_io();
+var SingleBlobSyncWriter = class {
+  db;
+  encryptionKey;
+  key;
+  validate;
+  dedupKey;
+  preferOnCollision;
+  notifyProfileDirty;
+  constructor(opts) {
+    if (typeof opts.key !== "string" || opts.key.length === 0) {
+      throw new TypeError(
+        "SingleBlobSyncWriter: key must be a non-empty string"
+      );
+    }
+    if (opts.key.endsWith(".")) {
+      throw new TypeError(
+        'SingleBlobSyncWriter: key must NOT end with "." \u2014 use PrefixSyncWriter for per-entry keys'
+      );
+    }
+    this.db = opts.db;
+    this.encryptionKey = opts.encryptionKey;
+    this.key = opts.key;
+    this.validate = opts.validate;
+    this.dedupKey = opts.dedupKey;
+    this.preferOnCollision = opts.preferOnCollision ?? null;
+    this.notifyProfileDirty = opts.notifyProfileDirty ?? null;
+  }
+  /**
+   * Return the (at-most-one) snapshot entry for this writer's exact
+   * key. Returns an empty array when the key is absent. Bytes are the
+   * envelope-stripped ciphertext suitable for receiver-side decrypt.
+   */
+  async snapshot() {
+    let raw2;
+    try {
+      raw2 = await this.db.get(this.key);
+    } catch {
+      return [];
+    }
+    if (raw2 === null || raw2.byteLength === 0) return [];
+    const ciphertext = unwrapEnvelopeBytes(raw2);
+    return [{ key: this.key, encryptedValue: ciphertext }];
+  }
+  /**
+   * Apply a remote single-blob snapshot. The dispatcher pre-filters
+   * the snapshot to entries whose key starts with this writer's
+   * configured key — defense-in-depth, this method enforces an EXACT
+   * match below.
+   */
+  async joinSnapshot(remote) {
+    let entriesEvaluated = 0;
+    let liveLanded = 0;
+    let localWon = 0;
+    let remoteRejectedMalformed = 0;
+    for (const entry of remote) {
+      if (entry.key !== this.key) {
+        continue;
+      }
+      entriesEvaluated += 1;
+      const remoteItems = await this.decodeBlob(
+        entry.encryptedValue,
+        /* remote = */
+        true
+      );
+      if (remoteItems === null) {
+        remoteRejectedMalformed += 1;
+        continue;
+      }
+      const localItems = await this.readLocalBlob();
+      const merged = this.union(localItems, remoteItems);
+      if (merged === null) {
+        localWon += 1;
+        continue;
+      }
+      try {
+        await this.writeMerged(merged);
+        liveLanded += 1;
+      } catch {
+        remoteRejectedMalformed += 1;
+      }
+    }
+    if (liveLanded > 0 && this.notifyProfileDirty !== null) {
+      try {
+        this.notifyProfileDirty();
+      } catch {
+      }
+    }
+    return {
+      entriesEvaluated,
+      liveLanded,
+      tombstonesLanded: 0,
+      localWon,
+      remoteRejectedMalformed
+    };
+  }
+  /**
+   * Compute the union of local + remote. Returns `null` when every
+   * remote item's dedup key is already present locally AND the
+   * collision tie-breaker (if configured) does not prefer any remote
+   * variant — the caller treats this as `localWon` and skips writeback.
+   */
+  union(local, remote) {
+    const merged = [...local];
+    const indexByKey = /* @__PURE__ */ new Map();
+    for (let i = 0; i < merged.length; i += 1) {
+      indexByKey.set(this.dedupKey(merged[i]), i);
+    }
+    let changed = false;
+    for (const item of remote) {
+      const key = this.dedupKey(item);
+      const idx = indexByKey.get(key);
+      if (idx === void 0) {
+        indexByKey.set(key, merged.length);
+        merged.push(item);
+        changed = true;
+        continue;
+      }
+      if (this.preferOnCollision !== null) {
+        const next = this.preferOnCollision(merged[idx], item);
+        if (next !== merged[idx]) {
+          merged[idx] = next;
+          changed = true;
+        }
+      }
+    }
+    return changed ? merged : null;
+  }
+  /**
+   * Read + decode the local blob. Returns an empty array when the key
+   * is absent OR when decode fails — in both cases the union below
+   * treats local as "nothing to keep", so a well-formed remote lands
+   * intact. This biases convergence toward propagating remote state on
+   * local corruption, matching the convention used elsewhere in the
+   * profile sync layer (`PrefixSyncWriter`, `runJoinSnapshot`).
+   */
+  async readLocalBlob() {
+    let raw2;
+    try {
+      raw2 = await this.db.get(this.key);
+    } catch {
+      return [];
+    }
+    if (raw2 === null || raw2.byteLength === 0) return [];
+    const ciphertext = unwrapEnvelopeBytes(raw2);
+    const decoded = await this.decodeBlob(
+      ciphertext,
+      /* remote = */
+      false
+    );
+    return decoded ?? [];
+  }
+  /**
+   * Decrypt + JSON-parse + validate a ciphertext blob.
+   *
+   * `remote=true` is the strict path: any failure (decrypt, parse,
+   * shape) returns `null` so the caller bumps `remoteRejectedMalformed`
+   * and leaves local untouched. `remote=false` (local read) returns
+   * `null` the same way, but the caller treats `null` as "empty local"
+   * for the union — letting a well-formed remote land cleanly even
+   * when local is corrupted.
+   */
+  async decodeBlob(raw2, _remote) {
+    if (raw2.byteLength === 0) return null;
+    if (raw2.byteLength > MAX_ENTRY_BYTES_RAW) return null;
+    const ciphertext = unwrapEnvelopeBytes(raw2);
+    let plaintextBytes;
+    try {
+      plaintextBytes = this.encryptionKey ? await decryptProfileValue(this.encryptionKey, ciphertext) : ciphertext;
+    } catch {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(plaintextBytes));
+    } catch {
+      return null;
+    }
+    if (!this.validate(parsed)) return null;
+    return parsed;
+  }
+  /**
+   * Encrypt + envelope-wrap + persist the merged blob under this
+   * writer's exact key.
+   *
+   * Goes through `putEnvelopePayload` so the on-disk format is the
+   * canonical post-#247 envelope — the same format
+   * `ProfileTokenStorageProvider.writeProfileKey` produces. This keeps
+   * subsequent reads via `getEnvelopePayload` on the happy path (no
+   * legacy raw-bytes fallback).
+   */
+  async writeMerged(merged) {
+    const plaintext = new TextEncoder().encode(JSON.stringify(merged));
+    const ciphertext = this.encryptionKey ? await encryptProfileValue(this.encryptionKey, plaintext) : plaintext;
+    await putEnvelopePayload(this.db, this.key, ciphertext);
+  }
+};
+function buildTombstonesSyncWriter(opts) {
+  if (typeof opts.addressId !== "string" || opts.addressId.length === 0) {
+    throw new TypeError(
+      "buildTombstonesSyncWriter: addressId must be a non-empty string"
+    );
+  }
+  return new SingleBlobSyncWriter({
+    db: opts.db,
+    encryptionKey: opts.encryptionKey,
+    key: `${opts.addressId}.tombstones`,
+    validate: isTombstoneArray,
+    dedupKey: (t) => `${t.tokenId}:${t.stateHash}`,
+    preferOnCollision: (local, remote) => remote.timestamp < local.timestamp ? remote : local,
+    notifyProfileDirty: opts.notifyProfileDirty,
+    label: "SingleBlobSyncWriter.tombstones"
+  });
+}
+function buildInvalidatedNametagsSyncWriter(opts) {
+  if (typeof opts.addressId !== "string" || opts.addressId.length === 0) {
+    throw new TypeError(
+      "buildInvalidatedNametagsSyncWriter: addressId must be a non-empty string"
+    );
+  }
+  return new SingleBlobSyncWriter({
+    db: opts.db,
+    encryptionKey: opts.encryptionKey,
+    key: `${opts.addressId}.invalidatedNametags`,
+    validate: isStringArray,
+    dedupKey: (s) => s,
+    notifyProfileDirty: opts.notifyProfileDirty,
+    label: "SingleBlobSyncWriter.invalidatedNametags"
+  });
+}
+function isTombstoneArray(value) {
+  if (!Array.isArray(value)) return false;
+  for (const item of value) {
+    if (item === null || typeof item !== "object") return false;
+    const r = item;
+    if (typeof r.tokenId !== "string" || r.tokenId.length === 0) return false;
+    if (typeof r.stateHash !== "string" || r.stateHash.length === 0) return false;
+    if (typeof r.timestamp !== "number" || !Number.isFinite(r.timestamp)) return false;
+  }
+  return true;
+}
+function isStringArray(value) {
+  if (!Array.isArray(value)) return false;
+  for (const item of value) {
+    if (typeof item !== "string") return false;
+  }
+  return true;
+}
 
 // profile/cid-ref-store.ts
 var import_cid2 = require("multiformats/cid");
@@ -19552,47 +19806,72 @@ async function buildProfilePointerLayer(input) {
       trustBase,
       decodeCid
     });
+    const INSPECT_EPOCH_MEMO_TTL_MS = 3e4;
+    const epochMemo = /* @__PURE__ */ new Map();
     const inspectSnapshotEpoch = async (version) => {
-      const cidBytes = await resolveRemoteCid(version);
-      if (input.ipfsGateways.length === 0) {
-        throw new Error(
-          `inspectSnapshotEpoch: no IPFS gateways configured for v=${version}`
-        );
+      const now2 = Date.now();
+      const cached = epochMemo.get(version);
+      if (cached !== void 0 && cached.expiresAt > now2) {
+        if (cached.error !== void 0) throw cached.error;
+        return cached.value;
       }
-      let cidString;
+      const compute = async () => {
+        const cidBytes = await resolveRemoteCid(version);
+        if (input.ipfsGateways.length === 0) {
+          throw new Error(
+            `inspectSnapshotEpoch: no IPFS gateways configured for v=${version}`
+          );
+        }
+        let cidString;
+        try {
+          cidString = import_cid4.CID.decode(cidBytes).toString();
+        } catch (err) {
+          throw new Error(
+            `inspectSnapshotEpoch: invalid CID bytes at v=${version}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        const rootBlockBytes = await fetchFromIpfs(
+          [...input.ipfsGateways],
+          cidString
+        );
+        const { decode: cborDecode2 } = await import("@ipld/dag-cbor");
+        let decoded;
+        try {
+          decoded = cborDecode2(rootBlockBytes);
+        } catch (err) {
+          throw new Error(
+            `inspectSnapshotEpoch: dag-cbor decode failed at v=${version}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+          throw new Error(
+            `inspectSnapshotEpoch: root block decoded to non-object at v=${version}`
+          );
+        }
+        const epoch = decoded.epoch;
+        if (epoch === void 0) return void 0;
+        if (typeof epoch !== "number" || !Number.isFinite(epoch) || !Number.isInteger(epoch) || epoch < 0) {
+          throw new Error(
+            `inspectSnapshotEpoch: invalid epoch ${String(epoch)} at v=${version}`
+          );
+        }
+        return epoch;
+      };
       try {
-        cidString = import_cid4.CID.decode(cidBytes).toString();
+        const result = await compute();
+        epochMemo.set(version, {
+          value: result,
+          expiresAt: Date.now() + INSPECT_EPOCH_MEMO_TTL_MS
+        });
+        return result;
       } catch (err) {
-        throw new Error(
-          `inspectSnapshotEpoch: invalid CID bytes at v=${version}: ${err instanceof Error ? err.message : String(err)}`
-        );
+        const error = err instanceof Error ? err : new Error(String(err));
+        epochMemo.set(version, {
+          error,
+          expiresAt: Date.now() + INSPECT_EPOCH_MEMO_TTL_MS
+        });
+        throw error;
       }
-      const rootBlockBytes = await fetchFromIpfs(
-        [...input.ipfsGateways],
-        cidString
-      );
-      const { decode: cborDecode2 } = await import("@ipld/dag-cbor");
-      let decoded;
-      try {
-        decoded = cborDecode2(rootBlockBytes);
-      } catch (err) {
-        throw new Error(
-          `inspectSnapshotEpoch: dag-cbor decode failed at v=${version}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-      if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
-        throw new Error(
-          `inspectSnapshotEpoch: root block decoded to non-object at v=${version}`
-        );
-      }
-      const epoch = decoded.epoch;
-      if (epoch === void 0) return void 0;
-      if (typeof epoch !== "number" || !Number.isFinite(epoch) || !Number.isInteger(epoch) || epoch < 0) {
-        throw new Error(
-          `inspectSnapshotEpoch: invalid epoch ${String(epoch)} at v=${version}`
-        );
-      }
-      return epoch;
     };
     const fetchAndJoin = buildFetchAndJoin({
       gateways: input.ipfsGateways,
@@ -20404,6 +20683,46 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
     });
   }
   /**
+   * Issue #335 — Build a sync writer for `${addressId}.tombstones`.
+   *
+   * The lean-snapshot dispatcher had no writer registered for this
+   * single-blob key, so cross-device snapshot apply silently dropped
+   * spent-token tombstones. See profile/single-blob-sync-writer.ts and
+   * issue #335 for the full RCA. Lifecycle and null semantics mirror
+   * {@link buildOutboxWriter} — returns `null` when encryption is not
+   * yet wired so the dispatcher's `writersFor()` skip-empty path is
+   * preserved.
+   */
+  buildTombstonesSyncWriter(addressId) {
+    if (!this.encryptionEnabled) return null;
+    if (this.profileEncryptionKey === null) return null;
+    if (typeof addressId !== "string" || addressId.length === 0) return null;
+    return buildTombstonesSyncWriter({
+      db: this.db,
+      encryptionKey: this.profileEncryptionKey,
+      addressId,
+      notifyProfileDirty: this.profileDirtyNotifier ?? void 0
+    });
+  }
+  /**
+   * Issue #335 (companion) — Build a sync writer for
+   * `${addressId}.invalidatedNametags`. Same propagation gap as
+   * tombstones: the key is a single blob (a `string[]` set) written
+   * via `writeProfileKey` and never registered in the dispatcher.
+   * Lifecycle and null semantics mirror {@link buildTombstonesSyncWriter}.
+   */
+  buildInvalidatedNametagsSyncWriter(addressId) {
+    if (!this.encryptionEnabled) return null;
+    if (this.profileEncryptionKey === null) return null;
+    if (typeof addressId !== "string" || addressId.length === 0) return null;
+    return buildInvalidatedNametagsSyncWriter({
+      db: this.db,
+      encryptionKey: this.profileEncryptionKey,
+      addressId,
+      notifyProfileDirty: this.profileDirtyNotifier ?? void 0
+    });
+  }
+  /**
    * Issue #285 — Build a {@link CidRefStore} bound to this provider's
    * IPFS gateway list and profile encryption key. The store pins fat
    * OpLog payloads (DM caches, group state, processed-event ledgers,
@@ -20783,10 +21102,17 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
       return;
     }
     this.envelopeFallbackSeen.add(dedupKey);
-    logger.warn(
-      "ProfileStorage",
-      `[ENVELOPE-FALLBACK] OpLog envelope decode failed for key="${redactProfileKey(info.key)}" \u2014 served raw bytes via legacy compat path. This is expected for pre-#247 wallets but indicates live envelope corruption when seen on freshly-written entries. error="${info.errorMessage}"`
-    );
+    if (info.isCborDecodeError === true) {
+      logger.debug(
+        "ProfileStorage",
+        `[ENVELOPE-FALLBACK] legacy raw-bytes read for key="${redactProfileKey(info.key)}" \u2014 served via db.get compat path (CBOR decode failed, expected for pre-#247 raw-bytes writers like SentLedgerWriter).`
+      );
+    } else {
+      logger.warn(
+        "ProfileStorage",
+        `[ENVELOPE-FALLBACK] OpLog envelope shape invalid for key="${redactProfileKey(info.key)}" \u2014 served raw bytes via legacy compat path. Indicates live envelope corruption (decoded to a non-envelope shape) \u2014 operator triage recommended. error="${info.errorMessage}"`
+      );
+    }
     if (this.envelopeFallbackNotifier !== null) {
       try {
         this.envelopeFallbackNotifier(info);
@@ -22485,6 +22811,28 @@ var LifecycleManager = class {
    */
   pointerPollTimer = null;
   /**
+   * Aborted in `shutdown()` to cancel any in-flight `pointer.recoverLatest()`
+   * calls that don't otherwise have a signal threaded through from a
+   * higher caller. Page-freeze 2026-05-29: without this, a `Sphere.destroy()`
+   * during a slow IPFS gateway round-trip leaves the recoverLatest walkback
+   * issuing requests for tens of seconds AFTER the user has reloaded the
+   * page or unmounted the provider — feeding the dual-instance leak we saw
+   * in the browser flame graph.
+   */
+  destroyController = null;
+  /**
+   * Lazily-allocated accessor for the destroy controller's signal. We create
+   * the controller on first use (after `initialize()` runs and before the
+   * first pointer poll) so test harnesses that wire up a `LifecycleManager`
+   * without ever polling don't pay the allocation cost.
+   */
+  getDestroySignal() {
+    if (this.destroyController === null) {
+      this.destroyController = new AbortController();
+    }
+    return this.destroyController.signal;
+  }
+  /**
    * Issue #245 #3 — wall-clock deadline (ms epoch) until which a
    * publish attempt should short-circuit because a recent attempt
    * hit `AGGREGATOR_POINTER_WALKBACK_FLOOR`. Zero when no throttle is
@@ -22634,6 +22982,10 @@ var LifecycleManager = class {
     if (this.pointerPollTimer !== null) {
       clearTimeout(this.pointerPollTimer);
       this.pointerPollTimer = null;
+    }
+    if (this.destroyController !== null) {
+      this.destroyController.abort();
+      this.destroyController = null;
     }
     const timer = this.host.getFlushTimer();
     if (timer !== null) {
@@ -23338,7 +23690,9 @@ var LifecycleManager = class {
           });
           let reconciledDownward = false;
           try {
-            const recovered = await pointer.recoverLatest();
+            const recovered = await pointer.recoverLatest({
+              abortSignal: this.getDestroySignal()
+            });
             if (recovered && "cid" in recovered) {
               const outcome = await pointer.reconcileLocalVersionDownward(recovered);
               if (outcome.reconciled) {
@@ -23450,7 +23804,9 @@ var LifecycleManager = class {
     }
     let recovered;
     try {
-      recovered = await pointer.recoverLatest();
+      recovered = await pointer.recoverLatest({
+        abortSignal: this.getDestroySignal()
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (this.isPermanentPointerError(err)) {
@@ -23660,7 +24016,9 @@ var LifecycleManager = class {
     }
     let recovered = null;
     try {
-      recovered = await pointer.recoverLatest();
+      recovered = await pointer.recoverLatest({
+        abortSignal: this.getDestroySignal()
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (this.isPermanentPointerError(err)) {
@@ -26714,6 +27072,24 @@ init_ipfs_client();
 // profile/profile-snapshot-dispatcher.ts
 init_logger();
 var ADDRESS_ID_PREFIX_RE = /^(DIRECT_[0-9a-f]{6}_[0-9a-f]{6})\./;
+var PER_ADDRESS_LEGACY_SUFFIX_MAP = [
+  { legacySuffix: "_invalidatedNametags", profileSuffix: ".invalidatedNametags" },
+  { legacySuffix: "_tombstones", profileSuffix: ".tombstones" }
+];
+var ADDRESS_ID_BARE_RE = /^DIRECT_[0-9a-f]{6}_[0-9a-f]{6}/;
+function normalizeEntryKey(key) {
+  const addrMatch = ADDRESS_ID_BARE_RE.exec(key);
+  if (addrMatch === null) return key;
+  const addrEnd = addrMatch[0].length;
+  if (key[addrEnd] !== "_") return key;
+  const suffixFromAddr = key.slice(addrEnd);
+  for (const { legacySuffix, profileSuffix } of PER_ADDRESS_LEGACY_SUFFIX_MAP) {
+    if (suffixFromAddr === legacySuffix) {
+      return key.slice(0, addrEnd) + profileSuffix;
+    }
+  }
+  return key;
+}
 function base64ToBytes(b64) {
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
     const buf = Buffer.from(b64, "base64");
@@ -26734,7 +27110,7 @@ function accumulate(agg, r) {
 async function runProfileSnapshotJoin(snapshot, deps) {
   const log = deps.log ?? ((msg) => logger.debug("SnapshotDispatcher", msg));
   const entries = snapshot.entries.map((e) => ({
-    key: e.key,
+    key: normalizeEntryKey(e.key),
     encryptedValue: base64ToBytes(e.value)
   }));
   const addressIds = /* @__PURE__ */ new Set();
@@ -27082,6 +27458,20 @@ function createProfileProviders(config, cacheStorage, oracle) {
         writers.push({
           keyPrefix: dispositionAuditOrphanPrefix(addressId),
           writer: dispoQuad.auditOrphan
+        });
+      }
+      const tombstonesWriter = storage.buildTombstonesSyncWriter(addressId);
+      if (tombstonesWriter !== null) {
+        writers.push({
+          keyPrefix: `${addressId}.tombstones`,
+          writer: tombstonesWriter
+        });
+      }
+      const invalidatedNametagsWriter = storage.buildInvalidatedNametagsSyncWriter(addressId);
+      if (invalidatedNametagsWriter !== null) {
+        writers.push({
+          keyPrefix: `${addressId}.invalidatedNametags`,
+          writer: invalidatedNametagsWriter
         });
       }
       return writers;

@@ -900,7 +900,7 @@ var init_errors = __esm({
   }
 });
 
-// node_modules/@noble/hashes/utils.js
+// ../../../node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1029,7 +1029,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "node_modules/@noble/hashes/utils.js"() {
+  "../../../node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1090,10 +1090,10 @@ var init_errors2 = __esm({
   }
 });
 
-// node_modules/@noble/hashes/hmac.js
+// ../../../node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "node_modules/@noble/hashes/hmac.js"() {
+  "../../../node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -1168,7 +1168,7 @@ var init_hmac = __esm({
   }
 });
 
-// node_modules/@noble/hashes/_md.js
+// ../../../node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1177,7 +1177,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "node_modules/@noble/hashes/_md.js"() {
+  "../../../node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1288,10 +1288,10 @@ var init_md = __esm({
   }
 });
 
-// node_modules/@noble/hashes/sha2.js
+// ../../../node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "node_modules/@noble/hashes/sha2.js"() {
+  "../../../node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -7028,10 +7028,13 @@ async function getEnvelopePayload(db, key, onFallback) {
       return null;
     } catch (err) {
       if (onFallback !== void 0) {
+        const details = err?.details;
+        const isCborDecodeError = details?.cborError === true;
         try {
           onFallback({
             key,
-            errorMessage: err instanceof Error ? err.message : String(err)
+            errorMessage: err instanceof Error ? err.message : String(err),
+            isCborDecodeError
           });
         } catch {
         }
@@ -8601,7 +8604,7 @@ var AggregatorPinger = class {
     if (this.provider) {
       try {
         const round = await this.provider.getCurrentRound();
-        if (typeof round === "number" && Number.isFinite(round) && round > 0) {
+        if (typeof round === "number" && Number.isFinite(round) && round >= 0) {
           return "up";
         }
         return "degraded";
@@ -40694,6 +40697,27 @@ var GROUP_CHAT_MEMBERS_PREFIX = "group_chat_members:";
 var GROUP_CHAT_MESSAGES_INDEX_V = 1;
 var MAX_GROUP_MESSAGE_SIZE = 64 * 1024;
 var MAX_INDEX_ITEMS = 1e4;
+var LOAD_FETCH_CONCURRENCY = 4;
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  let aborted = false;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!aborted) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        results[i] = await fn(items[i], i);
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 function isMessagesIndex(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && value.v === GROUP_CHAT_MESSAGES_INDEX_V && Array.isArray(value.items);
 }
@@ -40844,19 +40868,19 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
-          throw new ProfileError2(
-            "CID_REF_UNREADABLE",
-            `GroupChatModule.load: groups key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. Check module init.`
+          logger.warn(
+            "GroupChat",
+            `[CID_REF_DEGRADE] groups key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected; starting fresh.`
           );
-        }
-        try {
-          parsed = await this.deps.cidRefStore.fetchJson(
-            ref,
-            { requireEncrypted: true }
-          );
-        } catch (err) {
-          logger.error("GroupChat", "[GROUP_CHAT_GROUPS] CID-ref fetch failed", err);
+        } else {
+          try {
+            parsed = await this.deps.cidRefStore.fetchJson(
+              ref,
+              { requireEncrypted: true }
+            );
+          } catch (err) {
+            logger.error("GroupChat", "[GROUP_CHAT_GROUPS] CID-ref fetch failed", err);
+          }
         }
       } else {
         try {
@@ -40887,11 +40911,11 @@ var GroupChatModule = class {
       let assembledMessages = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
-          throw new ProfileError2(
-            "CID_REF_UNREADABLE",
-            `GroupChatModule.load: messages:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
+          logger.warn(
+            "GroupChat",
+            `[CID_REF_DEGRADE] messages:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected; skipping.`
           );
+          continue;
         }
         let fetched;
         try {
@@ -40909,7 +40933,7 @@ var GroupChatModule = class {
             continue;
           }
           const cidRefStoreRef = this.deps.cidRefStore;
-          const fetches = fetched.items.map(async (item) => {
+          const results = await mapWithConcurrency(fetched.items, LOAD_FETCH_CONCURRENCY, async (item) => {
             if (!isValidIndexItem(item)) {
               logger.error(
                 "GroupChat",
@@ -40951,7 +40975,6 @@ var GroupChatModule = class {
               return null;
             }
           });
-          const results = await Promise.all(fetches);
           assembledMessages = results.filter((m) => m !== null);
           this._lastPinnedMessagesByGroup.set(groupId, {
             json: JSON.stringify(fetched),
@@ -41046,11 +41069,11 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
-          throw new ProfileError2(
-            "CID_REF_UNREADABLE",
-            `GroupChatModule.load: members:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
+          logger.warn(
+            "GroupChat",
+            `[CID_REF_DEGRADE] members:${groupId} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected; skipping.`
           );
+          continue;
         }
         try {
           parsed = await this.deps.cidRefStore.fetchJson(ref, { requireEncrypted: true });
@@ -41129,23 +41152,23 @@ var GroupChatModule = class {
       let parsed = null;
       if (ref) {
         if (!this.deps.cidRefStore) {
-          const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
-          throw new ProfileError2(
-            "CID_REF_UNREADABLE",
-            `GroupChatModule.load: processedEvents key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected.`
-          );
-        }
-        try {
-          parsed = await this.deps.cidRefStore.fetchJson(
-            ref,
-            { requireEncrypted: true }
-          );
-        } catch (err) {
-          logger.error(
+          logger.warn(
             "GroupChat",
-            "[GROUP_CHAT_PROCESSED_EVENTS] CID-ref fetch failed; starting fresh",
-            err
+            `[CID_REF_DEGRADE] processedEvents key contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected; starting fresh.`
           );
+        } else {
+          try {
+            parsed = await this.deps.cidRefStore.fetchJson(
+              ref,
+              { requireEncrypted: true }
+            );
+          } catch (err) {
+            logger.error(
+              "GroupChat",
+              "[GROUP_CHAT_PROCESSED_EVENTS] CID-ref fetch failed; starting fresh",
+              err
+            );
+          }
         }
       } else {
         try {
@@ -42637,10 +42660,10 @@ function createGroupChatModule(config) {
   return new GroupChatModule(config);
 }
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 init_sha2();
 
-// node_modules/@noble/curves/utils.js
+// ../../../node_modules/@noble/curves/utils.js
 init_utils();
 init_utils();
 var _0n = /* @__PURE__ */ BigInt(0);
@@ -42782,7 +42805,7 @@ function memoized(fn) {
   };
 }
 
-// node_modules/@noble/curves/abstract/modular.js
+// ../../../node_modules/@noble/curves/abstract/modular.js
 var _0n2 = /* @__PURE__ */ BigInt(0);
 var _1n2 = /* @__PURE__ */ BigInt(1);
 var _2n = /* @__PURE__ */ BigInt(2);
@@ -43168,7 +43191,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
   return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// node_modules/@noble/curves/abstract/curve.js
+// ../../../node_modules/@noble/curves/abstract/curve.js
 var _0n3 = /* @__PURE__ */ BigInt(0);
 var _1n3 = /* @__PURE__ */ BigInt(1);
 function negateCt(condition, item) {
@@ -43401,7 +43424,7 @@ function createKeygen(randomSecretKey, getPublicKey2) {
   };
 }
 
-// node_modules/@noble/curves/abstract/weierstrass.js
+// ../../../node_modules/@noble/curves/abstract/weierstrass.js
 init_hmac();
 init_utils();
 var divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n2) / den;
@@ -44275,7 +44298,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   });
 }
 
-// node_modules/@noble/curves/secp256k1.js
+// ../../../node_modules/@noble/curves/secp256k1.js
 var secp256k1_CURVE = {
   p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
   n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),

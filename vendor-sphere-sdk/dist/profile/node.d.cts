@@ -21418,6 +21418,203 @@ declare class OrbitDbDispositionStorageAdapter implements DispositionPerEntrySto
 }
 
 /**
+ * Single-blob sync writer for OrbitDB keys whose value is one self-
+ * contained JSON array (or set), persisted under an EXACT key with NO
+ * per-entry suffix.
+ *
+ * **Why this exists (issue #335).** All other per-address writers
+ * (`OutboxWriter`, `SentLedgerWriter`, `PrefixSyncWriter`-based
+ * disposition/finalization/recipient-context) own a `keyPrefix` that
+ * ends with `.` — they fan out into per-entry keys
+ * (`${addressId}.outbox.${id}`, `${addressId}.audit.${tokenId}`, etc.).
+ * The lean-snapshot dispatcher (`profile-snapshot-dispatcher.ts`)
+ * pre-filters snapshot entries with `e.key.startsWith(keyPrefix)`, so
+ * each per-entry-prefix writer receives only its own slice.
+ *
+ * A small number of OrbitDB keys are NOT per-entry — they are a single
+ * blob whose value contains the entire collection (e.g.
+ * `${addressId}.tombstones` is a `TxfTombstone[]` array;
+ * `${addressId}.invalidatedNametags` is a `string[]` set). Before this
+ * module existed, those keys had no registered dispatcher writer, so
+ * cross-device snapshot apply silently dropped them. For
+ * `${addressId}.tombstones` this caused the soak regression in
+ * `bob-peer1-vs-peer2-after`: peer2 recovered from the aggregator-
+ * pointer snapshot without the spent-token tombstones, then re-ingested
+ * a CAR bundle that contained the spent source token as if it were
+ * live, doubling the post-recovery balance.
+ *
+ * **Semantics — union merge, not byte-verbatim.** Per-entry writers
+ * persist remote bytes verbatim because each key is independently
+ * owned (one writer per key). Single-blob keys are jointly owned: peer
+ * A and peer B may each have observed local-only entries before
+ * sync'ing, and a byte-verbatim apply of either side's blob would lose
+ * the other side's entries. This writer decrypts both sides, computes
+ * the SET UNION (dedup via a caller-supplied key function), and writes
+ * back the merged JSON re-encrypted under the same exact key.
+ *
+ * This matches the existing in-memory union semantics used by
+ * `PaymentsModule.mergeTombstones` (modules/payments/PaymentsModule.ts)
+ * and the on-disk RMW union loop in
+ * `ProfileTokenStorageProvider.writeOrbitOperationalState` (the
+ * `merged.invalidatedNametags = Array.from(new Set([...remote, ...opState]))`
+ * pattern). Convergence is monotonic and idempotent — re-running the
+ * JOIN with the same remote is a no-op once the first pass converges.
+ *
+ * **Counter semantics.** A single entry in the snapshot translates to
+ * `entriesEvaluated: 1`:
+ *   - `liveLanded: 1` if the union added at least one new dedup-key
+ *     and the writer persisted the merged blob;
+ *   - `localWon: 1` if local was already a superset (no writeback);
+ *   - `remoteRejectedMalformed: 1` if decrypt / JSON parse / shape
+ *     check failed, or the underlying writeback threw.
+ *
+ * Tombstones in the merge-table sense (the `{ tombstoned: true }`
+ * marker pattern used by `PrefixSyncWriter`) do NOT apply to a single-
+ * blob key: the entire blob IS the collection. The on-disk
+ * representation is a JSON array (or set) — there is no "soft delete"
+ * marker. `tombstonesLanded` is therefore always 0 for this writer;
+ * the `liveLanded`/`localWon` columns cover every relevant outcome.
+ *
+ * **Encryption + envelope.** The writer:
+ *   - decrypts incoming snapshot bytes after defensively stripping an
+ *     OpLog envelope if present (`unwrapEnvelopeBytes`) — mirrors the
+ *     pre-#247 vs post-#247 dual format handling that `OutboxWriter`,
+ *     `SentLedgerWriter`, and `PrefixSyncWriter` already implement;
+ *   - re-encrypts the merged blob with a fresh IV and writes via
+ *     `putEnvelopePayload` so the on-disk format stays envelope-wrapped
+ *     (the canonical post-#247 layout consumed by
+ *     `ProfileTokenStorageProvider.readProfileKey`).
+ *
+ * **Out of scope.** Single-blob writers cannot use the Lamport-based
+ * (live, tombstone) merge table from `profile-snapshot-merge.ts` — the
+ * blob is a flat array with no per-element Lamport. The union merge
+ * here is fundamentally a set-CRDT (deletes are not propagated at the
+ * blob level — they require explicit GC at the publish side, e.g.
+ * `gcExpiredTombstones`). If a future requirement adds blob-level
+ * deletion semantics, this writer can be extended with a tombstone
+ * marker shape akin to `PrefixSyncWriter`.
+ *
+ * @module profile/single-blob-sync-writer
+ * @see profile/factory.ts — `writersFor()` registration site
+ * @see profile/profile-snapshot-dispatcher.ts — dispatcher contract
+ * @see profile/prefix-sync-writer.ts — sibling for per-entry keys
+ */
+
+/**
+ * Per-instance options for {@link SingleBlobSyncWriter}.
+ *
+ * Construction-time invariants:
+ *   - `key` MUST be a non-empty string with no trailing `.` (it is the
+ *     EXACT OrbitDB key, not a prefix).
+ *   - `encryptionKey` SHOULD be non-null in production; `null` disables
+ *     encryption (matches the rest of the profile layer's optionality
+ *     and is used by test fixtures).
+ */
+interface SingleBlobSyncWriterOptions<T> {
+    /** OrbitDB key-value adapter — the writer's underlying store. */
+    readonly db: ProfileDatabase;
+    /** AES-256 key for encrypt/decrypt. `null` disables encryption. */
+    readonly encryptionKey: Uint8Array | null;
+    /** EXACT OrbitDB key (e.g. `"${addressId}.tombstones"`). */
+    readonly key: string;
+    /**
+     * Validator for the decoded JSON. MUST return `true` if the parsed
+     * value is a well-formed collection (typically an array of `T`).
+     * Returning `false` for remote payloads causes the entry to be
+     * rejected as malformed and the local blob is left untouched.
+     */
+    readonly validate: (decoded: unknown) => decoded is ReadonlyArray<T>;
+    /**
+     * Dedup-key extractor. The union merge inserts every remote item
+     * whose `dedupKey(item)` is not already present in the local set.
+     * The function MUST be pure and deterministic.
+     */
+    readonly dedupKey: (item: T) => string;
+    /**
+     * Optional tie-breaker on dedup collision. Called when both sides
+     * carry an item with the same `dedupKey`. The returned item replaces
+     * the local one. Defaults to "keep local" (no replacement). Use this
+     * to prefer the earliest timestamp on tombstones, or a stricter
+     * shape on heterogeneous payloads.
+     */
+    readonly preferOnCollision?: (local: T, remote: T) => T;
+    /**
+     * Fired once after a JOIN that landed at least one new item — same
+     * contract as the `notifyProfileDirty` hook on `PrefixSyncWriter`.
+     * The next dirty-flush re-publishes the union so peers downstream
+     * also converge.
+     */
+    readonly notifyProfileDirty?: () => void;
+    /** Label for diagnostics. Defaults to `'SingleBlobSyncWriter'`. */
+    readonly label?: string;
+}
+/**
+ * Set-CRDT union writer for OrbitDB single-blob keys. See module-level
+ * doc-comment for the full rationale.
+ */
+declare class SingleBlobSyncWriter<T> implements ProfileSyncWriter {
+    private readonly db;
+    private readonly encryptionKey;
+    private readonly key;
+    private readonly validate;
+    private readonly dedupKey;
+    private readonly preferOnCollision;
+    private readonly notifyProfileDirty;
+    constructor(opts: SingleBlobSyncWriterOptions<T>);
+    /**
+     * Return the (at-most-one) snapshot entry for this writer's exact
+     * key. Returns an empty array when the key is absent. Bytes are the
+     * envelope-stripped ciphertext suitable for receiver-side decrypt.
+     */
+    snapshot(): Promise<ReadonlyArray<SnapshotEntry>>;
+    /**
+     * Apply a remote single-blob snapshot. The dispatcher pre-filters
+     * the snapshot to entries whose key starts with this writer's
+     * configured key — defense-in-depth, this method enforces an EXACT
+     * match below.
+     */
+    joinSnapshot(remote: ReadonlyArray<SnapshotEntry>): Promise<JoinResult>;
+    /**
+     * Compute the union of local + remote. Returns `null` when every
+     * remote item's dedup key is already present locally AND the
+     * collision tie-breaker (if configured) does not prefer any remote
+     * variant — the caller treats this as `localWon` and skips writeback.
+     */
+    private union;
+    /**
+     * Read + decode the local blob. Returns an empty array when the key
+     * is absent OR when decode fails — in both cases the union below
+     * treats local as "nothing to keep", so a well-formed remote lands
+     * intact. This biases convergence toward propagating remote state on
+     * local corruption, matching the convention used elsewhere in the
+     * profile sync layer (`PrefixSyncWriter`, `runJoinSnapshot`).
+     */
+    private readLocalBlob;
+    /**
+     * Decrypt + JSON-parse + validate a ciphertext blob.
+     *
+     * `remote=true` is the strict path: any failure (decrypt, parse,
+     * shape) returns `null` so the caller bumps `remoteRejectedMalformed`
+     * and leaves local untouched. `remote=false` (local read) returns
+     * `null` the same way, but the caller treats `null` as "empty local"
+     * for the union — letting a well-formed remote land cleanly even
+     * when local is corrupted.
+     */
+    private decodeBlob;
+    /**
+     * Encrypt + envelope-wrap + persist the merged blob under this
+     * writer's exact key.
+     *
+     * Goes through `putEnvelopePayload` so the on-disk format is the
+     * canonical post-#247 envelope — the same format
+     * `ProfileTokenStorageProvider.writeProfileKey` produces. This keeps
+     * subsequent reads via `getEnvelopePayload` on the happy path (no
+     * legacy raw-bytes fallback).
+     */
+    private writeMerged;
+}
+
+/**
  * Pointer-layer wiring helper (Phase D integration, Task #103).
  *
  * Constructs a `ProfilePointerLayer` from the dependencies available
@@ -21663,6 +21860,7 @@ declare class ProfileStorageProvider implements StorageProvider {
     setEnvelopeFallbackNotifier(notifier: ((info: {
         readonly key: string;
         readonly errorMessage: string;
+        readonly isCborDecodeError?: boolean;
     }) => void) | null): void;
     /**
      * Issue #311 — register a listener fired when the read path detects
@@ -21875,6 +22073,30 @@ declare class ProfileStorageProvider implements StorageProvider {
      * `write()` rehydrates the max via `collectObservedLamports()`.
      */
     buildSentLedgerWriter(addressId: string, lamport?: Lamport): SentLedgerWriter | null;
+    /**
+     * Issue #335 — Build a sync writer for `${addressId}.tombstones`.
+     *
+     * The lean-snapshot dispatcher had no writer registered for this
+     * single-blob key, so cross-device snapshot apply silently dropped
+     * spent-token tombstones. See profile/single-blob-sync-writer.ts and
+     * issue #335 for the full RCA. Lifecycle and null semantics mirror
+     * {@link buildOutboxWriter} — returns `null` when encryption is not
+     * yet wired so the dispatcher's `writersFor()` skip-empty path is
+     * preserved.
+     */
+    buildTombstonesSyncWriter(addressId: string): SingleBlobSyncWriter<{
+        readonly tokenId: string;
+        readonly stateHash: string;
+        readonly timestamp: number;
+    }> | null;
+    /**
+     * Issue #335 (companion) — Build a sync writer for
+     * `${addressId}.invalidatedNametags`. Same propagation gap as
+     * tombstones: the key is a single blob (a `string[]` set) written
+     * via `writeProfileKey` and never registered in the dispatcher.
+     * Lifecycle and null semantics mirror {@link buildTombstonesSyncWriter}.
+     */
+    buildInvalidatedNametagsSyncWriter(addressId: string): SingleBlobSyncWriter<string> | null;
     /**
      * Issue #285 — Build a {@link CidRefStore} bound to this provider's
      * IPFS gateway list and profile encryption key. The store pins fat
