@@ -19,7 +19,7 @@ what is the whole skill — everything else is `gh workflow run` or
 | Surface | URL | Triggered by | Workflow |
 |---|---|---|---|
 | **Per-branch preview** | `https://unicity-sphere.github.io/sphere/<sanitized-branch>/` | `git push` to any branch (except `gh-pages`) | `deploy-pages-branch.yml` |
-| **Live testnet host** | <https://sphere-telco-test.dyndns.org/> | manual `gh workflow run deploy-manual.yml` | `deploy-manual.yml` |
+| **Live testnet host** (HAProxy + ssl-manager) | <https://sphere-telco-test.dyndns.org/> | **SSH session — `deploy-manual.yml` does NOT ship this surface** (see warning below) | none functional |
 | **CI gate** | n/a (status check) | every `git push` and PR | `ci.yml` |
 
 > **Branch-name sanitization for previews.** Slashes in branch names
@@ -70,71 +70,117 @@ The preview build sets `BASE_PATH` to a subdirectory, so:
 
 ---
 
-## 2. Live testnet host (manual, SSH-based)
+## 2. Live testnet host (HAProxy + ssl-manager, SSH-based)
 
-The live host runs an `nginx` Docker container built from this repo's
-`Dockerfile`, served on port 3010 behind whatever reverse proxy
-terminates TLS at `sphere-telco-test.dyndns.org`. The
-`deploy-manual.yml` workflow SSHs in, fast-forwards the working copy,
-and rebuilds the container.
+The live host at `sphere-telco-test.dyndns.org` runs an
+**HAProxy-fronted** container called `sphere-app` (NOT the `sphere-frontend`
+container in `docker-compose.yml` — that compose file is for local dev).
+
+**Production image** — `sphere-app:latest` built from `Dockerfile.ssl`:
+
+- Base image: `ghcr.io/unicitynetwork/ssl-manager` (nginx + tini + certbot wiring)
+- Exposes 8080 (HTTP) and 443 (HTTPS) internally
+- `dist/` is staged from a `node:20-alpine` builder stage and copied to
+  `/usr/share/nginx/html`
+- Entrypoint: `deploy/entrypoint.sh` — runs ssl-setup before nginx so the
+  container can serve TLS directly if HAProxy is bypassed
+
+**Launcher** — `run-sphere.sh`, which sources
+`../ssl-manager/run-lib.sh`. By default:
+
+- Container name: `sphere-app`, volume: `sphere-data`
+- `USE_HAPROXY=true`, `HAPROXY_HOST=haproxy`, `HAPROXY_NET=haproxy-net`
+- The container joins the `haproxy-net` docker network; HAProxy fronts
+  port 443 → container 8080. **No ports are published from the container
+  in HAProxy mode** — HAProxy owns the public 80/443 of the host.
+- HAProxy registration uses the bearer token in `--haproxy-api-key`
+  (or `HAPROXY_API_KEY` env). HAProxy reloads its config on register.
 
 ### Prerequisites
 
-- You need write access to the `unicity-sphere/sphere` repo on GitHub
-  (to dispatch the workflow).
-- The repo `production` environment must have these secrets set:
-  `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_PORT` (optional, defaults to 22).
-- The server already has the repo cloned at `~/sphere` with Docker installed.
+- SSH access to the live host (no automation does this end-to-end yet —
+  the `deploy-manual.yml` workflow targets the dev compose file, not
+  this production chain; see "The workflow does NOT match the live
+  host" below).
+- On the host: the `unicity-sphere/sphere` repo cloned at `~/sphere`,
+  the `ssl-manager` repo cloned at `~/ssl-manager` (or set
+  `SSL_MANAGER_DIR`), an HAProxy container running on the
+  `haproxy-net` network with a Registration API.
+- For SSL refresh / first registration:
+  `SSL_ADMIN_EMAIL` (or `--ssl-email` on the CLI), `HAPROXY_API_KEY`.
 
 ### Step-by-step
 
-1. **Land your fix on the branch the server tracks.** The server is
-   currently on `feat/telco-webrtc-calls` (set out-of-band — see
-   "The workflow does NOT match the live host" below). The
-   `deploy-manual.yml` workflow still references `main`; until it's
-   updated, the recommended path is the SSH session shown in that
-   section, not `gh workflow run`.
+```bash
+# 0. SSH to the host. Credentials live in the production environment
+#    secrets on GitHub — not in this repo.
+ssh "$SSH_USER@$SSH_HOST"
 
-2. **Dispatch the workflow (once it's fixed to pull the right
-   branch).**
+# 1. Update the working copy. The server is currently on
+#    feat/telco-webrtc-calls (set out-of-band — see the warning
+#    section below).
+cd ~/sphere
+git fetch origin
+git checkout feat/telco-webrtc-calls
+git pull --ff-only origin feat/telco-webrtc-calls
 
-   ```bash
-   # From any clean checkout
-   gh workflow run deploy-manual.yml --ref feat/telco-webrtc-calls
+# 2. Build the production image. NOTE: -f Dockerfile.ssl, NOT the
+#    default Dockerfile (which builds the dev image used by docker-
+#    compose.yml). The image MUST be tagged sphere-app:latest because
+#    that's what run-sphere.sh defaults to via SPHERE_IMAGE.
+docker build -f Dockerfile.ssl -t sphere-app:latest .
 
-   # Watch the run
-   gh run watch
-   ```
+# 3. Re-launch via run-sphere.sh. This stops + removes the existing
+#    `sphere-app` container, recreates it on haproxy-net, attaches the
+#    persistent sphere-data volume, and re-registers with HAProxy so
+#    443 → sphere-app:8080 stays alive across the swap.
+./run-sphere.sh \
+    --domain sphere-telco-test.dyndns.org \
+    --ssl-email "$SSL_ADMIN_EMAIL" \
+    --haproxy-api-key "$HAPROXY_API_KEY"
 
-   The workflow logs print the previous and current HEAD commits, so
-   you can verify the deploy actually moved forward (or didn't — the
-   pull is a no-op if there's nothing new on the tracked branch).
+# 4. Verify the container is up and the HAProxy registration stuck.
+docker ps --filter "name=^sphere-app$"
+docker logs --tail 50 sphere-app
+docker exec sphere-app curl -sf http://localhost:8080/ | head -c 200
+```
 
-3. **Verify the live host.**
+For a self-signed cert / dev TLS, swap `--ssl-email …` for `--ssl-test-mode`.
+For a no-SSL bypass (direct port publishing, HAProxy disabled), use
+`--no-haproxy --domain <host>` — useful only when HAProxy is being
+rotated.
 
-   - Open <https://sphere-telco-test.dyndns.org/> in a private window
-     (to bypass service-worker / cached `dist/` assets).
-   - Check the version surfaced by the app — Header → Settings →
-     About — and confirm the short SHA matches your deploy.
-   - Watch the Service Status banner pills for one full backoff cycle
-     (15 s) to confirm they verdict OK against the testnet backends.
+### Verify the live deploy
+
+- Open <https://sphere-telco-test.dyndns.org/> in a **private window**
+  (the service worker and `Cache-Control: public, immutable` on
+  `/assets/` will otherwise mask a fresh deploy).
+- Service Status banner pills should verdict OK against the testnet
+  backends within one probe interval (≤ 5 s) per the new
+  `useAggregatorStatus` hook (issue #329).
+- `curl -sI https://sphere-telco-test.dyndns.org/index.html` —
+  `Cache-Control: no-cache, no-store, must-revalidate` confirms
+  `index.html` is not cached and a hard refresh picks up the new
+  bundle hashes.
 
 ### Rollback
 
 ```bash
-# On the server:
+# On the host:
 cd ~/sphere
-git log --oneline -5            # find the prior good commit
+git log --oneline -5                    # find the prior good commit
 git checkout <prior-good-sha>
-docker compose build
-docker compose up -d
-docker compose ps
+docker build -f Dockerfile.ssl -t sphere-app:latest .
+./run-sphere.sh \
+    --domain sphere-telco-test.dyndns.org \
+    --ssl-email "$SSL_ADMIN_EMAIL" \
+    --haproxy-api-key "$HAPROXY_API_KEY"
 ```
 
-The workflow can also be re-pointed at any branch via the `--ref` flag
-in step 2, but the workflow script itself only knows how to
-`git pull origin main` once it's on the server, so a real rollback
-needs SSH access.
+For an emergency rollback without rebuild, keep prior images tagged
+(e.g. `docker tag sphere-app:latest sphere-app:pre-329` before each
+deploy) and `docker tag sphere-app:pre-329 sphere-app:latest` then
+re-run `run-sphere.sh` — skips the rebuild entirely.
 
 ---
 
@@ -182,8 +228,18 @@ git push -u origin fix/<slug>
 # 3. Open PR. Review on the preview URL.
 gh pr create --base feat/telco-webrtc-calls --title '...' --body '...'
 
-# 4. After merge, dispatch the prod deploy.
-gh workflow run deploy-manual.yml --ref main   # (or whichever ref the server pulls)
+# 4. After merge, SSH to the live host and run the production
+#    deploy chain (Dockerfile.ssl + run-sphere.sh, HAProxy mode).
+#    `deploy-manual.yml` cannot do this — see warning in section 2.
+ssh "$SSH_USER@$SSH_HOST"
+cd ~/sphere
+git fetch origin
+git checkout feat/telco-webrtc-calls
+git pull --ff-only origin feat/telco-webrtc-calls
+docker build -f Dockerfile.ssl -t sphere-app:latest .
+./run-sphere.sh --domain sphere-telco-test.dyndns.org \
+    --ssl-email "$SSL_ADMIN_EMAIL" \
+    --haproxy-api-key "$HAPROXY_API_KEY"
 
 # 5. Verify on the live host. Watch backend probes for one backoff
 #    cycle (≤ 15 s) to confirm pills verdict OK.
@@ -193,34 +249,48 @@ gh workflow run deploy-manual.yml --ref main   # (or whichever ref the server pu
 
 ## ⚠ The workflow does NOT match the live host
 
-> **As of 2026-06-01:** the server at `sphere-telco-test.dyndns.org`
-> has `feat/telco-webrtc-calls` checked out (set out-of-band, not by
-> any workflow). But `deploy-manual.yml` runs
-> `git pull origin main`. `origin/main` is currently 96 commits behind
-> `origin/feat/telco-webrtc-calls` — so dispatching the workflow as-is
-> will either no-op or pull stale `main` history into the feat
-> checkout. Either way it will **not** ship a fix that landed on
-> `feat/telco-webrtc-calls`.
+> **`deploy-manual.yml` cannot deploy the production HAProxy
+> container.** As written, it runs:
 >
-> **Until the workflow is fixed**, deploying to the live host requires
-> an SSH session:
->
-> ```bash
-> ssh "$SSH_USER@$SSH_HOST"
+> ```yaml
 > cd ~/sphere
-> git fetch origin
-> git checkout feat/telco-webrtc-calls
-> git pull --ff-only origin feat/telco-webrtc-calls
-> docker compose build
-> docker compose up -d
-> docker compose ps
+> git pull origin main
+> docker compose build       # builds Dockerfile, image `sphere-frontend`, port 3010
+> docker compose up -d       # starts the dev container
 > ```
 >
-> **Suggested workflow fix** — change line 25 of
-> `.github/workflows/deploy-manual.yml` from
-> `git pull origin main` to `git pull origin feat/telco-webrtc-calls`
-> (or parameterize the branch via `workflow_dispatch` input). Track
-> this here so the next dev doesn't trip on it.
+> But the live host runs `sphere-app` (from `Dockerfile.ssl`, with
+> HAProxy fronting it) — a different image, container name, and
+> network model. `docker compose up -d` would start the dev
+> `sphere-frontend` on port 3010 **alongside** the real `sphere-app`
+> without touching it; HAProxy still points at the unchanged
+> `sphere-app`. Net effect: the workflow appears to succeed but the
+> live host is untouched.
+>
+> Compounding this, `origin/main` is currently 96 commits behind
+> `origin/feat/telco-webrtc-calls` (the server's checked-out branch as
+> of 2026-06-01), so even the dev container the workflow does start
+> would be stale.
+>
+> **Until the workflow is rewritten, every prod deploy needs the SSH
+> session shown in section 2.** A correct workflow would:
+>
+> 1. Parameterize the branch via `workflow_dispatch` input (default
+>    `feat/telco-webrtc-calls` for now) instead of hardcoding `main`.
+> 2. Replace `docker compose build / up -d` with:
+>
+>    ```bash
+>    docker build -f Dockerfile.ssl -t sphere-app:latest .
+>    ./run-sphere.sh --domain "$DEPLOY_DOMAIN" \
+>        --ssl-email "$SSL_ADMIN_EMAIL" \
+>        --haproxy-api-key "$HAPROXY_API_KEY"
+>    ```
+>
+> 3. Move `SSL_ADMIN_EMAIL`, `HAPROXY_API_KEY`, and `DEPLOY_DOMAIN`
+>    into the `production` environment secrets alongside the existing
+>    SSH credentials.
+>
+> Track this here so the next dev doesn't trip on it.
 
 ---
 
@@ -255,7 +325,7 @@ new endpoint.
 | I want to… | Do this |
 |---|---|
 | See my branch on a public URL | `git push` — wait for `deploy-pages-branch.yml` |
-| Push to live testnet host | SSH session per the "workflow does NOT match the live host" section (until the workflow is fixed to pull `feat/telco-webrtc-calls`) |
-| Roll back live host | SSH to the host, `git checkout <prev-sha>`, `docker compose build && docker compose up -d` |
+| Push to live testnet host | SSH session — `git pull` + `docker build -f Dockerfile.ssl -t sphere-app:latest .` + `./run-sphere.sh --domain sphere-telco-test.dyndns.org …` (`deploy-manual.yml` builds the wrong image — see section 2 warning) |
+| Roll back live host | SSH to the host, `git checkout <prev-sha>`, `docker build -f Dockerfile.ssl -t sphere-app:latest .`, re-run `./run-sphere.sh` (or `docker tag sphere-app:pre-<n> sphere-app:latest` if you tagged the prior image) |
 | Re-run CI without a commit | `gh workflow run ci.yml --ref <branch>` |
 | Tear down a stale preview | Delete the branch on GitHub — `deploy-pages-branch.yml` cleans up `gh-pages` automatically |
