@@ -98,7 +98,7 @@ var InMemoryIpfsStatePersistence = class {
   }
 };
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -163,7 +163,7 @@ var oidNist = (suffix) => ({
   oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
 });
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 var _HMAC = class {
   oHash;
   iHash;
@@ -234,7 +234,7 @@ var _HMAC = class {
 var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
 hmac.create = (hash, key) => new _HMAC(hash, key);
 
-// ../../../node_modules/@noble/hashes/hkdf.js
+// node_modules/@noble/hashes/hkdf.js
 function extract(hash, ikm, salt) {
   ahash(hash);
   if (salt === void 0)
@@ -271,7 +271,7 @@ function expand(hash, prk, info, length = 32) {
 }
 var hkdf = (hash, ikm, salt, info, length) => expand(hash, extract(hash, ikm, salt), info, length);
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -384,7 +384,7 @@ var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
   1541459225
 ]);
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K = /* @__PURE__ */ Uint32Array.from([
   1116352408,
   1899447441,
@@ -2578,6 +2578,24 @@ var STORAGE_KEYS_ADDRESS = {
    * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
    */
   PROOF_POLLING_JOBS: "proof_polling_jobs",
+  /**
+   * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+   * verdicts. When `finalizeStrandedReceivedToken` hits
+   * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+   * or `permanent structural failure`, the tokenId is recorded here
+   * with the verdict reason + timestamp.
+   *
+   * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+   * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+   * `sphere payments receive` invocations skip the 60s drain timeout
+   * for already-failed tokens.
+   *
+   * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+   * `payments receive --finalize` (operator-forced retry — gives the
+   * token one more shot at finalization in case the HD-index window
+   * has since widened).
+   */
+  V6_RECOVER_PERMANENT: "v6_recover_permanent",
   // Swap storage keys
   /** Per-swap key: swap:{swapId} */
   SWAP_RECORD_PREFIX: "swap:",

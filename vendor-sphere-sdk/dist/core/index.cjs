@@ -190,13 +190,13 @@ function redactFields(input) {
   const seen = /* @__PURE__ */ new WeakSet();
   return redactValue(input, 0, seen);
 }
-function redactValue(value, depth, seen) {
+function redactValue(value, depth2, seen) {
   if (value == null) return value;
-  if (depth >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
+  if (depth2 >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
   if (Array.isArray(value)) {
     if (seen.has(value)) return REDACT_TRUNCATED;
     seen.add(value);
-    return value.map((el) => redactValue(el, depth + 1, seen));
+    return value.map((el) => redactValue(el, depth2 + 1, seen));
   }
   if (value instanceof Error) {
     return value;
@@ -210,7 +210,7 @@ function redactValue(value, depth, seen) {
       if (shouldRedactKey(k)) {
         out[k] = REDACTED;
       } else {
-        out[k] = redactValue(v, depth + 1, seen);
+        out[k] = redactValue(v, depth2 + 1, seen);
       }
     }
     return out;
@@ -720,8 +720,8 @@ function redactionMarkerFor(field, value) {
   }
   return `[REDACTED: ${field}]`;
 }
-function redactValue2(value, visited, depth) {
-  if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
+function redactValue2(value, visited, depth2) {
+  if (depth2 > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
   if (value === null || value === void 0) return value;
   const t = typeof value;
   if (t !== "object" && t !== "function") return value;
@@ -771,7 +771,7 @@ function redactValue2(value, visited, depth) {
       errCause = "[REDACTED: getter-threw]";
     }
     if (errCause !== void 0) {
-      clone.cause = redactValue2(errCause, visited, depth + 1);
+      clone.cause = redactValue2(errCause, visited, depth2 + 1);
     }
     let keys;
     try {
@@ -793,7 +793,7 @@ function redactValue2(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         clone[key] = redactionMarkerFor(key, v);
       } else {
-        clone[key] = redactValue2(v, visited, depth + 1);
+        clone[key] = redactValue2(v, visited, depth2 + 1);
       }
     }
     return clone;
@@ -832,7 +832,7 @@ function redactValue2(value, visited, depth) {
         } catch {
           item = "[REDACTED: getter-threw]";
         }
-        out2.push(redactValue2(item, visited, depth + 1));
+        out2.push(redactValue2(item, visited, depth2 + 1));
       }
       return out2;
     }
@@ -855,7 +855,7 @@ function redactValue2(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         out[key] = redactionMarkerFor(key, v);
       } else {
-        out[key] = redactValue2(v, visited, depth + 1);
+        out[key] = redactValue2(v, visited, depth2 + 1);
       }
     }
     return out;
@@ -916,7 +916,7 @@ var init_errors = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1045,7 +1045,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1106,10 +1106,10 @@ var init_errors2 = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "../../../node_modules/@noble/hashes/hmac.js"() {
+  "node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -1184,7 +1184,7 @@ var init_hmac = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1193,7 +1193,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1304,10 +1304,10 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -1534,6 +1534,98 @@ var init_originated_tag = __esm({
         );
       }
     }
+  }
+});
+
+// core/perf-counters.ts
+function detectEnabled() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      if (process.env.SPHERE_PERF === "1") return true;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (localStorage.getItem("SPHERE_PERF") === "1") return true;
+    }
+  } catch {
+  }
+  return false;
+}
+function detectDumpIntervalMs() {
+  try {
+    if (typeof process !== "undefined" && process?.env?.SPHERE_PERF_DUMP_MS) {
+      const n = Number(process.env.SPHERE_PERF_DUMP_MS);
+      if (Number.isFinite(n) && n > 0) return Math.max(100, Math.floor(n));
+    }
+  } catch {
+  }
+  return 5e3;
+}
+function getCell(name) {
+  let c = counters.get(name);
+  if (c === void 0) {
+    c = { count: 0, totalMs: 0, maxMs: 0 };
+    counters.set(name, c);
+  }
+  return c;
+}
+function incr(name, n = 1) {
+  if (!PERF_ENABLED) return;
+  const c = getCell(name);
+  c.count += n;
+}
+function observeMs(name, ms) {
+  if (!PERF_ENABLED) return;
+  const v = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const c = getCell(name);
+  c.count += 1;
+  c.totalMs += v;
+  if (v > c.maxMs) c.maxMs = v;
+}
+function snapshot() {
+  const out = {};
+  for (const [name, c] of counters) {
+    out[name] = {
+      count: c.count,
+      totalMs: Math.round(c.totalMs * 1e3) / 1e3,
+      avgMs: c.count > 0 ? Math.round(c.totalMs / c.count * 1e3) / 1e3 : 0,
+      maxMs: Math.round(c.maxMs * 1e3) / 1e3
+    };
+  }
+  return out;
+}
+function dumpAndReset() {
+  if (!PERF_ENABLED) return;
+  if (counters.size === 0) return;
+  const snap = snapshot();
+  counters.clear();
+  logger.info("perf", `[perf-counters] snapshot:`, snap);
+}
+function startAutoDump() {
+  if (dumpTimer !== null) return;
+  if (!PERF_ENABLED) return;
+  const ms = detectDumpIntervalMs();
+  dumpTimer = setInterval(() => {
+    try {
+      dumpAndReset();
+    } catch {
+    }
+  }, ms);
+  if (typeof dumpTimer.unref === "function") {
+    dumpTimer.unref();
+  }
+}
+var PERF_ENABLED, counters, dumpTimer;
+var init_perf_counters = __esm({
+  "core/perf-counters.ts"() {
+    "use strict";
+    init_logger();
+    PERF_ENABLED = detectEnabled();
+    counters = /* @__PURE__ */ new Map();
+    dumpTimer = null;
+    startAutoDump();
   }
 });
 
@@ -1884,6 +1976,24 @@ var init_constants = __esm({
        * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
        */
       PROOF_POLLING_JOBS: "proof_polling_jobs",
+      /**
+       * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+       * verdicts. When `finalizeStrandedReceivedToken` hits
+       * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+       * or `permanent structural failure`, the tokenId is recorded here
+       * with the verdict reason + timestamp.
+       *
+       * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+       * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+       * `sphere payments receive` invocations skip the 60s drain timeout
+       * for already-failed tokens.
+       *
+       * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+       * `payments receive --finalize` (operator-forced retry — gives the
+       * token one more shot at finalization in case the HD-index window
+       * has since widened).
+       */
+      V6_RECOVER_PERMANENT: "v6_recover_permanent",
       // Swap storage keys
       /** Per-swap key: swap:{swapId} */
       SWAP_RECORD_PREFIX: "swap:",
@@ -4516,11 +4626,34 @@ function verify(pkg) {
       });
       continue;
     }
+    {
+      const rootElement = pkg.pool.get(rootHash);
+      if (rootElement !== void 0) {
+        if (rootElement.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+          errors.push({
+            code: "MANIFEST_TYPE_MISMATCH",
+            message: `Manifest entry for tokenId=${tokenId} points to a non-root element (type=${rootElement.type}); expected '${ELEMENT_TYPE_TOKEN_ROOT}'`,
+            tokenId,
+            elementHash: rootHash
+          });
+        } else {
+          const rootContentTokenId = rootElement.content.tokenId;
+          if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+            errors.push({
+              code: "MANIFEST_TOKENID_MISMATCH",
+              message: `Manifest key tokenId=${tokenId} does not match the referenced token-root's content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"}. Bundle is structurally inconsistent (Audit #333 H2 \u2014 identity-confusion primitive).`,
+              tokenId,
+              elementHash: rootHash
+            });
+          }
+        }
+      }
+    }
     const visited = /* @__PURE__ */ new Set();
     const pathStack = /* @__PURE__ */ new Set();
     const VERIFY_MAX_DEPTH = 4096;
-    const dfsWalk = (hash, parentType, childRole, isArrayChild, depth = 0) => {
-      if (depth > VERIFY_MAX_DEPTH) {
+    const dfsWalk = (hash, parentType, childRole, isArrayChild, depth2 = 0) => {
+      if (depth2 > VERIFY_MAX_DEPTH) {
         errors.push({
           code: "CYCLE_DETECTED",
           message: `Verify exceeded VERIFY_MAX_DEPTH=${VERIFY_MAX_DEPTH} in token ${tokenId} subgraph at ${hash}; possible deeply-nested DAG or undetected cycle.`,
@@ -4579,12 +4712,12 @@ function verify(pkg) {
             const chainElement = pkg.pool.get(link.hash);
             if (chainElement) {
               elementsChecked.add(link.hash);
-              walkChildren(hash, chainElement, depth);
+              walkChildren(hash, chainElement, depth2);
             }
           }
         }
       }
-      walkChildren(hash, element, depth);
+      walkChildren(hash, element, depth2);
       pathStack.delete(hash);
       visited.add(hash);
     };
@@ -4731,6 +4864,7 @@ var import_dag_cbor5, EXPECTED_CHILD_TYPES, EXPECTED_ARRAY_CHILD_TYPES;
 var init_verify = __esm({
   "uxf/verify.ts"() {
     "use strict";
+    init_types();
     init_hash();
     import_dag_cbor5 = require("@ipld/dag-cbor");
     init_limits();
@@ -5388,6 +5522,21 @@ function packageFromJson(json) {
         `Refusing to import package with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   return {
     envelope,
@@ -5839,6 +5988,21 @@ async function importFromCar(car) {
         `Refusing to import CAR with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   const instanceChains = rebuildInstanceChains(pool);
   const indexes = {
@@ -6180,7 +6344,9 @@ function syncPool(pkg, pool) {
     mutablePool.set(hash, element);
   }
 }
-function ingest(pkg, token) {
+function ingest(pkg, token, opts) {
+  incr("uxf.ingest.calls");
+  const __iStart = performance.now();
   const pool = wrapPool(pkg);
   const rootHash = deconstructToken(pool, token);
   syncPool(pkg, pool);
@@ -6189,15 +6355,21 @@ function ingest(pkg, token) {
   const tokenId = rootContent.tokenId;
   const mutableManifest = pkg.manifest.tokens;
   mutableManifest.set(tokenId, rootHash);
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
   updateIndexesForToken(pkg, tokenId, rootHash);
+  observeMs("uxf.ingest.totalMs", performance.now() - __iStart);
 }
-function ingestAll(pkg, tokens) {
+function ingestAll(pkg, tokens, opts) {
   if (tokens.length === 0) return;
+  incr("uxf.ingestAll.calls");
+  incr("uxf.ingestAll.tokens", tokens.length);
+  const __iaStart = performance.now();
   const pool = wrapPool(pkg);
   const newTokens = [];
   for (const token of tokens) {
+    const __dStart = performance.now();
     const rootHash = deconstructToken(pool, token);
+    observeMs("uxf.ingestAll.perTokenDeconstructMs", performance.now() - __dStart);
     const rootElement = pool.get(rootHash);
     const rootContent = rootElement.content;
     newTokens.push({ tokenId: rootContent.tokenId, rootHash });
@@ -6248,13 +6420,20 @@ function ingestAll(pkg, tokens) {
       for (const [k, v] of prePoolSnapshot) mutablePool.set(k, v);
     } catch {
     }
+    observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
     throw err;
   }
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
+  observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
 }
 function assemble(pkg, tokenId, strategy = STRATEGY_LATEST) {
-  const pool = wrapPool(pkg);
-  return assembleToken(pool, pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  incr("uxf.assemble.calls");
+  const __aStart = performance.now();
+  try {
+    return assembleToken(wrapPool(pkg), pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  } finally {
+    observeMs("uxf.assemble.totalMs", performance.now() - __aStart);
+  }
 }
 function assembleAtState(pkg, tokenId, stateIndex, strategy = STRATEGY_LATEST) {
   const pool = wrapPool(pkg);
@@ -6273,7 +6452,18 @@ function removeToken(pkg, tokenId) {
   removeFromIndexes(pkg.indexes, tokenId);
   pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
 }
-function mergePkg(target, source, verifiedProofs) {
+function mergePkg(target, source, opts) {
+  let normalisedOpts;
+  if (opts === void 0) {
+    normalisedOpts = {};
+  } else if (opts instanceof Set) {
+    normalisedOpts = { verifiedProofs: opts };
+  } else {
+    normalisedOpts = opts;
+  }
+  const verifiedProofs = normalisedOpts.verifiedProofs;
+  const strict = normalisedOpts.strict === true;
+  const onSkip = normalisedOpts.onSkip;
   const mutablePool = target.pool;
   const mutableManifest = target.manifest.tokens;
   const stagedPoolInserts = /* @__PURE__ */ new Map();
@@ -6295,6 +6485,7 @@ function mergePkg(target, source, verifiedProofs) {
   ]);
   const stagedManifestWrites = /* @__PURE__ */ new Map();
   const stagedSyntheticInserts = /* @__PURE__ */ new Map();
+  const skipped = [];
   for (const [tokenId, incomingRoot] of source.manifest.tokens) {
     try {
       const existingRoot = mutableManifest.get(tokenId);
@@ -6316,12 +6507,40 @@ function mergePkg(target, source, verifiedProofs) {
       }
       stagedManifestWrites.set(tokenId, outcome.rootHash);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(String(err));
       logger.warn(
         "UxfPackage",
-        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${message}`
+        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${error.message}`
       );
+      const existingRoot = mutableManifest.get(tokenId);
+      const skipRecord = {
+        tokenId,
+        error,
+        targetExisting: existingRoot,
+        sourceIncoming: incomingRoot
+      };
+      skipped.push(skipRecord);
+      if (onSkip) {
+        try {
+          onSkip({ tokenId, error });
+        } catch (cbErr) {
+          logger.warn(
+            "UxfPackage",
+            `mergePkg: onSkip callback threw for tokenId=${tokenId} (ignored): ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`
+          );
+        }
+      }
     }
+  }
+  if (strict && skipped.length > 0) {
+    const summary = skipped.slice(0, 5).map((s) => `${s.tokenId.slice(0, 16)}\u2026: ${s.error.message}`).join("; ");
+    const suffix = skipped.length > 5 ? ` (and ${skipped.length - 5} more)` : "";
+    const aggregate = new UxfError(
+      "MERGE_PARTIAL_FAILURE",
+      `mergePkg(strict): ${skipped.length} per-token resolver failure(s); target unchanged. ${summary}${suffix}`
+    );
+    aggregate.skipped = skipped;
+    throw aggregate;
   }
   for (const [hash, element] of stagedPoolInserts) {
     mutablePool.set(hash, element);
@@ -6340,6 +6559,7 @@ function mergePkg(target, source, verifiedProofs) {
   );
   rebuildIndexes(target);
   target.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  return { skipped };
 }
 function addInstance2(pkg, originalHash, newInstance) {
   const pool = wrapPool(pkg);
@@ -6442,6 +6662,7 @@ var UxfPackage, WRAP_POOL_MAX_SIZE;
 var init_UxfPackage = __esm({
   "uxf/UxfPackage.ts"() {
     "use strict";
+    init_perf_counters();
     init_types();
     init_errors4();
     init_hash();
@@ -6464,13 +6685,38 @@ var init_UxfPackage = __esm({
       // ---------- Static Factories ----------
       /**
        * Create a new empty package.
+       *
+       * **Determinism note (post-#362):** the envelope `createdAt` /
+       * `updatedAt` fields are baked into the CAR root CID (the
+       * dag-cbor-encoded envelope IS the root block). If a caller invokes
+       * `create()` twice — e.g., a sender that crashes mid-flight and the
+       * worker rebuilds the bundle on resume — the two `Date.now()` calls
+       * straddling a second boundary would produce DIFFERENT envelope
+       * bytes → DIFFERENT bundleCids. That breaks every system that
+       * indexes on `bundleCid` for idempotency (replay-LRU at the
+       * recipient, IPFS pin reuse, outbox bundleCid dedup, the audit-#333
+       * H3 `targetExisting === sourceIncoming` fast path).
+       *
+       * Production senders therefore lock a single `createdAt` value at
+       * the start of a send attempt and persist it in the outbox entry's
+       * `createdAt`. On resume, the worker reads the persisted value and
+       * passes it back as `options.createdAt`. The `Date.now()` fallback
+       * stays for callers that don't need cross-attempt determinism
+       * (tests, ad-hoc tooling, archival exports).
+       *
+       * @param options.createdAt  Override the envelope timestamp (unix
+       *   seconds). When omitted, `Math.floor(Date.now() / 1000)` is used.
+       * @param options.updatedAt  Override the envelope updated-at timestamp.
+       *   Defaults to `createdAt` (a brand-new package's createdAt and
+       *   updatedAt are equal — they only diverge after `merge()`).
        */
       static create(options) {
-        const now2 = Math.floor(Date.now() / 1e3);
+        const now2 = options?.createdAt ?? Math.floor(Date.now() / 1e3);
+        const updated = options?.updatedAt ?? now2;
         const envelope = {
           version: "1.0.0",
           createdAt: now2,
-          updatedAt: now2,
+          updatedAt: updated,
           ...options?.description !== void 0 ? { description: options.description } : {},
           ...options?.creator !== void 0 ? { creator: options.creator } : {}
         };
@@ -6515,16 +6761,23 @@ var init_UxfPackage = __esm({
       /**
        * Deconstruct a token and add to the package.
        * If the token already exists, its manifest entry is updated to the new root.
+       *
+       * `opts.updatedAt` (unix seconds) overrides the post-ingest envelope
+       * `updatedAt` bump — required for bundleCid determinism across
+       * crash-restart retries (see {@link UxfPackage.create} determinism
+       * note).
        */
-      ingest(token) {
-        ingest(this.data, token);
+      ingest(token, opts) {
+        ingest(this.data, token, opts);
         return this;
       }
       /**
        * Batch ingest multiple tokens.
+       *
+       * See {@link ingest} for `opts.updatedAt`.
        */
-      ingestAll(tokens) {
-        ingestAll(this.data, tokens);
+      ingestAll(tokens, opts) {
+        ingestAll(this.data, tokens, opts);
         return this;
       }
       // ---------- Reassembly ----------
@@ -6619,8 +6872,11 @@ var init_UxfPackage = __esm({
        * resolution for any pairwise hash mismatch.
        */
       merge(other, opts) {
-        mergePkg(this.data, other.data, opts?.verifiedProofs);
-        return this;
+        return mergePkg(this.data, other.data, {
+          verifiedProofs: opts?.verifiedProofs,
+          strict: opts?.strict,
+          onSkip: opts?.onSkip
+        });
       }
       /**
        * Wave I.5: build the `verifiedProofs` set for a Rule 4-enabled
@@ -6640,6 +6896,8 @@ var init_UxfPackage = __esm({
        * treated as "not verified" — the resulting set is conservative.
        */
       async computeVerifiedProofs(other, verifier) {
+        incr("uxf.computeVerifiedProofs.calls");
+        const __perfStart = performance.now();
         const verified = /* @__PURE__ */ new Set();
         const ELEMENT_TYPE_INCLUSION_PROOF2 = "inclusion-proof";
         const combinedPool = /* @__PURE__ */ new Map();
@@ -6657,15 +6915,23 @@ var init_UxfPackage = __esm({
             continue;
           }
           try {
+            incr("uxf.computeVerifiedProofs.verifyCalls");
+            const __vStart = performance.now();
             const ok = await verifier({
               proofJson,
               transactionHash: txHashImprintHex,
               proofHash: hash
             });
-            if (ok) verified.add(hash);
+            observeMs("uxf.computeVerifiedProofs.verifyMs", performance.now() - __vStart);
+            if (ok) {
+              incr("uxf.computeVerifiedProofs.verifyOk");
+              verified.add(hash);
+            }
           } catch {
+            incr("uxf.computeVerifiedProofs.verifyThrew");
           }
         }
+        observeMs("uxf.computeVerifiedProofs.totalMs", performance.now() - __perfStart);
         return verified;
       }
       /**
@@ -6835,9 +7101,17 @@ var init_manifest_cas = __esm({
       }
     };
     ManifestCas = class {
-      constructor(storage) {
+      constructor(storage, opts) {
         this.storage = storage;
+        this.verifyEntryRoot = opts?.verifyEntryRoot;
       }
+      /**
+       * Audit #333 H7 — optional recomputed-content verifier. See
+       * {@link VerifyEntryRootFn}. When omitted the CAS retains its
+       * pre-fix label-only semantics (back-compat with existing tests
+       * that do not wire the hook).
+       */
+      verifyEntryRoot;
       /**
        * Atomic-from-the-caller's-perspective compare-and-swap on the
        * manifest entry for `(addr, tokenId)`.
@@ -6874,6 +7148,17 @@ var init_manifest_cas = __esm({
               ok: false,
               reason: "cas-mismatch",
               observed: { contentHash: observed.rootHash }
+            };
+          }
+        }
+        if (prev !== null && observed !== void 0 && this.verifyEntryRoot !== void 0) {
+          const verify2 = await this.verifyEntryRoot(addr, tokenId, observed);
+          if (!verify2.ok) {
+            return {
+              ok: false,
+              reason: "integrity-failed",
+              observed: { contentHash: observed.rootHash },
+              ...verify2.reason !== void 0 ? { integrityDetail: verify2.reason } : {}
             };
           }
         }
@@ -7115,15 +7400,19 @@ async function runJoinSnapshot(remote, deps) {
   let remoteRejectedMalformed = 0;
   for (const entry of remote) {
     entriesEvaluated += 1;
+    incr("profile.snapshotJoin.perKeyApplyCalls");
+    const __keyStart = performance.now();
     let remoteSlot;
     try {
       remoteSlot = await deps.classifyRemote(entry);
     } catch {
       remoteRejectedMalformed += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     if (remoteSlot === null || remoteSlot.kind === "absent") {
       remoteRejectedMalformed += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     let localSlot;
@@ -7135,6 +7424,7 @@ async function runJoinSnapshot(remote, deps) {
     const action = mergeSlots(localSlot, remoteSlot);
     if (action.kind === "noop") {
       localWon += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     try {
@@ -7146,6 +7436,8 @@ async function runJoinSnapshot(remote, deps) {
       }
     } catch {
       remoteRejectedMalformed += 1;
+    } finally {
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
     }
   }
   return {
@@ -7160,6 +7452,7 @@ var MAX_SAFE_LAMPORT;
 var init_profile_snapshot_merge = __esm({
   "profile/profile-snapshot-merge.ts"() {
     "use strict";
+    init_perf_counters();
     MAX_SAFE_LAMPORT = 2 ** 48;
   }
 });
@@ -8664,28 +8957,28 @@ var ConnectivityManager = class {
       this.lastOnlineAt = this.lastChangedAt;
     }
     this.cachedSnapshot = this.buildSnapshot();
-    const snapshot = this.cachedSnapshot;
+    const snapshot2 = this.cachedSnapshot;
     for (const fn of this.subscribers) {
       try {
-        fn(snapshot);
+        fn(snapshot2);
       } catch (err) {
         logger.warn("Connectivity", `subscriber threw on changed: ${safeErr(err)}`);
       }
     }
-    this.safeEmit("connectivity:changed", snapshot);
+    this.safeEmit("connectivity:changed", snapshot2);
     const nowOnline = this.allUp();
     if (nowOnline && !this.wasOnline) {
       this.wasOnline = true;
-      this.safeEmit("connectivity:online", snapshot);
+      this.safeEmit("connectivity:online", snapshot2);
     } else if (!nowOnline && this.wasOnline) {
       this.wasOnline = false;
-      this.safeEmit("connectivity:offline-degraded", snapshot);
+      this.safeEmit("connectivity:offline-degraded", snapshot2);
     }
   }
-  safeEmit(type, snapshot) {
+  safeEmit(type, snapshot2) {
     if (!this.emitEvent) return;
     try {
-      this.emitEvent(type, snapshot);
+      this.emitEvent(type, snapshot2);
     } catch (err) {
       logger.warn("Connectivity", `emitEvent(${type}) threw: ${safeErr(err)}`);
     }
@@ -9092,6 +9385,7 @@ init_errors2();
 
 // profile/aggregator-pointer/discover-algorithm.ts
 init_errors2();
+init_perf_counters();
 
 // profile/aggregator-pointer/reconcile-algorithm.ts
 init_errors2();
@@ -9101,6 +9395,7 @@ init_errors2();
 
 // profile/aggregator-pointer/ProfilePointerLayer.ts
 init_errors2();
+init_perf_counters();
 
 // profile/aggregator-pointer/index.ts
 init_win_broadcast();
@@ -9114,6 +9409,7 @@ var import_cid = require("multiformats/cid");
 var raw = __toESM(require("multiformats/codecs/raw"), 1);
 var import_digest = require("multiformats/hashes/digest");
 init_logger();
+init_perf_counters();
 init_errors3();
 function asHelia(value) {
   if (value === null || value === void 0) return null;
@@ -9181,6 +9477,42 @@ var CODEC_DAG_CBOR = 113;
 var FETCH_CAR_MAX_BLOCKS = 1e4;
 var DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
 var DEFAULT_PIN_TIMEOUT_MS = 6e4;
+var PIN_RETRY_BACKOFFS_MS = [100, 500, 2e3];
+function isTransientPinError(err) {
+  if (!(err instanceof Error)) return true;
+  const msg = err.message;
+  const httpMatch = /\bHTTP (\d{3})\b/.exec(msg);
+  if (httpMatch !== null) {
+    const status = Number.parseInt(httpMatch[1], 10);
+    if (status === 429) return true;
+    if (status >= 500 && status < 600) return true;
+    if (status >= 400 && status < 500) return false;
+  }
+  if (msg.toLowerCase().includes("fetch failed") || msg.toLowerCase().includes("network") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED") || msg.includes("EAI_AGAIN") || err.name === "AbortError" || err.name === "TimeoutError") {
+    return true;
+  }
+  return true;
+}
+async function withPinRetry(fn, isRetryable = isTransientPinError, backoffs = PIN_RETRY_BACKOFFS_MS) {
+  for (let attempt = 0; attempt <= backoffs.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isLast = attempt >= backoffs.length;
+      if (isLast) {
+        incr("ipfs.pin.retry.exhausted");
+        throw err;
+      }
+      if (!isRetryable(err)) {
+        incr("ipfs.pin.retry.permanent");
+        throw err;
+      }
+      incr("ipfs.pin.retry.attempt");
+      await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]));
+    }
+  }
+  throw new Error("withPinRetry: unreachable");
+}
 var DEFAULT_FETCH_TIMEOUT_MS = 3e4;
 var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
@@ -9246,9 +9578,125 @@ async function tryReadFromSidecar(gateway, cid) {
     return null;
   }
 }
+var PROBE_TIMEOUT_MS = 2e3;
+var capabilityCache = /* @__PURE__ */ new Map();
+function normalizeGatewayKey(gateway) {
+  return gateway.replace(/\/$/, "");
+}
+async function probeEndpointExposed(url) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    });
+    response.body?.cancel?.().catch(() => {
+    });
+    return response.status !== 404 && response.status !== 405 && response.status < 500;
+  } catch {
+    return false;
+  }
+}
+async function probeGatewayCapabilities(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  const cached = capabilityCache.get(key);
+  if (cached !== void 0) return cached;
+  const probe = (async () => {
+    const [dagImport, dagExport] = await Promise.all([
+      probeEndpointExposed(`${key}/api/v0/dag/import`),
+      probeEndpointExposed(`${key}/api/v0/dag/export`)
+    ]);
+    if (!dagImport || !dagExport) {
+      logger.warn(
+        "ipfs-client",
+        `#370 capability probe ${key}: dagImport=${dagImport} dagExport=${dagExport} \u2014 legacy per-block path will be used where the fast path is unavailable`
+      );
+    }
+    return { dagImport, dagExport };
+  })();
+  capabilityCache.set(key, probe);
+  return probe;
+}
+async function fetchCarViaExport(gateway, rootCid, timeoutMs, maxSizeBytes) {
+  const url = `${normalizeGatewayKey(gateway)}/api/v0/dag/export?arg=${encodeURIComponent(rootCid)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} ${response.statusText} from ${gateway} for /dag/export`
+    );
+  }
+  const contentLength = response.headers.get("Content-Length");
+  if (contentLength != null) {
+    const size = parseInt(contentLength, 10);
+    if (!isNaN(size) && size > maxSizeBytes) {
+      throw new Error(
+        `Gateway ${gateway} /dag/export Content-Length ${size} exceeds limit ${maxSizeBytes}`
+      );
+    }
+  }
+  if (response.body != null) {
+    return await readStreamWithLimit(response.body, maxSizeBytes, gateway);
+  }
+  const buf = await response.arrayBuffer();
+  if (buf.byteLength > maxSizeBytes) {
+    throw new Error(
+      `Gateway ${gateway} /dag/export returned ${buf.byteLength} bytes exceeding limit ${maxSizeBytes}`
+    );
+  }
+  return new Uint8Array(buf);
+}
+async function verifyAndReassembleExportedCar(carBytes, rootCid, helia) {
+  const { CarReader: CarReader4 } = await import("@ipld/car");
+  const { CarWriter: CarWriter3 } = await import("@ipld/car/writer");
+  const reader = await CarReader4.fromBytes(carBytes);
+  let rootBlockCid = null;
+  const collected = [];
+  for await (const block of reader.blocks()) {
+    const cidStr = block.cid.toString();
+    verifyCidMatchesBytes(cidStr, block.bytes);
+    collected.push({ cid: block.cid, bytes: block.bytes });
+    if (cidStr === rootCid) rootBlockCid = block.cid;
+  }
+  if (rootBlockCid === null) {
+    throw new Error(
+      `/dag/export response for ${rootCid} did not include the requested root block`
+    );
+  }
+  const localHelia = asHelia(helia);
+  if (localHelia !== null) {
+    for (const block of collected) {
+      await putBlockToLocalHelia(localHelia, block.cid.toString(), block.bytes);
+    }
+  }
+  const { writer, out } = CarWriter3.create([rootBlockCid]);
+  const chunks = [];
+  const collectPromise = (async () => {
+    for await (const chunk of out) chunks.push(chunk);
+  })();
+  try {
+    for (const block of collected) await writer.put(block);
+  } finally {
+    await writer.close();
+  }
+  await collectPromise;
+  let totalLength = 0;
+  for (const c of chunks) totalLength += c.length;
+  const reassembled = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    reassembled.set(c, offset);
+    offset += c.length;
+  }
+  return reassembled;
+}
 async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
   const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
   validateGatewayUrls(effectiveGateways);
+  return withPinRetry(() => pinToIpfsOnce(effectiveGateways, data, timeoutMs));
+}
+async function pinToIpfsOnce(effectiveGateways, data, timeoutMs) {
   let lastError = null;
   for (const gateway of effectiveGateways) {
     try {
@@ -9284,12 +9732,15 @@ async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
   );
 }
 async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
   const localHelia = asHelia(helia);
   if (localHelia !== null) {
     const local = await tryGetBlockFromLocalHelia(localHelia, cid);
     if (local !== null) {
       if (local.byteLength > maxSizeBytes) {
       } else {
+        incr("ipfs.fetchBlock.localHit");
+        observeMs("ipfs.fetchBlock.localHitMs", performance.now() - __perfStart);
         return local;
       }
     }
@@ -9391,12 +9842,17 @@ async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
       if (localHelia !== null) {
         await putBlockToLocalHelia(localHelia, cid, bytesOrNull);
       }
+      incr("ipfs.fetchBlock.gatewayHit");
+      incr("ipfs.fetchBlock.bytes", bytesOrNull.byteLength);
+      observeMs("ipfs.fetchBlock.gatewayMs", performance.now() - __perfStart);
       return bytesOrNull;
     } catch (err) {
       if (err instanceof ProfileError) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
+  incr("ipfs.fetchBlock.allGatewaysFailed");
+  observeMs("ipfs.fetchBlock.failedMs", performance.now() - __perfStart);
   throw new ProfileError(
     "BUNDLE_NOT_FOUND",
     `Failed to fetch CAR ${cid} from all gateways: ${lastError?.message ?? "unknown error"}`,
@@ -9404,6 +9860,8 @@ async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
   );
 }
 async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
+  incr("ipfs.fetchCar.calls");
   let parsedRoot;
   try {
     parsedRoot = import_cid.CID.parse(rootCid);
@@ -9422,6 +9880,47 @@ async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIM
       `fetchCarFromIpfs: unsupported root codec 0x${parsedRoot.code.toString(16)} for ${rootCid} (expected dag-cbor 0x71 or raw 0x55)`
     );
   }
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  const localHeliaForRoot = asHelia(helia);
+  if (localHeliaForRoot !== null) {
+    const localRoot = await tryGetBlockFromLocalHelia(localHeliaForRoot, rootCid);
+    if (localRoot !== null) {
+      return fetchCarFromIpfsLegacy(
+        effectiveGateways,
+        rootCid,
+        parsedRoot,
+        timeoutMs,
+        maxSizeBytesPerBlock,
+        helia
+      );
+    }
+  }
+  for (const gateway of effectiveGateways) {
+    const caps = await probeGatewayCapabilities(gateway);
+    if (!caps.dagExport) continue;
+    try {
+      const carBytes = await fetchCarViaExport(gateway, rootCid, timeoutMs, maxSizeBytesPerBlock);
+      return await verifyAndReassembleExportedCar(carBytes, rootCid, helia);
+    } catch (err) {
+      logger.warn(
+        "ipfs-client",
+        `fetchCarFromIpfs: /dag/export fast path failed on ${gateway} for ${rootCid}, falling back to legacy per-block BFS. Reason: ${err instanceof Error ? err.message : String(err)}`
+      );
+      break;
+    }
+  }
+  return fetchCarFromIpfsLegacy(
+    effectiveGateways,
+    rootCid,
+    parsedRoot,
+    timeoutMs,
+    maxSizeBytesPerBlock,
+    helia
+  );
+}
+async function fetchCarFromIpfsLegacy(gateways, rootCid, parsedRoot, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
   const { decode: dagCborDecode3 } = await import("@ipld/dag-cbor");
   const { CarWriter: CarWriter3 } = await import("@ipld/car/writer");
   const visited = /* @__PURE__ */ new Set();
@@ -9499,6 +9998,9 @@ async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIM
     carBytes.set(c, offset);
     offset += c.length;
   }
+  incr("ipfs.fetchCar.blocks", blocks.length);
+  incr("ipfs.fetchCar.bytes", totalLength);
+  observeMs("ipfs.fetchCar.totalMs", performance.now() - __perfStart);
   return carBytes;
 }
 function collectCidLinks(value, visit) {
@@ -9664,6 +10166,17 @@ var PROFILE_CAR_IMPORT_MAX_BLOCK_BYTES = 1024 * 1024;
 var LOCAL_EPOCH_FLOOR_KEY = "profile.pointer.epoch_floor";
 var LOCAL_EPOCH_RESET_REASON_KEY = "profile.pointer.epoch_reset_reason";
 var LOCAL_EPOCH_RESET_FLUSH_TRIGGER_KEY = "profile.pointer.epoch_reset_flush_trigger";
+
+// profile/global-clear-gate.ts
+var depth = 0;
+function beginGlobalClear() {
+  depth += 1;
+}
+function endGlobalClear() {
+  if (depth > 0) {
+    depth -= 1;
+  }
+}
 
 // transport/MultiAddressTransportMux.ts
 var import_buffer3 = require("buffer");
@@ -16740,6 +17253,7 @@ function coinIdsMatch(a, b) {
 
 // serialization/txf-serializer.ts
 init_constants();
+init_perf_counters();
 function bytesToHex6(bytes) {
   const arr = Array.isArray(bytes) ? bytes : Array.from(bytes);
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -16837,6 +17351,15 @@ function determineTokenStatus(txf) {
   return "confirmed";
 }
 function txfToToken(tokenId, txf) {
+  incr("serialization.txfSerializer.txfToToken.calls");
+  const __t0 = performance.now();
+  try {
+    return __txfToTokenImpl(tokenId, txf);
+  } finally {
+    observeMs("serialization.txfSerializer.txfToToken.totalMs", performance.now() - __t0);
+  }
+}
+function __txfToTokenImpl(tokenId, txf) {
   const coinData = txf.genesis.data.coinData ?? [];
   const totalAmount = coinData.reduce((sum, [, amt]) => {
     return sum + BigInt(amt || "0");
@@ -16929,6 +17452,18 @@ async function buildTxfStorageData(tokens, meta, options) {
   return storageData;
 }
 function parseTxfStorageData(data) {
+  incr("serialization.txfSerializer.parseStorageData.calls");
+  const __pStart = performance.now();
+  try {
+    return __parseTxfStorageDataImpl(data);
+  } finally {
+    observeMs(
+      "serialization.txfSerializer.parseStorageData.totalMs",
+      performance.now() - __pStart
+    );
+  }
+}
+function __parseTxfStorageDataImpl(data) {
   const result = {
     tokens: [],
     meta: null,
@@ -17915,6 +18450,53 @@ function validateTargets(request, availableSources) {
   });
 }
 
+// modules/payments/transfer/source-locks.ts
+var sourceLocks = /* @__PURE__ */ new Map();
+var DEFAULT_LOCK_MAX_HOLD_MS = 6e4;
+async function acquireSourceLocks(tokenIds, maxHoldMs = DEFAULT_LOCK_MAX_HOLD_MS, callerLabel = "sender") {
+  const sortedIds = [...new Set(tokenIds)].sort();
+  const releases = [];
+  for (const tokenId of sortedIds) {
+    while (sourceLocks.has(tokenId)) {
+      try {
+        await sourceLocks.get(tokenId);
+      } catch {
+      }
+    }
+    let releaseFn;
+    const lockPromise = new Promise((resolve) => {
+      releaseFn = resolve;
+    });
+    sourceLocks.set(tokenId, lockPromise);
+    let released = false;
+    const timer = setTimeout(() => {
+      if (!released && sourceLocks.get(tokenId) === lockPromise) {
+        console.warn(
+          `${callerLabel}: source lock for tokenId=${tokenId} held >${maxHoldMs}ms; force-releasing. The originating send may still complete its own error path, but unrelated future sends can now proceed.`
+        );
+        sourceLocks.delete(tokenId);
+        releaseFn();
+      }
+    }, maxHoldMs);
+    if (typeof timer === "object" && timer !== null && "unref" in timer) {
+      timer.unref();
+    }
+    releases.push(() => {
+      released = true;
+      clearTimeout(timer);
+      if (sourceLocks.get(tokenId) === lockPromise) {
+        sourceLocks.delete(tokenId);
+      }
+      releaseFn();
+    });
+  }
+  return () => {
+    for (const release of releases) {
+      release();
+    }
+  };
+}
+
 // modules/payments/transfer/conservative-sender.ts
 function sortByTokenIdAsc(list) {
   return [...list].sort(
@@ -17986,13 +18568,14 @@ function buildOutboxCreateInput(params) {
 }
 async function sendConservativeUxf(request, recipient, deps) {
   const transferId = deps.transferId ?? cryptoRandomUUID();
-  const now2 = Date.now();
+  const now2 = deps.bundleCreatedAt ?? Date.now();
   const result = {
     id: transferId,
     status: "pending",
     tokens: [],
     tokenTransfers: []
   };
+  let releaseSourceLocks = null;
   try {
     const available = await deps.availableSources();
     const projection = deps.toTokenLike ?? defaultTokenLike;
@@ -18044,6 +18627,12 @@ async function sendConservativeUxf(request, recipient, deps) {
       );
     }
     result.tokens = [...selected];
+    const sourceTokenIds = selected.map((t) => t.id);
+    releaseSourceLocks = await acquireSourceLocks(
+      sourceTokenIds,
+      deps.__sourceLockMaxHoldMs,
+      "sendConservativeUxf"
+    );
     const preflightOpts = deps.preflightOptions({
       selectedSources: selected,
       aggregator: deps.aggregator
@@ -18077,11 +18666,18 @@ async function sendConservativeUxf(request, recipient, deps) {
       }
       return tid.toLowerCase();
     });
+    const envelopeStamp = Math.floor(now2 / 1e3);
     const pkg = UxfPackage.create({
       description: "inter-wallet-transfer",
-      creator: deps.identity.chainPubkey
+      creator: deps.identity.chainPubkey,
+      // Lock the envelope timestamp to the pinned `now` so the
+      // bundleCid is deterministic across crash-restart retries.
+      createdAt: envelopeStamp
     });
-    pkg.ingestAll(orderedResults.map((r) => r.recipientTokenJson));
+    pkg.ingestAll(
+      orderedResults.map((r) => r.recipientTokenJson),
+      { updatedAt: envelopeStamp }
+    );
     const carBytes = await pkg.toCar();
     const bundleCid = await extractCarRootCid(carBytes);
     const strategy = request.delivery ?? { kind: "auto" };
@@ -18241,6 +18837,10 @@ async function sendConservativeUxf(request, recipient, deps) {
     result.error = err instanceof Error ? err.message : String(err);
     deps.emit("transfer:failed", result);
     throw err;
+  } finally {
+    if (releaseSourceLocks !== null) {
+      releaseSourceLocks();
+    }
   }
 }
 function cryptoRandomUUID() {
@@ -18383,51 +18983,6 @@ init_logger();
 init_UxfPackage();
 init_transfer_payload();
 init_limits2();
-var sourceLocks = /* @__PURE__ */ new Map();
-var DEFAULT_LOCK_MAX_HOLD_MS = 6e4;
-async function acquireSourceLocks(tokenIds, maxHoldMs = DEFAULT_LOCK_MAX_HOLD_MS) {
-  const sortedIds = [...new Set(tokenIds)].sort();
-  const releases = [];
-  for (const tokenId of sortedIds) {
-    while (sourceLocks.has(tokenId)) {
-      try {
-        await sourceLocks.get(tokenId);
-      } catch {
-      }
-    }
-    let releaseFn;
-    const lockPromise = new Promise((resolve) => {
-      releaseFn = resolve;
-    });
-    sourceLocks.set(tokenId, lockPromise);
-    let released = false;
-    const timer = setTimeout(() => {
-      if (!released && sourceLocks.get(tokenId) === lockPromise) {
-        console.warn(
-          `sendInstantUxf: source lock for tokenId=${tokenId} held >${maxHoldMs}ms; force-releasing. The originating send may still complete its own error path, but unrelated future sends can now proceed.`
-        );
-        sourceLocks.delete(tokenId);
-        releaseFn();
-      }
-    }, maxHoldMs);
-    if (typeof timer === "object" && timer !== null && "unref" in timer) {
-      timer.unref();
-    }
-    releases.push(() => {
-      released = true;
-      clearTimeout(timer);
-      if (sourceLocks.get(tokenId) === lockPromise) {
-        sourceLocks.delete(tokenId);
-      }
-      releaseFn();
-    });
-  }
-  return () => {
-    for (const release of releases) {
-      release();
-    }
-  };
-}
 function sortByTokenIdAsc2(list) {
   return [...list].sort(
     (a, b) => a.sourceTokenId < b.sourceTokenId ? -1 : a.sourceTokenId > b.sourceTokenId ? 1 : 0
@@ -18486,6 +19041,10 @@ function buildOutboxRecord(args, status, now2) {
     id: args.transferId,
     bundleCid: args.bundleCid,
     tokenIds: args.tokenIds,
+    // Audit #333 H5 — surface the source set for failed-permanent
+    // recovery. Omitted when the set is empty (back-compat: the field
+    // is optional, undefined === empty).
+    ...args.sourceTokenIds.length > 0 ? { sourceTokenIds: args.sourceTokenIds } : {},
     deliveryMethod: args.deliveryMethod,
     recipient: args.recipient,
     recipientTransportPubkey: args.recipientTransportPubkey,
@@ -18505,7 +19064,7 @@ function buildOutboxRecord(args, status, now2) {
 }
 async function sendInstantUxf(request, recipient, deps) {
   const transferId = deps.transferId ?? cryptoRandomUUID2();
-  const now2 = Date.now();
+  const now2 = deps.bundleCreatedAt ?? Date.now();
   const result = {
     id: transferId,
     status: "pending",
@@ -18567,7 +19126,8 @@ async function sendInstantUxf(request, recipient, deps) {
     const sourceTokenIds = selected.map((t) => t.id);
     releaseSourceLocks = await acquireSourceLocks(
       sourceTokenIds,
-      deps.__sourceLockMaxHoldMs
+      deps.__sourceLockMaxHoldMs,
+      "sendInstantUxf"
     );
     const commitResults = await deps.commitSources({
       sources: selected,
@@ -18609,11 +19169,20 @@ async function sendInstantUxf(request, recipient, deps) {
       }
       return tid.toLowerCase();
     });
+    const envelopeStamp = Math.floor(now2 / 1e3);
     const pkg = UxfPackage.create({
       description: "inter-wallet-transfer",
-      creator: deps.identity.chainPubkey
+      creator: deps.identity.chainPubkey,
+      // Lock the envelope timestamp to the orchestrator's pinned
+      // `now` so the bundle bytes (and therefore the CAR root CID
+      // we publish + persist as `bundleCid`) are deterministic
+      // across crash-restart retries.
+      createdAt: envelopeStamp
     });
-    pkg.ingestAll(orderedResults.map((r) => r.recipientTokenJson));
+    pkg.ingestAll(
+      orderedResults.map((r) => r.recipientTokenJson),
+      { updatedAt: envelopeStamp }
+    );
     const carBytes = await pkg.toCar();
     const bundleCid = await extractCarRootCid(carBytes);
     const outstandingRequestIds = collectOutstandingRequestIds(orderedResults);
@@ -18631,6 +19200,9 @@ async function sendInstantUxf(request, recipient, deps) {
       transferId,
       bundleCid,
       tokenIds,
+      // Audit #333 H5 — record the source token set so the worker can
+      // unlock them on failed-permanent.
+      sourceTokenIds,
       // Set placeholder; updated to the real method when the
       // resolveDelivery decision is known.
       deliveryMethod: wantsCidBranch ? "cid-over-nostr" : "car-over-nostr",
@@ -21101,16 +21673,16 @@ var RevalidateCascadedRunner = class {
   async run(addr, parentTokenId) {
     const visited = /* @__PURE__ */ new Set();
     visited.add(parentTokenId);
-    const counters = mutableCounters();
+    const counters2 = mutableCounters();
     await this._walkChildren(
       addr,
       parentTokenId,
       visited,
       0,
       // initial depth
-      counters
+      counters2
     );
-    return freezeCounters(counters);
+    return freezeCounters(counters2);
   }
   // ===========================================================================
   // 4.1. Recursive helper
@@ -21123,14 +21695,14 @@ var RevalidateCascadedRunner = class {
    * `invalidReason === 'parent-rejected'`), invoke the re-validator
    * and recurse into successfully-revalidated children's children.
    */
-  async _walkChildren(addr, currentTokenId, visited, depth, counters) {
-    if (depth >= this.maxDepth) {
-      counters.cycleDefenseFired++;
+  async _walkChildren(addr, currentTokenId, visited, depth2, counters2) {
+    if (depth2 >= this.maxDepth) {
+      counters2.cycleDefenseFired++;
       this._emitCycleWarning({
         addr,
         parentTokenId: currentTokenId,
         visitedTokenId: currentTokenId,
-        depth,
+        depth: depth2,
         kind: "depth-overrun"
       });
       return;
@@ -21142,7 +21714,7 @@ var RevalidateCascadedRunner = class {
         currentTokenId
       );
     } catch (err) {
-      counters.scannerErrors++;
+      counters2.scannerErrors++;
       if (this.opts.onScannerError !== void 0) {
         try {
           this.opts.onScannerError({
@@ -21167,12 +21739,12 @@ var RevalidateCascadedRunner = class {
     const sortedChildren = [...children].sort();
     for (const childTokenId of sortedChildren) {
       if (visited.has(childTokenId)) {
-        counters.cycleDefenseFired++;
+        counters2.cycleDefenseFired++;
         this._emitCycleWarning({
           addr,
           parentTokenId: currentTokenId,
           visitedTokenId: childTokenId,
-          depth,
+          depth: depth2,
           kind: "cycle"
         });
         continue;
@@ -21190,14 +21762,14 @@ var RevalidateCascadedRunner = class {
       if (!wasParentRejected) {
         continue;
       }
-      counters.checked++;
+      counters2.checked++;
       const parentEntry = await this.opts.manifestStore.readEntry(
         addr,
         currentTokenId
       );
       const parentIsValid = parentEntry !== void 0 && parentEntry.status === "valid";
       if (!parentIsValid) {
-        counters.stillInvalid++;
+        counters2.stillInvalid++;
         continue;
       }
       const verdict = await this.opts.revalidateChild({
@@ -21208,20 +21780,20 @@ var RevalidateCascadedRunner = class {
       });
       switch (verdict.kind) {
         case "revalidated":
-          counters.revalidated++;
+          counters2.revalidated++;
           await this._walkChildren(
             addr,
             childTokenId,
             visited,
-            depth + 1,
-            counters
+            depth2 + 1,
+            counters2
           );
           break;
         case "parent-still-invalid":
-          counters.stillInvalid++;
+          counters2.stillInvalid++;
           break;
         case "still-invalid-other":
-          counters.stillInvalid++;
+          counters2.stillInvalid++;
           break;
       }
     }
@@ -23346,9 +23918,9 @@ var RejectableSemaphore = class {
    * @internal
    */
   rejectAllPending(err) {
-    const snapshot = Array.from(this.pendingRejecters);
+    const snapshot2 = Array.from(this.pendingRejecters);
     this.pendingRejecters.clear();
-    for (const rejectFn of snapshot) {
+    for (const rejectFn of snapshot2) {
       rejectFn(err);
     }
   }
@@ -23840,6 +24412,20 @@ var FinalizationWorkerSender = class {
       }));
       terminal = "failed-permanent";
       cascadeFailedEmitted = this.maybeEmitCascadeFailed(working, failures);
+      if (this.options.recoverFailedPermanentSources !== void 0) {
+        const sources = working.sourceTokenIds ?? [];
+        try {
+          await this.options.recoverFailedPermanentSources(sources, working.id);
+        } catch (err) {
+          this.options.emit("transfer:failed", {
+            id: working.id,
+            status: "failed",
+            tokens: [],
+            tokenTransfers: [],
+            error: "failed-permanent transition succeeded, but source-unlock recovery threw: " + (err instanceof Error ? err.message : String(err))
+          });
+        }
+      }
     } else if (totalSuccess === outstanding.filter((r) => !completed.has(r)).length && totalSuccess > 0) {
       await this.options.outbox.update(working.id, (prev) => ({
         ...prev,
@@ -26077,7 +26663,7 @@ var CascadeWalker = class {
     visited.add(parentTokenId);
     const ancestors = /* @__PURE__ */ new Set();
     ancestors.add(parentTokenId);
-    const counters = mutableCounters2();
+    const counters2 = mutableCounters2();
     await this._walkCoinChildren(
       addr,
       parentTokenId,
@@ -26086,9 +26672,9 @@ var CascadeWalker = class {
       ancestors,
       0,
       // initial depth
-      counters
+      counters2
     );
-    return freezeCounters2(counters);
+    return freezeCounters2(counters2);
   }
   /**
    * Recursive helper. Reads children of `currentTokenId`, applies the
@@ -26104,14 +26690,14 @@ var CascadeWalker = class {
    *
    * @internal
    */
-  async _walkCoinChildren(addr, currentTokenId, rootReason, visited, ancestors, depth, counters) {
-    if (depth >= this.maxDepth) {
-      counters.cycleDefenseFired++;
+  async _walkCoinChildren(addr, currentTokenId, rootReason, visited, ancestors, depth2, counters2) {
+    if (depth2 >= this.maxDepth) {
+      counters2.cycleDefenseFired++;
       this._emitCycleWarning({
         addr,
         parentTokenId: currentTokenId,
         visitedTokenId: currentTokenId,
-        depth,
+        depth: depth2,
         kind: "depth-overrun"
       });
       return;
@@ -26123,7 +26709,7 @@ var CascadeWalker = class {
         currentTokenId
       );
     } catch (err) {
-      counters.scannerErrors++;
+      counters2.scannerErrors++;
       this._emitScannerError({
         addr,
         tokenId: currentTokenId,
@@ -26143,15 +26729,15 @@ var CascadeWalker = class {
     for (const childTokenId of sortedChildren) {
       if (visited.has(childTokenId)) {
         if (ancestors.has(childTokenId)) {
-          counters.cycleDefenseFired++;
+          counters2.cycleDefenseFired++;
         } else {
-          counters.dagJoinSkipped++;
+          counters2.dagJoinSkipped++;
         }
         this._emitCycleWarning({
           addr,
           parentTokenId: currentTokenId,
           visitedTokenId: childTokenId,
-          depth,
+          depth: depth2,
           kind: "cycle"
         });
         continue;
@@ -26163,23 +26749,23 @@ var CascadeWalker = class {
         rootReason
       );
       if (writeResult === "parent-flipped") {
-        counters.parentFlipAborted++;
+        counters2.parentFlipAborted++;
         continue;
       }
       if (writeResult === "no-entry" || writeResult === "cas-exhausted") {
         continue;
       }
       visited.add(childTokenId);
-      counters.cascaded++;
+      counters2.cascaded++;
       const tally = await this._emitCascadeFailedForOutboxEntries(
         addr,
         childTokenId,
         rootReason
       );
-      counters.outboxNotified += tally.emitted;
-      counters.silentNotified += tally.silent;
+      counters2.outboxNotified += tally.emitted;
+      counters2.silentNotified += tally.silent;
       if (tally.scannerError) {
-        counters.scannerErrors++;
+        counters2.scannerErrors++;
       }
       ancestors.add(childTokenId);
       try {
@@ -26189,8 +26775,8 @@ var CascadeWalker = class {
           rootReason,
           visited,
           ancestors,
-          depth + 1,
-          counters
+          depth2 + 1,
+          counters2
         );
       } finally {
         ancestors.delete(childTokenId);
@@ -26300,18 +26886,18 @@ var CascadeWalker = class {
    * @internal
    */
   async _cascadeNft(addr, parentTokenId, rootReason) {
-    const counters = mutableCounters2();
+    const counters2 = mutableCounters2();
     const tally = await this._emitCascadeFailedForOutboxEntries(
       addr,
       parentTokenId,
       rootReason
     );
-    counters.nftNotified = tally.emitted;
-    counters.silentNotified += tally.silent;
+    counters2.nftNotified = tally.emitted;
+    counters2.silentNotified += tally.silent;
     if (tally.scannerError) {
-      counters.scannerErrors++;
+      counters2.scannerErrors++;
     }
-    return freezeCounters2(counters);
+    return freezeCounters2(counters2);
   }
   // ===========================================================================
   // 4.3. Outbox notification — shared by both paths.
@@ -28358,6 +28944,26 @@ var PaymentsModule = class _PaymentsModule {
   // NOSTR-FIRST proof polling (background proof verification)
   proofPollingJobs = /* @__PURE__ */ new Map();
   /**
+   * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+   * verdicts. Keyed by in-memory `Token.id`; value carries the verdict
+   * label + timestamp the recovery code stamped at the time the
+   * permanent classification was determined.
+   *
+   * Read by `drainPendingFinalizations` (and the stranded-token
+   * registration scan in `recoverStrandedReceivedTokens`) so a
+   * subsequent `sphere balance` / `sphere payments receive`
+   * invocation does NOT re-pay the 60s drain timeout polling a token
+   * whose V6-RECOVER verdict is already known to be unrecoverable.
+   *
+   * Hydrated by `restoreV6RecoverPermanent()` on `load()` so the
+   * verdict survives process restart. Cleared by `Sphere.clear()`
+   * (full wallet wipe — the underlying KV key goes with it) and by
+   * `payments receive --finalize` (operator-forced retry: clears the
+   * map so the recovery path runs one more time in case the HD-index
+   * recovery window has since widened).
+   */
+  v6RecoverPermanent = /* @__PURE__ */ new Map();
+  /**
    * Lowercase hex of the signing-service publicKey used by
    * `UnmaskedPredicate.create` / `MaskedPredicate.create`. Lazily
    * populated by `createSigningService()` on first call; consumed
@@ -29445,6 +30051,15 @@ var PaymentsModule = class _PaymentsModule {
         await this.restoreProofPollingJobs();
       } catch (err) {
         logger.error("Payments", "[V6-RESTORE] Failed to restore proof-polling jobs:", err);
+      }
+      try {
+        await this.restoreV6RecoverPermanent();
+      } catch (err) {
+        logger.error(
+          "Payments",
+          "[V6-RECOVER-PERM] Failed to restore permanent-verdict ledger:",
+          err
+        );
       }
       try {
         const recovered = await this.recoverStrandedReceivedTokens();
@@ -32476,6 +33091,21 @@ var PaymentsModule = class _PaymentsModule {
     }
     const result = { transfers: received };
     if (opts.finalize) {
+      if (this.v6RecoverPermanent.size > 0) {
+        const clearedCount = this.v6RecoverPermanent.size;
+        this.v6RecoverPermanent.clear();
+        this.saveV6RecoverPermanent().catch(
+          (persistErr) => logger.debug(
+            "Payments",
+            `[V6-RECOVER-PERM] saveV6RecoverPermanent after forced-retry clear failed:`,
+            persistErr
+          )
+        );
+        logger.debug(
+          "Payments",
+          `[V6-RECOVER-PERM] Cleared ${clearedCount} permanent-verdict entries for forced retry`
+        );
+      }
       const drain = await this.drainPendingFinalizations({
         timeoutMs: opts.timeout ?? 6e4,
         pollIntervalMs: opts.pollInterval ?? 2e3,
@@ -32514,8 +33144,8 @@ var PaymentsModule = class _PaymentsModule {
    */
   async drainPendingFinalizations(opts) {
     const startTime = Date.now();
-    const hasUnconfirmedOrInflight = () => this.inflightReceiveCount > 0 || Array.from(this.tokens.values()).some(
-      (t) => t.status === "submitted" || t.status === "pending"
+    const hasUnconfirmedOrInflight = () => this.inflightReceiveCount > 0 || Array.from(this.tokens.entries()).some(
+      ([tokenId, t]) => (t.status === "submitted" || t.status === "pending") && !this.v6RecoverPermanent.has(tokenId)
     );
     if (this.ingestPool) {
       try {
@@ -33603,6 +34233,7 @@ var PaymentsModule = class _PaymentsModule {
     for (const [tokenId, token] of this.tokens) {
       if (token.status !== "pending") continue;
       if (this.proofPollingJobs.has(tokenId)) continue;
+      if (this.v6RecoverPermanent.has(tokenId)) continue;
       if (this.parsePendingFinalization(token.sdkData)) continue;
       if (!this.isReceivedLegacyPending(token)) continue;
       if (!token.sdkData) continue;
@@ -33866,6 +34497,17 @@ var PaymentsModule = class _PaymentsModule {
             logger.warn("Payments", `[V6-RECOVER] Failed to persist invalid status for ${tokenId.slice(0, 12)}:`, saveErr);
           }
         }
+        this.v6RecoverPermanent.set(tokenId, {
+          reason: classLabel,
+          ts: Date.now()
+        });
+        this.saveV6RecoverPermanent().catch(
+          (persistErr) => logger.debug(
+            "Payments",
+            `[V6-RECOVER-PERM] saveV6RecoverPermanent after permanent-fail mark failed:`,
+            persistErr
+          )
+        );
         this.proofPollingJobs.delete(tokenId);
         this.saveProofPollingJobs().catch(
           (persistErr) => logger.debug("Payments", `[V6-RECOVER] saveProofPollingJobs after permanent-fail mark failed:`, persistErr)
@@ -38859,6 +39501,88 @@ var PaymentsModule = class _PaymentsModule {
       this.startProofPolling();
     }
   }
+  // ===========================================================================
+  // Issue #378 (#275 P4) — V6-RECOVER permanent-verdict persistence
+  // ===========================================================================
+  /**
+   * Persist the `v6RecoverPermanent` map to storage so the verdict
+   * survives process restart. Fire-and-forget at call sites — failures
+   * are logged via the caller's catch arm; the next call re-attempts.
+   *
+   * Empty map → `storage.remove()` so a stale list does not survive
+   * (mirrors `saveProofPollingJobs` exactly).
+   */
+  async saveV6RecoverPermanent() {
+    const entries = Array.from(this.v6RecoverPermanent.entries()).map(
+      ([tokenId, v]) => ({ tokenId, reason: v.reason, ts: v.ts })
+    );
+    if (entries.length === 0) {
+      const storage = this.deps.storage;
+      const removeFn = storage.remove;
+      if (typeof removeFn === "function") {
+        await removeFn.call(storage, STORAGE_KEYS_ADDRESS.V6_RECOVER_PERMANENT);
+      } else {
+        await this.setStorageEntry(
+          STORAGE_KEYS_ADDRESS.V6_RECOVER_PERMANENT,
+          "[]",
+          "cache_index"
+        );
+      }
+      return;
+    }
+    await this.setStorageEntry(
+      STORAGE_KEYS_ADDRESS.V6_RECOVER_PERMANENT,
+      JSON.stringify(entries),
+      "cache_index"
+    );
+  }
+  /**
+   * Restore the `v6RecoverPermanent` map from storage. Called from
+   * `load()` AFTER `loadFromStorageData` populates `this.tokens`.
+   *
+   * Malformed entries are silently skipped — a single stray entry must
+   * not block legitimate verdicts. A wholly-malformed payload is logged
+   * once and the map starts empty.
+   */
+  async restoreV6RecoverPermanent() {
+    const data = await this.deps.storage.get(
+      STORAGE_KEYS_ADDRESS.V6_RECOVER_PERMANENT
+    );
+    if (!data) return;
+    let entries;
+    try {
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed)) {
+        logger.error(
+          "Payments",
+          "[V6-RECOVER-PERM] Persisted ledger is not an array; ignoring (in-memory ledger preserved)"
+        );
+        return;
+      }
+      entries = parsed;
+    } catch (err) {
+      logger.error(
+        "Payments",
+        "[V6-RECOVER-PERM] Failed to parse persisted ledger:",
+        err
+      );
+      return;
+    }
+    let restored = 0;
+    for (const e of entries) {
+      if (typeof e?.tokenId !== "string" || e.tokenId.length === 0 || typeof e.reason !== "string" || typeof e.ts !== "number" || !Number.isFinite(e.ts)) {
+        continue;
+      }
+      this.v6RecoverPermanent.set(e.tokenId, { reason: e.reason, ts: e.ts });
+      restored += 1;
+    }
+    if (restored > 0) {
+      logger.debug(
+        "Payments",
+        `[V6-RECOVER-PERM] Restored ${restored} permanent-verdict entries from storage`
+      );
+    }
+  }
   /**
    * Start the proof polling interval if not already running
    */
@@ -40091,8 +40815,8 @@ var CommunicationsModule = class _CommunicationsModule {
       const ownKey = _CommunicationsModule._normalizeKey(
         this.deps?.identity.chainPubkey ?? ""
       );
-      const snapshot = Array.from(this.messages.values());
-      for (const message of snapshot) {
+      const snapshot2 = Array.from(this.messages.values());
+      for (const message of snapshot2) {
         const sender = message.senderPubkey;
         if (ownKey && typeof sender === "string" && _CommunicationsModule._normalizeKey(sender) === ownKey) {
           continue;
@@ -42498,10 +43222,10 @@ function createGroupChatModule(config) {
   return new GroupChatModule(config);
 }
 
-// ../../../node_modules/@noble/curves/secp256k1.js
+// node_modules/@noble/curves/secp256k1.js
 init_sha2();
 
-// ../../../node_modules/@noble/curves/utils.js
+// node_modules/@noble/curves/utils.js
 init_utils();
 init_utils();
 var _0n = /* @__PURE__ */ BigInt(0);
@@ -42643,7 +43367,7 @@ function memoized(fn) {
   };
 }
 
-// ../../../node_modules/@noble/curves/abstract/modular.js
+// node_modules/@noble/curves/abstract/modular.js
 var _0n2 = /* @__PURE__ */ BigInt(0);
 var _1n2 = /* @__PURE__ */ BigInt(1);
 var _2n = /* @__PURE__ */ BigInt(2);
@@ -43029,7 +43753,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
   return isLE ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// ../../../node_modules/@noble/curves/abstract/curve.js
+// node_modules/@noble/curves/abstract/curve.js
 var _0n3 = /* @__PURE__ */ BigInt(0);
 var _1n3 = /* @__PURE__ */ BigInt(1);
 function negateCt(condition, item) {
@@ -43262,7 +43986,7 @@ function createKeygen(randomSecretKey, getPublicKey2) {
   };
 }
 
-// ../../../node_modules/@noble/curves/abstract/weierstrass.js
+// node_modules/@noble/curves/abstract/weierstrass.js
 init_hmac();
 init_utils();
 var divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n2) / den;
@@ -44136,7 +44860,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   });
 }
 
-// ../../../node_modules/@noble/curves/secp256k1.js
+// node_modules/@noble/curves/secp256k1.js
 var secp256k1_CURVE = {
   p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
   n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -55301,8 +56025,8 @@ function findMasterChainCode(data) {
     if (xpubStr.length > 100) {
       try {
         const decoded = base58Decode(xpubStr);
-        const depth = decoded[4];
-        if (depth === 0) {
+        const depth2 = decoded[4];
+        if (depth2 === 0) {
           return bytesToHex5(decoded.slice(13, 45));
         }
       } catch {
@@ -56326,52 +57050,57 @@ var Sphere = class _Sphere {
     const storage = "get" in storageOrOptions ? storageOrOptions : storageOrOptions.storage;
     const tokenStorage = "get" in storageOrOptions ? void 0 : storageOrOptions.tokenStorage;
     const fallbackTokenStorage = "get" in storageOrOptions ? void 0 : storageOrOptions.fallbackTokenStorage;
-    if (_Sphere.instance) {
-      logger.debug("Sphere", "Destroying Sphere instance...");
-      await _Sphere.instance.destroy();
-      logger.debug("Sphere", "Sphere instance destroyed");
-    }
-    logger.debug("Sphere", "Clearing L1 vesting cache...");
-    await vestingClassifier.destroy();
-    logger.debug("Sphere", "Yielding 50ms for IDB transaction settlement...");
-    await new Promise((r) => setTimeout(r, 50));
-    if (tokenStorage?.clear) {
-      logger.debug("Sphere", "Clearing token storage...");
-      try {
-        await tokenStorage.clear();
-        logger.debug("Sphere", "Token storage cleared");
-      } catch (err) {
-        logger.warn("Sphere", "Token storage clear failed:", err);
+    beginGlobalClear();
+    try {
+      if (_Sphere.instance) {
+        logger.debug("Sphere", "Destroying Sphere instance...");
+        await _Sphere.instance.destroy();
+        logger.debug("Sphere", "Sphere instance destroyed");
       }
-    } else {
-      logger.debug("Sphere", "No token storage provider to clear");
-    }
-    if (fallbackTokenStorage?.clear) {
-      logger.debug("Sphere", "Clearing fallback (legacy) token storage...");
-      try {
-        if (typeof fallbackTokenStorage.isConnected === "function" && !fallbackTokenStorage.isConnected() && typeof fallbackTokenStorage.connect === "function") {
-          await fallbackTokenStorage.connect();
+      logger.debug("Sphere", "Clearing L1 vesting cache...");
+      await vestingClassifier.destroy();
+      logger.debug("Sphere", "Yielding 50ms for IDB transaction settlement...");
+      await new Promise((r) => setTimeout(r, 50));
+      if (tokenStorage?.clear) {
+        logger.debug("Sphere", "Clearing token storage...");
+        try {
+          await tokenStorage.clear();
+          logger.debug("Sphere", "Token storage cleared");
+        } catch (err) {
+          logger.warn("Sphere", "Token storage clear failed:", err);
         }
-        await fallbackTokenStorage.clear();
-        logger.debug("Sphere", "Fallback token storage cleared");
-      } catch (err) {
-        logger.warn("Sphere", "Fallback token storage clear failed:", err);
+      } else {
+        logger.debug("Sphere", "No token storage provider to clear");
       }
-    }
-    logger.debug("Sphere", "Clearing KV storage...");
-    if (!storage.isConnected()) {
-      try {
-        await storage.connect();
-      } catch {
+      if (fallbackTokenStorage?.clear) {
+        logger.debug("Sphere", "Clearing fallback (legacy) token storage...");
+        try {
+          if (typeof fallbackTokenStorage.isConnected === "function" && !fallbackTokenStorage.isConnected() && typeof fallbackTokenStorage.connect === "function") {
+            await fallbackTokenStorage.connect();
+          }
+          await fallbackTokenStorage.clear();
+          logger.debug("Sphere", "Fallback token storage cleared");
+        } catch (err) {
+          logger.warn("Sphere", "Fallback token storage clear failed:", err);
+        }
       }
+      logger.debug("Sphere", "Clearing KV storage...");
+      if (!storage.isConnected()) {
+        try {
+          await storage.connect();
+        } catch {
+        }
+      }
+      if (storage.isConnected()) {
+        await storage.clear();
+        logger.debug("Sphere", "KV storage cleared");
+      } else {
+        logger.debug("Sphere", "KV storage not connected, skipping");
+      }
+      logger.debug("Sphere", "Done");
+    } finally {
+      endGlobalClear();
     }
-    if (storage.isConnected()) {
-      await storage.clear();
-      logger.debug("Sphere", "KV storage cleared");
-    } else {
-      logger.debug("Sphere", "KV storage not connected, skipping");
-    }
-    logger.debug("Sphere", "Done");
   }
   /**
    * Get current instance
@@ -56918,7 +57647,7 @@ var Sphere = class _Sphere {
         "NOT_INITIALIZED"
       );
     }
-    const snapshot = {
+    const snapshot2 = {
       chainPubkey: this._identity.chainPubkey,
       l1Address: this._identity.l1Address,
       directAddress: this._identity.directAddress,
@@ -56926,7 +57655,7 @@ var Sphere = class _Sphere {
       nametag: this._identity.nametag,
       privateKey: this._identity.privateKey
     };
-    applySetIdentity(snapshot);
+    applySetIdentity(snapshot2);
   }
   // ===========================================================================
   // Public Methods - Providers Access

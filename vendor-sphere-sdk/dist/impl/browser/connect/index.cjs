@@ -861,6 +861,24 @@ var STORAGE_KEYS_ADDRESS = {
    * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
    */
   PROOF_POLLING_JOBS: "proof_polling_jobs",
+  /**
+   * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+   * verdicts. When `finalizeStrandedReceivedToken` hits
+   * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+   * or `permanent structural failure`, the tokenId is recorded here
+   * with the verdict reason + timestamp.
+   *
+   * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+   * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+   * `sphere payments receive` invocations skip the 60s drain timeout
+   * for already-failed tokens.
+   *
+   * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+   * `payments receive --finalize` (operator-forced retry — gives the
+   * token one more shot at finalization in case the HD-index window
+   * has since widened).
+   */
+  V6_RECOVER_PERMANENT: "v6_recover_permanent",
   // Swap storage keys
   /** Per-swap key: swap:{swapId} */
   SWAP_RECORD_PREFIX: "swap:",

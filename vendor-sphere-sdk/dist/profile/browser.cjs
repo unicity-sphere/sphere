@@ -190,13 +190,13 @@ function redactFields(input) {
   const seen = /* @__PURE__ */ new WeakSet();
   return redactValue(input, 0, seen);
 }
-function redactValue(value, depth, seen) {
+function redactValue(value, depth2, seen) {
   if (value == null) return value;
-  if (depth >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
+  if (depth2 >= REDACT_MAX_DEPTH) return REDACT_TRUNCATED;
   if (Array.isArray(value)) {
     if (seen.has(value)) return REDACT_TRUNCATED;
     seen.add(value);
-    return value.map((el) => redactValue(el, depth + 1, seen));
+    return value.map((el) => redactValue(el, depth2 + 1, seen));
   }
   if (value instanceof Error) {
     return value;
@@ -210,7 +210,7 @@ function redactValue(value, depth, seen) {
       if (shouldRedactKey(k)) {
         out[k] = REDACTED;
       } else {
-        out[k] = redactValue(v, depth + 1, seen);
+        out[k] = redactValue(v, depth2 + 1, seen);
       }
     }
     return out;
@@ -549,6 +549,107 @@ function hexToBytesAllowEmpty(hex) {
 var init_hex = __esm({
   "core/hex.ts"() {
     "use strict";
+  }
+});
+
+// core/perf-counters.ts
+function detectEnabled() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      if (process.env.SPHERE_PERF === "1") return true;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (localStorage.getItem("SPHERE_PERF") === "1") return true;
+    }
+  } catch {
+  }
+  return false;
+}
+function detectDumpIntervalMs() {
+  try {
+    if (typeof process !== "undefined" && process?.env?.SPHERE_PERF_DUMP_MS) {
+      const n = Number(process.env.SPHERE_PERF_DUMP_MS);
+      if (Number.isFinite(n) && n > 0) return Math.max(100, Math.floor(n));
+    }
+  } catch {
+  }
+  return 5e3;
+}
+function getCell(name) {
+  let c = counters.get(name);
+  if (c === void 0) {
+    c = { count: 0, totalMs: 0, maxMs: 0 };
+    counters.set(name, c);
+  }
+  return c;
+}
+function incr(name, n = 1) {
+  if (!PERF_ENABLED) return;
+  const c = getCell(name);
+  c.count += n;
+}
+function observeMs(name, ms) {
+  if (!PERF_ENABLED) return;
+  const v = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const c = getCell(name);
+  c.count += 1;
+  c.totalMs += v;
+  if (v > c.maxMs) c.maxMs = v;
+}
+async function time(name, fn) {
+  if (!PERF_ENABLED) return fn();
+  const t0 = performance.now();
+  try {
+    return await fn();
+  } finally {
+    observeMs(name, performance.now() - t0);
+  }
+}
+function snapshot() {
+  const out = {};
+  for (const [name, c] of counters) {
+    out[name] = {
+      count: c.count,
+      totalMs: Math.round(c.totalMs * 1e3) / 1e3,
+      avgMs: c.count > 0 ? Math.round(c.totalMs / c.count * 1e3) / 1e3 : 0,
+      maxMs: Math.round(c.maxMs * 1e3) / 1e3
+    };
+  }
+  return out;
+}
+function dumpAndReset() {
+  if (!PERF_ENABLED) return;
+  if (counters.size === 0) return;
+  const snap = snapshot();
+  counters.clear();
+  logger.info("perf", `[perf-counters] snapshot:`, snap);
+}
+function startAutoDump() {
+  if (dumpTimer !== null) return;
+  if (!PERF_ENABLED) return;
+  const ms = detectDumpIntervalMs();
+  dumpTimer = setInterval(() => {
+    try {
+      dumpAndReset();
+    } catch {
+    }
+  }, ms);
+  if (typeof dumpTimer.unref === "function") {
+    dumpTimer.unref();
+  }
+}
+var PERF_ENABLED, counters, dumpTimer;
+var init_perf_counters = __esm({
+  "core/perf-counters.ts"() {
+    "use strict";
+    init_logger();
+    PERF_ENABLED = detectEnabled();
+    counters = /* @__PURE__ */ new Map();
+    dumpTimer = null;
+    startAutoDump();
   }
 });
 
@@ -983,7 +1084,7 @@ var init_http_block_broker = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -1112,7 +1213,7 @@ function randomBytes(bytesLength = 32) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -1126,7 +1227,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -1135,7 +1236,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV, SHA224_IV, SHA384_IV, SHA512_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -1292,7 +1393,7 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_u64.js
+// node_modules/@noble/hashes/_u64.js
 function fromBig(n, le = false) {
   if (le)
     return { h: Number(n & U32_MASK64), l: Number(n >> _32n & U32_MASK64) };
@@ -1314,7 +1415,7 @@ function add(Ah, Al, Bh, Bl) {
 }
 var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
-  "../../../node_modules/@noble/hashes/_u64.js"() {
+  "node_modules/@noble/hashes/_u64.js"() {
     "use strict";
     U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
     _32n = /* @__PURE__ */ BigInt(32);
@@ -1333,7 +1434,7 @@ var init_u64 = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var sha2_exports = {};
 __export(sha2_exports, {
   _SHA224: () => _SHA224,
@@ -1351,7 +1452,7 @@ __export(sha2_exports, {
 });
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, _SHA224, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA2_64B, _SHA512, _SHA384, T224_IV, T256_IV, _SHA512_224, _SHA512_256, sha256, sha224, sha512, sha384, sha512_256, sha512_224;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_u64();
@@ -1841,7 +1942,7 @@ var init_sha2 = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/utils.js
+// node_modules/@noble/curves/utils.js
 function abool(value, title = "") {
   if (typeof value !== "boolean") {
     const prefix = title && `"${title}" `;
@@ -1993,7 +2094,7 @@ function memoized(fn) {
 }
 var _0n, _1n, isPosBig, bitMask;
 var init_utils2 = __esm({
-  "../../../node_modules/@noble/curves/utils.js"() {
+  "node_modules/@noble/curves/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
@@ -2004,7 +2105,7 @@ var init_utils2 = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/abstract/modular.js
+// node_modules/@noble/curves/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
   return result >= _0n2 ? result : b + result;
@@ -2227,7 +2328,7 @@ function mapHashToField(key, fieldOrder, isLE = false) {
 }
 var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, FIELD_FIELDS, _Field;
 var init_modular = __esm({
-  "../../../node_modules/@noble/curves/abstract/modular.js"() {
+  "node_modules/@noble/curves/abstract/modular.js"() {
     "use strict";
     init_utils2();
     _0n2 = /* @__PURE__ */ BigInt(0);
@@ -2397,7 +2498,7 @@ var init_modular = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/abstract/curve.js
+// node_modules/@noble/curves/abstract/curve.js
 function negateCt(condition, item) {
   const neg = item.negate();
   return condition ? neg : item;
@@ -2496,7 +2597,7 @@ function createKeygen(randomSecretKey, getPublicKey) {
 }
 var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
-  "../../../node_modules/@noble/curves/abstract/curve.js"() {
+  "node_modules/@noble/curves/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -2638,7 +2739,7 @@ var init_curve = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/abstract/hash-to-curve.js
+// node_modules/@noble/curves/abstract/hash-to-curve.js
 function i2osp(value, length) {
   asafenumber(value);
   asafenumber(length);
@@ -2799,7 +2900,7 @@ function createHasher2(Point, mapToCurve, defaults) {
 }
 var os2ip, _DST_scalar;
 var init_hash_to_curve = __esm({
-  "../../../node_modules/@noble/curves/abstract/hash-to-curve.js"() {
+  "node_modules/@noble/curves/abstract/hash-to-curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
@@ -2808,10 +2909,10 @@ var init_hash_to_curve = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 var _HMAC, hmac;
 var init_hmac = __esm({
-  "../../../node_modules/@noble/hashes/hmac.js"() {
+  "node_modules/@noble/hashes/hmac.js"() {
     "use strict";
     init_utils();
     _HMAC = class {
@@ -2886,7 +2987,7 @@ var init_hmac = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/abstract/weierstrass.js
+// node_modules/@noble/curves/abstract/weierstrass.js
 function _splitEndoScalar(k, basis, n) {
   const [[a1, b1], [a2, b2]] = basis;
   const c1 = divNearest(b2 * k, n);
@@ -3749,7 +3850,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
 }
 var divNearest, DERErr, DER, _0n4, _1n4, _2n2, _3n2, _4n2;
 var init_weierstrass = __esm({
-  "../../../node_modules/@noble/curves/abstract/weierstrass.js"() {
+  "node_modules/@noble/curves/abstract/weierstrass.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -3870,7 +3971,7 @@ var init_weierstrass = __esm({
   }
 });
 
-// ../../../node_modules/@noble/curves/secp256k1.js
+// node_modules/@noble/curves/secp256k1.js
 var secp256k1_exports = {};
 __export(secp256k1_exports, {
   schnorr: () => schnorr,
@@ -3975,7 +4076,7 @@ function schnorrVerify(signature, message, publicKey) {
 }
 var secp256k1_CURVE, secp256k1_ENDO, _0n5, _2n3, Fpk1, Pointk1, secp256k1, TAGGED_HASH_PREFIXES, pointToBytes, hasEven, num, schnorr, isoMap, mapSWU, secp256k1_hasher;
 var init_secp256k1 = __esm({
-  "../../../node_modules/@noble/curves/secp256k1.js"() {
+  "node_modules/@noble/curves/secp256k1.js"() {
     "use strict";
     init_sha2();
     init_utils();
@@ -4090,7 +4191,7 @@ var init_secp256k1 = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/hkdf.js
+// node_modules/@noble/hashes/hkdf.js
 function extract(hash, ikm, salt) {
   ahash(hash);
   if (salt === void 0)
@@ -4125,7 +4226,7 @@ function expand(hash, prk, info, length = 32) {
 }
 var HKDF_COUNTER, EMPTY_BUFFER, hkdf;
 var init_hkdf = __esm({
-  "../../../node_modules/@noble/hashes/hkdf.js"() {
+  "node_modules/@noble/hashes/hkdf.js"() {
     "use strict";
     init_hmac();
     init_utils();
@@ -4307,8 +4408,8 @@ function redactionMarkerFor(field, value) {
   }
   return `[REDACTED: ${field}]`;
 }
-function redactValue2(value, visited, depth) {
-  if (depth > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
+function redactValue2(value, visited, depth2) {
+  if (depth2 > MAX_REDACT_DEPTH) return "[REDACTED: depth-cap]";
   if (value === null || value === void 0) return value;
   const t = typeof value;
   if (t !== "object" && t !== "function") return value;
@@ -4358,7 +4459,7 @@ function redactValue2(value, visited, depth) {
       errCause = "[REDACTED: getter-threw]";
     }
     if (errCause !== void 0) {
-      clone.cause = redactValue2(errCause, visited, depth + 1);
+      clone.cause = redactValue2(errCause, visited, depth2 + 1);
     }
     let keys;
     try {
@@ -4380,7 +4481,7 @@ function redactValue2(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         clone[key] = redactionMarkerFor(key, v);
       } else {
-        clone[key] = redactValue2(v, visited, depth + 1);
+        clone[key] = redactValue2(v, visited, depth2 + 1);
       }
     }
     return clone;
@@ -4419,7 +4520,7 @@ function redactValue2(value, visited, depth) {
         } catch {
           item = "[REDACTED: getter-threw]";
         }
-        out2.push(redactValue2(item, visited, depth + 1));
+        out2.push(redactValue2(item, visited, depth2 + 1));
       }
       return out2;
     }
@@ -4442,7 +4543,7 @@ function redactValue2(value, visited, depth) {
       if (REDACTED_FIELDS_SET.has(key)) {
         out[key] = redactionMarkerFor(key, v);
       } else {
-        out[key] = redactValue2(v, visited, depth + 1);
+        out[key] = redactValue2(v, visited, depth2 + 1);
       }
     }
     return out;
@@ -4560,6 +4661,41 @@ async function tryGetBlockFromLocalHelia(helia, cidString) {
   }
   return bytes;
 }
+function isTransientPinError(err) {
+  if (!(err instanceof Error)) return true;
+  const msg = err.message;
+  const httpMatch = /\bHTTP (\d{3})\b/.exec(msg);
+  if (httpMatch !== null) {
+    const status = Number.parseInt(httpMatch[1], 10);
+    if (status === 429) return true;
+    if (status >= 500 && status < 600) return true;
+    if (status >= 400 && status < 500) return false;
+  }
+  if (msg.toLowerCase().includes("fetch failed") || msg.toLowerCase().includes("network") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED") || msg.includes("EAI_AGAIN") || err.name === "AbortError" || err.name === "TimeoutError") {
+    return true;
+  }
+  return true;
+}
+async function withPinRetry(fn, isRetryable = isTransientPinError, backoffs = PIN_RETRY_BACKOFFS_MS) {
+  for (let attempt = 0; attempt <= backoffs.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isLast = attempt >= backoffs.length;
+      if (isLast) {
+        incr("ipfs.pin.retry.exhausted");
+        throw err;
+      }
+      if (!isRetryable(err)) {
+        incr("ipfs.pin.retry.permanent");
+        throw err;
+      }
+      incr("ipfs.pin.retry.attempt");
+      await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]));
+    }
+  }
+  throw new Error("withPinRetry: unreachable");
+}
 function submitToSidecarBestEffort(gateway, cid, bytes) {
   if (typeof gateway !== "string" || gateway.length === 0) return;
   if (typeof cid !== "string" || cid.length === 0) return;
@@ -4620,9 +4756,176 @@ async function tryReadFromSidecar(gateway, cid) {
     return null;
   }
 }
+function normalizeGatewayKey(gateway) {
+  return gateway.replace(/\/$/, "");
+}
+async function probeEndpointExposed(url) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    });
+    response.body?.cancel?.().catch(() => {
+    });
+    return response.status !== 404 && response.status !== 405 && response.status < 500;
+  } catch {
+    return false;
+  }
+}
+async function probeGatewayCapabilities(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  const cached = capabilityCache.get(key);
+  if (cached !== void 0) return cached;
+  const probe = (async () => {
+    const [dagImport, dagExport] = await Promise.all([
+      probeEndpointExposed(`${key}/api/v0/dag/import`),
+      probeEndpointExposed(`${key}/api/v0/dag/export`)
+    ]);
+    if (!dagImport || !dagExport) {
+      logger.warn(
+        "ipfs-client",
+        `#370 capability probe ${key}: dagImport=${dagImport} dagExport=${dagExport} \u2014 legacy per-block path will be used where the fast path is unavailable`
+      );
+    }
+    return { dagImport, dagExport };
+  })();
+  capabilityCache.set(key, probe);
+  return probe;
+}
+async function pinCarViaImport(gateway, carBytes, expectedRootCid, timeoutMs) {
+  const url = `${normalizeGatewayKey(gateway)}/api/v0/dag/import?pin=true`;
+  const form = new FormData();
+  form.append("file", new Blob([carBytes]), "bundle.car");
+  const response = await fetch(url, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} ${response.statusText} from ${gateway} for /dag/import`
+    );
+  }
+  const text = await response.text();
+  let foundExpectedRoot = false;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    let node;
+    try {
+      node = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (node === null || typeof node !== "object") continue;
+    const root = node.Root;
+    if (root === null || root === void 0 || typeof root !== "object") continue;
+    const rootObj = root;
+    let cidStr = null;
+    const cid = rootObj.Cid;
+    if (typeof cid === "string") {
+      cidStr = cid;
+    } else if (cid !== null && typeof cid === "object") {
+      const inner = cid["/"];
+      if (typeof inner === "string") cidStr = inner;
+    }
+    if (cidStr === expectedRootCid) {
+      const errMsg2 = rootObj.PinErrorMsg;
+      if (typeof errMsg2 === "string" && errMsg2.length > 0) {
+        throw new Error(
+          `Gateway ${gateway} reported PinErrorMsg for ${expectedRootCid}: ${errMsg2}`
+        );
+      }
+      foundExpectedRoot = true;
+    }
+  }
+  if (!foundExpectedRoot) {
+    throw new Error(
+      `Gateway ${gateway} /dag/import did not include expected root ${expectedRootCid} in NDJSON response`
+    );
+  }
+}
+async function fetchCarViaExport(gateway, rootCid, timeoutMs, maxSizeBytes) {
+  const url = `${normalizeGatewayKey(gateway)}/api/v0/dag/export?arg=${encodeURIComponent(rootCid)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} ${response.statusText} from ${gateway} for /dag/export`
+    );
+  }
+  const contentLength = response.headers.get("Content-Length");
+  if (contentLength != null) {
+    const size = parseInt(contentLength, 10);
+    if (!isNaN(size) && size > maxSizeBytes) {
+      throw new Error(
+        `Gateway ${gateway} /dag/export Content-Length ${size} exceeds limit ${maxSizeBytes}`
+      );
+    }
+  }
+  if (response.body != null) {
+    return await readStreamWithLimit(response.body, maxSizeBytes, gateway);
+  }
+  const buf = await response.arrayBuffer();
+  if (buf.byteLength > maxSizeBytes) {
+    throw new Error(
+      `Gateway ${gateway} /dag/export returned ${buf.byteLength} bytes exceeding limit ${maxSizeBytes}`
+    );
+  }
+  return new Uint8Array(buf);
+}
+async function verifyAndReassembleExportedCar(carBytes, rootCid, helia) {
+  const { CarReader: CarReader5 } = await import("@ipld/car");
+  const { CarWriter: CarWriter3 } = await import("@ipld/car/writer");
+  const reader = await CarReader5.fromBytes(carBytes);
+  let rootBlockCid = null;
+  const collected = [];
+  for await (const block of reader.blocks()) {
+    const cidStr = block.cid.toString();
+    verifyCidMatchesBytes(cidStr, block.bytes);
+    collected.push({ cid: block.cid, bytes: block.bytes });
+    if (cidStr === rootCid) rootBlockCid = block.cid;
+  }
+  if (rootBlockCid === null) {
+    throw new Error(
+      `/dag/export response for ${rootCid} did not include the requested root block`
+    );
+  }
+  const localHelia = asHelia(helia);
+  if (localHelia !== null) {
+    for (const block of collected) {
+      await putBlockToLocalHelia(localHelia, block.cid.toString(), block.bytes);
+    }
+  }
+  const { writer, out } = CarWriter3.create([rootBlockCid]);
+  const chunks = [];
+  const collectPromise = (async () => {
+    for await (const chunk of out) chunks.push(chunk);
+  })();
+  try {
+    for (const block of collected) await writer.put(block);
+  } finally {
+    await writer.close();
+  }
+  await collectPromise;
+  let totalLength = 0;
+  for (const c of chunks) totalLength += c.length;
+  const reassembled = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    reassembled.set(c, offset);
+    offset += c.length;
+  }
+  return reassembled;
+}
 async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
   const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
   validateGatewayUrls(effectiveGateways);
+  return withPinRetry(() => pinToIpfsOnce(effectiveGateways, data, timeoutMs));
+}
+async function pinToIpfsOnce(effectiveGateways, data, timeoutMs) {
   let lastError = null;
   for (const gateway of effectiveGateways) {
     try {
@@ -4660,6 +4963,11 @@ async function pinToIpfs(gateways, data, timeoutMs = DEFAULT_PIN_TIMEOUT_MS) {
 async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
   const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
   validateGatewayUrls(effectiveGateways);
+  return withPinRetry(
+    () => pinSingleBlockOnce(effectiveGateways, blockBytes, expectedCid, timeoutMs)
+  );
+}
+async function pinSingleBlockOnce(effectiveGateways, blockBytes, expectedCid, timeoutMs) {
   let codecName = "raw";
   try {
     const parsed = import_cid.CID.parse(expectedCid);
@@ -4698,6 +5006,88 @@ async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
   );
 }
 async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  let localHeliaWrittenInFastPath = false;
+  for (const gateway of effectiveGateways) {
+    const caps = await probeGatewayCapabilities(gateway);
+    if (!caps.dagImport) continue;
+    let parsed;
+    try {
+      parsed = await parseCarForFastPathPin(carBytes, expectedRootCid);
+    } catch (err) {
+      if (err instanceof ProfileError) throw err;
+      throw new ProfileError(
+        "ORBITDB_WRITE_FAILED",
+        `pinCarBlocksToIpfs: fast-path CAR parse failed: ${err instanceof Error ? err.message : String(err)}`,
+        err
+      );
+    }
+    const localHelia = asHelia(helia);
+    if (localHelia !== null && !localHeliaWrittenInFastPath) {
+      for (const block of parsed.blocks) {
+        let cidBindingOk = true;
+        try {
+          verifyCidMatchesBytes(block.cid, block.bytes);
+        } catch (err) {
+          cidBindingOk = false;
+          logger.warn(
+            "ipfs-client",
+            `pinCarBlocksToIpfs: producer-side CID/bytes mismatch for ${block.cid} \u2014 skipping local-helia put. ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        if (cidBindingOk) await putBlockToLocalHelia(localHelia, block.cid, block.bytes);
+      }
+      localHeliaWrittenInFastPath = true;
+    }
+    try {
+      await pinCarViaImport(gateway, carBytes, expectedRootCid, timeoutMs);
+      submitToSidecarBestEffort(gateway, expectedRootCid, parsed.rootBlock.bytes);
+      return expectedRootCid;
+    } catch (err) {
+      logger.warn(
+        "ipfs-client",
+        `pinCarBlocksToIpfs: /dag/import fast path failed on ${gateway} for ${expectedRootCid}, falling back to legacy per-block path. Reason: ${err instanceof Error ? err.message : String(err)}`
+      );
+      break;
+    }
+  }
+  return pinCarBlocksToIpfsLegacy(
+    effectiveGateways,
+    carBytes,
+    expectedRootCid,
+    timeoutMs,
+    // Skip the legacy path's local-Helia write loop if the fast path
+    // already wrote every block — avoids duplicate puts.
+    localHeliaWrittenInFastPath ? void 0 : helia,
+    concurrency
+  );
+}
+async function parseCarForFastPathPin(carBytes, expectedRootCid) {
+  const { CarReader: CarReader5 } = await import("@ipld/car");
+  const reader = await CarReader5.fromBytes(carBytes);
+  const blocks = [];
+  for await (const block of reader.blocks()) {
+    blocks.push({ cid: block.cid.toString(), bytes: block.bytes });
+  }
+  if (blocks.length === 0) {
+    throw new ProfileError(
+      "ORBITDB_WRITE_FAILED",
+      "CAR contained zero blocks \u2014 refusing to publish a phantom rootCid."
+    );
+  }
+  const rootBlock = blocks.find((b) => b.cid === expectedRootCid);
+  if (rootBlock === void 0) {
+    throw new ProfileError(
+      "ORBITDB_WRITE_FAILED",
+      `expectedRootCid ${expectedRootCid} is not present among CAR blocks (count=${blocks.length}) \u2014 builder/publisher mismatch.`
+    );
+  }
+  return { blocks, rootBlock };
+}
+async function pinCarBlocksToIpfsLegacy(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
+  const __perfStart = performance.now();
+  const __perfBytes = carBytes.byteLength;
   const localHelia = asHelia(helia);
   const { CarReader: CarReader5 } = await import("@ipld/car");
   let reader;
@@ -4774,17 +5164,25 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
   }
   await Promise.all(workers);
   if (workerErrors.length > 0) {
+    incr("ipfs.pinCar.error");
+    observeMs("ipfs.pinCar.totalMs", performance.now() - __perfStart);
     throw workerErrors[0];
   }
+  incr("ipfs.pinCar.blocks", blocks.length);
+  incr("ipfs.pinCar.bytes", __perfBytes);
+  observeMs("ipfs.pinCar.totalMs", performance.now() - __perfStart);
   return expectedRootCid;
 }
 async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS2, maxSizeBytes = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
   const localHelia = asHelia(helia);
   if (localHelia !== null) {
     const local = await tryGetBlockFromLocalHelia(localHelia, cid);
     if (local !== null) {
       if (local.byteLength > maxSizeBytes) {
       } else {
+        incr("ipfs.fetchBlock.localHit");
+        observeMs("ipfs.fetchBlock.localHitMs", performance.now() - __perfStart);
         return local;
       }
     }
@@ -4886,12 +5284,17 @@ async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
       if (localHelia !== null) {
         await putBlockToLocalHelia(localHelia, cid, bytesOrNull);
       }
+      incr("ipfs.fetchBlock.gatewayHit");
+      incr("ipfs.fetchBlock.bytes", bytesOrNull.byteLength);
+      observeMs("ipfs.fetchBlock.gatewayMs", performance.now() - __perfStart);
       return bytesOrNull;
     } catch (err) {
       if (err instanceof ProfileError) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
+  incr("ipfs.fetchBlock.allGatewaysFailed");
+  observeMs("ipfs.fetchBlock.failedMs", performance.now() - __perfStart);
   throw new ProfileError(
     "BUNDLE_NOT_FOUND",
     `Failed to fetch CAR ${cid} from all gateways: ${lastError?.message ?? "unknown error"}`,
@@ -4899,6 +5302,8 @@ async function fetchFromIpfs(gateways, cid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
   );
 }
 async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS2, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
+  incr("ipfs.fetchCar.calls");
   let parsedRoot;
   try {
     parsedRoot = import_cid.CID.parse(rootCid);
@@ -4917,6 +5322,47 @@ async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIM
       `fetchCarFromIpfs: unsupported root codec 0x${parsedRoot.code.toString(16)} for ${rootCid} (expected dag-cbor 0x71 or raw 0x55)`
     );
   }
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  const localHeliaForRoot = asHelia(helia);
+  if (localHeliaForRoot !== null) {
+    const localRoot = await tryGetBlockFromLocalHelia(localHeliaForRoot, rootCid);
+    if (localRoot !== null) {
+      return fetchCarFromIpfsLegacy(
+        effectiveGateways,
+        rootCid,
+        parsedRoot,
+        timeoutMs,
+        maxSizeBytesPerBlock,
+        helia
+      );
+    }
+  }
+  for (const gateway of effectiveGateways) {
+    const caps = await probeGatewayCapabilities(gateway);
+    if (!caps.dagExport) continue;
+    try {
+      const carBytes = await fetchCarViaExport(gateway, rootCid, timeoutMs, maxSizeBytesPerBlock);
+      return await verifyAndReassembleExportedCar(carBytes, rootCid, helia);
+    } catch (err) {
+      logger.warn(
+        "ipfs-client",
+        `fetchCarFromIpfs: /dag/export fast path failed on ${gateway} for ${rootCid}, falling back to legacy per-block BFS. Reason: ${err instanceof Error ? err.message : String(err)}`
+      );
+      break;
+    }
+  }
+  return fetchCarFromIpfsLegacy(
+    effectiveGateways,
+    rootCid,
+    parsedRoot,
+    timeoutMs,
+    maxSizeBytesPerBlock,
+    helia
+  );
+}
+async function fetchCarFromIpfsLegacy(gateways, rootCid, parsedRoot, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS2, maxSizeBytesPerBlock = DEFAULT_MAX_SIZE_BYTES, helia) {
+  const __perfStart = performance.now();
   const { decode: dagCborDecode3 } = await import("@ipld/dag-cbor");
   const { CarWriter: CarWriter3 } = await import("@ipld/car/writer");
   const visited = /* @__PURE__ */ new Set();
@@ -4994,6 +5440,9 @@ async function fetchCarFromIpfs(gateways, rootCid, timeoutMs = DEFAULT_FETCH_TIM
     carBytes.set(c, offset);
     offset += c.length;
   }
+  incr("ipfs.fetchCar.blocks", blocks.length);
+  incr("ipfs.fetchCar.bytes", totalLength);
+  observeMs("ipfs.fetchCar.totalMs", performance.now() - __perfStart);
   return carBytes;
 }
 function collectCidLinks(value, visit) {
@@ -5215,7 +5664,7 @@ async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
   }
   return result;
 }
-var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_PIN_CONCURRENCY, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
+var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_PIN_CONCURRENCY, PIN_RETRY_BACKOFFS_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, PROBE_TIMEOUT_MS, capabilityCache, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
 var init_ipfs_client = __esm({
   "profile/ipfs-client.ts"() {
     "use strict";
@@ -5224,6 +5673,7 @@ var init_ipfs_client = __esm({
     raw = __toESM(require("multiformats/codecs/raw"), 1);
     import_digest = require("multiformats/hashes/digest");
     init_logger();
+    init_perf_counters();
     init_errors();
     MULTIHASH_SHA256 = 18;
     SHA256_DIGEST_BYTES = 32;
@@ -5232,13 +5682,16 @@ var init_ipfs_client = __esm({
     FETCH_CAR_MAX_BLOCKS = 1e4;
     DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
     DEFAULT_PIN_TIMEOUT_MS = 6e4;
-    DEFAULT_PIN_CONCURRENCY = 10;
+    DEFAULT_PIN_CONCURRENCY = 5;
+    PIN_RETRY_BACKOFFS_MS = [100, 500, 2e3];
     DEFAULT_FETCH_TIMEOUT_MS2 = 3e4;
     DEFAULT_VERIFY_TIMEOUT_MS = 1e4;
     DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
     SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
     SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
     SIDECAR_READ_TIMEOUT_MS = 500;
+    PROBE_TIMEOUT_MS = 2e3;
+    capabilityCache = /* @__PURE__ */ new Map();
     CODEC_NAMES = {
       85: "raw",
       // raw
@@ -6693,11 +7146,34 @@ function verify(pkg) {
       });
       continue;
     }
+    {
+      const rootElement = pkg.pool.get(rootHash);
+      if (rootElement !== void 0) {
+        if (rootElement.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+          errors.push({
+            code: "MANIFEST_TYPE_MISMATCH",
+            message: `Manifest entry for tokenId=${tokenId} points to a non-root element (type=${rootElement.type}); expected '${ELEMENT_TYPE_TOKEN_ROOT}'`,
+            tokenId,
+            elementHash: rootHash
+          });
+        } else {
+          const rootContentTokenId = rootElement.content.tokenId;
+          if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+            errors.push({
+              code: "MANIFEST_TOKENID_MISMATCH",
+              message: `Manifest key tokenId=${tokenId} does not match the referenced token-root's content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"}. Bundle is structurally inconsistent (Audit #333 H2 \u2014 identity-confusion primitive).`,
+              tokenId,
+              elementHash: rootHash
+            });
+          }
+        }
+      }
+    }
     const visited = /* @__PURE__ */ new Set();
     const pathStack = /* @__PURE__ */ new Set();
     const VERIFY_MAX_DEPTH = 4096;
-    const dfsWalk = (hash, parentType, childRole, isArrayChild, depth = 0) => {
-      if (depth > VERIFY_MAX_DEPTH) {
+    const dfsWalk = (hash, parentType, childRole, isArrayChild, depth2 = 0) => {
+      if (depth2 > VERIFY_MAX_DEPTH) {
         errors.push({
           code: "CYCLE_DETECTED",
           message: `Verify exceeded VERIFY_MAX_DEPTH=${VERIFY_MAX_DEPTH} in token ${tokenId} subgraph at ${hash}; possible deeply-nested DAG or undetected cycle.`,
@@ -6756,12 +7232,12 @@ function verify(pkg) {
             const chainElement = pkg.pool.get(link.hash);
             if (chainElement) {
               elementsChecked.add(link.hash);
-              walkChildren(hash, chainElement, depth);
+              walkChildren(hash, chainElement, depth2);
             }
           }
         }
       }
-      walkChildren(hash, element, depth);
+      walkChildren(hash, element, depth2);
       pathStack.delete(hash);
       visited.add(hash);
     };
@@ -6908,6 +7384,7 @@ var import_dag_cbor6, EXPECTED_CHILD_TYPES, EXPECTED_ARRAY_CHILD_TYPES;
 var init_verify = __esm({
   "uxf/verify.ts"() {
     "use strict";
+    init_types();
     init_hash();
     import_dag_cbor6 = require("@ipld/dag-cbor");
     init_limits();
@@ -7565,6 +8042,21 @@ function packageFromJson(json) {
         `Refusing to import package with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   return {
     envelope,
@@ -8016,6 +8508,21 @@ async function importFromCar(car) {
         `Refusing to import CAR with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   const instanceChains = rebuildInstanceChains(pool);
   const indexes = {
@@ -8357,7 +8864,9 @@ function syncPool(pkg, pool) {
     mutablePool.set(hash, element);
   }
 }
-function ingest(pkg, token) {
+function ingest(pkg, token, opts) {
+  incr("uxf.ingest.calls");
+  const __iStart = performance.now();
   const pool = wrapPool(pkg);
   const rootHash = deconstructToken(pool, token);
   syncPool(pkg, pool);
@@ -8366,15 +8875,21 @@ function ingest(pkg, token) {
   const tokenId = rootContent.tokenId;
   const mutableManifest = pkg.manifest.tokens;
   mutableManifest.set(tokenId, rootHash);
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
   updateIndexesForToken(pkg, tokenId, rootHash);
+  observeMs("uxf.ingest.totalMs", performance.now() - __iStart);
 }
-function ingestAll(pkg, tokens) {
+function ingestAll(pkg, tokens, opts) {
   if (tokens.length === 0) return;
+  incr("uxf.ingestAll.calls");
+  incr("uxf.ingestAll.tokens", tokens.length);
+  const __iaStart = performance.now();
   const pool = wrapPool(pkg);
   const newTokens = [];
   for (const token of tokens) {
+    const __dStart = performance.now();
     const rootHash = deconstructToken(pool, token);
+    observeMs("uxf.ingestAll.perTokenDeconstructMs", performance.now() - __dStart);
     const rootElement = pool.get(rootHash);
     const rootContent = rootElement.content;
     newTokens.push({ tokenId: rootContent.tokenId, rootHash });
@@ -8425,13 +8940,20 @@ function ingestAll(pkg, tokens) {
       for (const [k, v] of prePoolSnapshot) mutablePool.set(k, v);
     } catch {
     }
+    observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
     throw err;
   }
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
+  observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
 }
 function assemble(pkg, tokenId, strategy = STRATEGY_LATEST) {
-  const pool = wrapPool(pkg);
-  return assembleToken(pool, pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  incr("uxf.assemble.calls");
+  const __aStart = performance.now();
+  try {
+    return assembleToken(wrapPool(pkg), pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  } finally {
+    observeMs("uxf.assemble.totalMs", performance.now() - __aStart);
+  }
 }
 function assembleAtState(pkg, tokenId, stateIndex, strategy = STRATEGY_LATEST) {
   const pool = wrapPool(pkg);
@@ -8450,7 +8972,18 @@ function removeToken(pkg, tokenId) {
   removeFromIndexes(pkg.indexes, tokenId);
   pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
 }
-function mergePkg(target, source, verifiedProofs) {
+function mergePkg(target, source, opts) {
+  let normalisedOpts;
+  if (opts === void 0) {
+    normalisedOpts = {};
+  } else if (opts instanceof Set) {
+    normalisedOpts = { verifiedProofs: opts };
+  } else {
+    normalisedOpts = opts;
+  }
+  const verifiedProofs = normalisedOpts.verifiedProofs;
+  const strict = normalisedOpts.strict === true;
+  const onSkip = normalisedOpts.onSkip;
   const mutablePool = target.pool;
   const mutableManifest = target.manifest.tokens;
   const stagedPoolInserts = /* @__PURE__ */ new Map();
@@ -8472,6 +9005,7 @@ function mergePkg(target, source, verifiedProofs) {
   ]);
   const stagedManifestWrites = /* @__PURE__ */ new Map();
   const stagedSyntheticInserts = /* @__PURE__ */ new Map();
+  const skipped = [];
   for (const [tokenId, incomingRoot] of source.manifest.tokens) {
     try {
       const existingRoot = mutableManifest.get(tokenId);
@@ -8493,12 +9027,40 @@ function mergePkg(target, source, verifiedProofs) {
       }
       stagedManifestWrites.set(tokenId, outcome.rootHash);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(String(err));
       logger.warn(
         "UxfPackage",
-        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${message}`
+        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${error.message}`
       );
+      const existingRoot = mutableManifest.get(tokenId);
+      const skipRecord = {
+        tokenId,
+        error,
+        targetExisting: existingRoot,
+        sourceIncoming: incomingRoot
+      };
+      skipped.push(skipRecord);
+      if (onSkip) {
+        try {
+          onSkip({ tokenId, error });
+        } catch (cbErr) {
+          logger.warn(
+            "UxfPackage",
+            `mergePkg: onSkip callback threw for tokenId=${tokenId} (ignored): ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`
+          );
+        }
+      }
     }
+  }
+  if (strict && skipped.length > 0) {
+    const summary = skipped.slice(0, 5).map((s) => `${s.tokenId.slice(0, 16)}\u2026: ${s.error.message}`).join("; ");
+    const suffix = skipped.length > 5 ? ` (and ${skipped.length - 5} more)` : "";
+    const aggregate = new UxfError(
+      "MERGE_PARTIAL_FAILURE",
+      `mergePkg(strict): ${skipped.length} per-token resolver failure(s); target unchanged. ${summary}${suffix}`
+    );
+    aggregate.skipped = skipped;
+    throw aggregate;
   }
   for (const [hash, element] of stagedPoolInserts) {
     mutablePool.set(hash, element);
@@ -8517,6 +9079,7 @@ function mergePkg(target, source, verifiedProofs) {
   );
   rebuildIndexes(target);
   target.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  return { skipped };
 }
 function addInstance2(pkg, originalHash, newInstance) {
   const pool = wrapPool(pkg);
@@ -8619,6 +9182,7 @@ var UxfPackage, WRAP_POOL_MAX_SIZE;
 var init_UxfPackage = __esm({
   "uxf/UxfPackage.ts"() {
     "use strict";
+    init_perf_counters();
     init_types();
     init_errors4();
     init_hash();
@@ -8641,13 +9205,38 @@ var init_UxfPackage = __esm({
       // ---------- Static Factories ----------
       /**
        * Create a new empty package.
+       *
+       * **Determinism note (post-#362):** the envelope `createdAt` /
+       * `updatedAt` fields are baked into the CAR root CID (the
+       * dag-cbor-encoded envelope IS the root block). If a caller invokes
+       * `create()` twice — e.g., a sender that crashes mid-flight and the
+       * worker rebuilds the bundle on resume — the two `Date.now()` calls
+       * straddling a second boundary would produce DIFFERENT envelope
+       * bytes → DIFFERENT bundleCids. That breaks every system that
+       * indexes on `bundleCid` for idempotency (replay-LRU at the
+       * recipient, IPFS pin reuse, outbox bundleCid dedup, the audit-#333
+       * H3 `targetExisting === sourceIncoming` fast path).
+       *
+       * Production senders therefore lock a single `createdAt` value at
+       * the start of a send attempt and persist it in the outbox entry's
+       * `createdAt`. On resume, the worker reads the persisted value and
+       * passes it back as `options.createdAt`. The `Date.now()` fallback
+       * stays for callers that don't need cross-attempt determinism
+       * (tests, ad-hoc tooling, archival exports).
+       *
+       * @param options.createdAt  Override the envelope timestamp (unix
+       *   seconds). When omitted, `Math.floor(Date.now() / 1000)` is used.
+       * @param options.updatedAt  Override the envelope updated-at timestamp.
+       *   Defaults to `createdAt` (a brand-new package's createdAt and
+       *   updatedAt are equal — they only diverge after `merge()`).
        */
       static create(options) {
-        const now2 = Math.floor(Date.now() / 1e3);
+        const now2 = options?.createdAt ?? Math.floor(Date.now() / 1e3);
+        const updated = options?.updatedAt ?? now2;
         const envelope = {
           version: "1.0.0",
           createdAt: now2,
-          updatedAt: now2,
+          updatedAt: updated,
           ...options?.description !== void 0 ? { description: options.description } : {},
           ...options?.creator !== void 0 ? { creator: options.creator } : {}
         };
@@ -8692,16 +9281,23 @@ var init_UxfPackage = __esm({
       /**
        * Deconstruct a token and add to the package.
        * If the token already exists, its manifest entry is updated to the new root.
+       *
+       * `opts.updatedAt` (unix seconds) overrides the post-ingest envelope
+       * `updatedAt` bump — required for bundleCid determinism across
+       * crash-restart retries (see {@link UxfPackage.create} determinism
+       * note).
        */
-      ingest(token) {
-        ingest(this.data, token);
+      ingest(token, opts) {
+        ingest(this.data, token, opts);
         return this;
       }
       /**
        * Batch ingest multiple tokens.
+       *
+       * See {@link ingest} for `opts.updatedAt`.
        */
-      ingestAll(tokens) {
-        ingestAll(this.data, tokens);
+      ingestAll(tokens, opts) {
+        ingestAll(this.data, tokens, opts);
         return this;
       }
       // ---------- Reassembly ----------
@@ -8796,8 +9392,11 @@ var init_UxfPackage = __esm({
        * resolution for any pairwise hash mismatch.
        */
       merge(other, opts) {
-        mergePkg(this.data, other.data, opts?.verifiedProofs);
-        return this;
+        return mergePkg(this.data, other.data, {
+          verifiedProofs: opts?.verifiedProofs,
+          strict: opts?.strict,
+          onSkip: opts?.onSkip
+        });
       }
       /**
        * Wave I.5: build the `verifiedProofs` set for a Rule 4-enabled
@@ -8817,6 +9416,8 @@ var init_UxfPackage = __esm({
        * treated as "not verified" — the resulting set is conservative.
        */
       async computeVerifiedProofs(other, verifier) {
+        incr("uxf.computeVerifiedProofs.calls");
+        const __perfStart = performance.now();
         const verified = /* @__PURE__ */ new Set();
         const ELEMENT_TYPE_INCLUSION_PROOF2 = "inclusion-proof";
         const combinedPool = /* @__PURE__ */ new Map();
@@ -8834,15 +9435,23 @@ var init_UxfPackage = __esm({
             continue;
           }
           try {
+            incr("uxf.computeVerifiedProofs.verifyCalls");
+            const __vStart = performance.now();
             const ok = await verifier({
               proofJson,
               transactionHash: txHashImprintHex,
               proofHash: hash
             });
-            if (ok) verified.add(hash);
+            observeMs("uxf.computeVerifiedProofs.verifyMs", performance.now() - __vStart);
+            if (ok) {
+              incr("uxf.computeVerifiedProofs.verifyOk");
+              verified.add(hash);
+            }
           } catch {
+            incr("uxf.computeVerifiedProofs.verifyThrew");
           }
         }
+        observeMs("uxf.computeVerifiedProofs.totalMs", performance.now() - __perfStart);
         return verified;
       }
       /**
@@ -10087,7 +10696,7 @@ var init_ipfs_http_client = __esm({
   }
 });
 
-// ../../../node_modules/@ipld/dag-pb/src/pb-decode.js
+// node_modules/@ipld/dag-pb/src/pb-decode.js
 function decodeVarint(bytes, offset) {
   let v = 0;
   for (let shift = 0; ; shift += 7) {
@@ -10218,16 +10827,16 @@ function decodeNode(bytes) {
 }
 var textDecoder;
 var init_pb_decode = __esm({
-  "../../../node_modules/@ipld/dag-pb/src/pb-decode.js"() {
+  "node_modules/@ipld/dag-pb/src/pb-decode.js"() {
     "use strict";
     textDecoder = new TextDecoder();
   }
 });
 
-// ../../../node_modules/@ipld/dag-pb/src/pb-encode.js
+// node_modules/@ipld/dag-pb/src/pb-encode.js
 var textEncoder, maxInt32, maxUInt32;
 var init_pb_encode = __esm({
-  "../../../node_modules/@ipld/dag-pb/src/pb-encode.js"() {
+  "node_modules/@ipld/dag-pb/src/pb-encode.js"() {
     "use strict";
     textEncoder = new TextEncoder();
     maxInt32 = 2 ** 32;
@@ -10235,7 +10844,7 @@ var init_pb_encode = __esm({
   }
 });
 
-// ../../../node_modules/@ipld/dag-pb/src/util.js
+// node_modules/@ipld/dag-pb/src/util.js
 function toByteView(buf) {
   if (buf instanceof ArrayBuffer) {
     return new Uint8Array(buf, 0, buf.byteLength);
@@ -10244,14 +10853,14 @@ function toByteView(buf) {
 }
 var import_cid5, textEncoder2;
 var init_util = __esm({
-  "../../../node_modules/@ipld/dag-pb/src/util.js"() {
+  "node_modules/@ipld/dag-pb/src/util.js"() {
     "use strict";
     import_cid5 = require("multiformats/cid");
     textEncoder2 = new TextEncoder();
   }
 });
 
-// ../../../node_modules/@ipld/dag-pb/src/index.js
+// node_modules/@ipld/dag-pb/src/index.js
 function decode2(bytes) {
   const buf = toByteView(bytes);
   const pbn = decodeNode(buf);
@@ -10282,7 +10891,7 @@ function decode2(bytes) {
 }
 var import_cid6;
 var init_src = __esm({
-  "../../../node_modules/@ipld/dag-pb/src/index.js"() {
+  "node_modules/@ipld/dag-pb/src/index.js"() {
     "use strict";
     import_cid6 = require("multiformats/cid");
     init_pb_decode();
@@ -10397,14 +11006,14 @@ function verifyBlock(cid, bytes) {
 function canonicalCidKey(cid) {
   return cid.toV1().toString();
 }
-function walkFile(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, visitCounter) {
+function walkFile(rootCid, blocks, depth2, outBuf, outBytesSoFar, pathVisited, visitCounter) {
   visitCounter.count += 1;
   if (visitCounter.count > MAX_TOTAL_NODE_VISITS) {
     throw new Error(
       `unixfs-verify: total visits exceeded ${MAX_TOTAL_NODE_VISITS}; refusing CPU-amplification DAG`
     );
   }
-  if (depth > MAX_RECURSION_DEPTH) {
+  if (depth2 > MAX_RECURSION_DEPTH) {
     throw new Error(`unixfs-verify: recursion depth exceeded ${MAX_RECURSION_DEPTH}`);
   }
   const cidKey2 = canonicalCidKey(rootCid);
@@ -10419,12 +11028,12 @@ function walkFile(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, vi
   }
   pathVisited.add(cidKey2);
   try {
-    walkFileInner(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter);
+    walkFileInner(rootCid, blocks, depth2, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter);
   } finally {
     pathVisited.delete(cidKey2);
   }
 }
-function walkFileInner(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter) {
+function walkFileInner(rootCid, blocks, depth2, outBuf, outBytesSoFar, pathVisited, blockBytes, visitCounter) {
   if (rootCid.code === CODEC_RAW2) {
     outBytesSoFar.total += blockBytes.length;
     if (outBytesSoFar.total > MAX_TOTAL_OUTPUT_BYTES) {
@@ -10477,7 +11086,7 @@ function walkFileInner(rootCid, blocks, depth, outBuf, outBytesSoFar, pathVisite
         `unixfs-verify: link without Hash in block ${rootCid.toString()}`
       );
     }
-    walkFile(link.Hash, blocks, depth + 1, outBuf, outBytesSoFar, pathVisited, visitCounter);
+    walkFile(link.Hash, blocks, depth2 + 1, outBuf, outBytesSoFar, pathVisited, visitCounter);
   }
 }
 async function verifyCarAndExtractFile(carBytes, expectedCid) {
@@ -10766,8 +11375,8 @@ async function resolveProfileSnapshot(params) {
     best.cid,
     params.fetchTimeoutMs ?? 3e4
   );
-  const snapshot = deserializeSnapshot(bytes);
-  return { snapshot, cid: best.cid, sequence: best.sequence };
+  const snapshot2 = deserializeSnapshot(bytes);
+  return { snapshot: snapshot2, cid: best.cid, sequence: best.sequence };
 }
 async function needsMigration(localCache) {
   const sequence = await localCache.get(LEGACY_IPNS_SEQUENCE_KEY);
@@ -10875,9 +11484,11 @@ module.exports = __toCommonJS(browser_exports);
 // profile/orbitdb-adapter.ts
 init_logger();
 init_hex();
+init_perf_counters();
 init_errors();
 
 // profile/helia-blockstore-shim.ts
+init_perf_counters();
 var BLOCKSTORE_GET_LRU_MAX_DEFAULT = 64;
 var BLOCKSTORE_GET_LRU_PER_ENTRY_MAX_DEFAULT = 1 * 1024 * 1024;
 async function drainGenerator(source) {
@@ -10936,6 +11547,8 @@ function installHeliaBlockstoreGetShim(blockstore, options) {
     }
   };
   const wrappedGet = async (cid, opts) => {
+    incr("helia.blockstore.get.calls");
+    const __gStart = performance.now();
     const key = cidKey(cid);
     if (key !== null) {
       const cached = lru.get(key);
@@ -10943,15 +11556,21 @@ function installHeliaBlockstoreGetShim(blockstore, options) {
         lru.delete(key);
         lru.set(key, cached);
         hits++;
+        incr("helia.blockstore.get.cacheHit");
+        observeMs("helia.blockstore.get.cacheHitMs", performance.now() - __gStart);
         return cached;
       }
       const pending = inflight.get(key);
       if (pending !== void 0) {
         hits++;
-        return pending;
+        incr("helia.blockstore.get.inflightHit");
+        const result2 = await pending;
+        observeMs("helia.blockstore.get.inflightHitMs", performance.now() - __gStart);
+        return result2;
       }
     }
     misses++;
+    incr("helia.blockstore.get.miss");
     const work = (async () => {
       try {
         const source = originalGet(cid, opts);
@@ -10967,31 +11586,51 @@ function installHeliaBlockstoreGetShim(blockstore, options) {
     const result = await work;
     if (key !== null && result instanceof Uint8Array) {
       touch(key, result);
+      incr("helia.blockstore.get.bytes", result.byteLength);
     }
+    observeMs("helia.blockstore.get.missMs", performance.now() - __gStart);
     return result;
   };
   blockstore.get = wrappedGet;
   let wrappedPut = null;
   if (originalPut !== null) {
     wrappedPut = (cid, val, opts) => {
+      incr("helia.blockstore.put.calls");
+      const __pStart = performance.now();
       const key = cidKey(cid);
       if (key !== null) {
         lru.delete(key);
         inflight.delete(key);
       }
-      return originalPut(cid, val, opts);
+      const result = originalPut(cid, val, opts);
+      if (result && typeof result.then === "function") {
+        return result.finally(() => {
+          observeMs("helia.blockstore.put.totalMs", performance.now() - __pStart);
+        });
+      }
+      observeMs("helia.blockstore.put.totalMs", performance.now() - __pStart);
+      return result;
     };
     blockstore.put = wrappedPut;
   }
   let wrappedDelete = null;
   if (originalDelete !== null) {
     wrappedDelete = (cid, opts) => {
+      incr("helia.blockstore.delete.calls");
+      const __dStart = performance.now();
       const key = cidKey(cid);
       if (key !== null) {
         lru.delete(key);
         inflight.delete(key);
       }
-      return originalDelete(cid, opts);
+      const result = originalDelete(cid, opts);
+      if (result && typeof result.then === "function") {
+        return result.finally(() => {
+          observeMs("helia.blockstore.delete.totalMs", performance.now() - __dStart);
+        });
+      }
+      observeMs("helia.blockstore.delete.totalMs", performance.now() - __dStart);
+      return result;
     };
     blockstore.delete = wrappedDelete;
   }
@@ -11016,6 +11655,7 @@ function installHeliaBlockstoreGetShim(blockstore, options) {
 
 // profile/helia-blockstore-pin-shim.ts
 init_logger();
+init_perf_counters();
 function installHeliaBlockstorePinShim(helia) {
   let pinAttempted = 0;
   let pinSucceeded = 0;
@@ -11073,18 +11713,27 @@ function installHeliaBlockstorePinShim(helia) {
   if (typeof blockstore.putMany === "function") {
     const originalPutMany = blockstore.putMany.bind(blockstore);
     blockstore.putMany = function pinningPutMany(source, options) {
+      incr("helia.blockstore.putMany.calls");
+      const __pmStart = performance.now();
       const upstream = originalPutMany(source, options);
       return (async function* pinningPutManyGen() {
-        for await (const yieldedCid of upstream) {
-          pinAttempted++;
-          schedulePin(yieldedCid, pins, Promise.resolve()).then((outcome) => {
-            if (outcome === "pinned") pinSucceeded++;
-            else if (outcome === "skipped") pinSkipped++;
-            else pinFailed++;
-          }).catch(() => {
-            pinFailed++;
-          });
-          yield yieldedCid;
+        let itemCount = 0;
+        try {
+          for await (const yieldedCid of upstream) {
+            itemCount++;
+            pinAttempted++;
+            schedulePin(yieldedCid, pins, Promise.resolve()).then((outcome) => {
+              if (outcome === "pinned") pinSucceeded++;
+              else if (outcome === "skipped") pinSkipped++;
+              else pinFailed++;
+            }).catch(() => {
+              pinFailed++;
+            });
+            yield yieldedCid;
+          }
+        } finally {
+          incr("helia.blockstore.putMany.items", itemCount);
+          observeMs("helia.blockstore.putMany.totalMs", performance.now() - __pmStart);
         }
       })();
     };
@@ -11108,8 +11757,11 @@ function installHeliaBlockstorePinShim(helia) {
       return "skipped";
     }
     if (pinnedCids.has(cidStr)) {
+      incr("helia.pins.add.cached");
       return "pinned";
     }
+    incr("helia.pins.add.calls");
+    const __pStart = performance.now();
     try {
       const result = pinsApi.add(cid);
       if (result && typeof result[Symbol.asyncIterator] === "function") {
@@ -11120,17 +11772,22 @@ function installHeliaBlockstorePinShim(helia) {
         await result;
       }
       pinnedCids.add(cidStr);
+      observeMs("helia.pins.add.successMs", performance.now() - __pStart);
       return "pinned";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/already pinned/i.test(msg)) {
         pinnedCids.add(cidStr);
+        incr("helia.pins.add.alreadyPinned");
+        observeMs("helia.pins.add.alreadyPinnedMs", performance.now() - __pStart);
         return "pinned";
       }
       logger.warn(
         "ProfilePinShim",
         `helia.pins.add failed for ${cidStr.slice(0, 16)}\u2026: ${msg}`
       );
+      incr("helia.pins.add.failed");
+      observeMs("helia.pins.add.failedMs", performance.now() - __pStart);
       return "failed";
     }
   }
@@ -11513,25 +12170,39 @@ var OrbitDbAdapter = class {
   }
   async put(key, value) {
     this.ensureConnected();
+    const __t0 = performance.now();
+    const isBundleKey = key.startsWith("tokens.bundle.");
     try {
       await this.db.put(key, value);
     } catch (err) {
+      incr("orbitdb.put.error");
       throw new ProfileError(
         "ORBITDB_WRITE_FAILED",
         `Failed to write key "${key}": ${err instanceof Error ? err.message : String(err)}`,
         err
       );
+    } finally {
+      observeMs(
+        isBundleKey ? "orbitdb.put.bundle" : "orbitdb.put.other",
+        performance.now() - __t0
+      );
     }
   }
   async get(key) {
     this.ensureConnected();
+    const __t0 = performance.now();
     try {
       const value = await this.db.get(key);
       if (value === void 0 || value === null) {
+        observeMs("orbitdb.get.missMs", performance.now() - __t0);
         return null;
       }
-      return coerceToUint8Array(value);
+      const result = coerceToUint8Array(value);
+      observeMs("orbitdb.get.hitMs", performance.now() - __t0);
+      return result;
     } catch (err) {
+      incr("orbitdb.get.error");
+      observeMs("orbitdb.get.errorMs", performance.now() - __t0);
       if (err instanceof ProfileError) throw err;
       throw new ProfileError(
         "ORBITDB_READ_FAILED",
@@ -11542,14 +12213,18 @@ var OrbitDbAdapter = class {
   }
   async del(key) {
     this.ensureConnected();
+    const __t0 = performance.now();
     try {
       await this.db.del(key);
     } catch (err) {
+      incr("orbitdb.del.error");
       throw new ProfileError(
         "ORBITDB_WRITE_FAILED",
         `Failed to delete key "${key}": ${err instanceof Error ? err.message : String(err)}`,
         err
       );
+    } finally {
+      observeMs("orbitdb.del.totalMs", performance.now() - __t0);
     }
   }
   // ---------- Structured-entry API (PROFILE-OPLOG-SCHEMA.md §5) ----------
@@ -11568,15 +12243,23 @@ var OrbitDbAdapter = class {
    */
   async putEntry(key, entry) {
     this.ensureConnected();
+    const t0 = performance.now();
+    const isBundleKey = key.startsWith("tokens.bundle.");
     try {
       const cborBytes = encodeEntry(entry);
       await this.db.put(key, cborBytes);
       this.localAuthoredKeys.add(key);
     } catch (err) {
+      incr("orbitdb.putEntry.error");
       throw new ProfileError(
         "ORBITDB_WRITE_FAILED",
         `Failed to write structured entry at "${key}": ${err instanceof Error ? err.message : String(err)}`,
         err
+      );
+    } finally {
+      observeMs(
+        isBundleKey ? "orbitdb.putEntry.bundle" : "orbitdb.putEntry.other",
+        performance.now() - t0
       );
     }
   }
@@ -11612,23 +12295,51 @@ var OrbitDbAdapter = class {
    */
   async getEntry(key, opts = {}) {
     this.ensureConnected();
+    const __geStart = performance.now();
+    const isBundleKey = key.startsWith("tokens.bundle.");
     try {
       const raw2 = await this.db.get(key);
-      if (raw2 === void 0 || raw2 === null) return null;
+      if (raw2 === void 0 || raw2 === null) {
+        observeMs(
+          isBundleKey ? "orbitdb.getEntry.bundleMissMs" : "orbitdb.getEntry.missMs",
+          performance.now() - __geStart
+        );
+        return null;
+      }
       const bytes = coerceToUint8Array(raw2);
       if (opts.downgradeAsReplicated === true) {
-        return decodeAndDowngradeReplicated(bytes);
+        const result = decodeAndDowngradeReplicated(bytes);
+        observeMs(
+          isBundleKey ? "orbitdb.getEntry.bundleHitMs" : "orbitdb.getEntry.hitMs",
+          performance.now() - __geStart
+        );
+        return result;
       }
       const envelope = decodeEntry(bytes);
       if (envelope.v === 0) {
+        observeMs(
+          isBundleKey ? "orbitdb.getEntry.bundleHitMs" : "orbitdb.getEntry.hitMs",
+          performance.now() - __geStart
+        );
         return envelope;
       }
       const trusted = opts.trustLocalClaim === true && this.localAuthoredKeys.has(key);
       if (trusted) {
+        observeMs(
+          isBundleKey ? "orbitdb.getEntry.bundleHitMs" : "orbitdb.getEntry.hitMs",
+          performance.now() - __geStart
+        );
         return envelope;
       }
-      return decodeAndDowngradeReplicated(bytes);
+      const downgraded = decodeAndDowngradeReplicated(bytes);
+      observeMs(
+        isBundleKey ? "orbitdb.getEntry.bundleHitMs" : "orbitdb.getEntry.hitMs",
+        performance.now() - __geStart
+      );
+      return downgraded;
     } catch (err) {
+      incr("orbitdb.getEntry.error");
+      observeMs("orbitdb.getEntry.errorMs", performance.now() - __geStart);
       if (err instanceof ProfileError) throw err;
       throw new ProfileError(
         "ORBITDB_READ_FAILED",
@@ -11639,9 +12350,13 @@ var OrbitDbAdapter = class {
   }
   async all(prefix, opts) {
     this.ensureConnected();
+    incr("orbitdb.all.calls");
+    const __allStart = performance.now();
     try {
       const result = /* @__PURE__ */ new Map();
+      const __dbAllStart = performance.now();
       const allEntries = await this.db.all();
+      observeMs("orbitdb.all.dbAllMs", performance.now() - __dbAllStart);
       const maxResults = opts?.maxResults !== void 0 && Number.isFinite(opts.maxResults) && opts.maxResults >= 0 ? Math.floor(opts.maxResults) : void 0;
       const isCapped = maxResults !== void 0;
       const ALL_AGGREGATE_BYTES_CAP = 256 * 1024 * 1024;
@@ -11720,8 +12435,12 @@ var OrbitDbAdapter = class {
           `all(): skipped ${skippedCount} malformed entries total (further details suppressed).`
         );
       }
+      incr("orbitdb.all.entries", result.size);
+      observeMs("orbitdb.all.totalMs", performance.now() - __allStart);
       return result;
     } catch (err) {
+      incr("orbitdb.all.error");
+      observeMs("orbitdb.all.totalMs", performance.now() - __allStart);
       if (err instanceof ProfileError) throw err;
       throw new ProfileError(
         "ORBITDB_READ_FAILED",
@@ -11774,8 +12493,14 @@ var OrbitDbAdapter = class {
   onReplication(callback) {
     this.ensureConnected();
     const handler = () => {
+      incr("orbitdb.onReplication.fired");
+      const t0 = performance.now();
       this.localAuthoredKeys.clear();
-      callback();
+      try {
+        callback();
+      } finally {
+        observeMs("orbitdb.onReplication.callbackMs", performance.now() - t0);
+      }
     };
     this.db.events.on("update", handler);
     this.replicationListeners.add(handler);
@@ -11990,7 +12715,7 @@ var OrbitDbAdapter = class {
 function extractLostHeadCid(err) {
   const pattern = /Failed to load block for (bafy[a-z0-9]+)/i;
   let current = err;
-  for (let depth = 0; depth < 4 && current !== void 0 && current !== null; depth++) {
+  for (let depth2 = 0; depth2 < 4 && current !== void 0 && current !== null; depth2++) {
     let message = null;
     if (current instanceof Error) {
       message = current.message;
@@ -12279,6 +13004,24 @@ var STORAGE_KEYS_ADDRESS = {
    * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
    */
   PROOF_POLLING_JOBS: "proof_polling_jobs",
+  /**
+   * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+   * verdicts. When `finalizeStrandedReceivedToken` hits
+   * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+   * or `permanent structural failure`, the tokenId is recorded here
+   * with the verdict reason + timestamp.
+   *
+   * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+   * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+   * `sphere payments receive` invocations skip the 60s drain timeout
+   * for already-failed tokens.
+   *
+   * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+   * `payments receive --finalize` (operator-forced retry — gives the
+   * token one more shot at finalization in case the HD-index window
+   * has since widened).
+   */
+  V6_RECOVER_PERMANENT: "v6_recover_permanent",
   // Swap storage keys
   /** Per-swap key: swap:{swapId} */
   SWAP_RECORD_PREFIX: "swap:",
@@ -12503,6 +13246,7 @@ init_encryption();
 init_oplog_envelope_io();
 
 // profile/profile-snapshot-merge.ts
+init_perf_counters();
 var MAX_SAFE_LAMPORT = 2 ** 48;
 function mergeSlots(local, remote) {
   if (remote.kind === "absent") {
@@ -12545,15 +13289,19 @@ async function runJoinSnapshot(remote, deps) {
   let remoteRejectedMalformed = 0;
   for (const entry of remote) {
     entriesEvaluated += 1;
+    incr("profile.snapshotJoin.perKeyApplyCalls");
+    const __keyStart = performance.now();
     let remoteSlot;
     try {
       remoteSlot = await deps.classifyRemote(entry);
     } catch {
       remoteRejectedMalformed += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     if (remoteSlot === null || remoteSlot.kind === "absent") {
       remoteRejectedMalformed += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     let localSlot;
@@ -12565,6 +13313,7 @@ async function runJoinSnapshot(remote, deps) {
     const action = mergeSlots(localSlot, remoteSlot);
     if (action.kind === "noop") {
       localWon += 1;
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
       continue;
     }
     try {
@@ -12576,6 +13325,8 @@ async function runJoinSnapshot(remote, deps) {
       }
     } catch {
       remoteRejectedMalformed += 1;
+    } finally {
+      observeMs("profile.snapshotJoin.perKeyApplyMs", performance.now() - __keyStart);
     }
   }
   return {
@@ -17645,7 +18396,11 @@ function shouldSkipForEpochFloor(floor, candidateEpoch) {
 
 // profile/aggregator-pointer/discover-algorithm.ts
 init_errors2();
+init_perf_counters();
 async function findLatestValidVersion(input) {
+  return time("pointerLayer.findLatestValidVersion", () => _findLatestValidVersionImpl(input));
+}
+async function _findLatestValidVersionImpl(input) {
   let cleanupExternalListener;
   try {
     return await findLatestValidVersionInner(input, (fn) => {
@@ -18096,6 +18851,7 @@ function assertOperatorOverridesAllowed(config, apiName) {
 
 // profile/aggregator-pointer/ProfilePointerLayer.ts
 init_errors2();
+init_perf_counters();
 var ProfilePointerLayer = class {
   #init;
   #config;
@@ -18111,6 +18867,17 @@ var ProfilePointerLayer = class {
   // enqueued during drain.  Public methods check this flag and reject
   // immediately after shutdown starts.
   #shuttingDown = false;
+  // ── Issue #364 Item #1 — recoverLatest head cache ──────────────────────
+  // Cached most-recent result of recoverLatest() with a short TTL.
+  // Subsequent calls within the TTL return the cached value, eliminating
+  // the read-back tight-loop's redundant aggregator round-trips.
+  // Cleared on shutdown(); concurrent callers attach to #inFlightRecover.
+  #recoverCacheTtlMs;
+  #cachedRecover = null;
+  // In-flight dedup: when set, a concurrent recoverLatest awaits this
+  // promise instead of launching a parallel aggregator round-trip.
+  // Cleared in finally after settle (success or failure).
+  #inFlightRecover = null;
   constructor(init) {
     this.#init = init;
     const suppliedConfig = init.config ?? {};
@@ -18119,6 +18886,9 @@ var ProfilePointerLayer = class {
       allowOperatorOverrides: suppliedConfig.allowOperatorOverrides === true,
       enablePointerWinBroadcasts: suppliedConfig.enablePointerWinBroadcasts === true
     });
+    const rawTtl = init.recoverLatestCacheTtlMs;
+    const ttlCandidate = typeof rawTtl === "number" && Number.isFinite(rawTtl) && rawTtl >= 0 ? rawTtl : 1e4;
+    this.#recoverCacheTtlMs = Math.min(ttlCandidate, 6e4);
   }
   /**
    * Issue #264 — capability gate for the pointer-win broadcast
@@ -18302,6 +19072,7 @@ var ProfilePointerLayer = class {
       }
     }
     this.#lastProbeVersions = [];
+    this.#cachedRecover = null;
   }
   // ── publish ──────────────────────────────────────────────────────────────
   /**
@@ -18349,6 +19120,10 @@ var ProfilePointerLayer = class {
       resolveRemoteCid: this.#init.resolveRemoteCid,
       abortSignal
     });
+    if (this.#cachedRecover !== null) {
+      incr("pointerLayer.recoverLatest.cacheInvalidatedOnPublish");
+      this.#cachedRecover = null;
+    }
     if (result.probeHistory.length > 0) {
       this.#lastProbeVersions = result.probeHistory;
     }
@@ -18388,8 +19163,46 @@ var ProfilePointerLayer = class {
    * disambiguates "no pointer" from "pointer exists but gateways are down".
    */
   async recoverLatest(opts) {
-    this.#assertNotShuttingDown("recoverLatest");
-    return this.#tracked(this.#recoverLatestInner(opts?.abortSignal));
+    return time("pointerLayer.recoverLatest", async () => {
+      this.#assertNotShuttingDown("recoverLatest");
+      const abortSignal = opts?.abortSignal;
+      if (abortSignal?.aborted) {
+        const err = new Error("recoverLatest aborted by caller");
+        err.name = "AbortError";
+        throw err;
+      }
+      if (this.#recoverCacheTtlMs > 0 && this.#cachedRecover !== null) {
+        if (Date.now() < this.#cachedRecover.expiresAt) {
+          incr("pointerLayer.recoverLatest.cacheHit");
+          return this.#cachedRecover.result;
+        }
+        incr("pointerLayer.recoverLatest.cacheStale");
+        this.#cachedRecover = null;
+      }
+      if (this.#inFlightRecover !== null) {
+        incr("pointerLayer.recoverLatest.inFlightDedup");
+        return this.#inFlightRecover;
+      }
+      if (this.#recoverCacheTtlMs > 0) {
+        incr("pointerLayer.recoverLatest.cacheMiss");
+      }
+      const inner = this.#tracked(this.#recoverLatestInner(abortSignal));
+      this.#inFlightRecover = inner;
+      try {
+        const result = await inner;
+        if (this.#recoverCacheTtlMs > 0 && !this.#shuttingDown) {
+          this.#cachedRecover = {
+            result,
+            expiresAt: Date.now() + this.#recoverCacheTtlMs
+          };
+        }
+        return result;
+      } finally {
+        if (this.#inFlightRecover === inner) {
+          this.#inFlightRecover = null;
+        }
+      }
+    });
   }
   async #recoverLatestInner(abortSignal) {
     if (abortSignal?.aborted) {
@@ -18478,8 +19291,10 @@ var ProfilePointerLayer = class {
    * validation per SPEC §8.2 step 3). Returns { validV, includedV } per H4.
    */
   async discoverLatestVersion(walkbackLimit, opts) {
-    this.#assertNotShuttingDown("discoverLatestVersion");
-    return this.#tracked(this.#discoverLatestVersionInner(walkbackLimit, opts?.abortSignal));
+    return time("pointerLayer.discoverLatestVersion", () => {
+      this.#assertNotShuttingDown("discoverLatestVersion");
+      return this.#tracked(this.#discoverLatestVersionInner(walkbackLimit, opts?.abortSignal));
+    });
   }
   async #discoverLatestVersionInner(walkbackLimit, abortSignal) {
     if (abortSignal?.aborted) {
@@ -18781,27 +19596,31 @@ var ProfilePointerLayer = class {
   // ── Probe helper (for external use / testing) ───────────────────────────
   /** Low-level probe for a single version — H2 OR-predicate. */
   async probe(v) {
-    this.#assertNotShuttingDown("probe");
-    return this.#tracked(probeVersion({
-      v,
-      keyMaterial: this.#init.keyMaterial,
-      signer: this.#init.signer,
-      aggregatorClient: this.#init.aggregatorClient,
-      trustBase: this.#init.trustBase
-    }));
+    return time("pointerLayer.probe", () => {
+      this.#assertNotShuttingDown("probe");
+      return this.#tracked(probeVersion({
+        v,
+        keyMaterial: this.#init.keyMaterial,
+        signer: this.#init.signer,
+        aggregatorClient: this.#init.aggregatorClient,
+        trustBase: this.#init.trustBase
+      }));
+    });
   }
   /** Low-level classifyVersion. */
   async classify(v) {
-    this.#assertNotShuttingDown("classify");
-    return this.#tracked(classifyVersion({
-      v,
-      keyMaterial: this.#init.keyMaterial,
-      signer: this.#init.signer,
-      aggregatorClient: this.#init.aggregatorClient,
-      trustBase: this.#init.trustBase,
-      decodeCid: this.#init.decodeCid,
-      fetchCar: this.#init.fetchCar
-    }));
+    return time("pointerLayer.classify", () => {
+      this.#assertNotShuttingDown("classify");
+      return this.#tracked(classifyVersion({
+        v,
+        keyMaterial: this.#init.keyMaterial,
+        signer: this.#init.signer,
+        aggregatorClient: this.#init.aggregatorClient,
+        trustBase: this.#init.trustBase,
+        decodeCid: this.#init.decodeCid,
+        fetchCar: this.#init.fetchCar
+      }));
+    });
   }
 };
 
@@ -19054,13 +19873,13 @@ function buildEntryGroupBlocks(entries) {
   }
   return { groupRefs, groupBlocks };
 }
-async function assembleCarBytes(snapshot, maxSizeBytes) {
-  const { groupRefs, groupBlocks } = buildEntryGroupBlocks(snapshot.entries);
+async function assembleCarBytes(snapshot2, maxSizeBytes) {
+  const { groupRefs, groupBlocks } = buildEntryGroupBlocks(snapshot2.entries);
   const rootDoc = {
     version: LEAN_PROFILE_SNAPSHOT_VERSION,
-    chainPubkey: snapshot.chainPubkey,
-    network: snapshot.network,
-    createdAt: snapshot.createdAt,
+    chainPubkey: snapshot2.chainPubkey,
+    network: snapshot2.network,
+    createdAt: snapshot2.createdAt,
     entryGroups: groupRefs.map((g, idx) => ({
       groupKey: g.groupKey,
       // Embed the CID instance directly — dag-cbor encodes CID
@@ -19069,7 +19888,7 @@ async function assembleCarBytes(snapshot, maxSizeBytes) {
       entriesCid: groupBlocks[idx].cid,
       entryCount: g.entryCount
     })),
-    bundles: snapshot.bundles.map((b) => {
+    bundles: snapshot2.bundles.map((b) => {
       const obj = {
         cid: b.cid,
         status: b.status,
@@ -19079,11 +19898,11 @@ async function assembleCarBytes(snapshot, maxSizeBytes) {
       return obj;
     })
   };
-  if (snapshot.epoch !== void 0) {
-    rootDoc.epoch = snapshot.epoch;
+  if (snapshot2.epoch !== void 0) {
+    rootDoc.epoch = snapshot2.epoch;
   }
-  if (snapshot.epochResetReason !== void 0) {
-    rootDoc.epochResetReason = snapshot.epochResetReason;
+  if (snapshot2.epochResetReason !== void 0) {
+    rootDoc.epochResetReason = snapshot2.epochResetReason;
   }
   const rootBytes = (0, import_dag_cbor2.encode)(rootDoc);
   if (rootBytes.byteLength > PROFILE_CAR_IMPORT_MAX_BLOCK_BYTES) {
@@ -19162,7 +19981,7 @@ async function buildLeanProfileSnapshot(options) {
     }
     normalizedReason = options.epochResetReason;
   }
-  const snapshot = {
+  const snapshot2 = {
     version: LEAN_PROFILE_SNAPSHOT_VERSION,
     chainPubkey: options.chainPubkey,
     network: options.network,
@@ -19173,7 +19992,7 @@ async function buildLeanProfileSnapshot(options) {
     entryGroups: [],
     bundles
   };
-  const { carBytes, rootCid } = await assembleCarBytes(snapshot, maxSizeBytes);
+  const { carBytes, rootCid } = await assembleCarBytes(snapshot2, maxSizeBytes);
   return {
     carBytes,
     entryCount: entries.length,
@@ -19685,9 +20504,9 @@ function buildFetchAndJoin(deps) {
         { cause: err }
       );
     }
-    let snapshot;
+    let snapshot2;
     try {
-      snapshot = await parseLeanProfileSnapshotFromRootBlock(
+      snapshot2 = await parseLeanProfileSnapshotFromRootBlock(
         rootBlockBytes,
         (subBlockCid) => fetchFromIpfs([...deps.gateways], subBlockCid)
       );
@@ -19700,7 +20519,7 @@ function buildFetchAndJoin(deps) {
       );
     }
     try {
-      await deps.applySnapshot(snapshot);
+      await deps.applySnapshot(snapshot2, cidString);
     } catch (err) {
       throw new AggregatorPointerError(
         AggregatorPointerErrorCode.PROTOCOL_ERROR,
@@ -21351,23 +22170,52 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
   // ===========================================================================
   /**
    * Encrypt a string value for OrbitDB storage.
-   * If encryption is disabled, returns the raw UTF-8 bytes.
+   *
+   * Fails CLOSED (Audit #333 C1): when encryption is configured
+   * (`encryptionEnabled === true`) but the encryption key has not
+   * been derived yet (no `setIdentity()` call), throws
+   * `PROFILE_NOT_INITIALIZED`. The previous behaviour returned raw
+   * UTF-8 bytes, which under the common Sphere ordering of
+   * `connect() → setIdentity()` allowed plaintext writes (including
+   * the wallet seed during migration) to land in OrbitDB and
+   * replicate to public IPFS gateways.
+   *
+   * When encryption is disabled entirely (`encrypt: false`, test
+   * mode), returns raw UTF-8 bytes.
    */
   async encrypt(value) {
-    if (!this.encryptionEnabled || !this.profileEncryptionKey) {
-      return new TextEncoder().encode(value);
+    if (this.encryptionEnabled) {
+      if (this.profileEncryptionKey === null) {
+        throw new ProfileError(
+          "PROFILE_NOT_INITIALIZED",
+          "ProfileStorageProvider.encrypt() called before setIdentity() derived the encryption key. Returning plaintext here would leak the unencrypted value to OrbitDB \u2192 IPFS replication. Call setIdentity() before any write."
+        );
+      }
+      return encryptString(this.profileEncryptionKey, value);
     }
-    return encryptString(this.profileEncryptionKey, value);
+    return new TextEncoder().encode(value);
   }
   /**
    * Decrypt bytes from OrbitDB to a string.
-   * If encryption is disabled, decodes as raw UTF-8.
+   *
+   * Symmetric to {@link encrypt}: throws `PROFILE_NOT_INITIALIZED` when
+   * encryption is enabled but the key has not been derived. A silent
+   * UTF-8 decode in that window would interpret ciphertext as garbage
+   * and quietly corrupt reads of envelope-encrypted entries.
+   *
+   * When encryption is disabled entirely, decodes as raw UTF-8.
    */
   async decrypt(encrypted) {
-    if (!this.encryptionEnabled || !this.profileEncryptionKey) {
-      return new TextDecoder().decode(encrypted);
+    if (this.encryptionEnabled) {
+      if (this.profileEncryptionKey === null) {
+        throw new ProfileError(
+          "PROFILE_NOT_INITIALIZED",
+          "ProfileStorageProvider.decrypt() called before setIdentity() derived the encryption key. Reading ciphertext as UTF-8 would silently corrupt the returned value. Call setIdentity() first."
+        );
+      }
+      return decryptString(this.profileEncryptionKey, encrypted);
     }
-    return decryptString(this.profileEncryptionKey, encrypted);
+    return new TextDecoder().decode(encrypted);
   }
   // ===========================================================================
   // Private Helpers: Logging
@@ -21382,6 +22230,13 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
 // profile/profile-token-storage-provider.ts
 init_logger();
 init_errors3();
+init_perf_counters();
+
+// profile/global-clear-gate.ts
+var depth = 0;
+function isGlobalClearActive() {
+  return depth > 0;
+}
 
 // types/txf.ts
 var ARCHIVED_PREFIX = "archived-";
@@ -21590,6 +22445,7 @@ function deriveStructuralManifest(pkg) {
 
 // profile/profile-token-storage/bundle-index.ts
 init_encryption();
+init_perf_counters();
 init_oplog_entry();
 var BUNDLE_KEY_PREFIX = "tokens.bundle.";
 var CONSOLIDATION_WARNING_THRESHOLD = 3;
@@ -21597,6 +22453,38 @@ var CORRUPT_CIDS_PREVIEW_CAP = 100;
 var BundleIndex = class {
   constructor(host) {
     this.host = host;
+  }
+  /**
+   * Issue #367 — set by {@link runProfileSnapshotJoin} BEFORE invoking
+   * this writer's `joinSnapshot()` and cleared in `finally` after.
+   * Read inside `joinSnapshot`'s `writeRemote` callback to annotate
+   * each landed bundle ref with its source snapshot's pointer CID.
+   *
+   * Null outside of an active snapshot apply — covers production code
+   * paths (where the dispatcher always arms it for non-empty bundle
+   * slices) AND legacy code paths / test doubles (where the dispatcher
+   * may not arm it at all). The `writeRemote` callback treats null as
+   * "no provenance available" and writes the bundle ref bytes verbatim,
+   * matching the pre-#367 behaviour.
+   */
+  currentSnapshotApplyCid = null;
+  /**
+   * Issue #367 — arm/clear the source-snapshot context consulted by
+   * `joinSnapshot`'s `writeRemote` callback. Invoked by the snapshot
+   * dispatcher around its BundleIndex JOIN call. Never throws.
+   *
+   * The setter is idempotent and does NOT enforce ownership — callers
+   * are responsible for clearing after their JOIN completes (the
+   * dispatcher's `finally` block satisfies this). A leaked non-null
+   * value into a later apply with a stale CID is the worst-case
+   * downside; the Rule-4 gate would then group bundles under the
+   * wrong source — but Rule-4 is an enrichment skip, not a correctness
+   * gate, so the cost is at most a missed optimisation, never lost
+   * tokens. The serialized `_applySnapshotIfWiredImpl` call site
+   * prevents this in practice.
+   */
+  setCurrentSnapshotApplyCid(cid) {
+    this.currentSnapshotApplyCid = cid;
   }
   /**
    * List all bundle refs from OrbitDB, filtered to active status.
@@ -21624,7 +22512,9 @@ var BundleIndex = class {
    * adapter's legacy-wrapping).
    */
   async listBundles() {
+    const t0 = performance.now();
     const rawEntries = await this.host.db.all(BUNDLE_KEY_PREFIX);
+    observeMs("bundleIndex.listBundles.dbAllMs", performance.now() - t0);
     const result = /* @__PURE__ */ new Map();
     const corruptCids = [];
     let firstCorruptError = null;
@@ -21649,6 +22539,7 @@ var BundleIndex = class {
         if (firstCorruptError === null) firstCorruptError = err;
       }
     }
+    incr("bundleIndex.listBundles.entries", result.size);
     if (corruptCids.length > 0) {
       const ev = this.host.buildErrorEvent("storage:error", firstCorruptError, "CID_REF_CORRUPT");
       const truncated = corruptCids.length > CORRUPT_CIDS_PREVIEW_CAP;
@@ -21800,16 +22691,46 @@ var BundleIndex = class {
         );
       },
       writeRemote: async (key, bytes) => {
+        let bytesToWrite = bytes;
+        const sourceCid = this.currentSnapshotApplyCid;
+        const encryptionKey = this.host.getEncryptionKey();
+        if (sourceCid !== null && sourceCid.length > 0 && encryptionKey !== null) {
+          try {
+            let encryptedPayload = bytes;
+            try {
+              const envelope = decodeEntry(bytes);
+              if (envelope.v === 1) {
+                encryptedPayload = envelope.payload;
+              }
+            } catch {
+            }
+            const decrypted = await decryptProfileValue(encryptionKey, encryptedPayload);
+            const parsed = JSON.parse(new TextDecoder().decode(decrypted));
+            if (isUxfBundleRef(parsed)) {
+              const annotated = {
+                ...parsed,
+                sourcedFromSnapshotPointerCid: sourceCid
+              };
+              const reSerialized = new TextEncoder().encode(JSON.stringify(annotated));
+              bytesToWrite = await encryptProfileValue(encryptionKey, reSerialized);
+            }
+          } catch (err) {
+            this.host.log(
+              `BundleIndex.joinSnapshot: provenance annotation failed for ${key}; persisting verbatim (${err instanceof Error ? err.message : String(err)})`
+            );
+            bytesToWrite = bytes;
+          }
+        }
         const db = this.host.db;
         if (typeof db.putEntry === "function") {
           const envelope = buildLocalEntry({
             type: "cache_index",
             originated: "system",
-            payload: bytes
+            payload: bytesToWrite
           });
           await db.putEntry(key, envelope);
         } else {
-          await db.put(key, bytes);
+          await db.put(key, bytesToWrite);
           const markHook = db.markLocallyAuthored;
           if (typeof markHook === "function") {
             markHook.call(db, key);
@@ -21891,9 +22812,12 @@ function isUxfBundleRef(value) {
 // profile/profile-token-storage/flush-scheduler.ts
 init_ipfs_client();
 init_transfer_payload();
+init_perf_counters();
 var POINTER_MONOTONICITY_VIOLATION = "POINTER_MONOTONICITY_VIOLATION";
 var POINTER_MONOTONICITY_RECOVERED = "POINTER_MONOTONICITY_RECOVERED";
 var MONOTONICITY_RECOVERY_PAYLOAD_CAP = 100;
+var OPLOG_RESET_PROBE_DEADLINE_MS = 3e4;
+var OPLOG_RESET_PROBE_PER_ATTEMPT_MS = 5e3;
 function unionOpStateWithSentWins(currentOp, previousOp) {
   function readId(entry) {
     if (!entry || typeof entry !== "object") return void 0;
@@ -22167,6 +23091,18 @@ var FlushScheduler = class {
    * the remote originator already published while we were merging).
    */
   async flushToIpfs() {
+    incr("flushScheduler.flushToIpfs.calls");
+    const __perfStart = performance.now();
+    try {
+      return await this.__flushToIpfsBody();
+    } finally {
+      observeMs(
+        "flushScheduler.flushToIpfs.totalMs",
+        performance.now() - __perfStart
+      );
+    }
+  }
+  async __flushToIpfsBody() {
     const encryptionKey = this.host.getEncryptionKey();
     if (!encryptionKey) return;
     const noDataMode = this.noDataFlushPending;
@@ -22632,19 +23568,71 @@ var FlushScheduler = class {
       if (typeof dbWithReset.resetCorruptedLog !== "function") {
         throw err;
       }
-      this.host.log(
-        `OpLog head unreachable (lostHeadCid=${lostHeadCid}); auto-resetting Profile DB. Prior OpLog history is permanently inaccessible. Token data on local IndexedDB is preserved.`
-      );
       const context = "flush-scheduler.bundle-write";
+      let effectiveLostHeadCid = lostHeadCid;
+      if (this.host.ipfsGateways.length > 0) {
+        this.host.log(
+          `OpLog head unreachable (lostHeadCid=${lostHeadCid}); probing ${this.host.ipfsGateways.length} gateway(s) before destructive reset (Audit #333 C3, deadline=${OPLOG_RESET_PROBE_DEADLINE_MS}ms)`
+        );
+        let probeOk = false;
+        let probeAttempts = 0;
+        let probeElapsedMs = 0;
+        try {
+          const probe = await verifyCidAccessibleWithRetry(
+            this.host.ipfsGateways,
+            lostHeadCid,
+            {
+              deadlineMs: OPLOG_RESET_PROBE_DEADLINE_MS,
+              perAttemptTimeoutMs: OPLOG_RESET_PROBE_PER_ATTEMPT_MS
+            }
+          );
+          probeOk = probe.ok;
+          probeAttempts = probe.attempts;
+          probeElapsedMs = probe.elapsedMs;
+        } catch (probeErr) {
+          this.host.log(
+            `OpLog head probe threw before completing: ${probeErr instanceof Error ? probeErr.message : String(probeErr)}; proceeding to reset (Audit #333 C3)`
+          );
+        }
+        if (probeOk) {
+          this.host.log(
+            `OpLog head IS accessible via gateway after ${probeAttempts} attempt(s) in ${probeElapsedMs}ms; retrying addBundle once before reset (Audit #333 C3)`
+          );
+          try {
+            await this.bundleIndex.addBundle(cid, bundleRef);
+            return;
+          } catch (retryErr) {
+            const retryLostHeadCid = extractLostHeadCid(retryErr);
+            if (retryLostHeadCid === null) {
+              throw retryErr;
+            }
+            this.host.log(
+              `Probe succeeded but addBundle still failed with lostHeadCid=${retryLostHeadCid}; proceeding to reset (Audit #333 C3)`
+            );
+            effectiveLostHeadCid = retryLostHeadCid;
+          }
+        } else {
+          this.host.log(
+            `OpLog head NOT accessible via any gateway after ${probeAttempts} attempt(s) in ${probeElapsedMs}ms; head is genuinely unrecoverable. Proceeding to reset (Audit #333 C3)`
+          );
+        }
+      } else {
+        this.host.log(
+          `OpLog head unreachable (lostHeadCid=${lostHeadCid}) and no IPFS gateways configured; no recovery surface available. Proceeding to reset (Audit #333 C3)`
+        );
+      }
+      this.host.log(
+        `OpLog head unreachable (lostHeadCid=${effectiveLostHeadCid}); auto-resetting Profile DB. Prior OpLog history is permanently inaccessible. Token data on local IndexedDB is preserved.`
+      );
       this.host.emitEvent({
         type: "profile:oplog-auto-resetting",
         timestamp: Date.now(),
-        data: { lostHeadCid, context }
+        data: { lostHeadCid: effectiveLostHeadCid, context }
       });
       let resetResult;
       try {
         resetResult = await dbWithReset.resetCorruptedLog({
-          lostHeadCid,
+          lostHeadCid: effectiveLostHeadCid,
           context
         });
       } catch (resetErr) {
@@ -22652,7 +23640,7 @@ var FlushScheduler = class {
           type: "profile:recovered",
           timestamp: Date.now(),
           data: {
-            lostHeadCid,
+            lostHeadCid: effectiveLostHeadCid,
             recoveredAt: Date.now(),
             context,
             retrySucceeded: false,
@@ -22666,7 +23654,7 @@ var FlushScheduler = class {
       const marker = {
         version: 1,
         recoveredAt: resetResult.recoveredAt,
-        lostHeadCid: resetResult.lostHeadCid ?? lostHeadCid,
+        lostHeadCid: resetResult.lostHeadCid ?? effectiveLostHeadCid,
         context,
         walkBackClosed: true,
         note: "Profile OpLog auto-reset: an OrbitDB head block was unreachable and could not be served by any known store (Helia blockstore, operator gateways). Walk-back past this point is permanently closed; some operational metadata (outbox/sent/history not yet pinned in a UXF bundle) may have been lost. Token data on local IndexedDB token storage is preserved."
@@ -22685,7 +23673,7 @@ var FlushScheduler = class {
           type: "profile:recovered",
           timestamp: Date.now(),
           data: {
-            lostHeadCid,
+            lostHeadCid: effectiveLostHeadCid,
             recoveredAt: resetResult.recoveredAt,
             context,
             retrySucceeded: false
@@ -22699,7 +23687,7 @@ var FlushScheduler = class {
         type: "profile:recovered",
         timestamp: Date.now(),
         data: {
-          lostHeadCid,
+          lostHeadCid: effectiveLostHeadCid,
           recoveredAt: resetResult.recoveredAt,
           context,
           retrySucceeded: true
@@ -24170,6 +25158,7 @@ var LifecycleManager = class {
 
 // profile/profile-snapshot-cache.ts
 init_sha2();
+init_perf_counters();
 var PROFILE_SNAPSHOT_SCHEMA_VERSION = 1;
 function getSnapshotBlobKey(addressId) {
   return `${STORAGE_KEYS_GLOBAL.PROFILE_SNAPSHOT_BLOB}_${addressId}`;
@@ -24198,6 +25187,9 @@ function computeContentHash(blob) {
   return hex;
 }
 async function writeSnapshot(storage, input) {
+  return time("snapshotCache.writeSnapshot", () => _writeSnapshotImpl(storage, input));
+}
+async function _writeSnapshotImpl(storage, input) {
   const ts = (input.now ?? Date.now)();
   const blobNoHash = {
     version: PROFILE_SNAPSHOT_SCHEMA_VERSION,
@@ -24235,6 +25227,9 @@ async function writeSnapshot(storage, input) {
   return ts;
 }
 async function readSnapshot(storage, addressId, expectedWalletId, now2 = Date.now) {
+  return time("snapshotCache.readSnapshot", () => _readSnapshotImpl(storage, addressId, expectedWalletId, now2));
+}
+async function _readSnapshotImpl(storage, addressId, expectedWalletId, now2 = Date.now) {
   const mainKey = getSnapshotBlobKey(addressId);
   let raw2;
   try {
@@ -24347,6 +25342,21 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
   encryptionKey = null;
   initialized = false;
   isShuttingDown = false;
+  /**
+   * Issue #364 Item #2 — true between {@link clear} entry and exit.
+   * `clear()` is destructive; allowing the periodic pointer-poll's
+   * `applySnapshotIfWired` to run mid-clear would dispatch a snapshot
+   * against state that is about to be wiped, wasting IPFS round-trips
+   * and risking partial seeding of about-to-be-deleted data. The
+   * shutdown gate (`isShuttingDown`/`hasShutdown`) does not cover the
+   * clear-on-a-live-provider path, hence the separate latch.
+   */
+  isClearing = false;
+  // Issue #368 — the process-wide global-clear gate lives in a
+  // dedicated leaf module (`profile/global-clear-gate.ts`) so
+  // `core/Sphere.ts` can bracket multi-wallet clears without taking a
+  // hard import on `ProfileTokenStorageProvider`. The gate is consulted
+  // inside `_applySnapshotIfWiredImpl` below.
   // --- Write-behind buffer ---
   pendingData = null;
   flushTimer = null;
@@ -24924,9 +25934,21 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
    * work after the gate has closed.
    */
   async applySnapshotIfWired(cidString) {
+    return time("profile.applySnapshot", () => this._applySnapshotIfWiredImpl(cidString));
+  }
+  async _applySnapshotIfWiredImpl(cidString) {
+    if (this.isClearing) {
+      incr("profile.applySnapshot.suppressedDuringClear");
+      return null;
+    }
+    if (isGlobalClearActive()) {
+      incr("profile.applySnapshot.suppressedDuringGlobalClear");
+      return null;
+    }
     if (this.isShuttingDown || this.hasShutdown) return null;
     const callback = this.applySnapshotCallback ?? this.options?.onApplySnapshot ?? null;
     if (typeof callback !== "function") return null;
+    incr("profile.applySnapshot.fired");
     return callback(cidString);
   }
   // ---------------------------------------------------------------------------
@@ -25211,6 +26233,10 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
   // load() -- Multi-bundle merge
   // ---------------------------------------------------------------------------
   async load(_identifier) {
+    incr("profile.load.calls");
+    return time("profile.load.totalMs", () => this._loadImpl(_identifier));
+  }
+  async _loadImpl(_identifier) {
     const timestamp = Date.now();
     if (!this.initialized || !this.encryptionKey) {
       return {
@@ -25275,7 +26301,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       const { UxfPackage: UxfPackage2 } = await Promise.resolve().then(() => (init_UxfPackage(), UxfPackage_exports));
       const mergedPkg = UxfPackage2.create();
       const loadedBundles = [];
-      for (const [cid] of activeBundles) {
+      for (const [cid, ref] of activeBundles) {
         try {
           const carBytes = await fetchCarFromIpfs(
             this._ipfsGateways,
@@ -25285,7 +26311,11 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
             this.db.getHelia?.()
           );
           const pkg = await UxfPackage2.fromCar(carBytes);
-          loadedBundles.push({ cid, pkg });
+          loadedBundles.push({
+            cid,
+            pkg,
+            sourcedFromSnapshotPointerCid: ref.sourcedFromSnapshotPointerCid ?? null
+          });
         } catch (err) {
           this.log(`Failed to load bundle ${cid}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -25306,7 +26336,27 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
       }
       let verifiedProofs = void 0;
       const verifyInclusionProof = this.options?.oracle?.verifyInclusionProof;
-      if (verifyInclusionProof && loadedBundles.length >= 2) {
+      const skipRule4Env = typeof process !== "undefined" && process?.env?.SPHERE_SKIP_RULE4 === "1";
+      if (skipRule4Env) incr("profile.load.rule4Skipped");
+      let skipRule4Snapshot = false;
+      if (loadedBundles.length >= 2) {
+        const firstCid = loadedBundles[0].sourcedFromSnapshotPointerCid;
+        if (firstCid !== null) {
+          skipRule4Snapshot = loadedBundles.every(
+            (b) => b.sourcedFromSnapshotPointerCid === firstCid
+          );
+        }
+      }
+      if (skipRule4Snapshot) {
+        incr("profile.load.rule4SkippedSnapshot");
+        this.log(
+          `JOIN: Rule-4 pairwise skipped \u2014 all ${loadedBundles.length} bundles sourced from snapshot ${loadedBundles[0].sourcedFromSnapshotPointerCid?.slice(0, 12)}\u2026`
+        );
+      }
+      const skipRule4 = skipRule4Env || skipRule4Snapshot;
+      if (verifyInclusionProof && loadedBundles.length >= 2 && !skipRule4) {
+        incr("profile.load.rule4PairwiseInvocations");
+        const __r4Start = performance.now();
         try {
           const accum = /* @__PURE__ */ new Set();
           for (let i = 0; i < loadedBundles.length; i++) {
@@ -25318,11 +26368,14 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
               for (const h of pairwise) accum.add(h);
             }
           }
+          observeMs("profile.load.rule4PairwiseMs", performance.now() - __r4Start);
           verifiedProofs = accum;
           this.log(
             `JOIN: computed verifiedProofs across ${loadedBundles.length} bundles (${accum.size} proof element(s) verified)`
           );
         } catch (err) {
+          observeMs("profile.load.rule4PairwiseMs", performance.now() - __r4Start);
+          incr("profile.load.rule4PairwiseThrew");
           this.log(
             `JOIN: computeVerifiedProofs failed (Rule 4 enrichment skipped): ${err instanceof Error ? err.message : String(err)}`
           );
@@ -25493,6 +26546,7 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
   }
   async clear() {
     if (!this.initialized) return false;
+    this.isClearing = true;
     try {
       const allBundles = await this.db.all(BUNDLE_KEY_PREFIX);
       for (const key of allBundles.keys()) {
@@ -25523,6 +26577,8 @@ var ProfileTokenStorageProvider = class _ProfileTokenStorageProvider {
     } catch (err) {
       this.log(`clear() failed: ${err instanceof Error ? err.message : String(err)}`);
       return false;
+    } finally {
+      this.isClearing = false;
     }
   }
   /**
@@ -27069,9 +28125,11 @@ function mergeByPrimaryKey(remote, local, keyField) {
 
 // profile/factory.ts
 init_ipfs_client();
+init_perf_counters();
 
 // profile/profile-snapshot-dispatcher.ts
 init_logger();
+init_perf_counters();
 var ADDRESS_ID_PREFIX_RE = /^(DIRECT_[0-9a-f]{6}_[0-9a-f]{6})\./;
 var PER_ADDRESS_LEGACY_SUFFIX_MAP = [
   { legacySuffix: "_invalidatedNametags", profileSuffix: ".invalidatedNametags" },
@@ -27108,12 +28166,17 @@ function accumulate(agg, r) {
   agg.localWon += r.localWon;
   agg.remoteRejectedMalformed += r.remoteRejectedMalformed;
 }
-async function runProfileSnapshotJoin(snapshot, deps) {
+async function runProfileSnapshotJoin(snapshot2, deps) {
   const log = deps.log ?? ((msg) => logger.debug("SnapshotDispatcher", msg));
-  const entries = snapshot.entries.map((e) => ({
+  const __sjStart = performance.now();
+  incr("profile.snapshotJoin.calls");
+  const __decodeStart = performance.now();
+  const entries = snapshot2.entries.map((e) => ({
     key: normalizeEntryKey(e.key),
     encryptedValue: base64ToBytes(e.value)
   }));
+  observeMs("profile.snapshotJoin.decodeMs", performance.now() - __decodeStart);
+  incr("profile.snapshotJoin.decodedEntries", entries.length);
   const addressIds = /* @__PURE__ */ new Set();
   for (const e of entries) {
     const m = ADDRESS_ID_PREFIX_RE.exec(e.key);
@@ -27138,6 +28201,8 @@ async function runProfileSnapshotJoin(snapshot, deps) {
     for (const { keyPrefix, writer } of writers) {
       const slice = entries.filter((e) => e.key.startsWith(keyPrefix));
       if (slice.length === 0) continue;
+      incr("profile.snapshotJoin.perWriterDispatchCalls");
+      const __wStart = performance.now();
       try {
         const result = await writer.joinSnapshot(slice);
         accumulate(aggregated, result);
@@ -27145,6 +28210,8 @@ async function runProfileSnapshotJoin(snapshot, deps) {
         log(
           `runProfileSnapshotJoin: writer @ ${keyPrefix} threw \u2014 skipping (error: ${err instanceof Error ? err.message : String(err)})`
         );
+      } finally {
+        observeMs("profile.snapshotJoin.perWriterDispatchMs", performance.now() - __wStart);
       }
     }
   }
@@ -27152,6 +28219,20 @@ async function runProfileSnapshotJoin(snapshot, deps) {
     const bundleSlice = entries.filter((e) => e.key.startsWith(BUNDLE_KEY_PREFIX));
     bundleEntriesSeen = bundleSlice.length;
     if (bundleSlice.length > 0) {
+      incr("profile.snapshotJoin.bundleIndexJoinCalls");
+      const __bStart = performance.now();
+      const setter = deps.bundleIndex.setCurrentSnapshotApplyCid;
+      const armed = typeof setter === "function";
+      const cidForContext = deps.sourcePointerCid ?? "";
+      if (armed && cidForContext.length > 0) {
+        try {
+          setter.call(deps.bundleIndex, cidForContext);
+        } catch (err) {
+          log(
+            `runProfileSnapshotJoin: setCurrentSnapshotApplyCid threw \u2014 proceeding without provenance annotation (error: ${err instanceof Error ? err.message : String(err)})`
+          );
+        }
+      }
       try {
         const result = await deps.bundleIndex.joinSnapshot(bundleSlice);
         accumulate(aggregated, result);
@@ -27159,6 +28240,14 @@ async function runProfileSnapshotJoin(snapshot, deps) {
         log(
           `runProfileSnapshotJoin: bundleIndex.joinSnapshot threw \u2014 skipping (error: ${err instanceof Error ? err.message : String(err)})`
         );
+      } finally {
+        observeMs("profile.snapshotJoin.bundleIndexJoinMs", performance.now() - __bStart);
+        if (armed) {
+          try {
+            setter.call(deps.bundleIndex, null);
+          } catch {
+          }
+        }
       }
     }
   } else {
@@ -27166,6 +28255,7 @@ async function runProfileSnapshotJoin(snapshot, deps) {
       "runProfileSnapshotJoin: bundleIndex not available \u2014 bundle JOIN skipped"
     );
   }
+  observeMs("profile.snapshotJoin.totalMs", performance.now() - __sjStart);
   const joinedAny = aggregated.liveLanded > 0 || aggregated.tombstonesLanded > 0;
   return {
     joinedAny,
@@ -27234,15 +28324,16 @@ async function runProfileDirtyFlush(deps) {
   if (!pointer) {
     return { ok: false, transient: false, code: "NOT_READY_POINTER" };
   }
-  const snapshot = await deps.buildSnapshot(chainPubkey, network);
-  await deps.pin(snapshot.carBytes, snapshot.rootCid);
-  const result = await deps.publishCid(snapshot.rootCid);
+  const snapshot2 = await deps.buildSnapshot(chainPubkey, network);
+  await deps.pin(snapshot2.carBytes, snapshot2.rootCid);
+  const result = await deps.publishCid(snapshot2.rootCid);
   return result;
 }
-function runProfileSnapshotApply(snapshot, deps) {
-  return runProfileSnapshotJoin(snapshot, {
+function runProfileSnapshotApply(snapshot2, deps, sourcePointerCid) {
+  return runProfileSnapshotJoin(snapshot2, {
     writersFor: deps.writersFor,
     bundleIndex: deps.getBundleIndex(),
+    sourcePointerCid,
     log: deps.log
   });
 }
@@ -27411,7 +28502,7 @@ function createProfileProviders(config, cacheStorage, oracle) {
     });
   }
   storage.setProfileDirtyNotifier(() => tokenStorage.notifyProfileDirty());
-  const dispatchParsedSnapshot = (snapshot) => runProfileSnapshotApply(snapshot, {
+  const dispatchParsedSnapshot = (snapshot2, sourcePointerCid) => runProfileSnapshotApply(snapshot2, {
     writersFor: (addressId) => {
       const writers = [];
       const outbox = storage.buildOutboxWriter(addressId);
@@ -27478,22 +28569,28 @@ function createProfileProviders(config, cacheStorage, oracle) {
       return writers;
     },
     getBundleIndex: () => tokenStorage.getBundleIndex()
-  });
-  storage.setSnapshotApplier((snapshot) => dispatchParsedSnapshot(snapshot));
+  }, sourcePointerCid);
+  storage.setSnapshotApplier(
+    (snapshot2, sourcePointerCid) => dispatchParsedSnapshot(snapshot2, sourcePointerCid)
+  );
   tokenStorage.setApplySnapshotCallback(async (cidString) => {
+    incr("applySnapshotCb.calls");
+    const __cbStart = performance.now();
     const helia = db.getHelia?.();
-    const rootBlockBytes = await fetchFromIpfs(
-      ipfsGateways,
-      cidString,
-      void 0,
-      void 0,
-      helia
+    const rootBlockBytes = await time(
+      "applySnapshotCb.fetchRootMs",
+      () => fetchFromIpfs(ipfsGateways, cidString, void 0, void 0, helia)
     );
-    const snapshot = await parseLeanProfileSnapshotFromRootBlock(
-      rootBlockBytes,
-      (subBlockCid) => fetchFromIpfs(ipfsGateways, subBlockCid, void 0, void 0, helia)
+    const snapshot2 = await time(
+      "applySnapshotCb.parseSnapshotMs",
+      () => parseLeanProfileSnapshotFromRootBlock(
+        rootBlockBytes,
+        (subBlockCid) => fetchFromIpfs(ipfsGateways, subBlockCid, void 0, void 0, helia)
+      )
     );
-    return dispatchParsedSnapshot(snapshot);
+    const result = await time("applySnapshotCb.dispatchMs", () => dispatchParsedSnapshot(snapshot2, cidString));
+    observeMs("applySnapshotCb.totalMs", performance.now() - __cbStart);
+    return result;
   });
   return { storage, tokenStorage };
 }
