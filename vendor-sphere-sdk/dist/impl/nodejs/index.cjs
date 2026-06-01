@@ -32155,11 +32155,41 @@ async function withPinRetry(fn, isRetryable = isTransientPinError, backoffs = PI
 var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
 var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
+var SIDECAR_COLD_MISS_THRESHOLD = 3;
+var SIDECAR_COLD_DURATION_MS = 6e4;
+var sidecarColdState = /* @__PURE__ */ new Map();
+function getSidecarColdState(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  let state = sidecarColdState.get(key);
+  if (!state) {
+    state = { consecutiveMisses: 0, coldUntil: 0 };
+    sidecarColdState.set(key, state);
+  }
+  return state;
+}
+function isSidecarCold(gateway) {
+  const state = sidecarColdState.get(normalizeGatewayKey(gateway));
+  if (!state) return false;
+  return state.coldUntil > Date.now();
+}
+function recordSidecarMiss(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses += 1;
+  if (state.consecutiveMisses >= SIDECAR_COLD_MISS_THRESHOLD) {
+    state.coldUntil = Date.now() + SIDECAR_COLD_DURATION_MS;
+  }
+}
+function recordSidecarHit(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses = 0;
+  state.coldUntil = 0;
+}
 function submitToSidecarBestEffort(gateway, cid, bytes) {
   if (typeof gateway !== "string" || gateway.length === 0) return;
   if (typeof cid !== "string" || cid.length === 0) return;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
   if (bytes.length > SIDECAR_SUBMIT_MAX_BYTES) return;
+  if (isSidecarCold(gateway)) return;
   const url = `${gateway.replace(/\/$/, "")}/sidecar/submit?cid=${encodeURIComponent(cid)}`;
   void fetch(url, {
     method: "POST",
@@ -32168,11 +32198,13 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     signal: AbortSignal.timeout(SIDECAR_SUBMIT_TIMEOUT_MS)
   }).then((response) => {
     if (!response.ok) {
+      if (response.status === 404) recordSidecarMiss(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 HTTP ${response.status} (${response.statusText}) on ${gateway}`
       );
     } else {
+      recordSidecarHit(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 200 on ${gateway}`
@@ -32181,6 +32213,7 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     response.body?.cancel?.().catch(() => {
     });
   }).catch(() => {
+    recordSidecarMiss(gateway);
   });
 }
 var PROBE_TIMEOUT_MS = 2e3;

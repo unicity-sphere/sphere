@@ -9401,11 +9401,41 @@ var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
 var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
 var SIDECAR_READ_TIMEOUT_MS = 500;
+var SIDECAR_COLD_MISS_THRESHOLD = 3;
+var SIDECAR_COLD_DURATION_MS = 6e4;
+var sidecarColdState = /* @__PURE__ */ new Map();
+function getSidecarColdState(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  let state = sidecarColdState.get(key);
+  if (!state) {
+    state = { consecutiveMisses: 0, coldUntil: 0 };
+    sidecarColdState.set(key, state);
+  }
+  return state;
+}
+function isSidecarCold(gateway) {
+  const state = sidecarColdState.get(normalizeGatewayKey(gateway));
+  if (!state) return false;
+  return state.coldUntil > Date.now();
+}
+function recordSidecarMiss(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses += 1;
+  if (state.consecutiveMisses >= SIDECAR_COLD_MISS_THRESHOLD) {
+    state.coldUntil = Date.now() + SIDECAR_COLD_DURATION_MS;
+  }
+}
+function recordSidecarHit(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses = 0;
+  state.coldUntil = 0;
+}
 function submitToSidecarBestEffort(gateway, cid, bytes) {
   if (typeof gateway !== "string" || gateway.length === 0) return;
   if (typeof cid !== "string" || cid.length === 0) return;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
   if (bytes.length > SIDECAR_SUBMIT_MAX_BYTES) return;
+  if (isSidecarCold(gateway)) return;
   const url = `${gateway.replace(/\/$/, "")}/sidecar/submit?cid=${encodeURIComponent(cid)}`;
   void fetch(url, {
     method: "POST",
@@ -9414,11 +9444,13 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     signal: AbortSignal.timeout(SIDECAR_SUBMIT_TIMEOUT_MS)
   }).then((response) => {
     if (!response.ok) {
+      if (response.status === 404) recordSidecarMiss(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 HTTP ${response.status} (${response.statusText}) on ${gateway}`
       );
     } else {
+      recordSidecarHit(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 200 on ${gateway}`
@@ -9427,11 +9459,13 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     response.body?.cancel?.().catch(() => {
     });
   }).catch(() => {
+    recordSidecarMiss(gateway);
   });
 }
 async function tryReadFromSidecar(gateway, cid) {
   if (typeof gateway !== "string" || gateway.length === 0) return null;
   if (typeof cid !== "string" || cid.length === 0) return null;
+  if (isSidecarCold(gateway)) return null;
   try {
     const url = `${gateway.replace(/\/$/, "")}/sidecar/blob?cid=${encodeURIComponent(cid)}`;
     const response = await fetch(url, {
@@ -9442,22 +9476,29 @@ async function tryReadFromSidecar(gateway, cid) {
     if (!response.ok) {
       response.body?.cancel?.().catch(() => {
       });
+      recordSidecarMiss(gateway);
       return null;
     }
     const ct = (response.headers.get("Content-Type") ?? "").toLowerCase();
     if (ct && !ct.startsWith("application/octet-stream") && !ct.startsWith("application/vnd.ipld")) {
       response.body?.cancel?.().catch(() => {
       });
+      recordSidecarMiss(gateway);
       return null;
     }
     const buf = await response.arrayBuffer();
-    if (buf.byteLength === 0) return null;
+    if (buf.byteLength === 0) {
+      recordSidecarMiss(gateway);
+      return null;
+    }
+    recordSidecarHit(gateway);
     logger.debug(
       "IPFS-Sidecar",
       `read hit ${cid.slice(0, 16)} (${buf.byteLength} bytes) on ${gateway}`
     );
     return new Uint8Array(buf);
   } catch {
+    recordSidecarMiss(gateway);
     return null;
   }
 }
@@ -40470,23 +40511,36 @@ var CommunicationsModule = class _CommunicationsModule {
    *
    * Dual-read per PROFILE-CID-REFERENCES.md §6:
    *   - If the payload is a CID ref envelope → fetch content from IPFS
-   *     via `cidRefStore`. Errors propagate with typed codes.
-   *   - If no cidRefStore is injected but a ref is found → throw typed
-   *     `ProfileError('CID_REF_UNREADABLE')`. Silent fallback would mean
-   *     silently losing all stored DMs for this address.
+   *     via `cidRefStore`. Errors degrade to empty rather than bricking load.
+   *   - If no cidRefStore is injected but a ref is found → `[CID_REF_DEGRADE]`
+   *     warn + start with empty messages. Relay re-delivery (NIP-17) will
+   *     rehydrate whatever the relay still retains. Mirrors the GroupChat
+   *     fallback added 2026-05-29 — the previous fatal throw bricked
+   *     `Sphere.load` via the shared `Promise.allSettled`, taking down every
+   *     other module's load with it.
    *   - Otherwise parse as legacy inline JSON with narrow SyntaxError catch.
    */
   async parseMessagesPayload(data, keyForDiagnostic) {
     const ref = CidRefStore.tryParseRef(data);
     if (ref) {
       if (!this.deps.cidRefStore) {
-        const { ProfileError: ProfileError2 } = await Promise.resolve().then(() => (init_errors3(), errors_exports));
-        throw new ProfileError2(
-          "CID_REF_UNREADABLE",
-          `CommunicationsModule.load: KV at ${keyForDiagnostic} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected. DMs cannot be restored without IPFS access. Check CommunicationsModule init \u2014 is cidRefStore provided?`
+        logger.warn(
+          "Communications",
+          `[CID_REF_DEGRADE] KV at ${keyForDiagnostic} contains a CID ref (cid=${ref.cid}) but no cidRefStore was injected; starting fresh. Relay re-delivery will rehydrate any retained DMs.`
         );
+        return [];
       }
-      const fetched = await this.deps.cidRefStore.fetchJson(ref);
+      let fetched;
+      try {
+        fetched = await this.deps.cidRefStore.fetchJson(ref);
+      } catch (err) {
+        logger.error(
+          "Communications",
+          `[MESSAGES] CID-ref fetch failed for ${keyForDiagnostic} (cid=${ref.cid}); starting fresh`,
+          err
+        );
+        return [];
+      }
       if (!Array.isArray(fetched)) {
         logger.error(
           "Communications",

@@ -4696,11 +4696,38 @@ async function withPinRetry(fn, isRetryable = isTransientPinError, backoffs = PI
   }
   throw new Error("withPinRetry: unreachable");
 }
+function getSidecarColdState(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  let state = sidecarColdState.get(key);
+  if (!state) {
+    state = { consecutiveMisses: 0, coldUntil: 0 };
+    sidecarColdState.set(key, state);
+  }
+  return state;
+}
+function isSidecarCold(gateway) {
+  const state = sidecarColdState.get(normalizeGatewayKey(gateway));
+  if (!state) return false;
+  return state.coldUntil > Date.now();
+}
+function recordSidecarMiss(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses += 1;
+  if (state.consecutiveMisses >= SIDECAR_COLD_MISS_THRESHOLD) {
+    state.coldUntil = Date.now() + SIDECAR_COLD_DURATION_MS;
+  }
+}
+function recordSidecarHit(gateway) {
+  const state = getSidecarColdState(gateway);
+  state.consecutiveMisses = 0;
+  state.coldUntil = 0;
+}
 function submitToSidecarBestEffort(gateway, cid, bytes) {
   if (typeof gateway !== "string" || gateway.length === 0) return;
   if (typeof cid !== "string" || cid.length === 0) return;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
   if (bytes.length > SIDECAR_SUBMIT_MAX_BYTES) return;
+  if (isSidecarCold(gateway)) return;
   const url = `${gateway.replace(/\/$/, "")}/sidecar/submit?cid=${encodeURIComponent(cid)}`;
   void fetch(url, {
     method: "POST",
@@ -4709,11 +4736,13 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     signal: AbortSignal.timeout(SIDECAR_SUBMIT_TIMEOUT_MS)
   }).then((response) => {
     if (!response.ok) {
+      if (response.status === 404) recordSidecarMiss(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 HTTP ${response.status} (${response.statusText}) on ${gateway}`
       );
     } else {
+      recordSidecarHit(gateway);
       logger.debug(
         "IPFS-Sidecar",
         `submit ${cid.slice(0, 16)} \u2192 200 on ${gateway}`
@@ -4722,11 +4751,13 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
     response.body?.cancel?.().catch(() => {
     });
   }).catch(() => {
+    recordSidecarMiss(gateway);
   });
 }
 async function tryReadFromSidecar(gateway, cid) {
   if (typeof gateway !== "string" || gateway.length === 0) return null;
   if (typeof cid !== "string" || cid.length === 0) return null;
+  if (isSidecarCold(gateway)) return null;
   try {
     const url = `${gateway.replace(/\/$/, "")}/sidecar/blob?cid=${encodeURIComponent(cid)}`;
     const response = await fetch(url, {
@@ -4737,22 +4768,29 @@ async function tryReadFromSidecar(gateway, cid) {
     if (!response.ok) {
       response.body?.cancel?.().catch(() => {
       });
+      recordSidecarMiss(gateway);
       return null;
     }
     const ct = (response.headers.get("Content-Type") ?? "").toLowerCase();
     if (ct && !ct.startsWith("application/octet-stream") && !ct.startsWith("application/vnd.ipld")) {
       response.body?.cancel?.().catch(() => {
       });
+      recordSidecarMiss(gateway);
       return null;
     }
     const buf = await response.arrayBuffer();
-    if (buf.byteLength === 0) return null;
+    if (buf.byteLength === 0) {
+      recordSidecarMiss(gateway);
+      return null;
+    }
+    recordSidecarHit(gateway);
     logger.debug(
       "IPFS-Sidecar",
       `read hit ${cid.slice(0, 16)} (${buf.byteLength} bytes) on ${gateway}`
     );
     return new Uint8Array(buf);
   } catch {
+    recordSidecarMiss(gateway);
     return null;
   }
 }
@@ -5664,7 +5702,7 @@ async function readStreamWithLimit(body, maxBytes, gatewayLabel) {
   }
   return result;
 }
-var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_PIN_CONCURRENCY, PIN_RETRY_BACKOFFS_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, PROBE_TIMEOUT_MS, capabilityCache, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
+var import_cid, raw, import_digest, MULTIHASH_SHA256, SHA256_DIGEST_BYTES, CODEC_RAW, CODEC_DAG_CBOR, FETCH_CAR_MAX_BLOCKS, DEFAULT_IPFS_API_URL, DEFAULT_PIN_TIMEOUT_MS, DEFAULT_PIN_CONCURRENCY, PIN_RETRY_BACKOFFS_MS, DEFAULT_FETCH_TIMEOUT_MS2, DEFAULT_VERIFY_TIMEOUT_MS, DEFAULT_MAX_SIZE_BYTES, SIDECAR_SUBMIT_MAX_BYTES, SIDECAR_SUBMIT_TIMEOUT_MS, SIDECAR_READ_TIMEOUT_MS, SIDECAR_COLD_MISS_THRESHOLD, SIDECAR_COLD_DURATION_MS, sidecarColdState, PROBE_TIMEOUT_MS, capabilityCache, CODEC_NAMES, VERIFY_RETRY_INITIAL_DELAY_MS, VERIFY_RETRY_MAX_DELAY_MS;
 var init_ipfs_client = __esm({
   "profile/ipfs-client.ts"() {
     "use strict";
@@ -5690,6 +5728,9 @@ var init_ipfs_client = __esm({
     SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
     SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
     SIDECAR_READ_TIMEOUT_MS = 500;
+    SIDECAR_COLD_MISS_THRESHOLD = 3;
+    SIDECAR_COLD_DURATION_MS = 6e4;
+    sidecarColdState = /* @__PURE__ */ new Map();
     PROBE_TIMEOUT_MS = 2e3;
     capabilityCache = /* @__PURE__ */ new Map();
     CODEC_NAMES = {
