@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Cloud, MessageCircle, TrendingUp, Wifi, X 
 import { useConnectivity, type ConnectivityBackendStatus } from '../../sdk/hooks/core/useConnectivity';
 import { useMarketStatus, type MarketStatus } from '../../sdk/hooks/core/useMarketStatus';
 import { useIpfsGatewayStatus, type IpfsGatewayStatus } from '../../sdk/hooks/core/useIpfsGatewayStatus';
+import { useAggregatorStatus, type AggregatorStatus } from '../../sdk/hooks/core/useAggregatorStatus';
 
 /**
  * Time (ms) the banner stays visible after the last service recovers,
@@ -19,11 +20,11 @@ interface ServiceRow {
   label: string;
   shortLabel: string; // shown on mobile when space is tight
   icon: typeof Cloud;
-  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus;
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus | AggregatorStatus;
 }
 
 function severityOf(
-  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus,
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus | AggregatorStatus,
 ): Severity {
   switch (status) {
     case 'up':
@@ -53,7 +54,7 @@ function dotClassFor(severity: Severity): string {
 }
 
 function statusLabelFor(
-  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus,
+  status: ConnectivityBackendStatus | MarketStatus | IpfsGatewayStatus | AggregatorStatus,
 ): string {
   switch (status) {
     case 'up':
@@ -125,6 +126,14 @@ export function ServiceStatusBanner() {
   // direct same-CID probe to the canonical Unicity IPFS gateway —
   // matching the truth users actually experience.
   const ipfsGateway = useIpfsGatewayStatus();
+  // Issue #329: the SDK's `AggregatorPinger` uses a single
+  // `getCurrentRound()` read-path call with an 8s timeout. A transient
+  // blip or contended event loop trips it into 'down' and the backoff
+  // schedule (5s → 5min) keeps it there long after recovery. We bypass
+  // `connectivity.aggregator` and run an independent two-step probe
+  // (GET /health → POST / JSON-RPC fallback) mirroring the
+  // @unicitylabs/infra-probe reference checks.
+  const aggregator = useAggregatorStatus();
   const [manuallyDismissed, setManuallyDismissed] = useState(false);
   const [recoveryWindowOpen, setRecoveryWindowOpen] = useState(false);
   // Tracks whether the PREVIOUS render had a live incident. Only the
@@ -149,7 +158,8 @@ export function ServiceStatusBanner() {
         label: 'Aggregator',
         shortLabel: 'Agg',
         icon: Cloud,
-        status: connectivity.aggregator,
+        // Direct multi-check probe — see comment on `aggregator` above.
+        status: aggregator,
       },
       {
         key: 'ipfs',
@@ -174,7 +184,7 @@ export function ServiceStatusBanner() {
         status: market,
       },
     ],
-    [connectivity.aggregator, connectivity.nostr, ipfsGateway, market],
+    [aggregator, connectivity.nostr, ipfsGateway, market],
   );
 
   const severities = rows.map((r) => severityOf(r.status));

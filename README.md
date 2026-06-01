@@ -158,6 +158,14 @@ tests/
 docker compose up        # Runs on port 3010
 ```
 
+## Deployment
+
+See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the full deploy
+manual — per-branch GH Pages previews (automatic on push), the live
+testnet host at <https://sphere-telco-test.dyndns.org/> (manual SSH
+workflow), CI gates, rollback, and the end-to-end checklist for a
+fix.
+
 ## License
 
 Private project — Unicity Labs
