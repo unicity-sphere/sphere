@@ -14816,10 +14816,13 @@ declare class CommunicationsModule {
      *
      * Dual-read per PROFILE-CID-REFERENCES.md §6:
      *   - If the payload is a CID ref envelope → fetch content from IPFS
-     *     via `cidRefStore`. Errors propagate with typed codes.
-     *   - If no cidRefStore is injected but a ref is found → throw typed
-     *     `ProfileError('CID_REF_UNREADABLE')`. Silent fallback would mean
-     *     silently losing all stored DMs for this address.
+     *     via `cidRefStore`. Errors degrade to empty rather than bricking load.
+     *   - If no cidRefStore is injected but a ref is found → `[CID_REF_DEGRADE]`
+     *     warn + start with empty messages. Relay re-delivery (NIP-17) will
+     *     rehydrate whatever the relay still retains. Mirrors the GroupChat
+     *     fallback added 2026-05-29 — the previous fatal throw bricked
+     *     `Sphere.load` via the shared `Promise.allSettled`, taking down every
+     *     other module's load with it.
      *   - Otherwise parse as legacy inline JSON with narrow SyntaxError catch.
      */
     private parseMessagesPayload;

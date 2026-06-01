@@ -1,6 +1,6 @@
 {
   "name": "@unicitylabs/sphere-sdk",
-  "version": "0.8.0-sdk-956b79f-perf-stack",
+  "version": "0.8.0-sdk-1499a93-comms-degrade-sidecar-cache",
   "description": "Modular TypeScript SDK for Unicity wallet operations",
   "type": "module",
   "main": "./dist/index.cjs",
