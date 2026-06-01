@@ -335,15 +335,20 @@ declare class UnicityAggregatorProvider implements OracleProvider {
      * Accepts either an SDK TransferCommitment or a simple commitment object.
      */
     submitCommitment(commitment: TransferCommitment | TransferCommitment$1): Promise<SubmitResult>;
+    private _submitCommitmentImpl;
     /**
      * Submit a mint commitment to the aggregator (SDK only)
      * @param commitment - SDK MintCommitment instance
      */
     submitMintCommitment(commitment: SdkMintCommitment): Promise<SubmitResult>;
+    private _submitMintCommitmentImpl;
     private isSdkTransferCommitment;
     getProof(requestId: string): Promise<InclusionProof | null>;
+    private _getProofImpl;
     waitForProof(requestId: string, options?: WaitOptions): Promise<InclusionProof>;
+    private _waitForProofImpl;
     validateToken(tokenData: unknown): Promise<ValidationResult>;
+    private _validateTokenImpl;
     /**
      * Issue #245 #5 — derive the hex-encoded publicKey from a parsed
      * SDK Token's current state predicate. Best-effort; returns `null`
@@ -358,6 +363,7 @@ declare class UnicityAggregatorProvider implements OracleProvider {
      * Wait for inclusion proof using SDK (for SDK commitments)
      */
     waitForProofSdk(commitment: TransferCommitment$1 | SdkMintCommitment, signal?: AbortSignal): Promise<unknown>;
+    private _waitForProofSdkImpl;
     /**
      * Wave G.3: cryptographic verification of an inclusion proof for
      * the UXF Rule 4 enrichment gate.
@@ -384,10 +390,15 @@ declare class UnicityAggregatorProvider implements OracleProvider {
         transactionHash: string;
         proofHash?: string;
     }): Promise<boolean>;
+    private _verifyInclusionProofImpl;
     isSpent(publicKey: string, stateHash: string): Promise<boolean>;
+    private _isSpentImpl;
     getTokenState(tokenId: string): Promise<TokenState | null>;
+    private _getTokenStateImpl;
     getCurrentRound(): Promise<number>;
+    private _getCurrentRoundImpl;
     mint(params: MintParams): Promise<MintResult>;
+    private _mintImpl;
     onEvent(callback: OracleEventCallback): () => void;
     private rpcCall;
     private ensureConnected;

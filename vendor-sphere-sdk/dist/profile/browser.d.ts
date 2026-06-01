@@ -581,10 +581,36 @@ declare class UxfPackage {
     private constructor();
     /**
      * Create a new empty package.
+     *
+     * **Determinism note (post-#362):** the envelope `createdAt` /
+     * `updatedAt` fields are baked into the CAR root CID (the
+     * dag-cbor-encoded envelope IS the root block). If a caller invokes
+     * `create()` twice — e.g., a sender that crashes mid-flight and the
+     * worker rebuilds the bundle on resume — the two `Date.now()` calls
+     * straddling a second boundary would produce DIFFERENT envelope
+     * bytes → DIFFERENT bundleCids. That breaks every system that
+     * indexes on `bundleCid` for idempotency (replay-LRU at the
+     * recipient, IPFS pin reuse, outbox bundleCid dedup, the audit-#333
+     * H3 `targetExisting === sourceIncoming` fast path).
+     *
+     * Production senders therefore lock a single `createdAt` value at
+     * the start of a send attempt and persist it in the outbox entry's
+     * `createdAt`. On resume, the worker reads the persisted value and
+     * passes it back as `options.createdAt`. The `Date.now()` fallback
+     * stays for callers that don't need cross-attempt determinism
+     * (tests, ad-hoc tooling, archival exports).
+     *
+     * @param options.createdAt  Override the envelope timestamp (unix
+     *   seconds). When omitted, `Math.floor(Date.now() / 1000)` is used.
+     * @param options.updatedAt  Override the envelope updated-at timestamp.
+     *   Defaults to `createdAt` (a brand-new package's createdAt and
+     *   updatedAt are equal — they only diverge after `merge()`).
      */
     static create(options?: {
         description?: string;
         creator?: string;
+        createdAt?: number;
+        updatedAt?: number;
     }): UxfPackage;
     /**
      * Load from storage adapter.
@@ -601,12 +627,23 @@ declare class UxfPackage {
     /**
      * Deconstruct a token and add to the package.
      * If the token already exists, its manifest entry is updated to the new root.
+     *
+     * `opts.updatedAt` (unix seconds) overrides the post-ingest envelope
+     * `updatedAt` bump — required for bundleCid determinism across
+     * crash-restart retries (see {@link UxfPackage.create} determinism
+     * note).
      */
-    ingest(token: unknown): this;
+    ingest(token: unknown, opts?: {
+        updatedAt?: number;
+    }): this;
     /**
      * Batch ingest multiple tokens.
+     *
+     * See {@link ingest} for `opts.updatedAt`.
      */
-    ingestAll(tokens: unknown[]): this;
+    ingestAll(tokens: unknown[], opts?: {
+        updatedAt?: number;
+    }): this;
     /**
      * Reassemble a token at its latest state.
      * @returns Self-contained object matching the ITokenJson shape.
@@ -662,8 +699,34 @@ declare class UxfPackage {
      * resolution for any pairwise hash mismatch.
      */
     merge(other: UxfPackage, opts?: {
-        verifiedProofs?: ReadonlySet<string>;
-    }): this;
+        readonly verifiedProofs?: ReadonlySet<string>;
+        /**
+         * Audit #333 H3 — strict mode. When `true`, mergePkg throws a
+         * `UxfError('MERGE_PARTIAL_FAILURE')` summarising every per-token
+         * resolver failure instead of silently dropping the affected
+         * tokens. The default (`false`) preserves the existing "good
+         * tokens survive; bad ones are skipped" contract but now
+         * returns the skipped set so the caller can react.
+         *
+         * Use `strict: true` on the recipient receive path where any
+         * silent drop is observable as token loss; leave default-off
+         * for opportunistic peer JOIN merges where partial coverage
+         * is acceptable.
+         */
+        readonly strict?: boolean;
+        /**
+         * Audit #333 H3 — per-token error callback. Fires once per
+         * skipped tokenId BEFORE strict-mode aggregation. Useful for
+         * telemetry / operator visibility surfaces that want each
+         * failure surfaced individually.
+         */
+        readonly onSkip?: (event: {
+            readonly tokenId: string;
+            readonly error: Error;
+        }) => void;
+    }): {
+        readonly skipped: ReadonlyArray<MergeSkip>;
+    };
     /**
      * Wave I.5: build the `verifiedProofs` set for a Rule 4-enabled
      * merge by walking the inclusion-proof elements in this package
@@ -738,6 +801,91 @@ declare class UxfPackage {
     get estimatedSize(): number;
     /** Get the underlying data (read-only). */
     get packageData(): Readonly<UxfPackageData>;
+}
+/**
+ * Merge another package's elements and manifest into this one.
+ *
+ * For each element in source.pool, re-hash via computeElementHash() and
+ * verify the hash matches its key before inserting (Decision 7).
+ * Manifest entries from source are added (or overwritten if tokenId collides).
+ * Instance chains are merged per Decision 6.
+ * Secondary indexes are rebuilt from scratch.
+ *
+ * ------------------------------------------------------------------
+ * Per-token atomicity contract
+ * ------------------------------------------------------------------
+ *
+ * The merge is **per-token atomic** rather than whole-merge atomic:
+ *   - Whole-bundle pool verification (Decision 7) is a fast-fail
+ *     gate. If ANY source pool element fails its hash re-check, the
+ *     entire merge aborts and target state is unchanged — a corrupt
+ *     pool is a whole-bundle integrity failure and cannot be
+ *     localised to a single tokenId.
+ *   - Once the pool verifies, each source manifest entry is
+ *     processed independently. If `resolveTokenRoot` throws for
+ *     tokenId N (e.g. `computeElementHash` rejects a malformed
+ *     child inside a Rule 4 synthetic rebuild), the failure is
+ *     logged via `logger.warn('UxfPackage', …)` citing tokenId +
+ *     error, and iteration CONTINUES for the remaining tokenIds.
+ *     One poisoned entry must not deny the user their good tokens.
+ *
+ * Implementation:
+ *   1. Stage the pool-verify pass into a proposed-inserts map
+ *      without touching target.pool.
+ *   2. Build a temporary "virtual pool" (target.pool ∪ stagedPool)
+ *      that the resolver can read through, without any commits.
+ *   3. For each source manifest entry: invoke the resolver, stage
+ *      its manifest write + any Rule 4 synthetic root insert. Skip
+ *      on throw.
+ *   4. Apply all staged writes to target.pool and target.manifest
+ *      atomically (synchronous Map.set calls — no I/O inside the
+ *      apply phase).
+ *
+ * Pool-rollback policy for partially-merged tokens:
+ *
+ *   Source pool elements are retained even when the owning source
+ *   manifest entry was skipped on a resolver throw. Rationale:
+ *     - The pool is content-addressed. Duplicate keys are no-ops;
+ *       unused pool growth is bounded at roughly ~500 bytes per
+ *       orphaned element and removed by `gc()` on demand.
+ *     - Transaction / state / predicate elements authored for a
+ *       skipped tokenId may be legitimately referenced by a
+ *       surviving tokenId's instance chain (shared nametag tokens,
+ *       shared predicates). A reachability-aware rollback would
+ *       have to re-implement `walkReachable` + set arithmetic on
+ *       the staged inserts — needless complexity for cheap bloat.
+ *     - GC is already the documented contract for pruning
+ *       unreachable elements after `removeToken` / partial imports.
+ *
+ * Multi-source (3+ candidate) refactor note (W3):
+ *
+ *   `resolveTokenRoot`'s `divergent` outcome is whole-set when
+ *   candidates ≥ 3: if any pair diverges the whole tokenId falls
+ *   into `divergent`. Today mergePkg is strictly 2-candidate
+ *   (existingRoot + incomingRoot) so this is latent. A future
+ *   multi-source JOIN (merging K ≥ 2 source bundles in one pass)
+ *   should either (a) fold sources pairwise with this 2-candidate
+ *   resolver, accepting that pairwise JOIN is not associative for
+ *   the `divergent` case, or (b) extend the resolver to return a
+ *   compatibility partition and pick the majority class. Leave the
+ *   refactor — just documenting.
+ */
+/**
+ * Audit #333 H3 — per-token merge skip record.
+ *
+ * One entry per source tokenId whose resolver threw during
+ * {@link mergePkg}. The token is NOT present in the merged manifest;
+ * `targetExisting` records what the target already had (if anything)
+ * so the caller can decide whether the skip is recoverable (e.g., the
+ * target's existing root is still good).
+ */
+interface MergeSkip {
+    readonly tokenId: string;
+    readonly error: Error;
+    /** target.manifest.tokens.get(tokenId) BEFORE the merge attempt. */
+    readonly targetExisting: ContentHash | undefined;
+    /** source.manifest.tokens.get(tokenId) that we failed to incorporate. */
+    readonly sourceIncoming: ContentHash;
 }
 
 /**
@@ -1312,14 +1460,54 @@ type ManifestCasResult = {
     readonly ok: true;
 } | {
     readonly ok: false;
-    readonly reason: 'cas-mismatch' | 'not-found' | 'concurrent-modification';
+    readonly reason: 'cas-mismatch' | 'not-found' | 'concurrent-modification'
+    /**
+     * Audit #333 H7 — `verifyEntryRoot` reported the stored entry's
+     * `rootHash` label does NOT match the actual content under that
+     * hash. The CAS label-match would have passed pre-fix; with the
+     * verifier wired we surface the structural defect instead of
+     * silently accepting the swap against forged content.
+     */
+     | 'integrity-failed';
     /** When `reason === 'cas-mismatch'`, the actually-observed entry
      *  (so the caller can retry against the latest state). Omitted
      *  for `'not-found'` and `'concurrent-modification'`. */
     readonly observed?: {
         readonly contentHash: ContentHash;
     };
+    /** Optional diagnostic detail for `'integrity-failed'`. */
+    readonly integrityDetail?: string;
 };
+/**
+ * Audit #333 H7 — recomputed-content verifier hook.
+ *
+ * `ManifestCas.update`'s precondition check compares
+ * `observed.rootHash` (a string read from the entry) to `prev.contentHash`
+ * (the caller's expected value). Both sides are arbitrary writer-supplied
+ * labels — a CAS pass means "the labels agree", not "the content under
+ * the label is the content the caller meant". An attacker writing an
+ * entry with a forged `rootHash` field that doesn't match the actual
+ * pool content slips through the CAS check unchanged.
+ *
+ * When wired, this hook is called AFTER the label CAS passes and BEFORE
+ * the write. It is responsible for fetching the content the entry's
+ * `rootHash` refers to (typically the UXF pool element), recomputing
+ * the hash, and asserting the recomputed value matches the entry's
+ * declaration. Production wiring routes through `computeElementHash`
+ * over the pool element.
+ *
+ * Returns `{ ok: true }` to permit the write, or `{ ok: false, reason }`
+ * to abort with `ManifestCasResult.reason === 'integrity-failed'`.
+ *
+ * Optional — when absent the CAS retains its pre-fix label-only
+ * semantics. Production wiring SHOULD always provide; the optional
+ * shape preserves test back-compat (existing tests do not assume the
+ * verifier is wired).
+ */
+type VerifyEntryRootFn = (addr: string, tokenId: string, entry: TokenManifestEntry) => Promise<{
+    readonly ok: boolean;
+    readonly reason?: string;
+}>;
 /**
  * Compare-and-swap helper over manifest entries.
  *
@@ -1337,7 +1525,16 @@ type ManifestCasResult = {
  */
 declare class ManifestCas {
     private readonly storage;
-    constructor(storage: MinimalManifestStorage);
+    /**
+     * Audit #333 H7 — optional recomputed-content verifier. See
+     * {@link VerifyEntryRootFn}. When omitted the CAS retains its
+     * pre-fix label-only semantics (back-compat with existing tests
+     * that do not wire the hook).
+     */
+    private readonly verifyEntryRoot;
+    constructor(storage: MinimalManifestStorage, opts?: {
+        readonly verifyEntryRoot?: VerifyEntryRootFn;
+    });
     /**
      * Atomic-from-the-caller's-perspective compare-and-swap on the
      * manifest entry for `(addr, tokenId)`.
@@ -5562,6 +5759,20 @@ interface UxfTransferOutboxEntry {
     /** Tokens shipped in this bundle (genesis token ids). Empty array
      *  permitted only for the migration synthetic case. */
     readonly tokenIds: ReadonlyArray<string>;
+    /**
+     * Audit #333 H5 — source tokens this outbox entry spent (sender-side
+     * locking surface). Populated by the instant-sender at outbox-record
+     * construction time from the selected source set. Consumed by the
+     * finalization worker at the `failed-permanent` transition to drive
+     * the `recoverFailedPermanentSources` hook — so a hard-failed instant
+     * send unlocks the spender-side balance rather than permanently
+     * locking it as `pending`/`transferring`.
+     *
+     * Optional with `[]` semantics on `undefined` to preserve back-compat
+     * with entries written before H5; the worker treats pre-H5 entries as
+     * "no recovery target" rather than blocking the terminal transition.
+     */
+    readonly sourceTokenIds?: ReadonlyArray<string>;
     /** How the bundle was sent. */
     readonly deliveryMethod: 'car-over-nostr' | 'cid-over-nostr' | 'txf-legacy';
     /** Recipient identifier (@nametag, DIRECT://..., chain pubkey, alpha1...). */
@@ -9241,6 +9452,32 @@ interface FinalizationWorkerSenderOptions {
      * deterministic version that resolves immediately.
      */
     readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+    /**
+     * Audit #333 H5 — recover source tokens on `failed-permanent`.
+     *
+     * Pre-fix the worker transitioned to `failed-permanent` and never
+     * touched the source tokens that the instant-sender had marked
+     * `'transferring'` (or `'pending'`) at submit time. With orphan
+     * auto-recovery default-OFF, a failed instant send permanently
+     * locked the source balance as unspendable.
+     *
+     * When wired, this hook fires once per `failed-permanent` transition
+     * with the entry's `sourceTokenIds`. Production should flip each
+     * tokenId's status from `transferring`/`pending` back to a
+     * spendable state (typically `confirmed`) — but only when safe
+     * (e.g., no other live outbox entry holds the same source).
+     *
+     * Errors thrown by the hook are caught and logged; they MUST NOT
+     * block the `failed-permanent` transition itself, which is the
+     * pre-existing terminal-state contract.
+     *
+     * Reads `sourceTokenIds` from the outbox entry (added to
+     * `UxfTransferOutboxEntry` as an optional field for back-compat).
+     * Entries written before H5 lacked this field — for those the hook
+     * is invoked with an empty array (preserves pre-fix behaviour while
+     * still firing the hook for observability).
+     */
+    readonly recoverFailedPermanentSources?: (sourceTokenIds: ReadonlyArray<string>, outboxId: string) => Promise<void>;
     /** Optional override of the §6.1 caps. */
     readonly caps?: FinalizationWorkerCaps;
     /**
@@ -11460,6 +11697,26 @@ declare class PaymentsModule {
     private unsubscribePaymentRequests;
     private unsubscribePaymentRequestResponses;
     private proofPollingJobs;
+    /**
+     * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+     * verdicts. Keyed by in-memory `Token.id`; value carries the verdict
+     * label + timestamp the recovery code stamped at the time the
+     * permanent classification was determined.
+     *
+     * Read by `drainPendingFinalizations` (and the stranded-token
+     * registration scan in `recoverStrandedReceivedTokens`) so a
+     * subsequent `sphere balance` / `sphere payments receive`
+     * invocation does NOT re-pay the 60s drain timeout polling a token
+     * whose V6-RECOVER verdict is already known to be unrecoverable.
+     *
+     * Hydrated by `restoreV6RecoverPermanent()` on `load()` so the
+     * verdict survives process restart. Cleared by `Sphere.clear()`
+     * (full wallet wipe — the underlying KV key goes with it) and by
+     * `payments receive --finalize` (operator-forced retry: clears the
+     * map so the recovery path runs one more time in case the HD-index
+     * recovery window has since widened).
+     */
+    private v6RecoverPermanent;
     /**
      * Lowercase hex of the signing-service publicKey used by
      * `UnmaskedPredicate.create` / `MaskedPredicate.create`. Lazily
@@ -14098,6 +14355,24 @@ declare class PaymentsModule {
      * 60s budget instead of being immediately discarded.
      */
     private restoreProofPollingJobs;
+    /**
+     * Persist the `v6RecoverPermanent` map to storage so the verdict
+     * survives process restart. Fire-and-forget at call sites — failures
+     * are logged via the caller's catch arm; the next call re-attempts.
+     *
+     * Empty map → `storage.remove()` so a stale list does not survive
+     * (mirrors `saveProofPollingJobs` exactly).
+     */
+    private saveV6RecoverPermanent;
+    /**
+     * Restore the `v6RecoverPermanent` map from storage. Called from
+     * `load()` AFTER `loadFromStorageData` populates `this.tokens`.
+     *
+     * Malformed entries are silently skipped — a single stray entry must
+     * not block legitimate verdicts. A wholly-malformed payload is logged
+     * once and the map starts empty.
+     */
+    private restoreV6RecoverPermanent;
     /**
      * Start the proof polling interval if not already running
      */
@@ -18355,7 +18630,37 @@ interface ProfileTokenStorageHost {
 
 declare class BundleIndex implements ProfileSyncWriter {
     private readonly host;
+    /**
+     * Issue #367 — set by {@link runProfileSnapshotJoin} BEFORE invoking
+     * this writer's `joinSnapshot()` and cleared in `finally` after.
+     * Read inside `joinSnapshot`'s `writeRemote` callback to annotate
+     * each landed bundle ref with its source snapshot's pointer CID.
+     *
+     * Null outside of an active snapshot apply — covers production code
+     * paths (where the dispatcher always arms it for non-empty bundle
+     * slices) AND legacy code paths / test doubles (where the dispatcher
+     * may not arm it at all). The `writeRemote` callback treats null as
+     * "no provenance available" and writes the bundle ref bytes verbatim,
+     * matching the pre-#367 behaviour.
+     */
+    private currentSnapshotApplyCid;
     constructor(host: ProfileTokenStorageHost);
+    /**
+     * Issue #367 — arm/clear the source-snapshot context consulted by
+     * `joinSnapshot`'s `writeRemote` callback. Invoked by the snapshot
+     * dispatcher around its BundleIndex JOIN call. Never throws.
+     *
+     * The setter is idempotent and does NOT enforce ownership — callers
+     * are responsible for clearing after their JOIN completes (the
+     * dispatcher's `finally` block satisfies this). A leaked non-null
+     * value into a later apply with a stale CID is the worst-case
+     * downside; the Rule-4 gate would then group bundles under the
+     * wrong source — but Rule-4 is an enrichment skip, not a correctness
+     * gate, so the cost is at most a missed optimisation, never lost
+     * tokens. The serialized `_applySnapshotIfWiredImpl` call site
+     * prevents this in practice.
+     */
+    setCurrentSnapshotApplyCid(cid: string | null): void;
     /**
      * List all bundle refs from OrbitDB, filtered to active status.
      */
@@ -18463,6 +18768,16 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
     private encryptionKey;
     private initialized;
     private isShuttingDown;
+    /**
+     * Issue #364 Item #2 — true between {@link clear} entry and exit.
+     * `clear()` is destructive; allowing the periodic pointer-poll's
+     * `applySnapshotIfWired` to run mid-clear would dispatch a snapshot
+     * against state that is about to be wiped, wasting IPFS round-trips
+     * and risking partial seeding of about-to-be-deleted data. The
+     * shutdown gate (`isShuttingDown`/`hasShutdown`) does not cover the
+     * clear-on-a-live-provider path, hence the separate latch.
+     */
+    private isClearing;
     private pendingData;
     private flushTimer;
     private flushPromise;
@@ -18715,6 +19030,7 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
      * work after the gate has closed.
      */
     applySnapshotIfWired(cidString: string): Promise<ApplySnapshotResult | null>;
+    private _applySnapshotIfWiredImpl;
     connect(): Promise<void>;
     disconnect(): Promise<void>;
     isConnected(): boolean;
@@ -18829,6 +19145,7 @@ declare class ProfileTokenStorageProvider implements TokenStorageProvider<TxfSto
     save(data: TxfStorageDataBase): Promise<SaveResult>;
     private tryFallbackLoad;
     load(_identifier?: string): Promise<LoadResult<TxfStorageDataBase>>;
+    private _loadImpl;
     sync(localData: TxfStorageDataBase): Promise<SyncResult<TxfStorageDataBase>>;
     exists(_identifier?: string): Promise<boolean>;
     clear(): Promise<boolean>;
@@ -20167,6 +20484,35 @@ interface ProfilePointerLayerInit {
     readonly inspectSnapshotEpoch?: (version: PointerVersion) => Promise<number | undefined>;
     /** Configuration (capabilities). */
     readonly config?: PointerLayerConfig;
+    /**
+     * Issue #364 Item #1 — TTL (ms) for the `recoverLatest()` head cache.
+     *
+     * A short cache eliminates the read-back tight-loop's redundant
+     * aggregator round-trips: the §D.4 recovery soak observed 108
+     * recoverLatest calls in 123 s (0.88/s), driven by the
+     * `awaitAggregatorPointerReadBack` loop polling every 500 ms while
+     * the per-call cost averages 250 ms. With this cache, only the first
+     * call in each TTL window hits the aggregator; subsequent calls
+     * within the window return the cached value in sub-millisecond time
+     * and bump the `pointerLayer.recoverLatest.cacheHit` counter.
+     *
+     * Concurrent callers that arrive while a call is in flight attach to
+     * the in-flight promise (`pointerLayer.recoverLatest.inFlightDedup`)
+     * rather than launching a parallel aggregator round-trip.
+     *
+     * Default: 10_000 (10 s). Trade-off rationale:
+     *   - The read-back loop's 500 ms poll cadence over a typical 30 s
+     *     shutdown-durability deadline drops from 60 calls to 3.
+     *   - The periodic pointer poll's 30-90 s cadence is unaffected
+     *     (each poll exceeds the TTL).
+     *   - New pointer versions are still observed within 10 s, which is
+     *     well inside the worst-case aggregator read-replica lag this
+     *     loop is designed to absorb.
+     *
+     * Set `0` to disable the cache entirely (every call hits the
+     * aggregator — restores pre-#364 behavior).
+     */
+    readonly recoverLatestCacheTtlMs?: number;
 }
 interface PublishResult {
     readonly version: PointerVersion;
@@ -20944,6 +21290,26 @@ interface UxfBundleRef {
     readonly removeFromProfileAfter?: number;
     /** Number of tokens in this bundle (for quick display without fetching CAR) */
     readonly tokenCount?: number;
+    /**
+     * Issue #367 — pointer CID of the lean-snapshot blob that placed this
+     * bundle ref into the local OrbitDB store via a snapshot-apply dispatch.
+     *
+     * Set ONLY when the writer that landed the ref was the snapshot
+     * dispatcher's `writeRemote` path inside `BundleIndex.joinSnapshot`.
+     * Unset (undefined) on:
+     *   - locally-published bundles written via `BundleIndex.addBundle`;
+     *   - bundles arriving via OrbitDB cross-device pubsub replication
+     *     (which doesn't flow through the snapshot dispatcher);
+     *   - legacy bundle refs persisted before this field existed.
+     *
+     * Read by `load()`'s Rule-4 pairwise gate: when every active bundle's
+     * `sourcedFromSnapshotPointerCid` is non-null AND identical, the load
+     * is sourced from a single trusted snapshot blob and Rule-4 enrichment
+     * can be skipped (the snapshot producer's local merge already resolved
+     * any siblings before publication). Any non-snapshot bundle in the
+     * active set forces Rule-4 to run.
+     */
+    readonly sourcedFromSnapshotPointerCid?: string;
 }
 /**
  * Encryption configuration for Profile values.
@@ -21837,7 +22203,7 @@ declare class ProfileStorageProvider implements StorageProvider {
      * without aggregator-pointer recovery rather than silently writing
      * the wrong CAR shape to the bundle index.
      */
-    setSnapshotApplier(applier: ((snapshot: LeanProfileSnapshot) => Promise<ApplySnapshotResult>) | null): void;
+    setSnapshotApplier(applier: ((snapshot: LeanProfileSnapshot, sourcePointerCid?: string) => Promise<ApplySnapshotResult>) | null): void;
     /**
      * Issue #280 — register an optional observability hook fired when
      * `readEnvelopePayload()` falls back from the envelope-decode path
@@ -22329,12 +22695,29 @@ declare class ProfileStorageProvider implements StorageProvider {
     setEncryptedRaw(key: string, value: string): Promise<void>;
     /**
      * Encrypt a string value for OrbitDB storage.
-     * If encryption is disabled, returns the raw UTF-8 bytes.
+     *
+     * Fails CLOSED (Audit #333 C1): when encryption is configured
+     * (`encryptionEnabled === true`) but the encryption key has not
+     * been derived yet (no `setIdentity()` call), throws
+     * `PROFILE_NOT_INITIALIZED`. The previous behaviour returned raw
+     * UTF-8 bytes, which under the common Sphere ordering of
+     * `connect() → setIdentity()` allowed plaintext writes (including
+     * the wallet seed during migration) to land in OrbitDB and
+     * replicate to public IPFS gateways.
+     *
+     * When encryption is disabled entirely (`encrypt: false`, test
+     * mode), returns raw UTF-8 bytes.
      */
     private encrypt;
     /**
      * Decrypt bytes from OrbitDB to a string.
-     * If encryption is disabled, decodes as raw UTF-8.
+     *
+     * Symmetric to {@link encrypt}: throws `PROFILE_NOT_INITIALIZED` when
+     * encryption is enabled but the key has not been derived. A silent
+     * UTF-8 decode in that window would interpret ciphertext as garbage
+     * and quietly corrupt reads of envelope-encrypted entries.
+     *
+     * When encryption is disabled entirely, decodes as raw UTF-8.
      */
     private decrypt;
     private log;

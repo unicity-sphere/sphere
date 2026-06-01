@@ -3730,10 +3730,36 @@ declare class UxfPackage {
     private constructor();
     /**
      * Create a new empty package.
+     *
+     * **Determinism note (post-#362):** the envelope `createdAt` /
+     * `updatedAt` fields are baked into the CAR root CID (the
+     * dag-cbor-encoded envelope IS the root block). If a caller invokes
+     * `create()` twice — e.g., a sender that crashes mid-flight and the
+     * worker rebuilds the bundle on resume — the two `Date.now()` calls
+     * straddling a second boundary would produce DIFFERENT envelope
+     * bytes → DIFFERENT bundleCids. That breaks every system that
+     * indexes on `bundleCid` for idempotency (replay-LRU at the
+     * recipient, IPFS pin reuse, outbox bundleCid dedup, the audit-#333
+     * H3 `targetExisting === sourceIncoming` fast path).
+     *
+     * Production senders therefore lock a single `createdAt` value at
+     * the start of a send attempt and persist it in the outbox entry's
+     * `createdAt`. On resume, the worker reads the persisted value and
+     * passes it back as `options.createdAt`. The `Date.now()` fallback
+     * stays for callers that don't need cross-attempt determinism
+     * (tests, ad-hoc tooling, archival exports).
+     *
+     * @param options.createdAt  Override the envelope timestamp (unix
+     *   seconds). When omitted, `Math.floor(Date.now() / 1000)` is used.
+     * @param options.updatedAt  Override the envelope updated-at timestamp.
+     *   Defaults to `createdAt` (a brand-new package's createdAt and
+     *   updatedAt are equal — they only diverge after `merge()`).
      */
     static create(options?: {
         description?: string;
         creator?: string;
+        createdAt?: number;
+        updatedAt?: number;
     }): UxfPackage;
     /**
      * Load from storage adapter.
@@ -3750,12 +3776,23 @@ declare class UxfPackage {
     /**
      * Deconstruct a token and add to the package.
      * If the token already exists, its manifest entry is updated to the new root.
+     *
+     * `opts.updatedAt` (unix seconds) overrides the post-ingest envelope
+     * `updatedAt` bump — required for bundleCid determinism across
+     * crash-restart retries (see {@link UxfPackage.create} determinism
+     * note).
      */
-    ingest(token: unknown): this;
+    ingest(token: unknown, opts?: {
+        updatedAt?: number;
+    }): this;
     /**
      * Batch ingest multiple tokens.
+     *
+     * See {@link ingest} for `opts.updatedAt`.
      */
-    ingestAll(tokens: unknown[]): this;
+    ingestAll(tokens: unknown[], opts?: {
+        updatedAt?: number;
+    }): this;
     /**
      * Reassemble a token at its latest state.
      * @returns Self-contained object matching the ITokenJson shape.
@@ -3811,8 +3848,34 @@ declare class UxfPackage {
      * resolution for any pairwise hash mismatch.
      */
     merge(other: UxfPackage, opts?: {
-        verifiedProofs?: ReadonlySet<string>;
-    }): this;
+        readonly verifiedProofs?: ReadonlySet<string>;
+        /**
+         * Audit #333 H3 — strict mode. When `true`, mergePkg throws a
+         * `UxfError('MERGE_PARTIAL_FAILURE')` summarising every per-token
+         * resolver failure instead of silently dropping the affected
+         * tokens. The default (`false`) preserves the existing "good
+         * tokens survive; bad ones are skipped" contract but now
+         * returns the skipped set so the caller can react.
+         *
+         * Use `strict: true` on the recipient receive path where any
+         * silent drop is observable as token loss; leave default-off
+         * for opportunistic peer JOIN merges where partial coverage
+         * is acceptable.
+         */
+        readonly strict?: boolean;
+        /**
+         * Audit #333 H3 — per-token error callback. Fires once per
+         * skipped tokenId BEFORE strict-mode aggregation. Useful for
+         * telemetry / operator visibility surfaces that want each
+         * failure surfaced individually.
+         */
+        readonly onSkip?: (event: {
+            readonly tokenId: string;
+            readonly error: Error;
+        }) => void;
+    }): {
+        readonly skipped: ReadonlyArray<MergeSkip>;
+    };
     /**
      * Wave I.5: build the `verifiedProofs` set for a Rule 4-enabled
      * merge by walking the inclusion-proof elements in this package
@@ -3887,6 +3950,91 @@ declare class UxfPackage {
     get estimatedSize(): number;
     /** Get the underlying data (read-only). */
     get packageData(): Readonly<UxfPackageData>;
+}
+/**
+ * Merge another package's elements and manifest into this one.
+ *
+ * For each element in source.pool, re-hash via computeElementHash() and
+ * verify the hash matches its key before inserting (Decision 7).
+ * Manifest entries from source are added (or overwritten if tokenId collides).
+ * Instance chains are merged per Decision 6.
+ * Secondary indexes are rebuilt from scratch.
+ *
+ * ------------------------------------------------------------------
+ * Per-token atomicity contract
+ * ------------------------------------------------------------------
+ *
+ * The merge is **per-token atomic** rather than whole-merge atomic:
+ *   - Whole-bundle pool verification (Decision 7) is a fast-fail
+ *     gate. If ANY source pool element fails its hash re-check, the
+ *     entire merge aborts and target state is unchanged — a corrupt
+ *     pool is a whole-bundle integrity failure and cannot be
+ *     localised to a single tokenId.
+ *   - Once the pool verifies, each source manifest entry is
+ *     processed independently. If `resolveTokenRoot` throws for
+ *     tokenId N (e.g. `computeElementHash` rejects a malformed
+ *     child inside a Rule 4 synthetic rebuild), the failure is
+ *     logged via `logger.warn('UxfPackage', …)` citing tokenId +
+ *     error, and iteration CONTINUES for the remaining tokenIds.
+ *     One poisoned entry must not deny the user their good tokens.
+ *
+ * Implementation:
+ *   1. Stage the pool-verify pass into a proposed-inserts map
+ *      without touching target.pool.
+ *   2. Build a temporary "virtual pool" (target.pool ∪ stagedPool)
+ *      that the resolver can read through, without any commits.
+ *   3. For each source manifest entry: invoke the resolver, stage
+ *      its manifest write + any Rule 4 synthetic root insert. Skip
+ *      on throw.
+ *   4. Apply all staged writes to target.pool and target.manifest
+ *      atomically (synchronous Map.set calls — no I/O inside the
+ *      apply phase).
+ *
+ * Pool-rollback policy for partially-merged tokens:
+ *
+ *   Source pool elements are retained even when the owning source
+ *   manifest entry was skipped on a resolver throw. Rationale:
+ *     - The pool is content-addressed. Duplicate keys are no-ops;
+ *       unused pool growth is bounded at roughly ~500 bytes per
+ *       orphaned element and removed by `gc()` on demand.
+ *     - Transaction / state / predicate elements authored for a
+ *       skipped tokenId may be legitimately referenced by a
+ *       surviving tokenId's instance chain (shared nametag tokens,
+ *       shared predicates). A reachability-aware rollback would
+ *       have to re-implement `walkReachable` + set arithmetic on
+ *       the staged inserts — needless complexity for cheap bloat.
+ *     - GC is already the documented contract for pruning
+ *       unreachable elements after `removeToken` / partial imports.
+ *
+ * Multi-source (3+ candidate) refactor note (W3):
+ *
+ *   `resolveTokenRoot`'s `divergent` outcome is whole-set when
+ *   candidates ≥ 3: if any pair diverges the whole tokenId falls
+ *   into `divergent`. Today mergePkg is strictly 2-candidate
+ *   (existingRoot + incomingRoot) so this is latent. A future
+ *   multi-source JOIN (merging K ≥ 2 source bundles in one pass)
+ *   should either (a) fold sources pairwise with this 2-candidate
+ *   resolver, accepting that pairwise JOIN is not associative for
+ *   the `divergent` case, or (b) extend the resolver to return a
+ *   compatibility partition and pick the majority class. Leave the
+ *   refactor — just documenting.
+ */
+/**
+ * Audit #333 H3 — per-token merge skip record.
+ *
+ * One entry per source tokenId whose resolver threw during
+ * {@link mergePkg}. The token is NOT present in the merged manifest;
+ * `targetExisting` records what the target already had (if anything)
+ * so the caller can decide whether the skip is recoverable (e.g., the
+ * target's existing root is still good).
+ */
+interface MergeSkip {
+    readonly tokenId: string;
+    readonly error: Error;
+    /** target.manifest.tokens.get(tokenId) BEFORE the merge attempt. */
+    readonly targetExisting: ContentHash | undefined;
+    /** source.manifest.tokens.get(tokenId) that we failed to incorporate. */
+    readonly sourceIncoming: ContentHash;
 }
 
 /**
@@ -7593,14 +7741,54 @@ type ManifestCasResult = {
     readonly ok: true;
 } | {
     readonly ok: false;
-    readonly reason: 'cas-mismatch' | 'not-found' | 'concurrent-modification';
+    readonly reason: 'cas-mismatch' | 'not-found' | 'concurrent-modification'
+    /**
+     * Audit #333 H7 — `verifyEntryRoot` reported the stored entry's
+     * `rootHash` label does NOT match the actual content under that
+     * hash. The CAS label-match would have passed pre-fix; with the
+     * verifier wired we surface the structural defect instead of
+     * silently accepting the swap against forged content.
+     */
+     | 'integrity-failed';
     /** When `reason === 'cas-mismatch'`, the actually-observed entry
      *  (so the caller can retry against the latest state). Omitted
      *  for `'not-found'` and `'concurrent-modification'`. */
     readonly observed?: {
         readonly contentHash: ContentHash;
     };
+    /** Optional diagnostic detail for `'integrity-failed'`. */
+    readonly integrityDetail?: string;
 };
+/**
+ * Audit #333 H7 — recomputed-content verifier hook.
+ *
+ * `ManifestCas.update`'s precondition check compares
+ * `observed.rootHash` (a string read from the entry) to `prev.contentHash`
+ * (the caller's expected value). Both sides are arbitrary writer-supplied
+ * labels — a CAS pass means "the labels agree", not "the content under
+ * the label is the content the caller meant". An attacker writing an
+ * entry with a forged `rootHash` field that doesn't match the actual
+ * pool content slips through the CAS check unchanged.
+ *
+ * When wired, this hook is called AFTER the label CAS passes and BEFORE
+ * the write. It is responsible for fetching the content the entry's
+ * `rootHash` refers to (typically the UXF pool element), recomputing
+ * the hash, and asserting the recomputed value matches the entry's
+ * declaration. Production wiring routes through `computeElementHash`
+ * over the pool element.
+ *
+ * Returns `{ ok: true }` to permit the write, or `{ ok: false, reason }`
+ * to abort with `ManifestCasResult.reason === 'integrity-failed'`.
+ *
+ * Optional — when absent the CAS retains its pre-fix label-only
+ * semantics. Production wiring SHOULD always provide; the optional
+ * shape preserves test back-compat (existing tests do not assume the
+ * verifier is wired).
+ */
+type VerifyEntryRootFn = (addr: string, tokenId: string, entry: TokenManifestEntry) => Promise<{
+    readonly ok: boolean;
+    readonly reason?: string;
+}>;
 /**
  * Compare-and-swap helper over manifest entries.
  *
@@ -7618,7 +7806,16 @@ type ManifestCasResult = {
  */
 declare class ManifestCas {
     private readonly storage;
-    constructor(storage: MinimalManifestStorage);
+    /**
+     * Audit #333 H7 — optional recomputed-content verifier. See
+     * {@link VerifyEntryRootFn}. When omitted the CAS retains its
+     * pre-fix label-only semantics (back-compat with existing tests
+     * that do not wire the hook).
+     */
+    private readonly verifyEntryRoot;
+    constructor(storage: MinimalManifestStorage, opts?: {
+        readonly verifyEntryRoot?: VerifyEntryRootFn;
+    });
     /**
      * Atomic-from-the-caller's-perspective compare-and-swap on the
      * manifest entry for `(addr, tokenId)`.
@@ -9416,6 +9613,26 @@ interface UxfBundleRef {
     readonly removeFromProfileAfter?: number;
     /** Number of tokens in this bundle (for quick display without fetching CAR) */
     readonly tokenCount?: number;
+    /**
+     * Issue #367 — pointer CID of the lean-snapshot blob that placed this
+     * bundle ref into the local OrbitDB store via a snapshot-apply dispatch.
+     *
+     * Set ONLY when the writer that landed the ref was the snapshot
+     * dispatcher's `writeRemote` path inside `BundleIndex.joinSnapshot`.
+     * Unset (undefined) on:
+     *   - locally-published bundles written via `BundleIndex.addBundle`;
+     *   - bundles arriving via OrbitDB cross-device pubsub replication
+     *     (which doesn't flow through the snapshot dispatcher);
+     *   - legacy bundle refs persisted before this field existed.
+     *
+     * Read by `load()`'s Rule-4 pairwise gate: when every active bundle's
+     * `sourcedFromSnapshotPointerCid` is non-null AND identical, the load
+     * is sourced from a single trusted snapshot blob and Rule-4 enrichment
+     * can be skipped (the snapshot producer's local merge already resolved
+     * any siblings before publication). Any non-snapshot bundle in the
+     * active set forces Rule-4 to run.
+     */
+    readonly sourcedFromSnapshotPointerCid?: string;
 }
 /**
  * State written to OrbitDB as `consolidation.pending` during a consolidation
@@ -11458,6 +11675,20 @@ interface UxfTransferOutboxEntry {
     /** Tokens shipped in this bundle (genesis token ids). Empty array
      *  permitted only for the migration synthetic case. */
     readonly tokenIds: ReadonlyArray<string>;
+    /**
+     * Audit #333 H5 — source tokens this outbox entry spent (sender-side
+     * locking surface). Populated by the instant-sender at outbox-record
+     * construction time from the selected source set. Consumed by the
+     * finalization worker at the `failed-permanent` transition to drive
+     * the `recoverFailedPermanentSources` hook — so a hard-failed instant
+     * send unlocks the spender-side balance rather than permanently
+     * locking it as `pending`/`transferring`.
+     *
+     * Optional with `[]` semantics on `undefined` to preserve back-compat
+     * with entries written before H5; the worker treats pre-H5 entries as
+     * "no recovery target" rather than blocking the terminal transition.
+     */
+    readonly sourceTokenIds?: ReadonlyArray<string>;
     /** How the bundle was sent. */
     readonly deliveryMethod: 'car-over-nostr' | 'cid-over-nostr' | 'txf-legacy';
     /** Recipient identifier (@nametag, DIRECT://..., chain pubkey, alpha1...). */
@@ -15137,6 +15368,32 @@ interface FinalizationWorkerSenderOptions {
      * deterministic version that resolves immediately.
      */
     readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+    /**
+     * Audit #333 H5 — recover source tokens on `failed-permanent`.
+     *
+     * Pre-fix the worker transitioned to `failed-permanent` and never
+     * touched the source tokens that the instant-sender had marked
+     * `'transferring'` (or `'pending'`) at submit time. With orphan
+     * auto-recovery default-OFF, a failed instant send permanently
+     * locked the source balance as unspendable.
+     *
+     * When wired, this hook fires once per `failed-permanent` transition
+     * with the entry's `sourceTokenIds`. Production should flip each
+     * tokenId's status from `transferring`/`pending` back to a
+     * spendable state (typically `confirmed`) — but only when safe
+     * (e.g., no other live outbox entry holds the same source).
+     *
+     * Errors thrown by the hook are caught and logged; they MUST NOT
+     * block the `failed-permanent` transition itself, which is the
+     * pre-existing terminal-state contract.
+     *
+     * Reads `sourceTokenIds` from the outbox entry (added to
+     * `UxfTransferOutboxEntry` as an optional field for back-compat).
+     * Entries written before H5 lacked this field — for those the hook
+     * is invoked with an empty array (preserves pre-fix behaviour while
+     * still firing the hook for observability).
+     */
+    readonly recoverFailedPermanentSources?: (sourceTokenIds: ReadonlyArray<string>, outboxId: string) => Promise<void>;
     /** Optional override of the §6.1 caps. */
     readonly caps?: FinalizationWorkerCaps;
     /**
@@ -17278,6 +17535,26 @@ declare class PaymentsModule {
     private unsubscribePaymentRequests;
     private unsubscribePaymentRequestResponses;
     private proofPollingJobs;
+    /**
+     * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+     * verdicts. Keyed by in-memory `Token.id`; value carries the verdict
+     * label + timestamp the recovery code stamped at the time the
+     * permanent classification was determined.
+     *
+     * Read by `drainPendingFinalizations` (and the stranded-token
+     * registration scan in `recoverStrandedReceivedTokens`) so a
+     * subsequent `sphere balance` / `sphere payments receive`
+     * invocation does NOT re-pay the 60s drain timeout polling a token
+     * whose V6-RECOVER verdict is already known to be unrecoverable.
+     *
+     * Hydrated by `restoreV6RecoverPermanent()` on `load()` so the
+     * verdict survives process restart. Cleared by `Sphere.clear()`
+     * (full wallet wipe — the underlying KV key goes with it) and by
+     * `payments receive --finalize` (operator-forced retry: clears the
+     * map so the recovery path runs one more time in case the HD-index
+     * recovery window has since widened).
+     */
+    private v6RecoverPermanent;
     /**
      * Lowercase hex of the signing-service publicKey used by
      * `UnmaskedPredicate.create` / `MaskedPredicate.create`. Lazily
@@ -19917,6 +20194,24 @@ declare class PaymentsModule {
      */
     private restoreProofPollingJobs;
     /**
+     * Persist the `v6RecoverPermanent` map to storage so the verdict
+     * survives process restart. Fire-and-forget at call sites — failures
+     * are logged via the caller's catch arm; the next call re-attempts.
+     *
+     * Empty map → `storage.remove()` so a stale list does not survive
+     * (mirrors `saveProofPollingJobs` exactly).
+     */
+    private saveV6RecoverPermanent;
+    /**
+     * Restore the `v6RecoverPermanent` map from storage. Called from
+     * `load()` AFTER `loadFromStorageData` populates `this.tokens`.
+     *
+     * Malformed entries are silently skipped — a single stray entry must
+     * not block legitimate verdicts. A wholly-malformed payload is logged
+     * once and the map starts empty.
+     */
+    private restoreV6RecoverPermanent;
+    /**
      * Start the proof polling interval if not already running
      */
     private startProofPolling;
@@ -21950,6 +22245,24 @@ declare const STORAGE_KEYS_ADDRESS: {
      * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
      */
     readonly PROOF_POLLING_JOBS: "proof_polling_jobs";
+    /**
+     * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+     * verdicts. When `finalizeStrandedReceivedToken` hits
+     * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+     * or `permanent structural failure`, the tokenId is recorded here
+     * with the verdict reason + timestamp.
+     *
+     * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+     * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+     * `sphere payments receive` invocations skip the 60s drain timeout
+     * for already-failed tokens.
+     *
+     * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+     * `payments receive --finalize` (operator-forced retry — gives the
+     * token one more shot at finalization in case the HD-index window
+     * has since widened).
+     */
+    readonly V6_RECOVER_PERMANENT: "v6_recover_permanent";
     /** Per-swap key: swap:{swapId} */
     readonly SWAP_RECORD_PREFIX: "swap:";
     /** Lightweight index array for listing */
@@ -22019,6 +22332,24 @@ declare const STORAGE_KEYS: {
      * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
      */
     readonly PROOF_POLLING_JOBS: "proof_polling_jobs";
+    /**
+     * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+     * verdicts. When `finalizeStrandedReceivedToken` hits
+     * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+     * or `permanent structural failure`, the tokenId is recorded here
+     * with the verdict reason + timestamp.
+     *
+     * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+     * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+     * `sphere payments receive` invocations skip the 60s drain timeout
+     * for already-failed tokens.
+     *
+     * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+     * `payments receive --finalize` (operator-forced retry — gives the
+     * token one more shot at finalization in case the HD-index window
+     * has since widened).
+     */
+    readonly V6_RECOVER_PERMANENT: "v6_recover_permanent";
     /** Per-swap key: swap:{swapId} */
     readonly SWAP_RECORD_PREFIX: "swap:";
     /** Lightweight index array for listing */
@@ -26926,6 +27257,14 @@ declare function addressesMatch(a: string, b: string): boolean;
 /**
  * UXF error codes covering all failure modes in the UXF module.
  */
-type UxfErrorCode = 'INVALID_HASH' | 'MISSING_ELEMENT' | 'TOKEN_NOT_FOUND' | 'STATE_INDEX_OUT_OF_RANGE' | 'TYPE_MISMATCH' | 'INVALID_INSTANCE_CHAIN' | 'DUPLICATE_TOKEN' | 'SERIALIZATION_ERROR' | 'VERIFICATION_FAILED' | 'CYCLE_DETECTED' | 'INVALID_PACKAGE' | 'INVALID_INPUT' | 'LIMIT_EXCEEDED' | 'NOT_IMPLEMENTED';
+type UxfErrorCode = 'INVALID_HASH' | 'MISSING_ELEMENT' | 'TOKEN_NOT_FOUND' | 'STATE_INDEX_OUT_OF_RANGE' | 'TYPE_MISMATCH' | 'INVALID_INSTANCE_CHAIN' | 'DUPLICATE_TOKEN' | 'SERIALIZATION_ERROR' | 'VERIFICATION_FAILED' | 'CYCLE_DETECTED' | 'INVALID_PACKAGE' | 'INVALID_INPUT' | 'LIMIT_EXCEEDED' | 'NOT_IMPLEMENTED'
+/**
+ * Audit #333 H3 — surfaced by `UxfPackage.merge({ strict: true })`
+ * when one or more per-token resolvers throw. Pre-fix the failures
+ * silently disappeared with only a `logger.warn`. The error
+ * carries a `skipped: MergeSkip[]` field (machine-readable) so
+ * callers can decide how to react.
+ */
+ | 'MERGE_PARTIAL_FAILURE';
 
 export { AUDIT_STATUSES, type AdditionalAsset, type AddressInfo, type AddressMode, type AddressType, type AggregatorClient, type AggregatorEvent, type AggregatorEventCallback, type AggregatorEventType, type AggregatorProvider, type AggregatorProviderConfig, type Asset, type AssetTarget, type AuditEntry, type AuditStatus, BUILTIN_IPFS_GATEWAYS, type BackgroundProgressStatus, type BaseProvider, type BroadcastHandler, type BroadcastMessage, type BuildSplitBundleResult, type CMasterKeyData, COIN_TYPES, type CheckNetworkHealthOptions, CoinGeckoPriceProvider, type CombinedTransferBundleV6, CommunicationsModule, type CommunicationsModuleConfig, type CommunicationsModuleDependencies, type ComposingIndicator, type ConnectivityBackendStatusType, type ConnectivityStatusPayload, type ConsolidationPendingState, type ContentHash, type ConversationPage, type CreateGroupOptions, type CreateInvoiceRequest, DEFAULT_AGGREGATOR_TIMEOUT, DEFAULT_AGGREGATOR_URL, DEFAULT_DERIVATION_PATH, DEFAULT_ELECTRUM_URL, DEFAULT_GROUP_RELAYS, DEFAULT_IPFS_BOOTSTRAP_PEERS, DEFAULT_IPFS_GATEWAYS, DEFAULT_MARKET_API_URL, DEFAULT_NOSTR_RELAYS, DEV_AGGREGATOR_URL, DISPOSITION_REASONS, type DecryptionProgressCallback, type DeliveryStrategy, type DerivationMode, type DirectMessage, type DirectTokenEntry, type DiscoverAddressProgress, type DiscoverAddressesOptions, type DiscoverAddressesResult, type DiscoveredAddress, type DispositionReason, type DispositionRecord, type EncryptedData, type ExtendedValidationResult, type FullIdentity, type GetConversationPageOptions, type GetInvoicesOptions, type GetSwapsFilter, GroupChatModule, type GroupChatModuleConfig, type GroupChatModuleDependencies, type GroupData, type GroupMemberData, type GroupMessageData, GroupRole, GroupVisibility, type HealthCheckFn, type Identity, type IdentityConfig, type InclusionProof, type IncomingBroadcast, type IncomingMessage, type IncomingPaymentRequest, type IncomingTokenTransfer, type IncomingTransfer, type InitProgress, type InitProgressCallback, type InitProgressStep, type InstanceChainEntry, type InstanceChainIndex, type InstanceSelectionStrategy, type InstantSplitBundle, type InstantSplitBundleV4, type InstantSplitBundleV5, type InstantSplitOptions, type InstantSplitProcessResult, type InstantSplitResult, type InstantSplitV5RecoveryMetadata, type IntentStatus, type IntentType, type InternalTransferMode, type InvalidEntry, type InvalidatedNametagEntry, type InvoiceRequestedAsset, index as L1, type L1Balance, L1PaymentsModule, type L1PaymentsModuleConfig, type L1PaymentsModuleDependencies, type L1SendRequest, type L1SendResult, type L1Transaction, type L1Utxo, LIMITS, type LegacyCombinedTransferPayload, type LegacyFileImportOptions, type LegacyFileInfo, type LegacyFileParseResult, type LegacyFileParsedData, type LegacyFileType, type LegacyInstantSplitPayload, type LegacySdkPayload, type LegacySphereTxfPayload, type LegacyTokenTransferPayload, type LoadResult, type LogHandler, type LogLevel, type LogRecord, type LogSink, type LoggerConfig, type LoggingConfig, type ManifestAuxiliary, type ManifestEntry, type ManifestEntryDelta, type ManifestFields, type ManifestSignatures, type MarketIntent, MarketModule, type MarketModuleConfig, type MarketModuleDependencies, type MessageHandler, type MigrationPhase, type MigrationResult, type MintOutboxEntry, type MintParams, type MintResult, NETWORKS, NIP29_KINDS, NOSTR_EVENT_KINDS, type NamespacedLogger, type NametagBindingProof, type NametagData, type NetworkHealthResult, type NetworkType, type OracleEvent, type OracleEventCallback, type OracleEventType, type OracleProvider, type OutboxEntry, type OutgoingPaymentRequest, type ParsedAddress, type ParsedStorageData, type PayInvoiceParams, type PaymentRequest, type PaymentRequestHandler, type PaymentRequestResponse, type PaymentRequestResponseHandler, type PaymentRequestResponseType, type PaymentRequestResult, type PaymentRequestStatus, type PaymentSession, type PaymentSessionDirection, type PaymentSessionError, type PaymentSessionErrorCode, type PaymentSessionStatus, PaymentsModule, type PaymentsModuleConfig, type PaymentsModuleDependencies, type PeerInfo, type PendingV5Finalization, type PostIntentRequest, type PostIntentResult, type PricePlatform, type PriceProvider, type PriceProviderConfig, type ProfileConfig, type ProfileEncryptionConfig, type ProfileErrorCode, type ProviderMetadata, type ProviderRole, type ProviderStatus, type ProviderStatusInfo, type ReceiveOptions, type ReceiveResult, type RegistryNetwork, type ReturnPaymentParams, type RingBufferSink, SIGN_MESSAGE_PREFIX, STORAGE_KEYS, STORAGE_KEYS_ADDRESS, STORAGE_KEYS_GLOBAL, STORAGE_PREFIX, type SaveResult, type ScanAddressProgress, type ScanAddressesOptions, type ScanAddressesResult, type ScannedAddressResult, type SearchFilters, type SearchIntentResult, type SearchOptions, type SearchResult, type ServiceHealthResult, type Span, type SpentTokenInfo, type SpentTokenResult, Sphere, type SphereConfig, type SphereCreateOptions, SphereError, type SphereErrorCode, type SphereEventHandler, type SphereEventMap, type SphereEventType, type SphereImportOptions, type SphereInitOptions, type SphereInitResult, type SphereLoadOptions, type SphereStatus, type SplitPaymentSession, type SplitRecoveryResult, type StorageEvent, type StorageEventCallback, type StorageEventType, type StorageProvider, type StorageProviderConfig, type SubmitResult, type SwapDeal, type SwapManifest, SwapModule, type SwapModuleConfig, type SwapProgress, type SwapProposalResult, type SwapRef, type SwapRole, type SyncResult$1 as SyncResult, TEST_AGGREGATOR_URL, TEST_ELECTRUM_URL, TEST_NOSTR_RELAYS, TIMEOUTS, type Token, type TokenDefinition, type TokenIcon, type TokenPrice, TokenRegistry, type TokenState, type TokenStatus, type TokenStorageProvider, type TokenTransferDetail, type TokenTransferHandler, type TokenTransferPayload, type ValidationResult as TokenValidationResult, TokenValidator, type TombstoneEntry, type TrackedAddress, type TrackedAddressEntry, type TransactionHistoryEntry, type TransferCommitment, type TransferMode, type TransferRequest, type TransferResult, type TransferStatus, type TransportEvent, type TransportEventCallback, type TransportEventType, type TransportProvider, type TransportProviderConfig, type TrustBaseLoader, type TxfAuthenticator, type TxfGenesis, type TxfGenesisData, type TxfInclusionProof, type TxfIntegrity, type TxfInvalidEntry, type TxfMerkleStep, type TxfMerkleTreePath, type TxfMeta, type TxfOutboxEntry, type TxfSentEntry, type TxfState, type TxfStorageData, type TxfStorageDataBase, type TxfToken, type TxfTombstone, type TxfTransaction, type UnconfirmedResolutionResult, type UxfBundleRef, type UxfDelta, type UxfElement, type UxfElementContent, type UxfElementHeader, type UxfElementType, type UxfEnvelope, type UxfErrorCode, type UxfIndexes, type UxfInstanceKind, type UxfManifest, type UxfPackageData, type UxfStorageAdapter, type UxfTransferPayload, type UxfTransferPayloadBase, type UxfTransferPayloadCar, type UxfTransferPayloadCid, type UxfVerificationIssue, type UxfVerificationResult, type V5FinalizationStage, type ValidationAction, type ValidationIssue, type ValidationResult$1 as ValidationResult, type WaitOptions, type WalletDatInfo, type WalletInfo, type WalletJSON$1 as WalletJSON, type WalletJSONExportOptions$1 as WalletJSONExportOptions, type WalletSource, addSink, addressesMatch, archivedKeyFromTokenId, base58Decode, base58Encode, buildManifest, buildTxfStorageData, bytesToHex, checkNetworkHealth, clearSinks, coinIdsMatch, computeSwapId, countCommittedTransactions, createAddress, createCommunicationsModule, createGroupChatModule, createKeyPair, createL1PaymentsModule, createMarketModule, createNametagBinding, createPaymentSession, createPaymentSessionError, createPaymentsModule, createPriceProvider, createRingBufferSink, createSphere, createSplitPaymentSession, createSwapModule, createTokenValidator, decodeBech32, decrypt$1 as decrypt, decryptCMasterKey, decryptJson, decryptMnemonic, decryptPrivateKey, decryptSimple, decryptTextFormatKey, decryptWallet, decryptWithSalt, deriveAddressInfo, deriveChildKey$1 as deriveChildKey, deriveKeyAtPath$1 as deriveKeyAtPath, disableDebug, doubleSha256, encodeBech32, encrypt$1 as encrypt, encryptMnemonic, encryptSimple, encryptWallet, extractFromText, findPattern, forkedKeyFromTokenIdAndState, formatAmount, generateAddressFromMasterKey, generateMasterKey, generateMnemonic, generatePrivateKey, getAddressHrp, getAddressId, getAddressStorageKey, getCoinIdByName, getCoinIdBySymbol, getCurrentStateHash, getLogger, getPublicKey, getSphere, getTokenDecimals, getTokenDefinition, getTokenIconUrl, getTokenId, getTokenName, getTokenSymbol, hasMissingNewStateHash, hasUncommittedTransactions, hasValidTxfData, hash160, hashSignMessage, hexToBytes, hexToWIF, identityFromMnemonicSync, initSphere, isArchivedKey, isAuditStatus, isCoinAsset, isCombinedTransferBundleV6, isDispositionReason, isForkedKey, isInstantSplitBundle, isInstantSplitBundleV4, isInstantSplitBundleV5, isKnownToken, isLegacyTokenTransferPayload, isNftAsset, isPaymentSessionTerminal, isPaymentSessionTimedOut, isSQLiteDatabase, isSphereError, isTextWalletEncrypted, isTokenKey, isUxfTransferPayload, isUxfTransferPayloadCar, isUxfTransferPayloadCid, isValidAddress, isValidBech32, isValidDirectAddress, isValidNametag, isValidPrivateKey, isValidTokenId, isWalletDatEncrypted, isWalletTextFormat, keyFromTokenId, listDebug, loadSphere, logger, mnemonicToSeedSync, normalizeAddress, normalizeCoinId, normalizeSdkTokenToStorage, objectToTxf, parseAddress, parseAndDecryptWalletDat, parseAndDecryptWalletText, parseForkedKey, parseTxfStorageData, parseWalletDat, parseWalletText, randomBytes, randomHex, randomUUID, recoverPubkeyFromSignature, ripemd160, setDebug, sha256, signMessage, signSwapManifest, sleep, sphereExists, toHumanReadable, toSmallestUnit, tokenIdFromArchivedKey, tokenIdFromKey, tokenToTxf, txfToToken, validateManifest, validateMnemonic, verifyManifestIntegrity, verifyNametagBinding, verifySignedMessage, verifySwapSignature, withSpan };

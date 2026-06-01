@@ -59,7 +59,7 @@ var init_types = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -110,7 +110,7 @@ function createHasher(hashCons, info = {}) {
 }
 var oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     oidNist = (suffix) => ({
       oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
@@ -118,7 +118,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -127,7 +127,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -238,10 +238,10 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -1972,6 +1972,7 @@ function deconstructToken(pool, token) {
 init_assemble();
 
 // uxf/verify.ts
+init_types();
 init_hash();
 import { encode as dagCborEncode } from "@ipld/dag-cbor";
 
@@ -2077,6 +2078,29 @@ function verify(pkg) {
         elementHash: rootHash
       });
       continue;
+    }
+    {
+      const rootElement = pkg.pool.get(rootHash);
+      if (rootElement !== void 0) {
+        if (rootElement.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+          errors.push({
+            code: "MANIFEST_TYPE_MISMATCH",
+            message: `Manifest entry for tokenId=${tokenId} points to a non-root element (type=${rootElement.type}); expected '${ELEMENT_TYPE_TOKEN_ROOT}'`,
+            tokenId,
+            elementHash: rootHash
+          });
+        } else {
+          const rootContentTokenId = rootElement.content.tokenId;
+          if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+            errors.push({
+              code: "MANIFEST_TOKENID_MISMATCH",
+              message: `Manifest key tokenId=${tokenId} does not match the referenced token-root's content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"}. Bundle is structurally inconsistent (Audit #333 H2 \u2014 identity-confusion primitive).`,
+              tokenId,
+              elementHash: rootHash
+            });
+          }
+        }
+      }
     }
     const visited = /* @__PURE__ */ new Set();
     const pathStack = /* @__PURE__ */ new Set();
@@ -2913,6 +2937,21 @@ function packageFromJson(json) {
         `Refusing to import package with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   return {
     envelope,
@@ -3368,6 +3407,21 @@ async function importFromCar(car) {
         `Refusing to import CAR with synthetic (Rule 4 enriched) manifest head for token ${tokenId} (rootHash=${rootHash}). Synthetic roots are ephemeral merge artifacts that must NOT cross peer boundaries.`
       );
     }
+    if (rootEl) {
+      if (rootEl.type !== ELEMENT_TYPE_TOKEN_ROOT) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest entry for tokenId=${tokenId} points to a non-root element (type='${rootEl.type}'); expected '${ELEMENT_TYPE_TOKEN_ROOT}' (Audit #333 H2).`
+        );
+      }
+      const rootContentTokenId = rootEl.content.tokenId;
+      if (typeof rootContentTokenId !== "string" || rootContentTokenId !== tokenId) {
+        throw new UxfError(
+          "VERIFICATION_FAILED",
+          `Manifest key tokenId=${tokenId} does not match token-root content.tokenId=${typeof rootContentTokenId === "string" ? rootContentTokenId : "(missing/non-string)"} (Audit #333 H2 \u2014 identity-confusion primitive).`
+        );
+      }
+    }
   }
   const instanceChains = rebuildInstanceChains(pool);
   const indexes = {
@@ -3648,14 +3702,6 @@ function concatUint8Arrays(arrays) {
   }
   return result;
 }
-
-// uxf/UxfPackage.ts
-init_types();
-init_errors();
-init_hash();
-init_element_pool();
-init_instance_chain();
-init_assemble();
 
 // core/logger.ts
 var LEVEL_RANK = {
@@ -4130,7 +4176,98 @@ var logger = {
   }
 };
 
+// core/perf-counters.ts
+function detectEnabled() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      if (process.env.SPHERE_PERF === "1") return true;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (localStorage.getItem("SPHERE_PERF") === "1") return true;
+    }
+  } catch {
+  }
+  return false;
+}
+var PERF_ENABLED = detectEnabled();
+function detectDumpIntervalMs() {
+  try {
+    if (typeof process !== "undefined" && process?.env?.SPHERE_PERF_DUMP_MS) {
+      const n = Number(process.env.SPHERE_PERF_DUMP_MS);
+      if (Number.isFinite(n) && n > 0) return Math.max(100, Math.floor(n));
+    }
+  } catch {
+  }
+  return 5e3;
+}
+var counters = /* @__PURE__ */ new Map();
+function getCell(name) {
+  let c = counters.get(name);
+  if (c === void 0) {
+    c = { count: 0, totalMs: 0, maxMs: 0 };
+    counters.set(name, c);
+  }
+  return c;
+}
+function incr(name, n = 1) {
+  if (!PERF_ENABLED) return;
+  const c = getCell(name);
+  c.count += n;
+}
+function observeMs(name, ms) {
+  if (!PERF_ENABLED) return;
+  const v = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const c = getCell(name);
+  c.count += 1;
+  c.totalMs += v;
+  if (v > c.maxMs) c.maxMs = v;
+}
+function snapshot() {
+  const out = {};
+  for (const [name, c] of counters) {
+    out[name] = {
+      count: c.count,
+      totalMs: Math.round(c.totalMs * 1e3) / 1e3,
+      avgMs: c.count > 0 ? Math.round(c.totalMs / c.count * 1e3) / 1e3 : 0,
+      maxMs: Math.round(c.maxMs * 1e3) / 1e3
+    };
+  }
+  return out;
+}
+function dumpAndReset() {
+  if (!PERF_ENABLED) return;
+  if (counters.size === 0) return;
+  const snap = snapshot();
+  counters.clear();
+  logger.info("perf", `[perf-counters] snapshot:`, snap);
+}
+var dumpTimer = null;
+function startAutoDump() {
+  if (dumpTimer !== null) return;
+  if (!PERF_ENABLED) return;
+  const ms = detectDumpIntervalMs();
+  dumpTimer = setInterval(() => {
+    try {
+      dumpAndReset();
+    } catch {
+    }
+  }, ms);
+  if (typeof dumpTimer.unref === "function") {
+    dumpTimer.unref();
+  }
+}
+startAutoDump();
+
 // uxf/UxfPackage.ts
+init_types();
+init_errors();
+init_hash();
+init_element_pool();
+init_instance_chain();
+init_assemble();
 var UxfPackage = class _UxfPackage {
   data;
   constructor(data) {
@@ -4139,13 +4276,38 @@ var UxfPackage = class _UxfPackage {
   // ---------- Static Factories ----------
   /**
    * Create a new empty package.
+   *
+   * **Determinism note (post-#362):** the envelope `createdAt` /
+   * `updatedAt` fields are baked into the CAR root CID (the
+   * dag-cbor-encoded envelope IS the root block). If a caller invokes
+   * `create()` twice — e.g., a sender that crashes mid-flight and the
+   * worker rebuilds the bundle on resume — the two `Date.now()` calls
+   * straddling a second boundary would produce DIFFERENT envelope
+   * bytes → DIFFERENT bundleCids. That breaks every system that
+   * indexes on `bundleCid` for idempotency (replay-LRU at the
+   * recipient, IPFS pin reuse, outbox bundleCid dedup, the audit-#333
+   * H3 `targetExisting === sourceIncoming` fast path).
+   *
+   * Production senders therefore lock a single `createdAt` value at
+   * the start of a send attempt and persist it in the outbox entry's
+   * `createdAt`. On resume, the worker reads the persisted value and
+   * passes it back as `options.createdAt`. The `Date.now()` fallback
+   * stays for callers that don't need cross-attempt determinism
+   * (tests, ad-hoc tooling, archival exports).
+   *
+   * @param options.createdAt  Override the envelope timestamp (unix
+   *   seconds). When omitted, `Math.floor(Date.now() / 1000)` is used.
+   * @param options.updatedAt  Override the envelope updated-at timestamp.
+   *   Defaults to `createdAt` (a brand-new package's createdAt and
+   *   updatedAt are equal — they only diverge after `merge()`).
    */
   static create(options) {
-    const now2 = Math.floor(Date.now() / 1e3);
+    const now2 = options?.createdAt ?? Math.floor(Date.now() / 1e3);
+    const updated = options?.updatedAt ?? now2;
     const envelope = {
       version: "1.0.0",
       createdAt: now2,
-      updatedAt: now2,
+      updatedAt: updated,
       ...options?.description !== void 0 ? { description: options.description } : {},
       ...options?.creator !== void 0 ? { creator: options.creator } : {}
     };
@@ -4190,16 +4352,23 @@ var UxfPackage = class _UxfPackage {
   /**
    * Deconstruct a token and add to the package.
    * If the token already exists, its manifest entry is updated to the new root.
+   *
+   * `opts.updatedAt` (unix seconds) overrides the post-ingest envelope
+   * `updatedAt` bump — required for bundleCid determinism across
+   * crash-restart retries (see {@link UxfPackage.create} determinism
+   * note).
    */
-  ingest(token) {
-    ingest(this.data, token);
+  ingest(token, opts) {
+    ingest(this.data, token, opts);
     return this;
   }
   /**
    * Batch ingest multiple tokens.
+   *
+   * See {@link ingest} for `opts.updatedAt`.
    */
-  ingestAll(tokens) {
-    ingestAll(this.data, tokens);
+  ingestAll(tokens, opts) {
+    ingestAll(this.data, tokens, opts);
     return this;
   }
   // ---------- Reassembly ----------
@@ -4294,8 +4463,11 @@ var UxfPackage = class _UxfPackage {
    * resolution for any pairwise hash mismatch.
    */
   merge(other, opts) {
-    mergePkg(this.data, other.data, opts?.verifiedProofs);
-    return this;
+    return mergePkg(this.data, other.data, {
+      verifiedProofs: opts?.verifiedProofs,
+      strict: opts?.strict,
+      onSkip: opts?.onSkip
+    });
   }
   /**
    * Wave I.5: build the `verifiedProofs` set for a Rule 4-enabled
@@ -4315,6 +4487,8 @@ var UxfPackage = class _UxfPackage {
    * treated as "not verified" — the resulting set is conservative.
    */
   async computeVerifiedProofs(other, verifier) {
+    incr("uxf.computeVerifiedProofs.calls");
+    const __perfStart = performance.now();
     const verified = /* @__PURE__ */ new Set();
     const ELEMENT_TYPE_INCLUSION_PROOF2 = "inclusion-proof";
     const combinedPool = /* @__PURE__ */ new Map();
@@ -4332,15 +4506,23 @@ var UxfPackage = class _UxfPackage {
         continue;
       }
       try {
+        incr("uxf.computeVerifiedProofs.verifyCalls");
+        const __vStart = performance.now();
         const ok = await verifier({
           proofJson,
           transactionHash: txHashImprintHex,
           proofHash: hash
         });
-        if (ok) verified.add(hash);
+        observeMs("uxf.computeVerifiedProofs.verifyMs", performance.now() - __vStart);
+        if (ok) {
+          incr("uxf.computeVerifiedProofs.verifyOk");
+          verified.add(hash);
+        }
       } catch {
+        incr("uxf.computeVerifiedProofs.verifyThrew");
       }
     }
+    observeMs("uxf.computeVerifiedProofs.totalMs", performance.now() - __perfStart);
     return verified;
   }
   /**
@@ -4456,7 +4638,9 @@ function syncPool(pkg, pool) {
     mutablePool.set(hash, element);
   }
 }
-function ingest(pkg, token) {
+function ingest(pkg, token, opts) {
+  incr("uxf.ingest.calls");
+  const __iStart = performance.now();
   const pool = wrapPool(pkg);
   const rootHash = deconstructToken(pool, token);
   syncPool(pkg, pool);
@@ -4465,15 +4649,21 @@ function ingest(pkg, token) {
   const tokenId = rootContent.tokenId;
   const mutableManifest = pkg.manifest.tokens;
   mutableManifest.set(tokenId, rootHash);
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
   updateIndexesForToken(pkg, tokenId, rootHash);
+  observeMs("uxf.ingest.totalMs", performance.now() - __iStart);
 }
-function ingestAll(pkg, tokens) {
+function ingestAll(pkg, tokens, opts) {
   if (tokens.length === 0) return;
+  incr("uxf.ingestAll.calls");
+  incr("uxf.ingestAll.tokens", tokens.length);
+  const __iaStart = performance.now();
   const pool = wrapPool(pkg);
   const newTokens = [];
   for (const token of tokens) {
+    const __dStart = performance.now();
     const rootHash = deconstructToken(pool, token);
+    observeMs("uxf.ingestAll.perTokenDeconstructMs", performance.now() - __dStart);
     const rootElement = pool.get(rootHash);
     const rootContent = rootElement.content;
     newTokens.push({ tokenId: rootContent.tokenId, rootHash });
@@ -4524,13 +4714,20 @@ function ingestAll(pkg, tokens) {
       for (const [k, v] of prePoolSnapshot) mutablePool.set(k, v);
     } catch {
     }
+    observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
     throw err;
   }
-  pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  pkg.envelope.updatedAt = opts?.updatedAt ?? Math.floor(Date.now() / 1e3);
+  observeMs("uxf.ingestAll.totalMs", performance.now() - __iaStart);
 }
 function assemble(pkg, tokenId, strategy = STRATEGY_LATEST) {
-  const pool = wrapPool(pkg);
-  return assembleToken(pool, pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  incr("uxf.assemble.calls");
+  const __aStart = performance.now();
+  try {
+    return assembleToken(wrapPool(pkg), pkg.manifest, tokenId, pkg.instanceChains, strategy);
+  } finally {
+    observeMs("uxf.assemble.totalMs", performance.now() - __aStart);
+  }
 }
 function assembleAtState(pkg, tokenId, stateIndex, strategy = STRATEGY_LATEST) {
   const pool = wrapPool(pkg);
@@ -4549,7 +4746,18 @@ function removeToken(pkg, tokenId) {
   removeFromIndexes(pkg.indexes, tokenId);
   pkg.envelope.updatedAt = Math.floor(Date.now() / 1e3);
 }
-function mergePkg(target, source, verifiedProofs) {
+function mergePkg(target, source, opts) {
+  let normalisedOpts;
+  if (opts === void 0) {
+    normalisedOpts = {};
+  } else if (opts instanceof Set) {
+    normalisedOpts = { verifiedProofs: opts };
+  } else {
+    normalisedOpts = opts;
+  }
+  const verifiedProofs = normalisedOpts.verifiedProofs;
+  const strict = normalisedOpts.strict === true;
+  const onSkip = normalisedOpts.onSkip;
   const mutablePool = target.pool;
   const mutableManifest = target.manifest.tokens;
   const stagedPoolInserts = /* @__PURE__ */ new Map();
@@ -4571,6 +4779,7 @@ function mergePkg(target, source, verifiedProofs) {
   ]);
   const stagedManifestWrites = /* @__PURE__ */ new Map();
   const stagedSyntheticInserts = /* @__PURE__ */ new Map();
+  const skipped = [];
   for (const [tokenId, incomingRoot] of source.manifest.tokens) {
     try {
       const existingRoot = mutableManifest.get(tokenId);
@@ -4592,12 +4801,40 @@ function mergePkg(target, source, verifiedProofs) {
       }
       stagedManifestWrites.set(tokenId, outcome.rootHash);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(String(err));
       logger.warn(
         "UxfPackage",
-        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${message}`
+        `mergePkg: skipping tokenId ${tokenId} \u2014 resolver threw: ${error.message}`
       );
+      const existingRoot = mutableManifest.get(tokenId);
+      const skipRecord = {
+        tokenId,
+        error,
+        targetExisting: existingRoot,
+        sourceIncoming: incomingRoot
+      };
+      skipped.push(skipRecord);
+      if (onSkip) {
+        try {
+          onSkip({ tokenId, error });
+        } catch (cbErr) {
+          logger.warn(
+            "UxfPackage",
+            `mergePkg: onSkip callback threw for tokenId=${tokenId} (ignored): ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`
+          );
+        }
+      }
     }
+  }
+  if (strict && skipped.length > 0) {
+    const summary = skipped.slice(0, 5).map((s) => `${s.tokenId.slice(0, 16)}\u2026: ${s.error.message}`).join("; ");
+    const suffix = skipped.length > 5 ? ` (and ${skipped.length - 5} more)` : "";
+    const aggregate = new UxfError(
+      "MERGE_PARTIAL_FAILURE",
+      `mergePkg(strict): ${skipped.length} per-token resolver failure(s); target unchanged. ${summary}${suffix}`
+    );
+    aggregate.skipped = skipped;
+    throw aggregate;
   }
   for (const [hash, element] of stagedPoolInserts) {
     mutablePool.set(hash, element);
@@ -4616,6 +4853,7 @@ function mergePkg(target, source, verifiedProofs) {
   );
   rebuildIndexes(target);
   target.envelope.updatedAt = Math.floor(Date.now() / 1e3);
+  return { skipped };
 }
 function addInstance2(pkg, originalHash, newInstance) {
   const pool = wrapPool(pkg);

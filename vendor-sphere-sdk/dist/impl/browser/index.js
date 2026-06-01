@@ -3,7 +3,7 @@ var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
 
-// ../../../node_modules/@noble/hashes/utils.js
+// node_modules/@noble/hashes/utils.js
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -111,7 +111,7 @@ function createHasher(hashCons, info = {}) {
 }
 var hasHexBuiltin, hexes, asciis, oidNist;
 var init_utils = __esm({
-  "../../../node_modules/@noble/hashes/utils.js"() {
+  "node_modules/@noble/hashes/utils.js"() {
     "use strict";
     hasHexBuiltin = /* @__PURE__ */ (() => (
       // @ts-ignore
@@ -125,7 +125,7 @@ var init_utils = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/_md.js
+// node_modules/@noble/hashes/_md.js
 function Chi(a, b, c) {
   return a & b ^ ~a & c;
 }
@@ -134,7 +134,7 @@ function Maj(a, b, c) {
 }
 var HashMD, SHA256_IV;
 var init_md = __esm({
-  "../../../node_modules/@noble/hashes/_md.js"() {
+  "node_modules/@noble/hashes/_md.js"() {
     "use strict";
     init_utils();
     HashMD = class {
@@ -245,10 +245,10 @@ var init_md = __esm({
   }
 });
 
-// ../../../node_modules/@noble/hashes/sha2.js
+// node_modules/@noble/hashes/sha2.js
 var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha256;
 var init_sha2 = __esm({
-  "../../../node_modules/@noble/hashes/sha2.js"() {
+  "node_modules/@noble/hashes/sha2.js"() {
     "use strict";
     init_md();
     init_utils();
@@ -1235,6 +1235,24 @@ var STORAGE_KEYS_ADDRESS = {
    * sourceTokenJson) to re-fire `finalizeReceivedToken` on next load().
    */
   PROOF_POLLING_JOBS: "proof_polling_jobs",
+  /**
+   * Issue #378 (#275 P4) — persistent ledger of V6-RECOVER permanent
+   * verdicts. When `finalizeStrandedReceivedToken` hits
+   * `permanent recipient-address mismatch (HD-index recovery exhausted)`
+   * or `permanent structural failure`, the tokenId is recorded here
+   * with the verdict reason + timestamp.
+   *
+   * Read by `drainPendingFinalizations` (and the V6-RECOVER stranded
+   * scan at `handleStrandedReceive`) so subsequent `sphere balance` /
+   * `sphere payments receive` invocations skip the 60s drain timeout
+   * for already-failed tokens.
+   *
+   * Cleared by `Sphere.clear()` (full wallet wipe) and by an explicit
+   * `payments receive --finalize` (operator-forced retry — gives the
+   * token one more shot at finalization in case the HD-index window
+   * has since widened).
+   */
+  V6_RECOVER_PERMANENT: "v6_recover_permanent",
   // Swap storage keys
   /** Per-swap key: swap:{swapId} */
   SWAP_RECORD_PREFIX: "swap:",
@@ -1794,7 +1812,7 @@ var SecretKey = class {
   }
 };
 
-// ../../../node_modules/@noble/hashes/hmac.js
+// node_modules/@noble/hashes/hmac.js
 init_utils();
 var _HMAC = class {
   oHash;
@@ -1866,7 +1884,7 @@ var _HMAC = class {
 var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
 hmac.create = (hash, key) => new _HMAC(hash, key);
 
-// ../../../node_modules/@noble/hashes/hkdf.js
+// node_modules/@noble/hashes/hkdf.js
 init_utils();
 function extract(hash, ikm, salt) {
   ahash(hash);
@@ -1967,6 +1985,100 @@ import { InclusionProofVerificationStatus } from "@unicitylabs/state-transition-
 
 // profile/aggregator-pointer/car-loss-tracker.ts
 var MAX_ATTEMPTS_RETAINED = CAR_FETCH_PERSISTENT_RETRY_ATTEMPTS * 4;
+
+// core/perf-counters.ts
+function detectEnabled() {
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      if (process.env.SPHERE_PERF === "1") return true;
+    }
+  } catch {
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (localStorage.getItem("SPHERE_PERF") === "1") return true;
+    }
+  } catch {
+  }
+  return false;
+}
+var PERF_ENABLED = detectEnabled();
+function detectDumpIntervalMs() {
+  try {
+    if (typeof process !== "undefined" && process?.env?.SPHERE_PERF_DUMP_MS) {
+      const n = Number(process.env.SPHERE_PERF_DUMP_MS);
+      if (Number.isFinite(n) && n > 0) return Math.max(100, Math.floor(n));
+    }
+  } catch {
+  }
+  return 5e3;
+}
+var counters = /* @__PURE__ */ new Map();
+function getCell(name) {
+  let c = counters.get(name);
+  if (c === void 0) {
+    c = { count: 0, totalMs: 0, maxMs: 0 };
+    counters.set(name, c);
+  }
+  return c;
+}
+function incr(name, n = 1) {
+  if (!PERF_ENABLED) return;
+  const c = getCell(name);
+  c.count += n;
+}
+function observeMs(name, ms) {
+  if (!PERF_ENABLED) return;
+  const v = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const c = getCell(name);
+  c.count += 1;
+  c.totalMs += v;
+  if (v > c.maxMs) c.maxMs = v;
+}
+async function time(name, fn) {
+  if (!PERF_ENABLED) return fn();
+  const t0 = performance.now();
+  try {
+    return await fn();
+  } finally {
+    observeMs(name, performance.now() - t0);
+  }
+}
+function snapshot() {
+  const out = {};
+  for (const [name, c] of counters) {
+    out[name] = {
+      count: c.count,
+      totalMs: Math.round(c.totalMs * 1e3) / 1e3,
+      avgMs: c.count > 0 ? Math.round(c.totalMs / c.count * 1e3) / 1e3 : 0,
+      maxMs: Math.round(c.maxMs * 1e3) / 1e3
+    };
+  }
+  return out;
+}
+function dumpAndReset() {
+  if (!PERF_ENABLED) return;
+  if (counters.size === 0) return;
+  const snap = snapshot();
+  counters.clear();
+  logger.info("perf", `[perf-counters] snapshot:`, snap);
+}
+var dumpTimer = null;
+function startAutoDump() {
+  if (dumpTimer !== null) return;
+  if (!PERF_ENABLED) return;
+  const ms = detectDumpIntervalMs();
+  dumpTimer = setInterval(() => {
+    try {
+      dumpAndReset();
+    } catch {
+    }
+  }, ms);
+  if (typeof dumpTimer.unref === "function") {
+    dumpTimer.unref();
+  }
+}
+startAutoDump();
 
 // profile/aggregator-pointer/win-broadcast.ts
 import { DataHasher } from "@unicitylabs/state-transition-sdk/lib/hash/DataHasher.js";
@@ -5534,6 +5646,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
    * Accepts either an SDK TransferCommitment or a simple commitment object.
    */
   async submitCommitment(commitment) {
+    return time("aggregator.submitCommitment", () => this._submitCommitmentImpl(commitment));
+  }
+  async _submitCommitmentImpl(commitment) {
     this.ensureConnected();
     try {
       let requestId;
@@ -5573,6 +5688,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
    * @param commitment - SDK MintCommitment instance
    */
   async submitMintCommitment(commitment) {
+    return time("aggregator.submitMintCommitment", () => this._submitMintCommitmentImpl(commitment));
+  }
+  async _submitMintCommitmentImpl(commitment) {
     this.ensureConnected();
     try {
       const response = await this.stateTransitionClient.submitMintCommitment(commitment);
@@ -5600,6 +5718,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     return commitment !== null && typeof commitment === "object" && "requestId" in commitment && typeof commitment.requestId?.toString === "function";
   }
   async getProof(requestId) {
+    return time("aggregator.getProof", () => this._getProofImpl(requestId));
+  }
+  async _getProofImpl(requestId) {
     this.ensureConnected();
     try {
       const response = await this.rpcCall("get_inclusion_proof", { requestId });
@@ -5652,6 +5773,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     }
   }
   async waitForProof(requestId, options) {
+    return time("aggregator.waitForProof", () => this._waitForProofImpl(requestId, options));
+  }
+  async _waitForProofImpl(requestId, options) {
     const timeout = options?.timeout ?? this.config.timeout;
     const pollInterval = options?.pollInterval ?? TIMEOUTS.PROOF_POLL_INTERVAL;
     const startTime = Date.now();
@@ -5672,6 +5796,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     throw new SphereError(`Timeout waiting for proof: ${requestId}`, "TIMEOUT");
   }
   async validateToken(tokenData) {
+    return time("aggregator.validateToken", () => this._validateTokenImpl(tokenData));
+  }
+  async _validateTokenImpl(tokenData) {
     this.ensureConnected();
     let sdkToken = null;
     try {
@@ -5755,6 +5882,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
    * Wait for inclusion proof using SDK (for SDK commitments)
    */
   async waitForProofSdk(commitment, signal) {
+    return time("aggregator.waitForProofSdk", () => this._waitForProofSdkImpl(commitment, signal));
+  }
+  async _waitForProofSdkImpl(commitment, signal) {
     this.ensureConnected();
     if (!this.trustBase) {
       throw new SphereError("Trust base not initialized", "NOT_INITIALIZED");
@@ -5789,6 +5919,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
   inclusionProofCache = /* @__PURE__ */ new Map();
   static INCLUSION_PROOF_CACHE_MAX = 1024;
   async verifyInclusionProof(input) {
+    return time("aggregator.verifyInclusionProof", () => this._verifyInclusionProofImpl(input));
+  }
+  async _verifyInclusionProofImpl(input) {
     if (this.trustBase === null) {
       throw new SphereError(
         "verifyInclusionProof: trustBase not loaded \u2014 call initialize() first",
@@ -5845,6 +5978,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     return result;
   }
   async isSpent(publicKey, stateHash) {
+    return time("aggregator.isSpent", () => this._isSpentImpl(publicKey, stateHash));
+  }
+  async _isSpentImpl(publicKey, stateHash) {
     const cacheKey = `${publicKey}:${stateHash}`;
     if (this.spentCache.has(cacheKey)) {
       const cached = this.spentCache.get(cacheKey);
@@ -5893,6 +6029,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     return spent;
   }
   async getTokenState(tokenId) {
+    return time("aggregator.getTokenState", () => this._getTokenStateImpl(tokenId));
+  }
+  async _getTokenStateImpl(tokenId) {
     this.ensureConnected();
     try {
       const response = await this.rpcCall("getTokenState", { tokenId });
@@ -5912,6 +6051,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     }
   }
   async getCurrentRound() {
+    return time("aggregator.getCurrentRound", () => this._getCurrentRoundImpl());
+  }
+  async _getCurrentRoundImpl() {
     if (!this.aggregatorClient) {
       throw new Error("UnicityAggregatorProvider: aggregator client not initialized");
     }
@@ -5919,6 +6061,9 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
     return Number(blockHeight);
   }
   async mint(params) {
+    return time("aggregator.mint", () => this._mintImpl(params));
+  }
+  async _mintImpl(params) {
     this.ensureConnected();
     try {
       const response = await this.rpcCall("mint", {
@@ -5950,33 +6095,37 @@ var UnicityAggregatorProvider = class _UnicityAggregatorProvider {
   // Private: RPC
   // ===========================================================================
   async rpcCall(method, params) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.timeout);
-    try {
-      const response = await fetch(this.config.url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Date.now(),
-          method,
-          params
-        }),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        throw new SphereError(`HTTP ${response.status}: ${response.statusText}`, "AGGREGATOR_ERROR");
+    return time(`aggregator.rpc.${method}`, async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.config.timeout);
+      try {
+        const response = await fetch(this.config.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method,
+            params
+          }),
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          incr(`aggregator.rpc.${method}.http_error`);
+          throw new SphereError(`HTTP ${response.status}: ${response.statusText}`, "AGGREGATOR_ERROR");
+        }
+        const result = await response.json();
+        if (result.error) {
+          incr(`aggregator.rpc.${method}.rpc_error`);
+          throw new SphereError(result.error.message ?? "RPC error", "AGGREGATOR_ERROR");
+        }
+        return result.result ?? {};
+      } finally {
+        clearTimeout(timeout);
       }
-      const result = await response.json();
-      if (result.error) {
-        throw new SphereError(result.error.message ?? "RPC error", "AGGREGATOR_ERROR");
-      }
-      return result.result ?? {};
-    } finally {
-      clearTimeout(timeout);
-    }
+    });
   }
   // ===========================================================================
   // Private: Helpers
@@ -8816,7 +8965,43 @@ async function putBlockToLocalHelia(helia, cidString, blockBytes) {
 }
 var DEFAULT_IPFS_API_URL = "https://ipfs.unicity.network";
 var DEFAULT_PIN_TIMEOUT_MS = 6e4;
-var DEFAULT_PIN_CONCURRENCY = 10;
+var DEFAULT_PIN_CONCURRENCY = 5;
+var PIN_RETRY_BACKOFFS_MS = [100, 500, 2e3];
+function isTransientPinError(err) {
+  if (!(err instanceof Error)) return true;
+  const msg = err.message;
+  const httpMatch = /\bHTTP (\d{3})\b/.exec(msg);
+  if (httpMatch !== null) {
+    const status = Number.parseInt(httpMatch[1], 10);
+    if (status === 429) return true;
+    if (status >= 500 && status < 600) return true;
+    if (status >= 400 && status < 500) return false;
+  }
+  if (msg.toLowerCase().includes("fetch failed") || msg.toLowerCase().includes("network") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED") || msg.includes("EAI_AGAIN") || err.name === "AbortError" || err.name === "TimeoutError") {
+    return true;
+  }
+  return true;
+}
+async function withPinRetry(fn, isRetryable = isTransientPinError, backoffs = PIN_RETRY_BACKOFFS_MS) {
+  for (let attempt = 0; attempt <= backoffs.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isLast = attempt >= backoffs.length;
+      if (isLast) {
+        incr("ipfs.pin.retry.exhausted");
+        throw err;
+      }
+      if (!isRetryable(err)) {
+        incr("ipfs.pin.retry.permanent");
+        throw err;
+      }
+      incr("ipfs.pin.retry.attempt");
+      await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]));
+    }
+  }
+  throw new Error("withPinRetry: unreachable");
+}
 var DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 var SIDECAR_SUBMIT_MAX_BYTES = 32 * 1024 * 1024;
 var SIDECAR_SUBMIT_TIMEOUT_MS = 5e3;
@@ -8848,6 +9033,97 @@ function submitToSidecarBestEffort(gateway, cid, bytes) {
   }).catch(() => {
   });
 }
+var PROBE_TIMEOUT_MS = 2e3;
+var capabilityCache = /* @__PURE__ */ new Map();
+function normalizeGatewayKey(gateway) {
+  return gateway.replace(/\/$/, "");
+}
+async function probeEndpointExposed(url) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    });
+    response.body?.cancel?.().catch(() => {
+    });
+    return response.status !== 404 && response.status !== 405 && response.status < 500;
+  } catch {
+    return false;
+  }
+}
+async function probeGatewayCapabilities(gateway) {
+  const key = normalizeGatewayKey(gateway);
+  const cached = capabilityCache.get(key);
+  if (cached !== void 0) return cached;
+  const probe = (async () => {
+    const [dagImport, dagExport] = await Promise.all([
+      probeEndpointExposed(`${key}/api/v0/dag/import`),
+      probeEndpointExposed(`${key}/api/v0/dag/export`)
+    ]);
+    if (!dagImport || !dagExport) {
+      logger.warn(
+        "ipfs-client",
+        `#370 capability probe ${key}: dagImport=${dagImport} dagExport=${dagExport} \u2014 legacy per-block path will be used where the fast path is unavailable`
+      );
+    }
+    return { dagImport, dagExport };
+  })();
+  capabilityCache.set(key, probe);
+  return probe;
+}
+async function pinCarViaImport(gateway, carBytes, expectedRootCid, timeoutMs) {
+  const url = `${normalizeGatewayKey(gateway)}/api/v0/dag/import?pin=true`;
+  const form = new FormData();
+  form.append("file", new Blob([carBytes]), "bundle.car");
+  const response = await fetch(url, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) {
+    throw new Error(
+      `HTTP ${response.status} ${response.statusText} from ${gateway} for /dag/import`
+    );
+  }
+  const text = await response.text();
+  let foundExpectedRoot = false;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    let node;
+    try {
+      node = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (node === null || typeof node !== "object") continue;
+    const root = node.Root;
+    if (root === null || root === void 0 || typeof root !== "object") continue;
+    const rootObj = root;
+    let cidStr = null;
+    const cid = rootObj.Cid;
+    if (typeof cid === "string") {
+      cidStr = cid;
+    } else if (cid !== null && typeof cid === "object") {
+      const inner = cid["/"];
+      if (typeof inner === "string") cidStr = inner;
+    }
+    if (cidStr === expectedRootCid) {
+      const errMsg = rootObj.PinErrorMsg;
+      if (typeof errMsg === "string" && errMsg.length > 0) {
+        throw new Error(
+          `Gateway ${gateway} reported PinErrorMsg for ${expectedRootCid}: ${errMsg}`
+        );
+      }
+      foundExpectedRoot = true;
+    }
+  }
+  if (!foundExpectedRoot) {
+    throw new Error(
+      `Gateway ${gateway} /dag/import did not include expected root ${expectedRootCid} in NDJSON response`
+    );
+  }
+}
 var CODEC_NAMES = {
   85: "raw",
   // raw
@@ -8859,6 +9135,11 @@ var CODEC_NAMES = {
 async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
   const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
   validateGatewayUrls(effectiveGateways);
+  return withPinRetry(
+    () => pinSingleBlockOnce(effectiveGateways, blockBytes, expectedCid, timeoutMs)
+  );
+}
+async function pinSingleBlockOnce(effectiveGateways, blockBytes, expectedCid, timeoutMs) {
   let codecName = "raw";
   try {
     const parsed = CID.parse(expectedCid);
@@ -8897,6 +9178,88 @@ async function pinSingleBlock(gateways, blockBytes, expectedCid, timeoutMs) {
   );
 }
 async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
+  const effectiveGateways = gateways.length > 0 ? gateways : [DEFAULT_IPFS_API_URL];
+  validateGatewayUrls(effectiveGateways);
+  let localHeliaWrittenInFastPath = false;
+  for (const gateway of effectiveGateways) {
+    const caps = await probeGatewayCapabilities(gateway);
+    if (!caps.dagImport) continue;
+    let parsed;
+    try {
+      parsed = await parseCarForFastPathPin(carBytes, expectedRootCid);
+    } catch (err) {
+      if (err instanceof ProfileError) throw err;
+      throw new ProfileError(
+        "ORBITDB_WRITE_FAILED",
+        `pinCarBlocksToIpfs: fast-path CAR parse failed: ${err instanceof Error ? err.message : String(err)}`,
+        err
+      );
+    }
+    const localHelia = asHelia(helia);
+    if (localHelia !== null && !localHeliaWrittenInFastPath) {
+      for (const block of parsed.blocks) {
+        let cidBindingOk = true;
+        try {
+          verifyCidMatchesBytes(block.cid, block.bytes);
+        } catch (err) {
+          cidBindingOk = false;
+          logger.warn(
+            "ipfs-client",
+            `pinCarBlocksToIpfs: producer-side CID/bytes mismatch for ${block.cid} \u2014 skipping local-helia put. ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        if (cidBindingOk) await putBlockToLocalHelia(localHelia, block.cid, block.bytes);
+      }
+      localHeliaWrittenInFastPath = true;
+    }
+    try {
+      await pinCarViaImport(gateway, carBytes, expectedRootCid, timeoutMs);
+      submitToSidecarBestEffort(gateway, expectedRootCid, parsed.rootBlock.bytes);
+      return expectedRootCid;
+    } catch (err) {
+      logger.warn(
+        "ipfs-client",
+        `pinCarBlocksToIpfs: /dag/import fast path failed on ${gateway} for ${expectedRootCid}, falling back to legacy per-block path. Reason: ${err instanceof Error ? err.message : String(err)}`
+      );
+      break;
+    }
+  }
+  return pinCarBlocksToIpfsLegacy(
+    effectiveGateways,
+    carBytes,
+    expectedRootCid,
+    timeoutMs,
+    // Skip the legacy path's local-Helia write loop if the fast path
+    // already wrote every block — avoids duplicate puts.
+    localHeliaWrittenInFastPath ? void 0 : helia,
+    concurrency
+  );
+}
+async function parseCarForFastPathPin(carBytes, expectedRootCid) {
+  const { CarReader: CarReader2 } = await import("@ipld/car");
+  const reader = await CarReader2.fromBytes(carBytes);
+  const blocks = [];
+  for await (const block of reader.blocks()) {
+    blocks.push({ cid: block.cid.toString(), bytes: block.bytes });
+  }
+  if (blocks.length === 0) {
+    throw new ProfileError(
+      "ORBITDB_WRITE_FAILED",
+      "CAR contained zero blocks \u2014 refusing to publish a phantom rootCid."
+    );
+  }
+  const rootBlock = blocks.find((b) => b.cid === expectedRootCid);
+  if (rootBlock === void 0) {
+    throw new ProfileError(
+      "ORBITDB_WRITE_FAILED",
+      `expectedRootCid ${expectedRootCid} is not present among CAR blocks (count=${blocks.length}) \u2014 builder/publisher mismatch.`
+    );
+  }
+  return { blocks, rootBlock };
+}
+async function pinCarBlocksToIpfsLegacy(gateways, carBytes, expectedRootCid, timeoutMs = DEFAULT_PIN_TIMEOUT_MS, helia, concurrency = DEFAULT_PIN_CONCURRENCY) {
+  const __perfStart = performance.now();
+  const __perfBytes = carBytes.byteLength;
   const localHelia = asHelia(helia);
   const { CarReader: CarReader2 } = await import("@ipld/car");
   let reader;
@@ -8973,8 +9336,13 @@ async function pinCarBlocksToIpfs(gateways, carBytes, expectedRootCid, timeoutMs
   }
   await Promise.all(workers);
   if (workerErrors.length > 0) {
+    incr("ipfs.pinCar.error");
+    observeMs("ipfs.pinCar.totalMs", performance.now() - __perfStart);
     throw workerErrors[0];
   }
+  incr("ipfs.pinCar.blocks", blocks.length);
+  incr("ipfs.pinCar.bytes", __perfBytes);
+  observeMs("ipfs.pinCar.totalMs", performance.now() - __perfStart);
   return expectedRootCid;
 }
 function verifyCidMatchesBytes(cidString, bytes) {
