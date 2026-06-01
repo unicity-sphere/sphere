@@ -158,6 +158,19 @@ tests/
 docker compose up        # Runs on port 3010
 ```
 
+## Deployment
+
+See **[docs/DEV-HAPROXY-DEPLOYMENT.md](docs/DEV-HAPROXY-DEPLOYMENT.md)**
+for the local rebuild/redeploy loop for
+<https://sphere-telco-test.dyndns.org/> — the `sphere-app` container
+fronted by HAProxy on this host. Covers: building a chosen sphere-sdk
+branch, refreshing `vendor-sphere-sdk/`, rebuilding via
+`Dockerfile.ssl`, redeploying via `run-sphere.sh`, verification,
+rollback, and the page-only quick-path.
+
+The same doc covers the auto per-branch GitHub Pages preview and the
+CI gate at the bottom.
+
 ## License
 
 Private project — Unicity Labs

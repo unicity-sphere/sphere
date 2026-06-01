@@ -38,6 +38,7 @@ import type { MarketStatus } from '../../../src/sdk/hooks/core/useMarketStatus';
 const connectivityMock = vi.fn<() => UseConnectivityReturn>();
 const marketMock = vi.fn<() => MarketStatus>();
 const ipfsGatewayMock = vi.fn<() => 'up' | 'down' | 'unknown'>();
+const aggregatorMock = vi.fn<() => 'up' | 'down' | 'degraded' | 'unknown'>();
 
 vi.mock('../../../src/sdk/hooks/core/useConnectivity', () => ({
   useConnectivity: () => connectivityMock(),
@@ -47,6 +48,9 @@ vi.mock('../../../src/sdk/hooks/core/useMarketStatus', () => ({
 }));
 vi.mock('../../../src/sdk/hooks/core/useIpfsGatewayStatus', () => ({
   useIpfsGatewayStatus: () => ipfsGatewayMock(),
+}));
+vi.mock('../../../src/sdk/hooks/core/useAggregatorStatus', () => ({
+  useAggregatorStatus: () => aggregatorMock(),
 }));
 
 function allUp(): UseConnectivityReturn {
@@ -70,6 +74,7 @@ beforeEach(() => {
   connectivityMock.mockReset();
   marketMock.mockReset();
   ipfsGatewayMock.mockReset();
+  aggregatorMock.mockReset();
   // Default ipfsGateway mock: mirror connectivity.ipfs so existing
   // tests written before the direct-probe split (which drove IPFS via
   // `connectivity.ipfs`) continue to express the SAME IPFS state.
@@ -77,6 +82,22 @@ beforeEach(() => {
   ipfsGatewayMock.mockImplementation(() => {
     try {
       return connectivityMock().ipfs as 'up' | 'down' | 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  });
+  // Default aggregatorStatus mock: mirror connectivity.aggregator so
+  // existing tests written before issue #329's direct-probe split
+  // (which drove the aggregator pill via `connectivity.aggregator`)
+  // continue to express the SAME aggregator state. Individual tests
+  // can override with `aggregatorMock.mockReturnValue(...)`.
+  aggregatorMock.mockImplementation(() => {
+    try {
+      return connectivityMock().aggregator as
+        | 'up'
+        | 'down'
+        | 'degraded'
+        | 'unknown';
     } catch {
       return 'unknown';
     }
