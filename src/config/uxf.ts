@@ -5,26 +5,22 @@ export const UXF_MIGRATION_CHOICE_KEY = 'sphere_uxf_migration_choice';
 
 export type UxfMigrationChoice = 'merge' | 'legacy-only' | 'uxf-only';
 
-// Known legacy IndexedDB database names (pre-UXF schema)
-export const LEGACY_DB_NAMES = ['sphere-storage'] as const;
-// UXF OrbitDB uses a different storage key pattern
-export const UXF_DB_PATTERN = /^orbitdb/i;
-
-export async function detectStorageState(): Promise<{
-  hasLegacy: boolean;
-  hasUxf: boolean;
-}> {
-  if (!('databases' in indexedDB)) {
-    // Firefox <126 doesn't support indexedDB.databases()
-    return { hasLegacy: false, hasUxf: false };
-  }
-  try {
-    const dbs = await indexedDB.databases();
-    const names = dbs.map(d => d.name ?? '');
-    const hasLegacy = names.some(n => LEGACY_DB_NAMES.includes(n as typeof LEGACY_DB_NAMES[number]));
-    const hasUxf = names.some(n => UXF_DB_PATTERN.test(n));
-    return { hasLegacy, hasUxf };
-  } catch {
-    return { hasLegacy: false, hasUxf: false };
-  }
-}
+// ── Tombstone: detectStorageState() / LEGACY_DB_NAMES / UXF_DB_PATTERN ───
+//
+// REMOVED — issue #331.
+//
+// A shallow `indexedDB.databases()` name probe is the wrong shape for
+// "is there material legacy / UXF data?". Both stores share the
+// `sphere-storage` IndexedDB (the Profile local cache is also wired
+// through `createIndexedDBStorageProvider()`), so once *any* wallet —
+// legacy OR fresh Profile — has booted in the browser the legacy DB
+// name is present and a pure name probe always answers
+// `hasLegacy = true`. That made `UxfMigrationPrompt` fire on every
+// reload for fresh Profile-only wallets.
+//
+// The canonical predicate lives in
+// `src/sdk/utils/tokenStorageProbe.ts → hasMaterialContent`, surfaced
+// to consumers as `SphereContext.hasLegacyData` /
+// `SphereContext.hasProfileData`. Both `UxfBanner` and
+// `UxfMigrationPrompt` route through it — do NOT reintroduce a
+// name-based probe here.
