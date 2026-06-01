@@ -60460,6 +60460,14 @@ var Sphere = class _Sphere {
         fallbackThrew = err;
       }
       if (fallbackValue !== null && fallbackValue !== void 0) {
+        try {
+          await this._storage.set(key, fallbackValue);
+        } catch (err) {
+          logger.debug(
+            "Sphere",
+            `Identity backfill of "${key}" into primary storage failed; the next boot will re-consult fallback. (${err instanceof Error ? err.message : String(err)})`
+          );
+        }
         return fallbackValue;
       }
       if (primaryThrew !== null) {
