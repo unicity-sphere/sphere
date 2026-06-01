@@ -13218,10 +13218,25 @@ var PROFILE_KEY_MAPPING = {
   "sent": { profileKey: "{addr}.sent", dynamic: true }
 };
 var CACHE_ONLY_KEYS = /* @__PURE__ */ new Set([
+  // External-API caches (regenerated from network)
   "token_registry_cache",
   "token_registry_cache_ts",
   "price_cache",
-  "price_cache_ts"
+  "price_cache_ts",
+  // Identity / seed material — NEVER replicate via OrbitDB/IPFS.
+  // Keep this list in sync with IDENTITY_KEYS below.
+  "mnemonic",
+  "master_key",
+  "chain_code",
+  "derivation_path",
+  "base_path",
+  "derivation_mode",
+  "wallet_source",
+  // `current_address_index` is the active HD slot pointer. Could be cross-
+  // device synced in principle, but on a fresh-device boot the address-
+  // discovery walker re-derives it from the mnemonic anyway; keeping it
+  // device-local removes one more identity-shaped key from the OpLog.
+  "current_address_index"
 ]);
 var IPFS_STATE_KEYS_PATTERN = /^ipfs_(seq|cid|ver)_/;
 function computeAddressId(directAddress) {
@@ -21748,6 +21763,12 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
     const translated = translateKey(key, this.addressId);
     if (translated.excluded) {
       return;
+    }
+    if (translated.profileKey.startsWith("identity.") && !translated.cacheOnly) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Refusing to write identity-shaped Profile key "${translated.profileKey}" to OrbitDB: seed material must NEVER replicate. Add the legacy key "${key}" to CACHE_ONLY_KEYS in profile/types.ts. See IDENTITY_KEYS for the canonical list.`
+      );
     }
     await this.localCache.set(key, value);
     if (translated.cacheOnly) {

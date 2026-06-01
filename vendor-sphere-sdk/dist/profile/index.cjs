@@ -11523,6 +11523,7 @@ __export(profile_exports, {
   DEFAULT_ENCRYPTION_CONFIG: () => DEFAULT_ENCRYPTION_CONFIG,
   DEFAULT_LIST_KEYS_MAX_RESULTS: () => DEFAULT_LIST_KEYS_MAX_RESULTS,
   DispositionWriter: () => DispositionWriter,
+  IDENTITY_KEYS: () => IDENTITY_KEYS,
   IPFS_STATE_KEYS_PATTERN: () => IPFS_STATE_KEYS_PATTERN,
   InMemoryDispositionStorageAdapter: () => InMemoryDispositionStorageAdapter,
   Lamport: () => Lamport,
@@ -11668,10 +11669,35 @@ var PROFILE_KEY_MAPPING = {
   "sent": { profileKey: "{addr}.sent", dynamic: true }
 };
 var CACHE_ONLY_KEYS = /* @__PURE__ */ new Set([
+  // External-API caches (regenerated from network)
   "token_registry_cache",
   "token_registry_cache_ts",
   "price_cache",
-  "price_cache_ts"
+  "price_cache_ts",
+  // Identity / seed material — NEVER replicate via OrbitDB/IPFS.
+  // Keep this list in sync with IDENTITY_KEYS below.
+  "mnemonic",
+  "master_key",
+  "chain_code",
+  "derivation_path",
+  "base_path",
+  "derivation_mode",
+  "wallet_source",
+  // `current_address_index` is the active HD slot pointer. Could be cross-
+  // device synced in principle, but on a fresh-device boot the address-
+  // discovery walker re-derives it from the mnemonic anyway; keeping it
+  // device-local removes one more identity-shaped key from the OpLog.
+  "current_address_index"
+]);
+var IDENTITY_KEYS = /* @__PURE__ */ new Set([
+  "mnemonic",
+  "master_key",
+  "chain_code",
+  "derivation_path",
+  "base_path",
+  "derivation_mode",
+  "wallet_source",
+  "current_address_index"
 ]);
 var IPFS_STATE_KEYS_PATTERN = /^ipfs_(seq|cid|ver)_/;
 function computeAddressId(directAddress) {
@@ -22325,6 +22351,12 @@ var ProfileStorageProvider = class _ProfileStorageProvider {
     if (translated.excluded) {
       return;
     }
+    if (translated.profileKey.startsWith("identity.") && !translated.cacheOnly) {
+      throw new ProfileError(
+        "PROFILE_NOT_INITIALIZED",
+        `Refusing to write identity-shaped Profile key "${translated.profileKey}" to OrbitDB: seed material must NEVER replicate. Add the legacy key "${key}" to CACHE_ONLY_KEYS in profile/types.ts. See IDENTITY_KEYS for the canonical list.`
+      );
+    }
     await this.localCache.set(key, value);
     if (translated.cacheOnly) {
       return;
@@ -28860,7 +28892,7 @@ var ProfileMigration = class _ProfileMigration {
       await this.setPhase(legacyStorage, "complete");
       const result = {
         success: true,
-        keysMigrated: transformed.profileKeys.size,
+        keysMigrated: transformed.profileKeys.size + transformed.identityKeys.size,
         tokensMigrated: transformed.tokenIds.size,
         addressesMigrated: countAddresses(transformed),
         durationMs: Date.now() - startTime
@@ -28873,7 +28905,7 @@ var ProfileMigration = class _ProfileMigration {
       this.log("Migration failed at phase", currentPhase, ":", errorMsg);
       return {
         success: false,
-        keysMigrated: transformed?.profileKeys.size ?? 0,
+        keysMigrated: (transformed?.profileKeys.size ?? 0) + (transformed?.identityKeys.size ?? 0),
         tokensMigrated: transformed?.tokenIds.size ?? 0,
         addressesMigrated: transformed !== null ? countAddresses(transformed) : 0,
         durationMs: Date.now() - startTime,
@@ -28942,6 +28974,7 @@ var ProfileMigration = class _ProfileMigration {
   async stepTransformLocal(legacyStorage, legacyTokenStorage) {
     this.log("Step 2: TRANSFORM LOCAL");
     const profileKeys = /* @__PURE__ */ new Map();
+    const identityKeys = /* @__PURE__ */ new Map();
     const tokenIds = /* @__PURE__ */ new Set();
     let historyCount = 0;
     let conversationCount = 0;
@@ -28962,6 +28995,10 @@ var ProfileMigration = class _ProfileMigration {
       }
       const value = await legacyStorage.get(rawKey);
       if (value === null) continue;
+      if (IDENTITY_KEYS.has(stripped)) {
+        identityKeys.set(stripped, value);
+        continue;
+      }
       const profileKey = mapLegacyKeyToProfileKey(stripped);
       if (profileKey === null) continue;
       profileKeys.set(profileKey, value);
@@ -29021,6 +29058,7 @@ var ProfileMigration = class _ProfileMigration {
     }
     return {
       profileKeys,
+      identityKeys,
       txfData,
       tokenIds,
       historyCount,
@@ -29058,6 +29096,21 @@ var ProfileMigration = class _ProfileMigration {
       }
     }
     this.log(`Wrote ${keysWritten} profile keys`);
+    let identityKeysWritten = 0;
+    for (const [legacyKey, value] of data.identityKeys) {
+      try {
+        await storage.set(legacyKey, value);
+        identityKeysWritten++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new ProfileError(
+          "MIGRATION_FAILED",
+          `Failed to write identity key '${legacyKey}': ${msg}`,
+          err
+        );
+      }
+    }
+    this.log(`Wrote ${identityKeysWritten} identity keys (cache-only, never OrbitDB)`);
     if (data.txfData !== null) {
       const saveResult = await profileTokenStorage.save(data.txfData);
       if (!saveResult.success) {
