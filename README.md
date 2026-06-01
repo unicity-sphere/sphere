@@ -160,11 +160,16 @@ docker compose up        # Runs on port 3010
 
 ## Deployment
 
-See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the full deploy
-manual — per-branch GH Pages previews (automatic on push), the live
-testnet host at <https://sphere-telco-test.dyndns.org/> (manual SSH
-workflow), CI gates, rollback, and the end-to-end checklist for a
-fix.
+See **[docs/DEV-HAPROXY-DEPLOYMENT.md](docs/DEV-HAPROXY-DEPLOYMENT.md)**
+for the local rebuild/redeploy loop for
+<https://sphere-telco-test.dyndns.org/> — the `sphere-app` container
+fronted by HAProxy on this host. Covers: building a chosen sphere-sdk
+branch, refreshing `vendor-sphere-sdk/`, rebuilding via
+`Dockerfile.ssl`, redeploying via `run-sphere.sh`, verification,
+rollback, and the page-only quick-path.
+
+The same doc covers the auto per-branch GitHub Pages preview and the
+CI gate at the bottom.
 
 ## License
 
