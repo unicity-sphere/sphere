@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  detectStorageState,
   UXF_MIGRATION_SKIP_KEY,
   UXF_MIGRATION_CHOICE_KEY,
   type UxfMigrationChoice,
 } from '../../config/uxf';
+import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 
 type PromptVariant = 'legacy-only' | 'both';
 
@@ -136,18 +136,34 @@ function MigrationModal({ onChoice, onSkip, variant }: MigrationPromptProps) {
 }
 
 export function UxfMigrationPrompt() {
+  const { walletExists, hasLegacyData, hasProfileData } = useSphereContext();
   const [variant, setVariant] = useState<PromptVariant | null>(null);
 
   useEffect(() => {
-    const skipped = sessionStorage.getItem(UXF_MIGRATION_SKIP_KEY);
-    const persisted = localStorage.getItem(UXF_MIGRATION_CHOICE_KEY);
-    if (skipped || persisted) return;
+    // Persisted choice / one-shot session skip both suppress the modal
+    // for the rest of that lifetime — re-check on every dependency
+    // change because either could be written by another tab.
+    if (sessionStorage.getItem(UXF_MIGRATION_SKIP_KEY)) { setVariant(null); return; }
+    if (localStorage.getItem(UXF_MIGRATION_CHOICE_KEY)) { setVariant(null); return; }
 
-    detectStorageState().then(({ hasLegacy, hasUxf }) => {
-      if (hasLegacy && hasUxf) setVariant('both');
-      else if (hasLegacy) setVariant('legacy-only');
-    });
-  }, []);
+    // Pre-onboarding: no wallet → no migration question.
+    if (!walletExists) { setVariant(null); return; }
+
+    // Probes still pending — defer. Without this guard the (null, null)
+    // first render would fall through to "no legacy data", hiding the
+    // modal for users who DO have a legacy wallet until the next
+    // re-render. The banner uses the same guard for the same reason
+    // (see UxfBanner.tsx → `probesPending`).
+    if (hasLegacyData === null || hasProfileData === null) { setVariant(null); return; }
+
+    // Content-aware decision — mirrors the UxfBanner matrix:
+    // legacy data is the *only* thing that warrants a migration prompt.
+    // A Profile-only wallet (the fresh-install path) is the target
+    // state, not a state worth interrupting the user about.
+    if (hasLegacyData && hasProfileData) setVariant('both');
+    else if (hasLegacyData)               setVariant('legacy-only');
+    else                                  setVariant(null);
+  }, [walletExists, hasLegacyData, hasProfileData]);
 
   function handleChoice(choice: UxfMigrationChoice, eraseLegacy: boolean) {
     localStorage.setItem(UXF_MIGRATION_CHOICE_KEY, JSON.stringify({ choice, eraseLegacy }));
