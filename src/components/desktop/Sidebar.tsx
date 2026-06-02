@@ -1,6 +1,6 @@
-import { X, LayoutGrid, Wallet, Maximize2, Minimize2 } from 'lucide-react';
+import { X, LayoutGrid, Wallet, Maximize2, Minimize2, Sparkles } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { getAgentConfig } from '../../config/activities';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
@@ -13,9 +13,11 @@ interface SidebarProps {
 
 export function Sidebar({ isFullscreen, onToggleFullscreen }: SidebarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { openTabs, activeTabId, activateTab, closeTab, showDesktop, walletOpen, toggleWallet } = useDesktopState();
   const dmUnreadCount = useDmUnreadCount();
   const groupUnreadCount = useGroupUnreadCount();
+  const isAstridActive = location.pathname.startsWith('/astrid');
 
   const handleActivateTab = (tab: { id: string; appId: string; url?: string }) => {
     activateTab(tab.id);
@@ -75,10 +77,28 @@ export function Sidebar({ isFullscreen, onToggleFullscreen }: SidebarProps) {
         <LayoutGrid className="w-4 h-4" />
       </motion.button>
 
+      {/* Astrid — pinned shortcut */}
+      <div className="relative group shrink-0">
+        <motion.button
+          onClick={() => navigate('/astrid')}
+          whileHover={{ scale: 1.08 }}
+          whileTap={{ scale: 0.92 }}
+          className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-150 ${
+            isAstridActive
+              ? 'bg-orange-500 dark:bg-brand-orange text-white shadow-sm shadow-orange-500/25'
+              : 'text-neutral-500 dark:text-[rgba(255,255,255,0.45)] hover:bg-neutral-200/60 dark:hover:bg-brand-orange-dim'
+          }`}
+          title="Astrid"
+        >
+          <Sparkles className="w-4 h-4" />
+        </motion.button>
+        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-md bg-neutral-900 dark:bg-neutral-800 text-white text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+          Astrid
+        </div>
+      </div>
+
       {/* Divider */}
-      {openTabs.length > 0 && (
-        <div className="w-6 h-px bg-neutral-200 dark:bg-[rgba(255,255,255,0.08)] shrink-0" />
-      )}
+      <div className="w-6 h-px bg-neutral-200 dark:bg-[rgba(255,255,255,0.08)] shrink-0" />
 
       {/* Open app icons */}
       {openTabs.map((tab) => {

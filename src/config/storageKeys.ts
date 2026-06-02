@@ -34,6 +34,14 @@ export const STORAGE_KEYS = {
   // Dev Settings
   DEV_AGGREGATOR_URL: 'sphere_dev_aggregator_url',
   DEV_SKIP_TRUST_BASE: 'sphere_dev_skip_trust_base',
+
+  // Astrid AI agent (mock)
+  AGENT_CONFIG: 'sphere_agent_config',
+  AGENT_CHATS: 'sphere_agent_chats',
+  AGENT_MESSAGES_PREFIX: 'sphere_agent_messages_',
+  AGENT_STATS: 'sphere_agent_stats',
+  AGENT_CAPSULES: 'sphere_agent_capsules',
+  AGENT_ONBOARDING_COMPLETED: 'sphere_agent_onboarding_completed',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
