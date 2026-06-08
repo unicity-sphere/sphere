@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Circle, Waves, Triangle, Wrench } from 'lucide-react';
+import { Send, Loader2, Sparkles, Circle, Waves, Triangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAgent, useAgentMessages } from '../../hooks/useAgent';
-import type { AgentAvatar, AgentMessage, AgentTaskType } from '../../types/agent';
+import type { AgentAvatar, AgentMessage } from '../../types/agent';
+import { TaskCard } from './TaskCard';
 
 interface AstridChatProps {
   chatId: string;
@@ -22,21 +23,11 @@ const AVATAR_GRADIENT: Record<AgentAvatar, string> = {
   prism: 'from-emerald-400 to-teal-500',
 };
 
-const TASK_LABEL: Record<AgentTaskType, string> = {
-  chat: 'Chat',
-  'web-search': 'Web Search',
-  calendar: 'Calendar',
-  'code-runner': 'Code Runner',
-  translator: 'Translator',
-  'image-gen': 'Image Generation',
-  'market-data': 'Market Data',
-};
-
 const QUICK_PROMPTS = [
-  'Find me the latest news on AI agents',
-  'Schedule a meeting for tomorrow at 3pm',
-  'Translate "good morning" into Japanese',
-  'What is the price of BTC right now?',
+  'Swap 50 UCT to BTC',
+  'Buy 0.1 ETH with 300 USDT',
+  'Send 25 UCT to @alice',
+  'DCA 10 USDT into BTC daily',
 ];
 
 export function AstridChat({ chatId }: AstridChatProps) {
@@ -104,7 +95,13 @@ export function AstridChat({ chatId }: AstridChatProps) {
         ) : (
           <div className="space-y-3 max-w-2xl mx-auto">
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} agentName={config.name} avatarGradient={avatarGradient} AvatarIcon={AvatarIcon} />
+              <MessageBubble
+                key={m.id}
+                message={m}
+                agentName={config.name}
+                avatarGradient={avatarGradient}
+                AvatarIcon={AvatarIcon}
+              />
             ))}
             <AnimatePresence>
               {isSending && (
@@ -183,16 +180,11 @@ function MessageBubble({ message, agentName, avatarGradient, AvatarIcon }: Messa
       <div className="flex-1 max-w-[80%]">
         <div className="flex items-baseline gap-2 mb-0.5">
           <span className="text-xs font-semibold text-neutral-700 dark:text-white/75">{agentName}</span>
-          {message.taskType && message.taskType !== 'chat' && (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:text-orange-400">
-              <Wrench className="w-2.5 h-2.5" />
-              {TASK_LABEL[message.taskType]}
-            </span>
-          )}
         </div>
         <div className="bg-neutral-100 dark:bg-white/6 text-neutral-900 dark:text-white/90 rounded-2xl rounded-tl-md px-4 py-2 text-sm whitespace-pre-wrap break-words">
           {message.content}
         </div>
+        {message.taskId && <TaskCard taskId={message.taskId} />}
       </div>
     </div>
   );
@@ -225,14 +217,14 @@ function EmptyChatState({ agentName, avatarGradient, AvatarIcon, onPromptClick }
         How can {agentName} help today?
       </h3>
       <p className="text-xs text-neutral-500 dark:text-white/45 mb-6">
-        Ask anything, or try one of the prompts below.
+        Give it a trading task, or try one of these prompts.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
         {QUICK_PROMPTS.map((p) => (
           <button
             key={p}
             onClick={() => onPromptClick(p)}
-            className="text-left p-3 rounded-xl bg-neutral-100 dark:bg-white/4 border border-neutral-200 dark:border-white/8 hover:border-orange-500/50 dark:hover:bg-white/8 text-xs text-neutral-700 dark:text-white/75 transition-colors"
+            className="text-left p-3 rounded-xl bg-neutral-100 dark:bg-white/4 border border-neutral-200 dark:border-white/8 hover:border-orange-500/50 dark:hover:bg-white/8 text-xs text-neutral-700 dark:text-white/75 transition-colors font-mono"
           >
             {p}
           </button>

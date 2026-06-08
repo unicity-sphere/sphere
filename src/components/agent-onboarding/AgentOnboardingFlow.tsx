@@ -32,6 +32,7 @@ export function AgentOnboardingFlow({ onComplete, onSkip }: AgentOnboardingFlowP
     integrations,
     updateIntegration,
     handleFinish,
+    isFinishing,
   } = useAgentOnboarding(onComplete);
 
   return (
@@ -86,6 +87,7 @@ export function AgentOnboardingFlow({ onComplete, onSkip }: AgentOnboardingFlowP
             avatar={avatar}
             personality={personality}
             integrations={integrations}
+            isFinishing={isFinishing}
             onFinish={handleFinish}
             onBack={goBack}
           />

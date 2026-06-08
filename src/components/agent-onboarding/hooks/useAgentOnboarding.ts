@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
+import {
+  TokenRegistry,
+  getCoinIdBySymbol,
+  toSmallestUnit,
+} from '@unicitylabs/sphere-sdk';
 import { useAgent } from '../../../hooks/useAgent';
-import type { AgentAvatar, AgentIntegrations, AgentPersonality } from '../../../types/agent';
+import type {
+  AgentAvatar,
+  AgentIntegrations,
+  AgentPersonality,
+  CoinId,
+} from '../../../types/agent';
 
 export type AgentOnboardingStep =
   | 'intro'
@@ -13,6 +23,45 @@ export type AgentOnboardingStep =
 export type NametagAvailability = 'idle' | 'checking' | 'available' | 'taken';
 
 const RESERVED_NAMETAGS = new Set(['astrid', 'admin', 'support', 'system', 'sphere', 'unicity']);
+
+interface SeedTokenSpec {
+  symbol: string;
+  initial: string;
+  maxPerTask: string;
+}
+
+const SEED_TOKENS: SeedTokenSpec[] = [
+  { symbol: 'UCT',  initial: '1000', maxPerTask: '250' },
+  { symbol: 'BTC',  initial: '0.01', maxPerTask: '0.0025' },
+  { symbol: 'ETH',  initial: '0.5',  maxPerTask: '0.125' },
+  { symbol: 'SOL',  initial: '5',    maxPerTask: '1.25' },
+  { symbol: 'USDT', initial: '200',  maxPerTask: '50' },
+  { symbol: 'USDC', initial: '100',  maxPerTask: '25' },
+];
+
+async function buildSeedBalances(): Promise<{
+  balances: Record<CoinId, string>;
+  maxPerTask: Record<CoinId, string>;
+}> {
+  await TokenRegistry.waitForReady(5000);
+  const registry = TokenRegistry.getInstance();
+  const balances: Record<CoinId, string> = {};
+  const maxPerTask: Record<CoinId, string> = {};
+  for (const spec of SEED_TOKENS) {
+    const coinId = getCoinIdBySymbol(spec.symbol);
+    if (!coinId) continue;
+    const def = registry.getDefinition(coinId);
+    if (!def || def.assetKind !== 'fungible') continue;
+    const decimals = def.decimals ?? 6;
+    try {
+      balances[coinId] = toSmallestUnit(spec.initial, decimals).toString();
+      maxPerTask[coinId] = toSmallestUnit(spec.maxPerTask, decimals).toString();
+    } catch {
+      // skip if conversion fails
+    }
+  }
+  return { balances, maxPerTask };
+}
 
 export function useAgentOnboarding(onComplete: () => void) {
   const { createOrUpdateConfig, completeOnboarding } = useAgent();
@@ -88,7 +137,9 @@ export function useAgentOnboarding(onComplete: () => void) {
     });
   }, []);
 
-  const handleFinish = useCallback(() => {
+  const [isFinishing, setIsFinishing] = useState(false);
+
+  const handleFinish = useCallback(async () => {
     if (!name.trim()) {
       setError('Name is required');
       setStep('name');
@@ -99,18 +150,24 @@ export function useAgentOnboarding(onComplete: () => void) {
       setStep('nametag');
       return;
     }
-    createOrUpdateConfig({
-      name: name.trim(),
-      nametag: nametagInput,
-      personality,
-      avatar,
-      balance: 1000,
-      maxTokensPerTask: 200,
-      integrations,
-      createdAt: Date.now(),
-    });
-    completeOnboarding();
-    onComplete();
+    setIsFinishing(true);
+    try {
+      const { balances, maxPerTask } = await buildSeedBalances();
+      createOrUpdateConfig({
+        name: name.trim(),
+        nametag: nametagInput,
+        personality,
+        avatar,
+        balances,
+        maxPerTask,
+        integrations,
+        createdAt: Date.now(),
+      });
+      completeOnboarding();
+      onComplete();
+    } finally {
+      setIsFinishing(false);
+    }
   }, [
     name,
     nametagInput,
@@ -145,5 +202,6 @@ export function useAgentOnboarding(onComplete: () => void) {
     integrations,
     updateIntegration,
     handleFinish,
+    isFinishing,
   };
 }

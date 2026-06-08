@@ -1,13 +1,23 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import {
+  TokenRegistry,
+  getCoinIdBySymbol,
+  toHumanReadable,
+  toSmallestUnit,
+} from '@unicitylabs/sphere-sdk';
 import { STORAGE_KEYS } from '../config/storageKeys';
+import { getMockPrice } from '../utils/mockTokenPrices';
 import type {
   AgentChat,
   AgentConfig,
+  AgentExecutedTask,
   AgentIntegrations,
   AgentMessage,
   AgentStats,
   AgentTaskType,
   Capsule,
+  CapsuleId,
+  CoinId,
 } from '../types/agent';
 
 const listeners = new Set<() => void>();
@@ -48,114 +58,120 @@ function removeKey(key: string) {
   emit();
 }
 
-const TASK_TYPES: AgentTaskType[] = [
-  'chat',
-  'web-search',
-  'calendar',
-  'code-runner',
-  'translator',
-  'image-gen',
-  'market-data',
-];
+const TASK_TYPES: AgentTaskType[] = ['swap', 'buy', 'sell', 'dca', 'transfer', 'bridge'];
 
 function emptyStats(): AgentStats {
-  const byTaskType = TASK_TYPES.reduce(
+  const tasksByType = TASK_TYPES.reduce(
     (acc, t) => {
-      acc[t] = { tokens: 0, count: 0 };
+      acc[t] = { count: 0, usdValue: 0 };
       return acc;
     },
-    {} as AgentStats['byTaskType'],
+    {} as AgentStats['tasksByType'],
   );
-  return { byTaskType, totalTokens: 0, lastTaskAt: null };
+  return { tasksByType, spendByCoin: {}, totalTasks: 0, lastTaskAt: null };
 }
-
-const TASK_COST_RANGE: Record<AgentTaskType, [number, number]> = {
-  chat: [1, 3],
-  'web-search': [5, 15],
-  calendar: [2, 5],
-  'code-runner': [10, 30],
-  translator: [1, 3],
-  'image-gen': [40, 120],
-  'market-data': [3, 8],
-};
 
 const DEFAULT_CAPSULES: Capsule[] = [
   {
-    id: 'web-search',
-    name: 'Web Search',
-    description: 'Lets your agent search the web for fresh information.',
-    icon: 'search',
-    category: 'Information',
+    id: 'spot-trader',
+    name: 'Spot Trader',
+    description: 'Execute spot swaps between supported tokens.',
+    icon: 'arrow-left-right',
+    category: 'Trading',
     version: '1.0.0',
     author: 'Sphere Labs',
     enabled: true,
     installedAt: 0,
-    taskType: 'web-search',
+    taskTypes: ['swap', 'buy', 'sell'],
   },
   {
-    id: 'calendar',
-    name: 'Calendar',
-    description: 'Schedule events and read your upcoming agenda.',
-    icon: 'calendar',
-    category: 'Productivity',
-    version: '1.2.0',
+    id: 'dca-bot',
+    name: 'DCA Bot',
+    description: 'Schedule recurring buys to dollar-cost average.',
+    icon: 'repeat',
+    category: 'Trading',
+    version: '1.0.0',
     author: 'Sphere Labs',
     enabled: true,
     installedAt: 0,
-    taskType: 'calendar',
+    taskTypes: ['dca'],
   },
   {
-    id: 'code-runner',
-    name: 'Code Runner',
-    description: 'Execute snippets in a sandbox and return results.',
-    icon: 'code',
-    category: 'Developer',
-    version: '0.9.1',
+    id: 'limit-orders',
+    name: 'Limit Order Watcher',
+    description: 'Place limit orders that trigger when targets are hit.',
+    icon: 'gauge',
+    category: 'Trading',
+    version: '0.9.0',
     author: 'Sphere Labs',
     enabled: false,
     installedAt: 0,
-    taskType: 'code-runner',
+    taskTypes: [],
   },
   {
-    id: 'translator',
-    name: 'Translator',
-    description: 'Translate text between 40+ languages on demand.',
-    icon: 'languages',
-    category: 'Language',
-    version: '1.0.0',
-    author: 'Sphere Labs',
-    enabled: true,
-    installedAt: 0,
-    taskType: 'translator',
-  },
-  {
-    id: 'image-gen',
-    name: 'Image Generation',
-    description: 'Generate images from a text prompt.',
-    icon: 'image',
-    category: 'Creative',
+    id: 'rebalancer',
+    name: 'Portfolio Rebalancer',
+    description: 'Keep your portfolio aligned to a target allocation.',
+    icon: 'pie-chart',
+    category: 'Portfolio',
     version: '0.5.0',
     author: 'Sphere Labs',
     enabled: false,
     installedAt: 0,
-    taskType: 'image-gen',
+    taskTypes: [],
   },
   {
-    id: 'market-data',
-    name: 'Market Data',
-    description: 'Live crypto and equity price lookups.',
-    icon: 'trending-up',
-    category: 'Finance',
-    version: '1.1.0',
+    id: 'bridge',
+    name: 'Cross-chain Bridge',
+    description: 'Move tokens between chains through trusted bridges.',
+    icon: 'shuffle',
+    category: 'Infra',
+    version: '1.0.0',
     author: 'Sphere Labs',
     enabled: false,
     installedAt: 0,
-    taskType: 'market-data',
+    taskTypes: ['bridge'],
+  },
+  {
+    id: 'sentiment',
+    name: 'News Sentiment',
+    description: 'Track news sentiment for the tokens you hold.',
+    icon: 'newspaper',
+    category: 'Signals',
+    version: '0.4.0',
+    author: 'Sphere Labs',
+    enabled: false,
+    installedAt: 0,
+    taskTypes: [],
   },
 ];
 
+function wipeAgentState() {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('sphere_agent_')) localStorage.removeItem(key);
+  }
+}
+
 function getConfig(): AgentConfig | null {
-  return readJSON<AgentConfig>(STORAGE_KEYS.AGENT_CONFIG);
+  const raw = readJSON<Partial<AgentConfig> & { balance?: number }>(STORAGE_KEYS.AGENT_CONFIG);
+  if (!raw) return null;
+  // Detect pre-multi-coin shape: had a single `balance: number` and no
+  // `balances` map. Wipe all agent state so onboarding seeds fresh balances.
+  if (raw.balance !== undefined && !raw.balances) {
+    wipeAgentState();
+    return null;
+  }
+  return {
+    name: raw.name ?? '',
+    nametag: raw.nametag ?? '',
+    personality: raw.personality ?? 'friendly',
+    avatar: raw.avatar ?? 'spark',
+    integrations: raw.integrations ?? {},
+    createdAt: raw.createdAt ?? Date.now(),
+    balances: raw.balances && typeof raw.balances === 'object' ? raw.balances : {},
+    maxPerTask: raw.maxPerTask && typeof raw.maxPerTask === 'object' ? raw.maxPerTask : {},
+  };
 }
 
 function getChats(): AgentChat[] {
@@ -170,25 +186,20 @@ function getMessages(chatId: string): AgentMessage[] {
   return readJSON<AgentMessage[]>(messagesKey(chatId)) ?? [];
 }
 
-export function useAgentMessages(chatId: string | null): AgentMessage[] {
-  const raw = useSyncExternalStore(
-    subscribe,
-    () => (chatId ? localStorage.getItem(messagesKey(chatId)) : null),
-    () => null,
-  );
-  return useMemo(() => {
-    if (!chatId) return [];
-    if (!raw) return [];
-    try {
-      return JSON.parse(raw) as AgentMessage[];
-    } catch {
-      return [];
-    }
-  }, [chatId, raw]);
+function getStats(): AgentStats {
+  const raw = readJSON<Partial<AgentStats>>(STORAGE_KEYS.AGENT_STATS);
+  const empty = emptyStats();
+  if (!raw) return empty;
+  return {
+    tasksByType: { ...empty.tasksByType, ...(raw.tasksByType ?? {}) },
+    spendByCoin: raw.spendByCoin && typeof raw.spendByCoin === 'object' ? raw.spendByCoin : {},
+    totalTasks: typeof raw.totalTasks === 'number' ? raw.totalTasks : 0,
+    lastTaskAt: typeof raw.lastTaskAt === 'number' ? raw.lastTaskAt : null,
+  };
 }
 
-function getStats(): AgentStats {
-  return readJSON<AgentStats>(STORAGE_KEYS.AGENT_STATS) ?? emptyStats();
+function getTasks(): AgentExecutedTask[] {
+  return readJSON<AgentExecutedTask[]>(STORAGE_KEYS.AGENT_TASKS) ?? [];
 }
 
 function getCapsules(): Capsule[] {
@@ -203,37 +214,309 @@ function isOnboardingCompleted(): boolean {
   return localStorage.getItem(STORAGE_KEYS.AGENT_ONBOARDING_COMPLETED) === 'true';
 }
 
-const MOCK_REPLIES: string[] = [
-  "Got it. I'll take care of that for you.",
-  "Here's what I found — let me know if you want to dig deeper.",
-  "Done. Anything else you'd like me to handle?",
-  "Interesting question. Based on what I know, here's the short answer.",
-  "I can help with that. Give me a second to think it through.",
-  "Looks straightforward. I've drafted a response below.",
-  "Let me break this down step by step for you.",
-  "Sure, I can do that — shall I proceed with the default settings?",
+// ----- Mock chat reply pool -----
+const MOCK_REPLIES_CHAT: string[] = [
+  "Got it. Anything else you'd like me to handle?",
+  "Sure. What else?",
+  "Noted. I'll keep an eye on it.",
+  "Happy to help — just let me know what to do next.",
+  "Tell me more about what you'd like me to do.",
 ];
 
-function pickReply(): string {
-  return MOCK_REPLIES[Math.floor(Math.random() * MOCK_REPLIES.length)];
-}
-
-function pickTaskType(content: string, enabledCapsules: Capsule[]): AgentTaskType {
-  const lc = content.toLowerCase();
-  const match = enabledCapsules.find((c) => {
-    if (c.taskType === 'web-search') return /search|find|look up|google/.test(lc);
-    if (c.taskType === 'calendar') return /calendar|schedule|meeting|event/.test(lc);
-    if (c.taskType === 'code-runner') return /code|run|script|function/.test(lc);
-    if (c.taskType === 'translator') return /translate|translation|language/.test(lc);
-    if (c.taskType === 'image-gen') return /image|picture|draw|generate/.test(lc);
-    if (c.taskType === 'market-data') return /price|market|stock|crypto|btc|eth/.test(lc);
-    return false;
-  });
-  return match?.taskType ?? 'chat';
+function pickChatReply(): string {
+  return MOCK_REPLIES_CHAT[Math.floor(Math.random() * MOCK_REPLIES_CHAT.length)];
 }
 
 function id() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ----- Task parser -----
+interface ParsedCommand {
+  type: AgentTaskType;
+  sourceSymbol?: string;
+  sourceAmount?: string;
+  targetSymbol?: string;
+  recipient?: string;
+  recurrence?: 'daily' | 'weekly' | 'monthly';
+}
+
+function parseCommand(text: string): ParsedCommand | null {
+  const lc = text.trim();
+
+  let m = lc.match(/\bswap\s+([\d.]+)\s+([a-z]{2,8})\s+(?:to|for|into)\s+([a-z]{2,8})/i);
+  if (m) {
+    return {
+      type: 'swap',
+      sourceAmount: m[1],
+      sourceSymbol: m[2].toUpperCase(),
+      targetSymbol: m[3].toUpperCase(),
+    };
+  }
+
+  m = lc.match(/\bbuy\s+([a-z]{2,8})\s+(?:for|with)\s+([\d.]+)\s+([a-z]{2,8})/i);
+  if (m) {
+    return {
+      type: 'buy',
+      targetSymbol: m[1].toUpperCase(),
+      sourceAmount: m[2],
+      sourceSymbol: m[3].toUpperCase(),
+    };
+  }
+
+  m = lc.match(/\bbuy\s+([\d.]+)\s+([a-z]{2,8})/i);
+  if (m) {
+    return {
+      type: 'buy',
+      targetSymbol: m[2].toUpperCase(),
+      sourceAmount: m[1],
+      sourceSymbol: 'USDT',
+    };
+  }
+
+  m = lc.match(/\bsell\s+([\d.]+)\s+([a-z]{2,8})(?:\s+(?:to|for)\s+([a-z]{2,8}))?/i);
+  if (m) {
+    return {
+      type: 'sell',
+      sourceAmount: m[1],
+      sourceSymbol: m[2].toUpperCase(),
+      targetSymbol: (m[3] ?? 'USDT').toUpperCase(),
+    };
+  }
+
+  m = lc.match(/\b(?:send|transfer)\s+([\d.]+)\s+([a-z]{2,8})\s+to\s+(@?[a-z0-9_-]+)/i);
+  if (m) {
+    return {
+      type: 'transfer',
+      sourceAmount: m[1],
+      sourceSymbol: m[2].toUpperCase(),
+      recipient: m[3],
+    };
+  }
+
+  m = lc.match(/\bdca\s+([\d.]+)\s+([a-z]{2,8})\s+(?:to|into)\s+([a-z]{2,8})(?:\s+(daily|weekly|monthly))?/i);
+  if (m) {
+    return {
+      type: 'dca',
+      sourceAmount: m[1],
+      sourceSymbol: m[2].toUpperCase(),
+      targetSymbol: m[3].toUpperCase(),
+      recurrence: (m[4] as 'daily' | 'weekly' | 'monthly' | undefined) ?? 'daily',
+    };
+  }
+
+  m = lc.match(/\bbridge\s+([\d.]+)\s+([a-z]{2,8})/i);
+  if (m) {
+    return {
+      type: 'bridge',
+      sourceAmount: m[1],
+      sourceSymbol: m[2].toUpperCase(),
+    };
+  }
+
+  return null;
+}
+
+interface TokenMeta {
+  coinId: CoinId;
+  name: string;
+  symbol: string;
+  decimals: number;
+  priceUsd: number;
+}
+
+function resolveTokenBySymbol(symbol: string): TokenMeta | null {
+  const coinId = getCoinIdBySymbol(symbol);
+  if (!coinId) return null;
+  const def = TokenRegistry.getInstance().getDefinition(coinId);
+  if (!def || def.assetKind !== 'fungible') return null;
+  return {
+    coinId: def.id,
+    name: def.name,
+    symbol: def.symbol ?? symbol,
+    decimals: def.decimals ?? 6,
+    priceUsd: getMockPrice(def.name),
+  };
+}
+
+function bigintMin(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
+}
+
+function executeTask(
+  parsed: ParsedCommand,
+  chatId: string,
+  cfg: AgentConfig,
+  enabledCapsules: Capsule[],
+): { task: AgentExecutedTask; reply: string; updatedBalances: Record<CoinId, string> } {
+  const sourceMeta = parsed.sourceSymbol ? resolveTokenBySymbol(parsed.sourceSymbol) : null;
+  const targetMeta = parsed.targetSymbol ? resolveTokenBySymbol(parsed.targetSymbol) : null;
+
+  const fail = (reason: string): ReturnType<typeof executeTask> => ({
+    task: {
+      id: id(),
+      type: parsed.type,
+      status: 'failed',
+      sourceCoinId: sourceMeta?.coinId ?? '',
+      sourceAmount: '0',
+      targetCoinId: targetMeta?.coinId,
+      recipient: parsed.recipient,
+      recurrence: parsed.recurrence,
+      timestamp: Date.now(),
+      chatId,
+    },
+    reply: reason,
+    updatedBalances: cfg.balances,
+  });
+
+  if (!sourceMeta) return fail(`I don't recognise the token "${parsed.sourceSymbol}".`);
+  if (!parsed.sourceAmount) return fail("Please specify an amount.");
+  if ((parsed.type === 'swap' || parsed.type === 'buy' || parsed.type === 'sell' || parsed.type === 'dca') && !targetMeta) {
+    return fail(`I don't recognise the target token "${parsed.targetSymbol}".`);
+  }
+
+  const requiredCapsule = capsuleForTask(parsed.type, enabledCapsules);
+  if (requiredCapsule.gated && !requiredCapsule.capsule) {
+    return fail(
+      `That requires the ${requiredCapsule.requiredName} capsule. Enable it in your dashboard and try again.`,
+    );
+  }
+
+  let amountSmallest: bigint;
+  try {
+    amountSmallest = toSmallestUnit(parsed.sourceAmount, sourceMeta.decimals);
+  } catch {
+    return fail(`Invalid amount "${parsed.sourceAmount}".`);
+  }
+
+  const balanceSmallest = BigInt(cfg.balances[sourceMeta.coinId] ?? '0');
+  if (amountSmallest > balanceSmallest) {
+    const have = toHumanReadable(balanceSmallest, sourceMeta.decimals);
+    return fail(
+      `Insufficient ${sourceMeta.symbol} balance. You have ${have} ${sourceMeta.symbol}.`,
+    );
+  }
+
+  const capSmallest = BigInt(cfg.maxPerTask[sourceMeta.coinId] ?? '0');
+  if (capSmallest > 0n && amountSmallest > capSmallest) {
+    const cap = toHumanReadable(capSmallest, sourceMeta.decimals);
+    return fail(
+      `Amount exceeds your per-task cap of ${cap} ${sourceMeta.symbol}. Adjust it in the Balance tab.`,
+    );
+  }
+
+  // Compute target amount via mock price ratio
+  let targetAmountSmallest: bigint | undefined;
+  if (targetMeta && sourceMeta.priceUsd > 0 && targetMeta.priceUsd > 0) {
+    const humanSource = Number(toHumanReadable(amountSmallest, sourceMeta.decimals));
+    const humanTarget = (humanSource * sourceMeta.priceUsd) / targetMeta.priceUsd;
+    targetAmountSmallest = toSmallestUnit(
+      humanTarget.toFixed(Math.min(targetMeta.decimals, 12)),
+      targetMeta.decimals,
+    );
+  }
+
+  const updatedBalances: Record<CoinId, string> = { ...cfg.balances };
+  if (parsed.type !== 'dca') {
+    updatedBalances[sourceMeta.coinId] = (balanceSmallest - amountSmallest).toString();
+    if (targetMeta && targetAmountSmallest != null) {
+      const prev = BigInt(updatedBalances[targetMeta.coinId] ?? '0');
+      updatedBalances[targetMeta.coinId] = (prev + targetAmountSmallest).toString();
+    }
+  }
+
+  const task: AgentExecutedTask = {
+    id: id(),
+    type: parsed.type,
+    status: parsed.type === 'dca' ? 'pending' : 'completed',
+    sourceCoinId: sourceMeta.coinId,
+    sourceAmount: amountSmallest.toString(),
+    targetCoinId: targetMeta?.coinId,
+    targetAmount: targetAmountSmallest?.toString(),
+    recipient: parsed.recipient,
+    recurrence: parsed.recurrence,
+    timestamp: Date.now(),
+    chatId,
+    capsuleId: requiredCapsule.capsule?.id,
+  };
+
+  const humanSource = toHumanReadable(amountSmallest, sourceMeta.decimals);
+  let reply = '';
+  switch (parsed.type) {
+    case 'swap':
+    case 'buy':
+      reply = `Done. Swapped ${humanSource} ${sourceMeta.symbol} for ${targetMeta && targetAmountSmallest ? toHumanReadable(targetAmountSmallest, targetMeta.decimals) : '?'} ${targetMeta?.symbol ?? ''}.`;
+      break;
+    case 'sell':
+      reply = `Sold ${humanSource} ${sourceMeta.symbol} for ${targetMeta && targetAmountSmallest ? toHumanReadable(targetAmountSmallest, targetMeta.decimals) : '?'} ${targetMeta?.symbol ?? ''}.`;
+      break;
+    case 'transfer':
+      reply = `Sent ${humanSource} ${sourceMeta.symbol} to ${parsed.recipient}.`;
+      break;
+    case 'dca': {
+      const cadence = parsed.recurrence ?? 'daily';
+      reply = `DCA scheduled: ${humanSource} ${sourceMeta.symbol} into ${targetMeta?.symbol ?? '?'} ${cadence}. I'll execute the first run shortly.`;
+      break;
+    }
+    case 'bridge':
+      reply = `Bridged ${humanSource} ${sourceMeta.symbol}. Funds should land on the destination chain shortly.`;
+      break;
+  }
+
+  return { task, reply, updatedBalances };
+}
+
+interface CapsuleResolution {
+  gated: boolean;
+  requiredName?: string;
+  capsule?: Capsule;
+}
+
+function capsuleForTask(type: AgentTaskType, enabledCapsules: Capsule[]): CapsuleResolution {
+  const requirements: Record<AgentTaskType, { id: CapsuleId; name: string } | null> = {
+    swap: { id: 'spot-trader', name: 'Spot Trader' },
+    buy: { id: 'spot-trader', name: 'Spot Trader' },
+    sell: { id: 'spot-trader', name: 'Spot Trader' },
+    dca: { id: 'dca-bot', name: 'DCA Bot' },
+    bridge: { id: 'bridge', name: 'Cross-chain Bridge' },
+    transfer: null,
+  };
+  const req = requirements[type];
+  if (!req) return { gated: false };
+  const capsule = enabledCapsules.find((c) => c.id === req.id);
+  return { gated: true, requiredName: req.name, capsule };
+}
+
+export function useAgentMessages(chatId: string | null): AgentMessage[] {
+  const raw = useSyncExternalStore(
+    subscribe,
+    () => (chatId ? localStorage.getItem(messagesKey(chatId)) : null),
+    () => null,
+  );
+  return useMemo(() => {
+    if (!chatId || !raw) return [];
+    try {
+      return JSON.parse(raw) as AgentMessage[];
+    } catch {
+      return [];
+    }
+  }, [chatId, raw]);
+}
+
+export function useAgentTasks(): AgentExecutedTask[] {
+  const raw = useSyncExternalStore(
+    subscribe,
+    () => localStorage.getItem(STORAGE_KEYS.AGENT_TASKS),
+    () => null,
+  );
+  return useMemo(() => {
+    if (!raw) return [];
+    try {
+      return JSON.parse(raw) as AgentExecutedTask[];
+    } catch {
+      return [];
+    }
+  }, [raw]);
 }
 
 export function useAgent() {
@@ -281,23 +564,36 @@ export function useAgent() {
     });
   }, []);
 
-  const topUp = useCallback((amount: number) => {
+  const topUp = useCallback((coinId: CoinId, amountSmallest: string) => {
     const current = getConfig();
     if (!current) return;
-    writeJSON(STORAGE_KEYS.AGENT_CONFIG, { ...current, balance: current.balance + amount });
+    const prev = BigInt(current.balances[coinId] ?? '0');
+    const next = prev + BigInt(amountSmallest);
+    writeJSON(STORAGE_KEYS.AGENT_CONFIG, {
+      ...current,
+      balances: { ...current.balances, [coinId]: next.toString() },
+    });
   }, []);
 
-  const withdraw = useCallback((amount: number) => {
+  const withdraw = useCallback((coinId: CoinId, amountSmallest: string) => {
     const current = getConfig();
     if (!current) return;
-    const next = Math.max(0, current.balance - amount);
-    writeJSON(STORAGE_KEYS.AGENT_CONFIG, { ...current, balance: next });
+    const prev = BigInt(current.balances[coinId] ?? '0');
+    const amount = BigInt(amountSmallest);
+    const next = bigintMin(prev, amount) > 0n ? prev - bigintMin(prev, amount) : 0n;
+    writeJSON(STORAGE_KEYS.AGENT_CONFIG, {
+      ...current,
+      balances: { ...current.balances, [coinId]: next.toString() },
+    });
   }, []);
 
-  const setMaxTokensPerTask = useCallback((value: number) => {
+  const setMaxPerTask = useCallback((coinId: CoinId, amountSmallest: string) => {
     const current = getConfig();
     if (!current) return;
-    writeJSON(STORAGE_KEYS.AGENT_CONFIG, { ...current, maxTokensPerTask: value });
+    writeJSON(STORAGE_KEYS.AGENT_CONFIG, {
+      ...current,
+      maxPerTask: { ...current.maxPerTask, [coinId]: amountSmallest },
+    });
   }, []);
 
   const completeOnboarding = useCallback(() => {
@@ -335,87 +631,99 @@ export function useAgent() {
 
   const getChatMessages = useCallback((chatId: string) => getMessages(chatId), []);
 
-  const sendMessage = useCallback(
-    async (chatId: string, content: string): Promise<void> => {
-      const trimmed = content.trim();
-      if (!trimmed) return;
+  const sendMessage = useCallback(async (chatId: string, content: string): Promise<void> => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
 
-      const userMsg: AgentMessage = {
-        id: id(),
-        chatId,
-        role: 'user',
-        content: trimmed,
-        timestamp: Date.now(),
-      };
+    const userMsg: AgentMessage = {
+      id: id(),
+      chatId,
+      role: 'user',
+      content: trimmed,
+      timestamp: Date.now(),
+    };
 
-      const existing = getMessages(chatId);
-      const afterUser = [...existing, userMsg];
-      writeJSON(messagesKey(chatId), afterUser);
+    const existing = getMessages(chatId);
+    writeJSON(messagesKey(chatId), [...existing, userMsg]);
 
-      const chats = getChats().map((c) =>
-        c.id === chatId
-          ? {
-              ...c,
-              lastMessageAt: Date.now(),
-              messageCount: c.messageCount + 1,
-              title: c.messageCount === 0 ? trimmed.slice(0, 40) : c.title,
-            }
-          : c,
-      );
-      writeJSON(STORAGE_KEYS.AGENT_CHATS, chats);
+    const chats = getChats().map((c) =>
+      c.id === chatId
+        ? {
+            ...c,
+            lastMessageAt: Date.now(),
+            messageCount: c.messageCount + 1,
+            title: c.messageCount === 0 ? trimmed.slice(0, 40) : c.title,
+          }
+        : c,
+    );
+    writeJSON(STORAGE_KEYS.AGENT_CHATS, chats);
 
-      await new Promise((r) => setTimeout(r, 800 + Math.random() * 700));
+    await new Promise((r) => setTimeout(r, 700 + Math.random() * 700));
 
-      const cfg = getConfig();
-      const caps = getCapsules().filter((c) => c.enabled);
-      const taskType = pickTaskType(trimmed, caps);
+    const cfg = getConfig();
+    if (!cfg) return;
 
-      const [minCost, maxCost] = TASK_COST_RANGE[taskType];
-      const rawCost = minCost + Math.floor(Math.random() * (maxCost - minCost + 1));
-      const cost = Math.min(cfg?.maxTokensPerTask ?? Infinity, rawCost);
+    const enabledCapsules = getCapsules().filter((c) => c.enabled);
+    const parsed = parseCommand(trimmed);
 
-      const agentMsg: AgentMessage = {
-        id: id(),
-        chatId,
-        role: 'agent',
-        content: pickReply(),
-        timestamp: Date.now(),
-        taskType,
-      };
+    let replyContent: string;
+    let taskRef: AgentExecutedTask | null = null;
 
-      const finalMessages = [...getMessages(chatId), agentMsg];
-      writeJSON(messagesKey(chatId), finalMessages);
+    if (parsed) {
+      const result = executeTask(parsed, chatId, cfg, enabledCapsules);
+      taskRef = result.task;
+      replyContent = result.reply;
 
-      const chats2 = getChats().map((c) =>
-        c.id === chatId
-          ? { ...c, lastMessageAt: Date.now(), messageCount: c.messageCount + 1 }
-          : c,
-      );
-      writeJSON(STORAGE_KEYS.AGENT_CHATS, chats2);
+      if (result.task.status === 'completed' || result.task.status === 'pending') {
+        const sourceMeta = TokenRegistry.getInstance().getDefinition(result.task.sourceCoinId);
+        const sourcePrice = getMockPrice(sourceMeta?.name);
+        const sourceDecimals = sourceMeta?.decimals ?? 6;
+        const humanSource = Number(toHumanReadable(result.task.sourceAmount, sourceDecimals));
+        const usdValue = humanSource * sourcePrice;
 
-      const stats = getStats();
-      const slot = stats.byTaskType[taskType] ?? { tokens: 0, count: 0 };
-      const nextStats: AgentStats = {
-        ...stats,
-        byTaskType: {
-          ...stats.byTaskType,
-          [taskType]: { tokens: slot.tokens + cost, count: slot.count + 1 },
-        },
-        totalTokens: stats.totalTokens + cost,
-        lastTaskAt: Date.now(),
-      };
-      writeJSON(STORAGE_KEYS.AGENT_STATS, nextStats);
+        const stats = getStats();
+        const slot = stats.tasksByType[result.task.type];
+        const prevSpend = BigInt(stats.spendByCoin[result.task.sourceCoinId] ?? '0');
+        const nextStats: AgentStats = {
+          ...stats,
+          tasksByType: {
+            ...stats.tasksByType,
+            [result.task.type]: { count: slot.count + 1, usdValue: slot.usdValue + usdValue },
+          },
+          spendByCoin: {
+            ...stats.spendByCoin,
+            [result.task.sourceCoinId]: (prevSpend + BigInt(result.task.sourceAmount)).toString(),
+          },
+          totalTasks: stats.totalTasks + 1,
+          lastTaskAt: Date.now(),
+        };
+        writeJSON(STORAGE_KEYS.AGENT_STATS, nextStats);
 
-      const cfg2 = getConfig();
-      if (cfg2) {
-        writeJSON(STORAGE_KEYS.AGENT_CONFIG, {
-          ...cfg2,
-          balance: Math.max(0, cfg2.balance - cost),
-        });
+        writeJSON(STORAGE_KEYS.AGENT_CONFIG, { ...cfg, balances: result.updatedBalances });
       }
-    },
-    [],
-  );
+
+      writeJSON(STORAGE_KEYS.AGENT_TASKS, [result.task, ...getTasks()]);
+    } else {
+      replyContent = pickChatReply();
+    }
+
+    const agentMsg: AgentMessage = {
+      id: id(),
+      chatId,
+      role: 'agent',
+      content: replyContent,
+      timestamp: Date.now(),
+      taskId: taskRef?.id,
+    };
+
+    writeJSON(messagesKey(chatId), [...getMessages(chatId), agentMsg]);
+    const chats2 = getChats().map((c) =>
+      c.id === chatId
+        ? { ...c, lastMessageAt: Date.now(), messageCount: c.messageCount + 1 }
+        : c,
+    );
+    writeJSON(STORAGE_KEYS.AGENT_CHATS, chats2);
+  }, []);
 
   const toggleCapsule = useCallback((capsuleId: string) => {
     const all = getCapsules().map((c) =>
@@ -431,7 +739,7 @@ export function useAgent() {
     updateIntegrations,
     topUp,
     withdraw,
-    setMaxTokensPerTask,
+    setMaxPerTask,
     completeOnboarding,
     resetOnboarding,
     createChat,

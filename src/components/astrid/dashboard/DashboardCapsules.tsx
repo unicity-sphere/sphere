@@ -1,10 +1,10 @@
 import {
-  Search,
-  Calendar,
-  Code,
-  Languages,
-  Image,
-  TrendingUp,
+  ArrowLeftRight,
+  Repeat,
+  Gauge,
+  PieChart,
+  Shuffle,
+  Newspaper,
   Boxes,
   Plus,
   CheckCircle2,
@@ -14,12 +14,12 @@ import { useAgent } from '../../../hooks/useAgent';
 import type { Capsule } from '../../../types/agent';
 
 const ICON_MAP: Record<string, LucideIcon> = {
-  search: Search,
-  calendar: Calendar,
-  code: Code,
-  languages: Languages,
-  image: Image,
-  'trending-up': TrendingUp,
+  'arrow-left-right': ArrowLeftRight,
+  repeat: Repeat,
+  gauge: Gauge,
+  'pie-chart': PieChart,
+  shuffle: Shuffle,
+  newspaper: Newspaper,
 };
 
 export function DashboardCapsules() {

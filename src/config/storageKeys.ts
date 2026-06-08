@@ -41,6 +41,7 @@ export const STORAGE_KEYS = {
   AGENT_MESSAGES_PREFIX: 'sphere_agent_messages_',
   AGENT_STATS: 'sphere_agent_stats',
   AGENT_CAPSULES: 'sphere_agent_capsules',
+  AGENT_TASKS: 'sphere_agent_tasks',
   AGENT_ONBOARDING_COMPLETED: 'sphere_agent_onboarding_completed',
 } as const;
 

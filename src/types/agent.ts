@@ -8,13 +8,15 @@ export interface AgentIntegrations {
   discord?: string;
 }
 
+export type CoinId = string;
+
 export interface AgentConfig {
   name: string;
   nametag: string;
   personality: AgentPersonality;
   avatar: AgentAvatar;
-  balance: number;
-  maxTokensPerTask: number;
+  balances: Record<CoinId, string>;
+  maxPerTask: Record<CoinId, string>;
   integrations: AgentIntegrations;
   createdAt: number;
 }
@@ -29,14 +31,25 @@ export interface AgentChat {
 
 export type AgentMessageRole = 'user' | 'agent';
 
-export type AgentTaskType =
-  | 'chat'
-  | 'web-search'
-  | 'calendar'
-  | 'code-runner'
-  | 'translator'
-  | 'image-gen'
-  | 'market-data';
+export type AgentTaskType = 'swap' | 'buy' | 'sell' | 'dca' | 'transfer' | 'bridge';
+
+export type AgentTaskStatus = 'completed' | 'pending' | 'failed';
+
+export interface AgentExecutedTask {
+  id: string;
+  type: AgentTaskType;
+  status: AgentTaskStatus;
+  sourceCoinId: CoinId;
+  sourceAmount: string;
+  targetCoinId?: CoinId;
+  targetAmount?: string;
+  recipient?: string;
+  recurrence?: 'daily' | 'weekly' | 'monthly';
+  timestamp: number;
+  chatId?: string;
+  messageId?: string;
+  capsuleId?: string;
+}
 
 export interface AgentMessage {
   id: string;
@@ -44,22 +57,31 @@ export interface AgentMessage {
   role: AgentMessageRole;
   content: string;
   timestamp: number;
-  taskType?: AgentTaskType;
+  taskId?: string;
 }
 
-export interface AgentTaskStat {
-  tokens: number;
+export interface AgentStatsTypeSlot {
   count: number;
+  usdValue: number;
 }
 
 export interface AgentStats {
-  byTaskType: Record<AgentTaskType, AgentTaskStat>;
-  totalTokens: number;
+  tasksByType: Record<AgentTaskType, AgentStatsTypeSlot>;
+  spendByCoin: Record<CoinId, string>;
+  totalTasks: number;
   lastTaskAt: number | null;
 }
 
+export type CapsuleId =
+  | 'spot-trader'
+  | 'dca-bot'
+  | 'limit-orders'
+  | 'rebalancer'
+  | 'bridge'
+  | 'sentiment';
+
 export interface Capsule {
-  id: string;
+  id: CapsuleId;
   name: string;
   description: string;
   icon: string;
@@ -68,5 +90,5 @@ export interface Capsule {
   author: string;
   enabled: boolean;
   installedAt: number;
-  taskType: AgentTaskType;
+  taskTypes: AgentTaskType[];
 }

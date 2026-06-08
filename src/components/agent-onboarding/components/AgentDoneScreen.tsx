@@ -1,5 +1,13 @@
 import { motion } from 'framer-motion';
-import { CheckCircle2, ArrowRight, Sparkles, Circle, Waves, Triangle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ArrowRight,
+  Sparkles,
+  Circle,
+  Waves,
+  Triangle,
+  Loader2,
+} from 'lucide-react';
 import type { AgentAvatar, AgentIntegrations, AgentPersonality } from '../../../types/agent';
 
 interface AgentDoneScreenProps {
@@ -8,6 +16,7 @@ interface AgentDoneScreenProps {
   avatar: AgentAvatar;
   personality: AgentPersonality;
   integrations: AgentIntegrations;
+  isFinishing: boolean;
   onFinish: () => void;
   onBack: () => void;
 }
@@ -25,6 +34,7 @@ export function AgentDoneScreen({
   avatar,
   personality,
   integrations,
+  isFinishing,
   onFinish,
   onBack,
 }: AgentDoneScreenProps) {
@@ -83,9 +93,11 @@ export function AgentDoneScreen({
           label="Integrations"
           value={integrationCount === 0 ? 'None' : `${integrationCount} connected`}
         />
-        <div className="border-t border-neutral-200 dark:border-neutral-700/50 pt-2 mt-2 flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
-          <CheckCircle2 className="w-3.5 h-3.5" />
-          Starting balance: 1000 tokens · Cap: 200 tokens/task
+        <div className="border-t border-neutral-200 dark:border-neutral-700/50 pt-2 mt-2 flex items-start gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+          <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            Starter portfolio funded: UCT, BTC, ETH, SOL, USDT, USDC. You can top up or withdraw any time.
+          </span>
         </div>
       </motion.div>
 
@@ -94,14 +106,24 @@ export function AgentDoneScreen({
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.4 }}
         onClick={onFinish}
+        disabled={isFinishing}
         whileHover={{ scale: 1.02 }}
         whileTap={{ scale: 0.98 }}
-        className="relative w-full py-3.5 px-5 rounded-xl bg-linear-to-r from-orange-500 to-orange-600 text-white text-sm font-bold shadow-xl shadow-orange-500/25 flex items-center justify-center gap-2 overflow-hidden group"
+        className="relative w-full py-3.5 px-5 rounded-xl bg-linear-to-r from-orange-500 to-orange-600 text-white text-sm font-bold shadow-xl shadow-orange-500/25 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed overflow-hidden group"
       >
         <div className="absolute inset-0 bg-linear-to-r from-orange-400 to-orange-500 opacity-0 group-hover:opacity-100 transition-opacity" />
         <span className="relative z-10 flex items-center gap-2">
-          Go to {name}
-          <ArrowRight className="w-4 h-4" />
+          {isFinishing ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Funding wallet…
+            </>
+          ) : (
+            <>
+              Go to {name}
+              <ArrowRight className="w-4 h-4" />
+            </>
+          )}
         </span>
       </motion.button>
 
@@ -110,7 +132,8 @@ export function AgentDoneScreen({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.5 }}
         onClick={onBack}
-        className="w-full mt-2 py-2.5 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+        disabled={isFinishing}
+        className="w-full mt-2 py-2.5 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors disabled:opacity-50"
       >
         Back
       </motion.button>
