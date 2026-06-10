@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body>
+  <script>
+    var path = window.location.pathname;
+    var m = path.match(/^(\/sphere\/[^/]+)(\/.+)/);
+    if (m) {
+      var qs = window.location.search;
+      window.location.replace(
+        m[1] + '/?p=' + encodeURIComponent(m[2]) +
+        (qs ? '&' + qs.substring(1) : '') +
+        window.location.hash
+      );
+    }
+  </script>
+</body>
+</html>
