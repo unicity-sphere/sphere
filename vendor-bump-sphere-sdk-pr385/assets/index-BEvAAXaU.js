@@ -1,1 +1,0 @@
-function o(n){return n[Symbol.asyncIterator]!=null}function s(n){if(o(n))return(async()=>{const r=[];for await(const a of n)r.push(a);return r})();const t=[];for(const r of n)t.push(r);return t}export{s as a};
