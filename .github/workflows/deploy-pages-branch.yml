@@ -77,6 +77,14 @@ jobs:
           # Public URL — baked into the bundle at build time. Hardcoded
           # because the same value applies to every branch preview deploy.
           VITE_SPHERE_API_URL: https://quest-api.staging.unicity.network
+          # wallet-api backend (S4 asset path) — absolute https URL, baked in
+          # at build time. The staging backend serves wildcard CORS, so the
+          # github.io origin reaches it directly (no dev proxy involved; the
+          # SDK derives the wss:// wake socket from this same base). Engine
+          # override vars (VITE_AGGREGATOR_URL / VITE_TRUSTBASE_URL) stay
+          # UNSET here on purpose: the testnet2 network preset supplies the
+          # real gateway + the trustbase it serves — never mix trustbases.
+          VITE_WALLET_API_URL: https://wallet-api.staging.unicity.network
           # Aggregator API key — inlined into the bundle at build time.
           # The testnet2 value is NOT a secret (see .env / .env.example), so it
           # is safe to hardcode here. Without it the deployed bundle gets
