@@ -1,6 +1,5 @@
 import { Check, Sparkles, Trash2, Loader2, XIcon, ArrowRight, Clock, Receipt, AlertCircle } from 'lucide-react';
 import { type IncomingPaymentRequest, PaymentRequestStatus } from '../hooks/useIncomingPaymentRequests';
-import { useTransfer } from '../../../../sdk';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
@@ -13,13 +12,14 @@ interface PaymentRequestsModalProps {
   onClose: () => void;
   requests: IncomingPaymentRequest[];
   pendingCount: number;
+  /** Server-confirmed on wallet-api — 403/409 rejections throw and are surfaced here. */
   reject: (request: IncomingPaymentRequest) => Promise<void>;
-  paid: (request: IncomingPaymentRequest) => Promise<void>;
+  /** Pays via payments.payPaymentRequest (send + linked 'paid' respond). */
+  pay: (request: IncomingPaymentRequest) => Promise<void>;
   clearProcessed: () => void;
 }
 
-export function PaymentRequestsModal({ isOpen, onClose, requests, pendingCount, reject, clearProcessed, paid }: PaymentRequestsModalProps) {
-  const { transfer } = useTransfer();
+export function PaymentRequestsModal({ isOpen, onClose, requests, pendingCount, reject, clearProcessed, pay }: PaymentRequestsModalProps) {
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -33,18 +33,14 @@ export function PaymentRequestsModal({ isOpen, onClose, requests, pendingCount, 
     }
   };
 
-  const handlePay = async (req: IncomingPaymentRequest) => {
+  /** Run a request action; failures (e.g. 403/409 on reject, send failures
+   *  on pay) land in the per-request error slot — never silent, never an
+   *  optimistic status flip. */
+  const handleAction = async (req: IncomingPaymentRequest, action: (r: IncomingPaymentRequest) => Promise<void>) => {
     setProcessingId(req.id);
     setErrors(prev => ({ ...prev, [req.id]: '' }));
     try {
-      const recipient = req.recipientNametag ? `@${req.recipientNametag}` : req.senderPubkey;
-      if (import.meta.env.DEV) console.log(`Initiating payment for request ${req.requestId} to ${recipient}`);
-      await transfer({
-        recipient,
-        amount: req.amount.toString(),
-        coinId: req.coinId,
-      });
-      paid(req);
+      await action(req);
     } catch (error: unknown) {
       setErrors(prev => ({ ...prev, [req.id]: getErrorMessage(error) }));
     } finally {
@@ -90,8 +86,8 @@ export function PaymentRequestsModal({ isOpen, onClose, requests, pendingCount, 
                 key={req.id}
                 req={req}
                 error={errors[req.id]}
-                onPay={() => handlePay(req)}
-                onReject={() => reject(req)}
+                onPay={() => handleAction(req, pay)}
+                onReject={() => handleAction(req, reject)}
                 isProcessing={processingId === req.id}
                 isGlobalDisabled={isGlobalProcessing}
               />
@@ -133,11 +129,12 @@ function RequestCard({ req, error, onPay, onReject, isProcessing, isGlobalDisabl
   const amountDisplay = AmountFormatUtils.formatDisplayAmount(req.amount.toString(), req.coinId);
   const timeAgo = getTimeAgo(req.timestamp);
 
-  // Стиль статуса
+  // Status styling
   const statusConfig = {
     [PaymentRequestStatus.ACCEPTED]: { color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', icon: Check, label: 'Payment Sent' },
     [PaymentRequestStatus.PAID]: { color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', icon: Check, label: 'Paid Successfully' },
     [PaymentRequestStatus.REJECTED]: { color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/20', icon: XIcon, label: 'Request Declined' },
+    [PaymentRequestStatus.EXPIRED]: { color: 'text-neutral-500', bg: 'bg-neutral-500/10', border: 'border-neutral-500/20', icon: Clock, label: 'Request Expired' },
     [PaymentRequestStatus.PENDING]: { color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: Clock, label: 'Awaiting Payment' },
   };
 

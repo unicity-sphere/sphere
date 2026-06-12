@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   STORAGE_KEYS,
   clearAllSphereData,
+  getOrCreateWalletApiDeviceId,
 } from "../../../src/config/storageKeys";
 
 // ==========================================
@@ -120,5 +121,55 @@ describe("clearAllSphereData", () => {
     );
 
     consoleSpy.mockRestore();
+  });
+});
+
+// ==========================================
+// Test: getOrCreateWalletApiDeviceId
+// ==========================================
+
+describe("getOrCreateWalletApiDeviceId", () => {
+  let localStorageMock: { [key: string]: string };
+
+  beforeEach(() => {
+    localStorageMock = {};
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn((key: string) => localStorageMock[key] || null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStorageMock[key] = value;
+      }),
+      removeItem: vi.fn((key: string) => {
+        delete localStorageMock[key];
+      }),
+      key: vi.fn((index: number) => Object.keys(localStorageMock)[index] || null),
+      get length() {
+        return Object.keys(localStorageMock).length;
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("generates a device id once and persists it under the sphere_ key", () => {
+    const first = getOrCreateWalletApiDeviceId();
+
+    expect(first).toMatch(/^sphere-web-/);
+    expect(localStorageMock[STORAGE_KEYS.WALLET_API_DEVICE_ID]).toBe(first);
+
+    // Stable across calls — one (owner, device) session row, not one per load
+    expect(getOrCreateWalletApiDeviceId()).toBe(first);
+  });
+
+  it("resets the device identity when sphere data is cleared (wallet deletion)", () => {
+    const first = getOrCreateWalletApiDeviceId();
+
+    clearAllSphereData();
+    expect(localStorageMock[STORAGE_KEYS.WALLET_API_DEVICE_ID]).toBeUndefined();
+
+    const second = getOrCreateWalletApiDeviceId();
+    expect(second).toMatch(/^sphere-web-/);
+    expect(second).not.toBe(first);
   });
 });

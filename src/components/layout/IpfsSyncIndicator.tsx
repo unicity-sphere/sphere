@@ -16,13 +16,17 @@ function getStatusText(
 }
 
 export function IpfsSyncIndicator() {
-  const { ipfsEnabled, toggleIpfs } = useSphereContext();
+  const { ipfsEnabled, toggleIpfs, walletApiEnabled } = useSphereContext();
   const { status, lastSynced } = useIpfsSync();
   const isSyncing = ipfsEnabled && status === 'syncing';
   const isError = ipfsEnabled && status === 'error';
   const statusText = getStatusText(ipfsEnabled, status, lastSynced);
 
   const iconClass = 'w-4 h-4 sm:w-5 sm:h-5';
+
+  // wallet-api custody (S4): IPFS token sync is forced off in SphereProvider —
+  // hide the toggle so it cannot suggest a second token mirror exists.
+  if (walletApiEnabled) return null;
 
   return (
     <HeaderTooltip label={ipfsEnabled ? 'Disable IPFS sync' : 'Enable IPFS sync'}>

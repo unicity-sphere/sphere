@@ -6,10 +6,21 @@ export const PaymentRequestStatus = {
     PENDING: 'PENDING',
     ACCEPTED: 'ACCEPTED',
     REJECTED: 'REJECTED',
-    PAID: 'PAID'
+    PAID: 'PAID',
+    // Backend model is open → paid | declined | expired (§16): a stale request
+    // can expire server-side; a pay/reject attempt on it surfaces a 409.
+    EXPIRED: 'EXPIRED'
 } as const;
 
 export type PaymentRequestStatus = typeof PaymentRequestStatus[keyof typeof PaymentRequestStatus];
+
+const STATUS_MAP: Record<SDKPaymentRequest['status'], PaymentRequestStatus> = {
+    pending: PaymentRequestStatus.PENDING,
+    accepted: PaymentRequestStatus.ACCEPTED,
+    rejected: PaymentRequestStatus.REJECTED,
+    paid: PaymentRequestStatus.PAID,
+    expired: PaymentRequestStatus.EXPIRED,
+};
 
 export interface IncomingPaymentRequest {
     id: string;
@@ -37,70 +48,89 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
         recipientNametag: sdk.senderNametag ?? '',
         requestId: sdk.requestId,
         timestamp: sdk.timestamp,
-        status: PaymentRequestStatus.PENDING,
+        status: STATUS_MAP[sdk.status] ?? PaymentRequestStatus.PENDING,
     };
 }
 
+/**
+ * Incoming payment requests, driven by the PaymentsModule (the SDK list is
+ * the source of truth — statuses are read back after every action, never
+ * flipped optimistically):
+ *
+ * - `accept` — local status only; the wallet-api backend has no 'accepted'
+ *   state (§16 models open → paid | declined | expired), so the requester is
+ *   NOT notified until the request is actually paid.
+ * - `reject` — server-confirmed on the wallet-api path: the §16 'declined'
+ *   respond happens BEFORE the local flip, and a server rejection (403
+ *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
+ *   surface it, the local status stays pending.
+ * - `pay` — `payments.payPaymentRequest`: sends the transfer, then links the
+ *   transferId in the 'paid' respond. A failed respond after a successful
+ *   send is logged by the SDK, never reported as a payment failure.
+ */
 export const useIncomingPaymentRequests = () => {
     const { sphere } = useSphereContext();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
-    useEffect(() => {
+    const refresh = useCallback(() => {
         if (!sphere) return;
+        setRequests(sphere.payments.getPaymentRequests().map(bridgeRequest));
+    }, [sphere]);
 
-        const handler = (sdkReq: SDKPaymentRequest) => {
-            setRequests(prev => [...prev, bridgeRequest(sdkReq)]);
-        };
+    useEffect(() => {
+        if (!sphere) {
+            setRequests([]);
+            return;
+        }
 
+        // Seed from the module: requests that arrived before this hook
+        // mounted (e.g. the wallet-api sign-in backfill) are not re-emitted.
+        refresh();
+
+        const handler = () => refresh();
         sphere.on('payment_request:incoming', handler);
-
         return () => {
             sphere.off('payment_request:incoming', handler);
         };
-    }, [sphere]);
-
-    const updateStatus = useCallback(async (
-        request: IncomingPaymentRequest,
-        status: typeof PaymentRequestStatus[keyof typeof PaymentRequestStatus],
-        responseType: 'accepted' | 'rejected' | 'paid',
-    ) => {
-        if (!sphere) return;
-        const transport = sphere.getTransport();
-        if (transport.sendPaymentRequestResponse) {
-            await transport.sendPaymentRequestResponse(request.senderPubkey, {
-                requestId: request.requestId,
-                responseType,
-            });
-        }
-        setRequests(prev =>
-            prev.map(r => r.id === request.id ? { ...r, status } : r)
-        );
-    }, [sphere]);
+    }, [sphere, refresh]);
 
     const pendingCount = useMemo(
         () => requests.filter(r => r.status === PaymentRequestStatus.PENDING).length,
         [requests],
     );
 
-    const accept = useCallback(
-        (request: IncomingPaymentRequest) => updateStatus(request, PaymentRequestStatus.ACCEPTED, 'accepted'),
-        [updateStatus],
-    );
+    const accept = useCallback(async (request: IncomingPaymentRequest) => {
+        if (!sphere) return;
+        try {
+            await sphere.payments.acceptPaymentRequest(request.id);
+        } finally {
+            refresh();
+        }
+    }, [sphere, refresh]);
 
-    const reject = useCallback(
-        (request: IncomingPaymentRequest) => updateStatus(request, PaymentRequestStatus.REJECTED, 'rejected'),
-        [updateStatus],
-    );
+    const reject = useCallback(async (request: IncomingPaymentRequest) => {
+        if (!sphere) return;
+        try {
+            await sphere.payments.rejectPaymentRequest(request.id);
+        } finally {
+            refresh();
+        }
+    }, [sphere, refresh]);
 
-    const paid = useCallback(
-        (request: IncomingPaymentRequest) => updateStatus(request, PaymentRequestStatus.PAID, 'paid'),
-        [updateStatus],
-    );
+    const pay = useCallback(async (request: IncomingPaymentRequest) => {
+        if (!sphere) return;
+        try {
+            await sphere.payments.payPaymentRequest(request.id);
+        } finally {
+            refresh();
+        }
+    }, [sphere, refresh]);
 
-    const clearProcessed = useCallback(
-        () => setRequests(prev => prev.filter(r => r.status === PaymentRequestStatus.PENDING)),
-        [],
-    );
+    const clearProcessed = useCallback(() => {
+        if (!sphere) return;
+        sphere.payments.clearProcessedPaymentRequests();
+        refresh();
+    }, [sphere, refresh]);
 
-    return { requests, pendingCount, accept, reject, paid, clearProcessed };
+    return { requests, pendingCount, accept, reject, pay, clearProcessed };
 };

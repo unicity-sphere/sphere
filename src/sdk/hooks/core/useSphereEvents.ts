@@ -98,6 +98,10 @@ export function useSphereEvents(): void {
     };
 
     const handleIdentityChange = () => {
+      // New identity = new transfer stream (wallet-api sessions are
+      // per-identity): clear the toast dedup set so the new address's
+      // transfers are never swallowed by ids seen under the old one.
+      seenTransferIdsRef.current.clear();
       refreshIdentityCache();
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.all });

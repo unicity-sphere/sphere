@@ -1,10 +1,19 @@
 import { createContext } from 'react';
 import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import type { WalletApiProviderExtras } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+
+/**
+ * The app's provider bundle: the browser base, plus — when the asset path
+ * rides wallet-api (VITE_WALLET_API_URL set) — the S4 extras (`delivery`,
+ * `walletApi`). The extras are additive: helpers taking `BrowserProviders`
+ * keep working unchanged.
+ */
+export type SphereAppProviders = BrowserProviders & Partial<WalletApiProviderExtras>;
 
 export interface SphereContextValue {
   sphere: Sphere | null;
-  providers: BrowserProviders | null;
+  providers: SphereAppProviders | null;
 
   isLoading: boolean;
   isInitialized: boolean;
@@ -36,6 +45,13 @@ export interface SphereContextValue {
   ipfsEnabled: boolean;
   /** Toggle IPFS sync on/off (persists to localStorage, triggers reinitialize) */
   toggleIpfs: () => void;
+
+  /**
+   * True when the asset path rides the wallet-api backend (S4 composition).
+   * IPFS token sync is unavailable in this mode — server inventory custody
+   * and a second token-storage mirror have undefined handoff semantics.
+   */
+  walletApiEnabled: boolean;
 }
 
 export interface CreateWalletOptions {

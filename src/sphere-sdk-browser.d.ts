@@ -46,4 +46,31 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
   export function createBrowserProviders(
     config?: BrowserProvidersConfig,
   ): BrowserProviders;
+
+  /**
+   * Browser oracle (network-config) provider factory. Used to select the
+   * engine port at composition time (createSphereProviders) when the app
+   * must point at a non-preset gateway + the trustbase it serves — e.g. the
+   * LOCAL dev-stack mock aggregator in the two-profile smoke.
+   */
+  export interface BrowserAggregatorProviderConfig {
+    /** Aggregator (gateway) URL */
+    url: string;
+    /** API key for authentication */
+    apiKey?: string;
+    /** Request timeout (ms) */
+    timeout?: number;
+    /** Skip trust base loading (dev only) */
+    skipVerification?: boolean;
+    /** Enable debug logging */
+    debug?: boolean;
+    /** Trust base JSON URL (fetched by the browser loader) */
+    trustBaseUrl?: string;
+    /** Embedded-fallback network (required when trustBaseUrl is set) */
+    network?: NetworkType;
+  }
+
+  export function createUnicityAggregatorProvider(
+    config: BrowserAggregatorProviderConfig,
+  ): OracleProvider;
 }

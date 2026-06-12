@@ -25,7 +25,26 @@ export default defineConfig(({ mode }) => {
   // the SPA HTML fallback — a proxied URL without a "." (e.g.
   // /coingecko/simple/price?ids=bitcoin) would otherwise be rewritten to
   // index.html and never reach the proxy (the SDK then gets HTML, not JSON).
-  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko'];
+  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko', '/wallet-api', '/local-agg'];
+
+  // wallet-api backend + LOCAL dev-stack aggregator (docker-compose.dev.yml
+  // in the wallet-api repo). Neither serves CORS headers, so the browser app
+  // reaches them through this same-origin proxy in dev/preview (set
+  // VITE_WALLET_API_URL=/wallet-api etc.); production deployments must solve
+  // CORS/edge routing on the backend side.
+  const localStackProxy = {
+    '/wallet-api': {
+      target: env.WALLET_API_PROXY_TARGET || 'http://127.0.0.1:3000',
+      changeOrigin: true,
+      ws: true, // the SDK's wake socket (/v1/ws) rides the same base URL
+      rewrite: (p: string) => p.replace(/^\/wallet-api/, ''),
+    },
+    '/local-agg': {
+      target: env.AGGREGATOR_PROXY_TARGET || 'http://127.0.0.1:3001',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/local-agg/, ''),
+    },
+  };
 
   return {
     plugins: [
@@ -101,8 +120,14 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (path) => path.replace(/^\/coingecko/, ''),
-        }
+        },
+        ...localStackProxy,
       }
+    },
+    // `vite preview` (used by the Playwright smoke) needs the same
+    // same-origin route to the local stack as the dev server.
+    preview: {
+      proxy: { ...localStackProxy },
     },
     // Ensure polyfill shims resolve correctly for symlinked file: dependencies
     resolve: {

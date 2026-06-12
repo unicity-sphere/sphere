@@ -34,6 +34,10 @@ export const STORAGE_KEYS = {
   // Dev Settings
   DEV_AGGREGATOR_URL: 'sphere_dev_aggregator_url',
   DEV_SKIP_TRUST_BASE: 'sphere_dev_skip_trust_base',
+
+  // wallet-api device label — one session row per (owner, device) on the
+  // backend; the SDK stores the refresh token under it (ARCHITECTURE §4).
+  WALLET_API_DEVICE_ID: 'sphere_wallet_api_device_id',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
@@ -55,3 +59,20 @@ export function clearAllSphereData(): void {
 }
 
 export type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];
+
+/**
+ * Stable per-device label for the wallet-api session (ARCHITECTURE §4: one
+ * session row per (owner, device); the refresh token is stored under it).
+ * Persisted so reloads reuse the session instead of forcing a fresh
+ * challenge sign-in and a new server session row per page load.
+ *
+ * The key carries the `sphere_` prefix, so `clearAllSphereData()` (wallet
+ * deletion) resets the device identity together with everything else.
+ */
+export function getOrCreateWalletApiDeviceId(): string {
+  const existing = localStorage.getItem(STORAGE_KEYS.WALLET_API_DEVICE_ID);
+  if (existing) return existing;
+  const deviceId = `sphere-web-${crypto.randomUUID()}`;
+  localStorage.setItem(STORAGE_KEYS.WALLET_API_DEVICE_ID, deviceId);
+  return deviceId;
+}

@@ -12,9 +12,19 @@ import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
   createBrowserProviders,
+  createUnicityAggregatorProvider,
   type BrowserProviders,
 } from '@unicitylabs/sphere-sdk/impl/browser';
-import { SphereContext } from './SphereContext';
+import {
+  createSphereProviders,
+  createWalletApiProviders,
+} from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+import { SphereContext, type SphereAppProviders } from './SphereContext';
+import {
+  getEngineOverride,
+  getWalletApiBaseUrl,
+  isWalletApiEnabled,
+} from '../config/walletApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -26,7 +36,11 @@ import type {
   ImportFromFileOptions,
   ImportFromFileResult,
 } from './SphereContext';
-import { clearAllSphereData, STORAGE_KEYS } from '../config/storageKeys';
+import {
+  clearAllSphereData,
+  getOrCreateWalletApiDeviceId,
+  STORAGE_KEYS,
+} from '../config/storageKeys';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)
@@ -56,6 +70,10 @@ function isIpfsEnabled(): boolean {
 }
 
 function getIpfsConfig() {
+  // wallet-api mode: server inventory custody — a second token-storage
+  // mirror (IPFS) has undefined ownership-handoff/tombstone semantics, so
+  // token sync is forced off (the toggle is hidden too).
+  if (isWalletApiEnabled()) return {};
   if (!isIpfsEnabled()) return {};
   return {
     tokenSync: {
@@ -79,11 +97,54 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
 
 /** Add IPFS storage provider and trigger initial sync (fire-and-forget) */
 function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
+  if (isWalletApiEnabled()) return; // see getIpfsConfig()
   if (providers.ipfsTokenStorage) {
     instance.addTokenStorageProvider(providers.ipfsTokenStorage)
       .then(() => instance.sync())
       .catch(err => logger.warn('SphereProvider', 'IPFS sync failed', err));
   }
+}
+
+/**
+ * Compose the app's provider bundle (S4): the browser base, an optional
+ * engine-port override (LOCAL dev stack: mock aggregator + the trustbase it
+ * serves), and — when VITE_WALLET_API_URL is set — the wallet-api preset:
+ * thin server-custody token storage + mailbox delivery + the S1 client.
+ * Composing `delivery` moves ASSETS to wallet-api; messaging, group chat and
+ * nametags stay on the Nostr transport in the base bundle.
+ */
+function buildProviders(network: NetworkType): SphereAppProviders {
+  const base = createBrowserProviders({
+    network,
+    // v2 token engine: aggregator URL + trust base come from the network
+    // preset; only the apiKey is injected (non-secret on testnet2).
+    oracle: { apiKey: import.meta.env.VITE_AGGREGATOR_API_KEY },
+    price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
+    // Group chat (NIP-29) is disabled: the UI is already hidden (PR #339), and
+    // skipping the module here stops the SDK from connecting to NIP-29 relays.
+    groupChat: false,
+    market: true,
+    ...getIpfsConfig(),
+  });
+
+  const engineOverride = getEngineOverride();
+  const withEngine = engineOverride
+    ? createSphereProviders(base, {
+        engine: createUnicityAggregatorProvider({
+          url: engineOverride.aggregatorUrl,
+          trustBaseUrl: engineOverride.trustBaseUrl,
+          network,
+        }),
+      })
+    : base;
+
+  const walletApiBaseUrl = getWalletApiBaseUrl();
+  if (!walletApiBaseUrl) return withEngine;
+  return createWalletApiProviders(withEngine, {
+    baseUrl: walletApiBaseUrl,
+    network,
+    deviceId: getOrCreateWalletApiDeviceId(),
+  });
 }
 
 /** Clean up persisted wallet data on creation/import failure */
@@ -110,7 +171,7 @@ export function SphereProvider({
 }: SphereProviderProps) {
   const queryClient = useQueryClient();
   const [sphere, setSphere] = useState<Sphere | null>(null);
-  const [providers, setProviders] = useState<BrowserProviders | null>(null);
+  const [providers, setProviders] = useState<SphereAppProviders | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -130,18 +191,7 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
-      const browserProviders = createBrowserProviders({
-        network,
-        // v2 token engine: aggregator URL + trust base (networkId 4) come from the
-        // testnet2 network preset; only the apiKey is injected (non-secret on testnet2).
-        oracle: { apiKey: import.meta.env.VITE_AGGREGATOR_API_KEY },
-        price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
-        // Group chat (NIP-29) is disabled: the UI is already hidden (PR #339), and
-        // skipping the module here stops the SDK from connecting to NIP-29 relays.
-        groupChat: false,
-        market: true,
-        ...getIpfsConfig(),
-      });
+      const browserProviders = buildProviders(network);
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
 
@@ -366,6 +416,15 @@ export function SphereProvider({
     // Notify connected dApps before destroying — ConnectPage/IframeAgent listen for this
     window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
 
+    // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
+    // calls walletApi.logout() on address switch, not on destroy — without
+    // this the server session row would outlive wallet deletion.
+    if (providers?.walletApi) {
+      await providers.walletApi.logout().catch((err) => {
+        logger.warn('SphereProvider', 'wallet-api logout failed (best effort)', err);
+      });
+    }
+
     // Destroy sphere to close SDK connections (Nostr, IndexedDB handles, etc.)
     if (sphereRef.current) {
       await sphereRef.current.destroy();
@@ -459,6 +518,7 @@ export function SphereProvider({
     reinitialize: initialize,
     ipfsEnabled,
     toggleIpfs,
+    walletApiEnabled: isWalletApiEnabled(),
   };
 
   return (

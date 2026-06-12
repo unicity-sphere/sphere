@@ -127,7 +127,7 @@ interface L3WalletViewProps {
   paymentRequests: import('../hooks/useIncomingPaymentRequests').IncomingPaymentRequest[];
   paymentRequestsPendingCount: number;
   paymentRequestsReject: (request: import('../hooks/useIncomingPaymentRequests').IncomingPaymentRequest) => Promise<void>;
-  paymentRequestsPaid: (request: import('../hooks/useIncomingPaymentRequests').IncomingPaymentRequest) => Promise<void>;
+  paymentRequestsPay: (request: import('../hooks/useIncomingPaymentRequests').IncomingPaymentRequest) => Promise<void>;
   paymentRequestsClearProcessed: () => void;
 }
 
@@ -144,7 +144,7 @@ export function L3WalletView({
   paymentRequests,
   paymentRequestsPendingCount,
   paymentRequestsReject,
-  paymentRequestsPaid,
+  paymentRequestsPay,
   paymentRequestsClearProcessed,
 }: L3WalletViewProps) {
   const navigate = useNavigate();
@@ -510,7 +510,7 @@ export function L3WalletView({
         requests={paymentRequests}
         pendingCount={paymentRequestsPendingCount}
         reject={paymentRequestsReject}
-        paid={paymentRequestsPaid}
+        pay={paymentRequestsPay}
         clearProcessed={paymentRequestsClearProcessed}
       />
       <SeedPhraseModal

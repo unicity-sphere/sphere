@@ -22,7 +22,7 @@ export function WalletPanel() {
   const { isLoading: isWalletLoading, walletExists, error: walletError } = useWalletStatus();
   const { identity, nametag, isLoading: isLoadingIdentity } = useIdentity();
   const { initProgress } = useSphereContext();
-  const { pendingCount, requests, reject, paid, clearProcessed } = useIncomingPaymentRequests();
+  const { pendingCount, requests, reject, pay, clearProcessed } = useIncomingPaymentRequests();
   const { setFullscreen } = useUIState();
 
   // Track previous pending count to detect new requests
@@ -252,7 +252,7 @@ export function WalletPanel() {
           paymentRequests={requests}
           paymentRequestsPendingCount={pendingCount}
           paymentRequestsReject={reject}
-          paymentRequestsPaid={paid}
+          paymentRequestsPay={pay}
           paymentRequestsClearProcessed={clearProcessed}
         />
       </div>
