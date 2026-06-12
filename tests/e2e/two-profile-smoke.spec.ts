@@ -11,6 +11,11 @@
  *   A creates + funds a wallet → sends UCT to B → B sees the balance →
  *   B sends A a payment request → A pays it → both UIs converge.
  *
+ * Each profile is hard-reloaded (F5) right after its first balance
+ * assertion: reload drops all in-memory engine state, so re-asserting the
+ * SAME balance proves it survives a full pull from wallet-api (the
+ * sphere-sdk#521 regression — fixed in 0.9.1-dev.9 — lost it here).
+ *
  * Nametags ride Nostr (unchanged by this integration) and are REQUIRED for
  * recipient resolution: the engine send path needs the recipient's published
  * chain pubkey, so both profiles register one during onboarding.
@@ -72,6 +77,16 @@ async function createWallet(page: Page, tag: string): Promise<void> {
   });
 }
 
+/**
+ * F5 and re-assert the same balance. Reload discards all in-memory state,
+ * so the balance can only come back via the full pull from wallet-api —
+ * exactly the path sphere-sdk#521 broke (fixed in 0.9.1-dev.9).
+ */
+async function reloadAndExpectBalance(page: Page, balance: string): Promise<void> {
+  await page.reload();
+  await expect(visible(page, balance)).toBeVisible({ timeout: 240_000 });
+}
+
 /** Open mint via Top Up (UCT/BTC/SOL/ETH basket) and wait for the deposit. */
 async function topUp(page: Page): Promise<void> {
   await visibleButton(page, 'Top Up').click();
@@ -91,6 +106,9 @@ test('two profiles converge over wallet-api: fund, send, request, pay', async ({
   await createWallet(a, TAG_A);
   await createWallet(b, TAG_B);
   await topUp(a);
+
+  // ── A reloads (F5): minted balance must survive the full pull ───────────
+  await reloadAndExpectBalance(a, '100.0000 UCT');
 
   // ── A sends 10 UCT to @B (mailbox delivery + B's claim/handoff) ─────────
   await visibleButton(a, 'Send').click();
@@ -112,6 +130,9 @@ test('two profiles converge over wallet-api: fund, send, request, pay', async ({
 
   // ── B receives: wake → mailbox claim → inventory custody → balance ──────
   await expect(visible(b, '10.0000 UCT')).toBeVisible({ timeout: 240_000 });
+
+  // ── B reloads (F5): received balance must survive the full pull ─────────
+  await reloadAndExpectBalance(b, '10.0000 UCT');
 
   // ── B requests 5 UCT from @A (§16 payment request) ──────────────────────
   await visibleButton(b, 'Top Up').click();
