@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
 import { IpfsSyncIndicator } from './IpfsSyncIndicator';
+import { WalletApiSessionIndicator } from './WalletApiSessionIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
 
@@ -152,9 +153,11 @@ export function Header() {
                 </div>
               )}
 
-              {/* Desktop: IPFS sync indicator */}
+              {/* Desktop: custody status — IPFS sync (legacy) / wallet-api
+                  session (S4); each renders only in its own composition. */}
               <div className="hidden lg:flex items-center gap-3">
                 <IpfsSyncIndicator />
+                <WalletApiSessionIndicator />
                 {/* <ThemeToggle /> */}
               </div>
             </div>
@@ -233,9 +236,10 @@ export function Header() {
               )
             ))}
 
-            {/* IPFS sync + Social links — mobile only */}
+            {/* Custody status + Social links — mobile only */}
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
               <IpfsSyncIndicator />
+              <WalletApiSessionIndicator />
               <div className="flex-1" />
               <div className="flex items-center gap-5">
                 {[

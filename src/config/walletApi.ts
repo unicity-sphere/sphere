@@ -25,16 +25,49 @@ function resolveUrl(value: string): string {
   return new URL(value, window.location.origin).toString();
 }
 
-/** Backend base URL when wallet-api mode is enabled; null otherwise. */
+/**
+ * True when this bundle declares wallet-api intent (`VITE_REQUIRE_WALLET_API`).
+ * Set by deployments whose custody model is wallet-api (the Pages workflow):
+ * any value other than empty/`false`/`0` counts as set.
+ */
+export function isWalletApiRequired(): boolean {
+  const raw = import.meta.env.VITE_REQUIRE_WALLET_API as string | undefined;
+  return !!raw && raw !== 'false' && raw !== '0';
+}
+
+/**
+ * Backend base URL when wallet-api mode is enabled; null otherwise.
+ *
+ * #351 assert (2026-06-12 incident): a bundle built with
+ * `VITE_REQUIRE_WALLET_API` but without `VITE_WALLET_API_URL` must fail at
+ * provider composition instead of silently falling back to the legacy
+ * local-custody composition — a missing URL would otherwise CHANGE the
+ * custody model, not just degrade a feature.
+ */
 export function getWalletApiBaseUrl(): string | null {
   const raw = import.meta.env.VITE_WALLET_API_URL as string | undefined;
-  if (!raw) return null;
+  if (!raw) {
+    if (isWalletApiRequired()) {
+      throw new Error(
+        'VITE_REQUIRE_WALLET_API is set but VITE_WALLET_API_URL is missing or empty — ' +
+          'this build declares wallet-api custody, so composing the legacy local-custody ' +
+          'bundle instead would silently change the custody model. Bake VITE_WALLET_API_URL ' +
+          'into the build, or unset VITE_REQUIRE_WALLET_API for an intentionally legacy deployment.',
+      );
+    }
+    return null;
+  }
   return resolveUrl(raw);
 }
 
-/** True when the asset path rides wallet-api (drives IPFS-off, UI hints). */
+/**
+ * True when the asset path rides wallet-api (drives IPFS-off, UI hints).
+ * Reads the raw env (no #351 assert) so render paths never throw: the assert
+ * fires once, at provider composition (`buildProviders`), where
+ * SphereProvider catches it and surfaces a visible initialization error.
+ */
 export function isWalletApiEnabled(): boolean {
-  return getWalletApiBaseUrl() !== null;
+  return !!(import.meta.env.VITE_WALLET_API_URL as string | undefined);
 }
 
 /**

@@ -112,6 +112,11 @@ function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
  * thin server-custody token storage + mailbox delivery + the S1 client.
  * Composing `delivery` moves ASSETS to wallet-api; messaging, group chat and
  * nametags stay on the Nostr transport in the base bundle.
+ *
+ * Fail-closed (#351): on builds with VITE_REQUIRE_WALLET_API set,
+ * getWalletApiBaseUrl() throws when VITE_WALLET_API_URL is missing — the
+ * error is caught by initialize() and surfaced as a visible init error
+ * instead of silently composing the legacy local-custody bundle.
  */
 function buildProviders(network: NetworkType): SphereAppProviders {
   const base = createBrowserProviders({

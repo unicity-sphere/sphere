@@ -85,6 +85,12 @@ jobs:
           # UNSET here on purpose: the testnet2 network preset supplies the
           # real gateway + the trustbase it serves — never mix trustbases.
           VITE_WALLET_API_URL: https://wallet-api.staging.unicity.network
+          # #351 composition assert: this deploy INTENDS wallet-api custody —
+          # if VITE_WALLET_API_URL ever goes missing from a bundle (stale CDN
+          # rebuild, env drift), the app fails fast at provider composition
+          # instead of silently swapping to the legacy local-custody model
+          # (the 2026-06-12 incident).
+          VITE_REQUIRE_WALLET_API: 'true'
           # Aggregator API key — inlined into the bundle at build time.
           # The testnet2 value is NOT a secret (see .env / .env.example), so it
           # is safe to hardcode here. Without it the deployed bundle gets

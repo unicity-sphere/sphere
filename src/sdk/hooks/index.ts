@@ -9,6 +9,8 @@ export type { UseNametagReturn } from './core/useNametag';
 export { useSphereEvents } from './core/useSphereEvents';
 export { useIpfsSync } from './core/useIpfsSync';
 export type { IpfsSyncStatus, IpfsSyncState, UseIpfsSyncReturn } from './core/useIpfsSync';
+export { useWalletApiSession } from './core/useWalletApiSession';
+export type { WalletApiSessionStatus, UseWalletApiSessionReturn } from './core/useWalletApiSession';
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';
