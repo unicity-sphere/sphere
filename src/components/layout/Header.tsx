@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
-import { IpfsSyncIndicator } from './IpfsSyncIndicator';
 import { VaultSyncIndicator } from './VaultSyncIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
@@ -153,11 +152,9 @@ export function Header() {
                 </div>
               )}
 
-              {/* Desktop: sync indicators (IPFS + cloud Vault) */}
+              {/* Desktop: single cloud-Vault sync status (IPFS/Nostr toggles live in Settings → Vault). */}
               <div className="hidden lg:flex items-center gap-3">
-                <IpfsSyncIndicator />
                 <VaultSyncIndicator />
-                {/* <ThemeToggle /> */}
               </div>
             </div>
 
@@ -235,9 +232,8 @@ export function Header() {
               )
             ))}
 
-            {/* IPFS + Vault sync + Social links — mobile only */}
+            {/* Vault sync status + Social links — mobile only (IPFS/Nostr toggles in Settings → Vault) */}
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
-              <IpfsSyncIndicator />
               <VaultSyncIndicator />
               <div className="flex-1" />
               <div className="flex items-center gap-5">
