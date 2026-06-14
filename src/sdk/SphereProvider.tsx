@@ -27,7 +27,7 @@ import type {
   ImportFromFileResult,
 } from './SphereContext';
 import { clearAllSphereData, STORAGE_KEYS } from '../config/storageKeys';
-import { getVaultStore, isValidVaultUrl, getVaultDeviceId } from '../config/vaultStore';
+import { getVaultStore, isValidVaultUrl, getVaultDeviceId, getActiveCustomUrl } from '../config/vaultStore';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)
@@ -115,11 +115,11 @@ function getTokenApiConfig(network: NetworkType): TokenApiConfig {
   if (setting.mode === 'off') return {};
 
   if (setting.mode === 'custom') {
-    const url = setting.customUrl?.trim();
+    const url = getActiveCustomUrl(setting);
     if (!isValidVaultUrl(url)) {
       console.warn(
-        '[Vault] Custom vault URL is blank or invalid — treating cloud backup as OFF. ' +
-        'Set a valid http(s) URL in Settings → Vault.',
+        '[Vault] Active custom store URL is blank or invalid — treating cloud backup as OFF. ' +
+        'Pick or add a valid server in Settings → Vault.',
       );
       return {};
     }
