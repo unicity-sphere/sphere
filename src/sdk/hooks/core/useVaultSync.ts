@@ -53,6 +53,12 @@ export function useVaultSync(): UseVaultSyncReturn {
       setEnabled(false);
     }
 
+    // A reinitialize (e.g. toggling IPFS) SWAPS the sphere instance and re-runs this
+    // effect. Clear any stale error carried over from the previous instance so the
+    // indicator never hangs red after the wallet has actually recovered — the fresh
+    // instance re-reports its true status via sync:provider.
+    setState((prev) => (prev.status === 'error' ? { ...prev, status: 'idle', lastError: null } : prev));
+
     const handleSyncStarted = () => {
       setState((prev) => ({ ...prev, status: 'syncing', lastError: null }));
     };
