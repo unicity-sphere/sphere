@@ -27,7 +27,7 @@ import type {
   ImportFromFileResult,
 } from './SphereContext';
 import { clearAllSphereData, STORAGE_KEYS } from '../config/storageKeys';
-import { getVaultStore, isValidVaultUrl } from '../config/vaultStore';
+import { getVaultStore, isValidVaultUrl, getVaultDeviceId } from '../config/vaultStore';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)
@@ -123,7 +123,10 @@ function getTokenApiConfig(network: NetworkType): TokenApiConfig {
       );
       return {};
     }
-    return { vault: { enabled: true, url }, courier: { enabled: true, url } };
+    return {
+      vault: { enabled: true, url, deviceId: getVaultDeviceId() },
+      courier: { enabled: true, url },
+    };
   }
 
   // 'default' — Unicity's company token-api. The dev env var (if set) points
@@ -131,7 +134,7 @@ function getTokenApiConfig(network: NetworkType): TokenApiConfig {
   // default (NETWORKS[network].vaultUrl).
   const url = import.meta.env.VITE_VAULT_URL || NETWORKS[network]?.vaultUrl;
   return {
-    vault: { enabled: true, ...(url ? { url } : {}) },
+    vault: { enabled: true, deviceId: getVaultDeviceId(), ...(url ? { url } : {}) },
     courier: { enabled: true, ...(url ? { url } : {}) },
   };
 }
@@ -141,7 +144,7 @@ function getTokenApiConfigFromEnv(network: NetworkType): TokenApiConfig {
   const cfg: TokenApiConfig = {};
   if (isVaultEnabled()) {
     const url = import.meta.env.VITE_VAULT_URL || NETWORKS[network]?.vaultUrl;
-    cfg.vault = { enabled: true, ...(url ? { url } : {}) };
+    cfg.vault = { enabled: true, deviceId: getVaultDeviceId(), ...(url ? { url } : {}) };
   }
   if (isCourierEnabled()) {
     const url = import.meta.env.VITE_COURIER_URL || NETWORKS[network]?.vaultUrl;
@@ -161,12 +164,24 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
   }
 }
 
-/** Add IPFS storage provider and trigger initial sync (fire-and-forget) */
-function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
-  if (providers.ipfsTokenStorage) {
-    instance.addTokenStorageProvider(providers.ipfsTokenStorage)
+/**
+ * Register the IPFS provider (if enabled) and trigger an initial cloud sync.
+ *
+ * The boot sync is what PULLS a peer device's tokens into THIS device: the vault's
+ * sync() returns the full rehydrated remote snapshot as `merged`, which the
+ * PaymentsModule merge folds in. `load()` alone won't do it on a reload (it
+ * short-circuits at the first successful provider once local has data), so we MUST
+ * fire a sync at boot whenever a cloud provider (IPFS or vault) is active — not
+ * only when IPFS happens to be on.
+ */
+function setupIpfsSync(instance: Sphere, providers: BrowserProviders, vaultEnabled = false): void {
+  const ipfsAdd = providers.ipfsTokenStorage
+    ? instance.addTokenStorageProvider(providers.ipfsTokenStorage)
+    : Promise.resolve();
+  if (providers.ipfsTokenStorage || vaultEnabled) {
+    ipfsAdd
       .then(() => instance.sync())
-      .catch(err => logger.warn('SphereProvider', 'IPFS sync failed', err));
+      .catch(err => logger.warn('SphereProvider', 'cloud sync failed', err));
   }
 }
 
@@ -243,15 +258,16 @@ export function SphereProvider({
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
+        const tokenApiConfig = getTokenApiConfig(network);
         const { sphere: instance } = await Sphere.init({
           ...browserProviders,
           network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
           l1: {},
           discoverAddresses: false, // Run separately below for UX
           onProgress: setInitProgress,
-          ...getTokenApiConfig(network), // opt-in vault backup + courier delivery (OFF by default)
+          ...tokenApiConfig, // opt-in vault backup + courier delivery (OFF by default)
         });
-        setupIpfsSync(instance, browserProviders);
+        setupIpfsSync(instance, browserProviders, !!tokenApiConfig.vault?.enabled);
         setInitProgress(null);
         sphereRef.current = instance;
         setSphere(instance);

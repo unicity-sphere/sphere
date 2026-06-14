@@ -66,3 +66,23 @@ export function getVaultStore(): VaultStoreSetting | null {
 export function setVaultStore(setting: VaultStoreSetting): void {
   localStorage.setItem(STORAGE_KEYS.VAULT_STORE, JSON.stringify(setting));
 }
+
+/**
+ * A stable, per-browser device id for the vault auth session. token-api keys ONE
+ * session per (ownerId, deviceId); without a distinct id every browser used the
+ * SDK default 'sphere-vault', so a second browser's login rotated the first's
+ * session and its next /v1/auth/refresh got a 401. A persisted random UUID gives
+ * each browser its own session (so multiple devices can stay authed at once).
+ */
+export function getVaultDeviceId(): string {
+  try {
+    let id = localStorage.getItem(STORAGE_KEYS.VAULT_DEVICE_ID);
+    if (!id) {
+      id = crypto?.randomUUID?.() ?? `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(STORAGE_KEYS.VAULT_DEVICE_ID, id);
+    }
+    return id;
+  } catch {
+    return 'sphere-vault';
+  }
+}

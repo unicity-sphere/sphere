@@ -29,6 +29,12 @@ export const STORAGE_KEYS = {
   // VaultStoreSetting ({ mode, customUrl? }) — see config/vaultStore.ts.
   VAULT_STORE: 'sphere_vault_store',
 
+  // Stable per-browser device id for the vault auth session. token-api keys ONE
+  // session per (ownerId, deviceId); without a distinct id every browser used the
+  // SDK default 'sphere-vault', so a 2nd browser's login rotated the 1st's session
+  // and its next /v1/auth/refresh got 401. A persisted UUID = one session/browser.
+  VAULT_DEVICE_ID: 'sphere_vault_device_id',
+
   // Desktop state (open tabs, active tab)
   DESKTOP_STATE: 'sphere_desktop_state',
 
