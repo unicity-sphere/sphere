@@ -27,6 +27,7 @@ import type {
   ImportFromFileResult,
 } from './SphereContext';
 import { clearAllSphereData, STORAGE_KEYS } from '../config/storageKeys';
+import { getVaultStore, isValidVaultUrl } from '../config/vaultStore';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)
@@ -67,15 +68,24 @@ function getIpfsConfig() {
 }
 
 /**
- * Token-Vault v2 wiring (opt-in, env-gated). Both the encrypted remote backup
- * (`vault`) and the store-and-forward token delivery channel (`courier`) are
- * OFF by default — with the env vars unset the wallet boots EXACTLY as today
- * (no vault provider, Nostr-only delivery). Flip them on per-build via:
+ * Token-Vault v2 wiring. The encrypted remote backup (`vault`) and the
+ * store-and-forward token delivery channel (`courier`) are driven by the user's
+ * persisted "Cloud backup & sync (Vault)" setting (Settings → Vault), with the
+ * env flags acting only as a fall-back default until the user has chosen.
+ *
+ * The Vault is operator-blind durable backup/sync of the user's OWN tokens; the
+ * local IndexedDB stays the working copy. The user choice is which token-api
+ * SERVER (or none). One server hosts both vault + courier, so a single URL feeds
+ * both. See config/vaultStore.ts for the persisted setting.
+ *
+ * Env fall-back (only when nothing has been saved yet):
  *   VITE_VAULT_ENABLED=true   VITE_VAULT_URL=http://localhost:3000   (optional)
  *   VITE_COURIER_ENABLED=true VITE_COURIER_URL=http://localhost:3000 (optional)
  * When enabled but the URL is unset, the SDK resolves NETWORKS[network].vaultUrl
- * (the per-network token-api default). The two flags are threaded into the
- * Sphere.init / import options on EVERY boot path (create, load, import).
+ * (the per-network token-api default). The resolved config is threaded into the
+ * Sphere.init / import options on EVERY boot path (create, load, import). When
+ * the effective mode is "off", this returns `{}` — a NO-OP, byte-identical to
+ * today (no vault provider, Nostr-only delivery).
  */
 function isVaultEnabled(): boolean {
   return import.meta.env.VITE_VAULT_ENABLED === 'true';
@@ -85,21 +95,50 @@ function isCourierEnabled(): boolean {
   return import.meta.env.VITE_COURIER_ENABLED === 'true';
 }
 
-/**
- * Build the `{ vault?, courier? }` slice of the Sphere init options from the env
- * flags for the given network. Returns `{}` when both are off, so spreading it
- * into init options is a NO-OP on the default (unset) build — byte-identical to
- * today. `url` is omitted unless explicitly set, letting the SDK fall back to
- * `NETWORKS[network].vaultUrl`.
- */
-function getTokenApiConfig(network: NetworkType): {
+type TokenApiConfig = {
   vault?: { enabled: boolean; url?: string };
   courier?: { enabled: boolean; url?: string };
-} {
-  const cfg: {
-    vault?: { enabled: boolean; url?: string };
-    courier?: { enabled: boolean; url?: string };
-  } = {};
+};
+
+/**
+ * Build the `{ vault?, courier? }` slice of the Sphere init options for the given
+ * network, resolving the effective config from the persisted vault-store setting
+ * (overriding the env flags). Falls back to the env flags only when the user has
+ * not chosen yet. Returns `{}` (a no-op) for the "off" mode.
+ */
+function getTokenApiConfig(network: NetworkType): TokenApiConfig {
+  const setting = getVaultStore();
+
+  // No saved choice yet — honour the build-time env flags (legacy behavior).
+  if (!setting) return getTokenApiConfigFromEnv(network);
+
+  if (setting.mode === 'off') return {};
+
+  if (setting.mode === 'custom') {
+    const url = setting.customUrl?.trim();
+    if (!isValidVaultUrl(url)) {
+      console.warn(
+        '[Vault] Custom vault URL is blank or invalid — treating cloud backup as OFF. ' +
+        'Set a valid http(s) URL in Settings → Vault.',
+      );
+      return {};
+    }
+    return { vault: { enabled: true, url }, courier: { enabled: true, url } };
+  }
+
+  // 'default' — Unicity's company token-api. The dev env var (if set) points
+  // this session at the local token-api; otherwise the SDK uses the per-network
+  // default (NETWORKS[network].vaultUrl).
+  const url = import.meta.env.VITE_VAULT_URL || NETWORKS[network]?.vaultUrl;
+  return {
+    vault: { enabled: true, ...(url ? { url } : {}) },
+    courier: { enabled: true, ...(url ? { url } : {}) },
+  };
+}
+
+/** Legacy env-flag resolution, used only before the user has saved a choice. */
+function getTokenApiConfigFromEnv(network: NetworkType): TokenApiConfig {
+  const cfg: TokenApiConfig = {};
   if (isVaultEnabled()) {
     const url = import.meta.env.VITE_VAULT_URL || NETWORKS[network]?.vaultUrl;
     cfg.vault = { enabled: true, ...(url ? { url } : {}) };

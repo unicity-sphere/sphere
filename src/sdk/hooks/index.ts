@@ -9,6 +9,8 @@ export type { UseNametagReturn } from './core/useNametag';
 export { useSphereEvents } from './core/useSphereEvents';
 export { useIpfsSync } from './core/useIpfsSync';
 export type { IpfsSyncStatus, IpfsSyncState, UseIpfsSyncReturn } from './core/useIpfsSync';
+export { useVaultSync } from './core/useVaultSync';
+export type { VaultSyncStatus, VaultSyncState, UseVaultSyncReturn } from './core/useVaultSync';
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';

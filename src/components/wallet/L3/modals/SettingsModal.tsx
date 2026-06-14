@@ -1,10 +1,19 @@
 import { useState } from 'react';
-import { Settings, Layers, Download, LogOut, Key, AtSign, Link } from 'lucide-react';
+import { Settings, Layers, Download, LogOut, Key, AtSign, Link, Cloud } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
+import { VaultSettingsModal } from './VaultSettingsModal';
+import { getVaultStore, DEFAULT_VAULT_STORE } from '../../../../config/vaultStore';
+
+function vaultSubtitle(): string {
+  const setting = getVaultStore() ?? DEFAULT_VAULT_STORE;
+  if (setting.mode === 'off') return 'Off';
+  if (setting.mode === 'custom') return 'Custom server';
+  return 'Default (Unicity)';
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -27,6 +36,7 @@ export function SettingsModal({
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
+  const [isVaultOpen, setIsVaultOpen] = useState(false);
 
   return (
     <>
@@ -73,6 +83,14 @@ export function SettingsModal({
           />
 
           <MenuButton
+            icon={Cloud}
+            color="blue"
+            label="Vault"
+            subtitle={vaultSubtitle()}
+            onClick={() => setIsVaultOpen(true)}
+          />
+
+          <MenuButton
             icon={Download}
             color="green"
             label="Backup Wallet"
@@ -110,6 +128,11 @@ export function SettingsModal({
       <ConnectedSitesModal
         isOpen={isConnectedSitesOpen}
         onClose={() => setIsConnectedSitesOpen(false)}
+      />
+
+      <VaultSettingsModal
+        isOpen={isVaultOpen}
+        onClose={() => setIsVaultOpen(false)}
       />
     </>
   );

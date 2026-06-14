@@ -25,6 +25,10 @@ export const STORAGE_KEYS = {
   // IPFS
   IPFS_ENABLED: 'sphere_ipfs_enabled',
 
+  // Cloud backup & sync (token-api Vault + courier). Holds a JSON
+  // VaultStoreSetting ({ mode, customUrl? }) — see config/vaultStore.ts.
+  VAULT_STORE: 'sphere_vault_store',
+
   // Desktop state (open tabs, active tab)
   DESKTOP_STATE: 'sphere_desktop_state',
 
