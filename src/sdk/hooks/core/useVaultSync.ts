@@ -84,24 +84,21 @@ export function useVaultSync(): UseVaultSyncReturn {
       setState((prev) => (prev.status === 'syncing' ? { ...prev, status: 'idle' } : prev));
     };
 
-    const handleSyncError = (data: { error: string }) => {
-      setState((prev) => (prev.status === 'syncing'
-        ? { ...prev, status: 'error', lastError: data.error }
-        : prev));
-    };
-
+    // Vault status is provider-SPECIFIC. We deliberately do NOT subscribe to the GLOBAL
+    // 'sync:error' event: it fires for ANY provider (e.g. IPFS), so honouring it would
+    // mislabel the VAULT as failed when an UNRELATED provider errors — e.g. right after
+    // toggling IPFS off. The vault's OWN failures arrive via the provider-filtered
+    // 'sync:provider' (success:false) handler above.
     sphere.on('sync:started', handleSyncStarted);
     sphere.on('sync:provider', handleSyncProvider);
     sphere.on('sync:remote-update', handleRemoteUpdate);
     sphere.on('sync:completed', handleSyncCompleted);
-    sphere.on('sync:error', handleSyncError);
 
     return () => {
       sphere.off('sync:started', handleSyncStarted);
       sphere.off('sync:provider', handleSyncProvider);
       sphere.off('sync:remote-update', handleRemoteUpdate);
       sphere.off('sync:completed', handleSyncCompleted);
-      sphere.off('sync:error', handleSyncError);
     };
   }, [sphere]);
 
