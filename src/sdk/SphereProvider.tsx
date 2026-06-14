@@ -66,6 +66,51 @@ function getIpfsConfig() {
   };
 }
 
+/**
+ * Token-Vault v2 wiring (opt-in, env-gated). Both the encrypted remote backup
+ * (`vault`) and the store-and-forward token delivery channel (`courier`) are
+ * OFF by default — with the env vars unset the wallet boots EXACTLY as today
+ * (no vault provider, Nostr-only delivery). Flip them on per-build via:
+ *   VITE_VAULT_ENABLED=true   VITE_VAULT_URL=http://localhost:3000   (optional)
+ *   VITE_COURIER_ENABLED=true VITE_COURIER_URL=http://localhost:3000 (optional)
+ * When enabled but the URL is unset, the SDK resolves NETWORKS[network].vaultUrl
+ * (the per-network token-api default). The two flags are threaded into the
+ * Sphere.init / import options on EVERY boot path (create, load, import).
+ */
+function isVaultEnabled(): boolean {
+  return import.meta.env.VITE_VAULT_ENABLED === 'true';
+}
+
+function isCourierEnabled(): boolean {
+  return import.meta.env.VITE_COURIER_ENABLED === 'true';
+}
+
+/**
+ * Build the `{ vault?, courier? }` slice of the Sphere init options from the env
+ * flags for the given network. Returns `{}` when both are off, so spreading it
+ * into init options is a NO-OP on the default (unset) build — byte-identical to
+ * today. `url` is omitted unless explicitly set, letting the SDK fall back to
+ * `NETWORKS[network].vaultUrl`.
+ */
+function getTokenApiConfig(network: NetworkType): {
+  vault?: { enabled: boolean; url?: string };
+  courier?: { enabled: boolean; url?: string };
+} {
+  const cfg: {
+    vault?: { enabled: boolean; url?: string };
+    courier?: { enabled: boolean; url?: string };
+  } = {};
+  if (isVaultEnabled()) {
+    const url = import.meta.env.VITE_VAULT_URL || NETWORKS[network]?.vaultUrl;
+    cfg.vault = { enabled: true, ...(url ? { url } : {}) };
+  }
+  if (isCourierEnabled()) {
+    const url = import.meta.env.VITE_COURIER_URL || NETWORKS[network]?.vaultUrl;
+    cfg.courier = { enabled: true, ...(url ? { url } : {}) };
+  }
+  return cfg;
+}
+
 // =============================================================================
 // Shared helpers (pure functions, no React state)
 // =============================================================================
@@ -165,6 +210,7 @@ export function SphereProvider({
           l1: {},
           discoverAddresses: false, // Run separately below for UX
           onProgress: setInitProgress,
+          ...getTokenApiConfig(network), // opt-in vault backup + courier delivery (OFF by default)
         });
         setupIpfsSync(instance, browserProviders);
         setInitProgress(null);
@@ -244,6 +290,7 @@ export function SphereProvider({
           nametag: options?.nametag,
           l1: {},
           onProgress: setInitProgress,
+          ...getTokenApiConfig(network), // opt-in vault backup + courier delivery (OFF by default)
         });
         setInitProgress(null);
 
@@ -309,6 +356,7 @@ export function SphereProvider({
         nametag: options?.nametag,
         l1: {},
         onProgress: setInitProgress,
+        ...getTokenApiConfig(network), // opt-in vault backup + courier delivery (OFF by default)
       });
       setInitProgress(null);
 
@@ -335,6 +383,7 @@ export function SphereProvider({
           nametag: options.nametag,
           l1: {},
           onProgress: setInitProgress,
+          ...getTokenApiConfig(network), // opt-in vault backup + courier delivery (OFF by default)
         });
         setInitProgress(null);
 
