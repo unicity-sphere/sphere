@@ -25,6 +25,10 @@ export const STORAGE_KEYS = {
   // IPFS
   IPFS_ENABLED: 'sphere_ipfs_enabled',
 
+  // Nostr peer transport (messaging + token delivery). 'false' = full-offline mode
+  // (the wallet boots local-only; peer send/receive unavailable until re-enabled).
+  NOSTR_ENABLED: 'sphere_nostr_enabled',
+
   // Cloud backup & sync (token-api Vault + courier). Holds a JSON
   // VaultStoreSetting ({ mode, customUrl? }) — see config/vaultStore.ts.
   VAULT_STORE: 'sphere_vault_store',

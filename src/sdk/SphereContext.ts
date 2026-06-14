@@ -36,6 +36,13 @@ export interface SphereContextValue {
   ipfsEnabled: boolean;
   /** Toggle IPFS sync on/off (persists to localStorage, triggers reinitialize) */
   toggleIpfs: () => void;
+
+  /** Whether the Nostr peer transport (messaging + delivery) is currently enabled.
+   *  When false the wallet is in full-offline mode (local-only). */
+  nostrEnabled: boolean;
+  /** Toggle the Nostr transport on/off (persists; disables/enables the provider at
+   *  runtime — no reload). Off = offline mode; on = reconnects to relays. */
+  toggleNostr: () => void;
 }
 
 export interface CreateWalletOptions {

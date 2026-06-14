@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Cloud, Check, Plus, Trash2, Server } from 'lucide-react';
+import { Cloud, Check, Plus, Trash2, Server, Database, Radio } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader } from '../../ui';
+import { useSphereContext } from '../../../../sdk/hooks';
 import {
   getVaultStore,
   setVaultStore,
@@ -27,7 +28,7 @@ function selectableCardClass(selected: boolean): string {
   }`;
 }
 
-function Radio({ selected }: { selected: boolean }) {
+function RadioDot({ selected }: { selected: boolean }) {
   return (
     <span
       className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
@@ -39,7 +40,49 @@ function Radio({ selected }: { selected: boolean }) {
   );
 }
 
+/** A labelled on/off toggle row for a provider (IPFS / Nostr). */
+function ToggleRow({
+  icon: Icon,
+  title,
+  description,
+  on,
+  onToggle,
+}: {
+  icon: typeof Database;
+  title: string;
+  description: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 p-3.5 rounded-2xl border border-neutral-200 dark:border-white/8 bg-neutral-50 dark:bg-white/4">
+      <Icon className={`w-4 h-4 shrink-0 ${on ? 'text-orange-500' : 'text-neutral-400 dark:text-white/35'}`} />
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-semibold text-neutral-900 dark:text-white">{title}</span>
+        <span className="block text-xs text-neutral-500 dark:text-white/45 mt-0.5">{description}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        onClick={onToggle}
+        className={`relative w-10 h-6 rounded-full shrink-0 transition-colors ${
+          on ? 'bg-orange-500' : 'bg-neutral-300 dark:bg-white/15'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+            on ? 'translate-x-4' : 'translate-x-0'
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
 export function VaultSettingsModal({ isOpen, onClose }: VaultSettingsModalProps) {
+  const { ipfsEnabled, toggleIpfs, nostrEnabled, toggleNostr } = useSphereContext();
   const [setting, setSetting] = useState<VaultStoreSetting>(DEFAULT_VAULT_STORE);
   const [saved, setSaved] = useState(false);
   // Add-server inline form state.
@@ -116,7 +159,7 @@ export function VaultSettingsModal({ isOpen, onClose }: VaultSettingsModalProps)
         <div className="space-y-2">
           {/* Default (Unicity) */}
           <button onClick={selectDefault} className={selectableCardClass(setting.mode === 'default')}>
-            <Radio selected={setting.mode === 'default'} />
+            <RadioDot selected={setting.mode === 'default'} />
             <span className="flex-1 min-w-0">
               <span className="block text-sm font-semibold text-neutral-900 dark:text-white">Default (Unicity)</span>
               <span className="block text-xs text-neutral-500 dark:text-white/45 mt-0.5">
@@ -131,7 +174,7 @@ export function VaultSettingsModal({ isOpen, onClose }: VaultSettingsModalProps)
             return (
               <div key={s.id} className={selectableCardClass(selected)}>
                 <button onClick={() => selectCustom(s.id)} className="flex items-start gap-3 flex-1 min-w-0 text-left">
-                  <Radio selected={selected} />
+                  <RadioDot selected={selected} />
                   <span className="flex-1 min-w-0">
                     <span className="flex items-center gap-1.5 text-sm font-semibold text-neutral-900 dark:text-white">
                       <Server className="w-3.5 h-3.5 shrink-0 opacity-60" />
@@ -206,7 +249,7 @@ export function VaultSettingsModal({ isOpen, onClose }: VaultSettingsModalProps)
 
           {/* Off */}
           <button onClick={selectOff} className={selectableCardClass(setting.mode === 'off')}>
-            <Radio selected={setting.mode === 'off'} />
+            <RadioDot selected={setting.mode === 'off'} />
             <span className="flex-1 min-w-0">
               <span className="block text-sm font-semibold text-neutral-900 dark:text-white">Off</span>
               <span className="block text-xs text-neutral-500 dark:text-white/45 mt-0.5">
@@ -222,6 +265,27 @@ export function VaultSettingsModal({ isOpen, onClose }: VaultSettingsModalProps)
           token-api servers and switch between them — one is active at a time. The active server
           handles both backup and token delivery. Changes apply on reload.
         </p>
+
+        {/* Other sync & delivery providers — instant toggles (no reload). */}
+        <p className="text-xs font-medium text-neutral-500 dark:text-white/45 uppercase tracking-wider pt-1">
+          Sync &amp; delivery
+        </p>
+        <div className="space-y-2">
+          <ToggleRow
+            icon={Database}
+            title="IPFS backup"
+            description="Decentralized, end-to-end-encrypted backup of your tokens."
+            on={ipfsEnabled}
+            onToggle={toggleIpfs}
+          />
+          <ToggleRow
+            icon={Radio}
+            title="Peer messaging & delivery (Nostr)"
+            description="Relays for DMs and token send/receive. Off = offline mode (local only)."
+            on={nostrEnabled}
+            onToggle={toggleNostr}
+          />
+        </div>
 
         {/* Save */}
         <button

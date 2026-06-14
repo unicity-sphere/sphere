@@ -56,6 +56,14 @@ function isIpfsEnabled(): boolean {
   return stored !== 'false'; // enabled by default
 }
 
+/** The Nostr transport provider id (NostrTransportProvider.id). */
+const NOSTR_PROVIDER_ID = 'nostr';
+
+function isNostrEnabled(): boolean {
+  const stored = localStorage.getItem(STORAGE_KEYS.NOSTR_ENABLED);
+  return stored !== 'false'; // enabled by default
+}
+
 function getIpfsConfig() {
   if (!isIpfsEnabled()) return {};
   return {
@@ -214,6 +222,7 @@ export function SphereProvider({
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
+  const [nostrEnabled, setNostrEnabled] = useState(isNostrEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
   const sphereRef = useRef<Sphere | null>(null);
@@ -545,6 +554,29 @@ export function SphereProvider({
     initialize();
   }, [initialize]);
 
+  // Toggle the Nostr peer transport (messaging + delivery) at runtime — no reload.
+  // OFF = full-offline mode: disableProvider disconnects the relay transport so the
+  // wallet runs local-only (peer send/receive unavailable); ON reconnects. The setting
+  // is persisted and re-applied on boot (see the effect below).
+  const toggleNostr = useCallback(() => {
+    const next = !isNostrEnabled();
+    localStorage.setItem(STORAGE_KEYS.NOSTR_ENABLED, String(next));
+    setNostrEnabled(next);
+    if (!sphere) return;
+    void (next
+      ? sphere.enableProvider(NOSTR_PROVIDER_ID)
+      : sphere.disableProvider(NOSTR_PROVIDER_ID)
+    ).catch((err) => logger.warn('SphereProvider', `toggleNostr(${next}) failed:`, err));
+  }, [sphere]);
+
+  // Apply a persisted "Nostr off" once the wallet is ready: the SDK always wires the
+  // transport at init, so honour the offline preference by disabling it post-init.
+  useEffect(() => {
+    if (sphere && !nostrEnabled) {
+      void sphere.disableProvider(NOSTR_PROVIDER_ID).catch(() => {});
+    }
+  }, [sphere, nostrEnabled]);
+
   const value: SphereContextValue = {
     sphere,
     providers,
@@ -563,6 +595,8 @@ export function SphereProvider({
     reinitialize: initialize,
     ipfsEnabled,
     toggleIpfs,
+    nostrEnabled,
+    toggleNostr,
   };
 
   return (
