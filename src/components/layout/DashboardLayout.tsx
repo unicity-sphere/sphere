@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { Header } from './Header';
+import { OfflineBanner } from './OfflineBanner';
 import { MiniChatBubbles } from '../chat/mini';
 import { useUIState } from '../../hooks/useUIState';
 import { useDesktopState } from '../../hooks/useDesktopState';
@@ -58,6 +59,7 @@ export function DashboardLayout() {
       {/* Content — above background layers */}
       <div className="relative z-10 flex flex-col h-full">
         {!isFullscreen && <Header />}
+        {!isFullscreen && <OfflineBanner />}
         <div className={`flex-1 min-h-0 flex ${!isAgentPage ? 'overflow-y-auto overflow-x-hidden' : ''}`}>
           <div className={`flex-1 w-full ${isFullscreen ? 'p-0' : isAgentPage ? 'px-0 sm:px-12 lg:px-28 pb-0' : 'px-0 sm:px-12 lg:px-28 pt-4 pb-0 md:pt-8 lg:pb-8'} ${
             isMinePage ? 'bg-neutral-100 dark:bg-transparent' : ''
