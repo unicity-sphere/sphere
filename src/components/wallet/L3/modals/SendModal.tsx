@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check } from 'lucide-react';
+import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, WifiOff } from 'lucide-react';
 import type { Asset } from '@unicitylabs/sphere-sdk';
 import { toSmallestUnit } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
@@ -29,7 +29,7 @@ interface SendModalProps {
 export function SendModal({ isOpen, onClose, prefill, asModal }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
-  const { sphere } = useSphereContext();
+  const { sphere, nostrEnabled } = useSphereContext();
 
   const assets = sdkAssets;
 
@@ -205,6 +205,16 @@ export function SendModal({ isOpen, onClose, prefill, asModal }: SendModalProps)
       <ModalHeader variant="screen" title={getTitle()} onClose={getBackHandler()} />
 
       <div className="px-6 py-8 flex-1 overflow-y-auto">
+        {/* Offline notice — peer send needs Nostr to resolve + deliver to the recipient. */}
+        {!nostrEnabled && step !== 'success' && step !== 'processing' && (
+          <div className="mb-4 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs">
+            <WifiOff className="w-4 h-4 shrink-0 mt-px" />
+            <span>
+              Offline mode (Nostr off) — peer send needs the relay network to resolve the
+              recipient and deliver. Re-enable Nostr in Settings → Vault to send.
+            </span>
+          </div>
+        )}
         <AnimatePresence mode="wait">
 
           {/* 1. ASSET SELECTION */}
