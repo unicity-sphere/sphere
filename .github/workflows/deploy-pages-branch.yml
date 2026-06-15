@@ -9,9 +9,36 @@ on:
 permissions:
   contents: write  # Needed to push to gh-pages branch
 
+# Per-operation concurrency (sphere#369). Deploys are keyed per-branch
+# (`deploy-<branch>`) and delete-cleanups per-deleted-ref (`cleanup-<type>-<ref>`)
+# in DISJOINT namespaces, so a branch-deletion cleanup can never share a group
+# with — and therefore can never cancel — any branch's deploy.
+#
+# The old global `gh-pages-deploy` group (with cancel-in-progress: false) put
+# the push-deploy and the delete-cleanup in the SAME group. On a squash-merge
+# that also deletes the PR branch, both runs become pending together; GitHub
+# keeps only the newest pending run per group and cancels the older one, so the
+# just-merged deploy was silently cancelled and staging kept the old bundle.
+# Note `github.ref` is NOT a fix on its own: on a `delete` event it resolves to
+# the default branch (`main`), so it would still collide a deploy of `main` with
+# any cleanup. The event-aware prefixed key below is collision-free regardless
+# of which branch is the default. (ref_type is folded into the cleanup key so a
+# branch and a same-named tag deleted together don't share a cleanup group.)
+#
+# Trade-off vs. the old design: the global group serialized ALL gh-pages pushes,
+# so they never raced. These per-op groups let pushes of DIFFERENT refs overlap,
+# and peaceiris pushes non-force with no retry (verified against the action
+# source). So two near-simultaneous deploys (two branches whose ~2-min builds
+# finish together) — or the run's two sequential pushes, build-and-deploy then
+# deploy-redirect, when a foreign push interleaves — can fail with a re-runnable
+# non-fast-forward error (re-run the workflow). That is never a folder-restore
+# and never a silent no-ship: a loud, recoverable failure replacing #369's
+# invisible one. (A deploy-vs-cleanup overlap is rarer still: a deploy pushes
+# only after its build, by which point a seconds-fast cleanup has already landed
+# and the deploy fast-forwards cleanly.)
 concurrency:
-  group: gh-pages-deploy
-  cancel-in-progress: false
+  group: pages-${{ github.event_name == 'delete' && format('cleanup-{0}-{1}', github.event.ref_type, github.event.ref) || format('deploy-{0}', github.ref_name) }}
+  cancel-in-progress: true
 
 jobs:
   # Cleanup job - runs when a branch is deleted
