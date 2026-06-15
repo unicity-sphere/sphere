@@ -24,6 +24,29 @@ function getStatusText(enabled: boolean, status: string, lastSynced: number | nu
 }
 
 /**
+ * Map a raw vault sync error (an SDK reason code or a transport message) to a
+ * concrete human cause, so the header pill explains WHY rather than a bare
+ * "Sync failed" the user can't act on.
+ */
+function describeVaultError(raw: string | null): string {
+  const e = (raw ?? '').toLowerCase();
+  if (!e) return 'Vault sync failed';
+  if (e.includes('awaiting') || e.includes('initial-load') || e.includes('initial load'))
+    return 'Vault backup starting — finishing first sync';
+  if (e.includes('rollback') || e.includes('regress') || e.includes('baseline'))
+    return 'Vault state mismatch (rollback protection)';
+  if (
+    e.includes('econnrefused') || e.includes('failed to fetch') || e.includes('networkerror') ||
+    e.includes('network') || e.includes('fetch') || e.includes('timeout') || e.includes('timed out') ||
+    e.includes('econn') || e.includes('enotfound') || e.includes('503') || e.includes('502')
+  )
+    return "Can't reach vault — is the store online?";
+  if (e.includes('401') || e.includes('403') || e.includes('unauthor') || e.includes('auth'))
+    return 'Vault sign-in failed';
+  return `Vault sync failed: ${raw}`;
+}
+
+/**
  * VaultSyncIndicator — header status pill for the cloud Vault backup/sync.
  *
  * When the vault is ENABLED the pill is an ACTION: clicking it runs a sync — which
@@ -58,7 +81,7 @@ export function VaultSyncIndicator() {
     : isSyncing
       ? 'Syncing your vault…'
       : isError
-        ? `Vault sync failed${lastError ? `: ${lastError}` : ''} — click to retry`
+        ? `${describeVaultError(lastError)} — click to retry`
         : lastSynced
           ? `Vault synced ${formatLastSynced(lastSynced)} — click to sync now`
           : 'Cloud backup & sync (Vault) — click to sync now';
