@@ -21,20 +21,23 @@
  *
  *   • F5 reload (dev.9): minted/received balance survives `page.reload()`
  *     (sphere-sdk#521 lost it here).
- *   • G1 — real close+reopen + HISTORY (dev.11): after A's send we CLOSE A's
- *     context and REOPEN it over the same user-data-dir, then re-assert BOTH
- *     the balance AND the transaction history (the SENT record + its memo).
- *     This is the assertion that catches the history-reload bug (#549/#550);
- *     a `page.reload()` alone never replayed persisted history this way.
- *   • G4 — second tab: `context.newPage()` on A's context (same context =
- *     shared storage, a true second tab) shows identical post-send state
- *     (balance + the SENT history record) to the first tab.
- *   • J12 — payment-request resolution survives reopen: after A pays B's
- *     request, close+reopen A and re-assert A's payment-request view still
- *     shows the resolved "Paid Successfully" status. (In this app the resolved
- *     payment-request status view lives on the PAYER's side — the requester
- *     has no outgoing-request response view wired in — so J12 is asserted on
- *     A, the only party that holds a resolved-request view.)
+ *   • G4 — second tab: `context.newPage()` on A's context right after the send
+ *     (same context = shared storage, a true second tab) shows identical
+ *     post-send state — balance + the SENT history record + its memo — to the
+ *     first tab, read from the full pull (no live wake-push dependency).
+ *   • G1 + J12 — ONE real close+reopen of A at the END of the live flow: A's
+ *     session stays continuous through send→request→pay (so the incoming
+ *     request's wake push lands on a live Nostr subscription), then A's context
+ *     is CLOSED and REOPENED over the same user-data-dir. On the fresh engine
+ *     we re-assert the FULL post-flow state replays from wallet-api:
+ *       - G1 (dev.11): the balance AND the SENT transaction history (the SENT
+ *         record + its memo) — the assertion that catches the history-reload
+ *         bug (#549/#550); a `page.reload()` alone never replayed persisted
+ *         history this way.
+ *       - J12: the resolved payment-request status "Paid Successfully" survives
+ *         the reopen. In this app the resolved payment-request status view lives
+ *         on the PAYER's side (the requester has no outgoing-request response
+ *         view wired in), so J12 is asserted on A, the only party holding one.
  *
  * Nametags ride Nostr (unchanged by this integration) and are REQUIRED for
  * recipient resolution: the engine send path needs the recipient's published
@@ -97,10 +100,17 @@ class Profile {
     return this.page;
   }
 
-  /** Real close + reopen over the same user-data-dir (fresh in-memory engine). */
+  /**
+   * Real close + reopen over the same user-data-dir (fresh in-memory engine).
+   * A relaunched persistent context opens a blank tab — Chromium does not
+   * restore the last URL under automation — so navigate back to /home, the
+   * same entry point the user lands on after relaunching the app.
+   */
   async reopen(): Promise<Page> {
     await this.context.close();
-    return this.open();
+    const page = await this.open();
+    await page.goto('/home');
+    return page;
   }
 
   async dispose(): Promise<void> {
@@ -164,17 +174,19 @@ async function topUp(page: Page): Promise<void> {
 async function expectSentInHistory(page: Page, tag: string, memo: string): Promise<void> {
   await page.getByTitle('Transaction history').filter({ visible: true }).first().click();
   await expect(visible(page, 'Transaction History')).toBeVisible({ timeout: 30_000 });
-  // The SENT record card (clickable row): scoped to the recipient nametag so a
-  // RECEIVED row can never satisfy it, then assert the sign+amount and memo
-  // live inside that same card.
+  // Anchor on the memo (unique per run) to find this one record card, then
+  // assert the SENT direction + recipient + sign/amount all live in it. The
+  // title renders 'Sent' and 'to @tag' as adjacent inline nodes with no text
+  // whitespace between them (DOM text is "Sentto @tag"), so match it with a
+  // \s* regex rather than a literal space.
   const record = page
     .locator('div.cursor-pointer')
-    .filter({ hasText: `Sent to @${tag}` })
+    .filter({ hasText: memo })
     .filter({ visible: true })
     .first();
   await expect(record).toBeVisible({ timeout: 60_000 });
+  await expect(record.getByText(new RegExp(`Sent\\s*to @${tag}`)).first()).toBeVisible({ timeout: 30_000 });
   await expect(record.getByText(/-\s*10\s*UCT/).first()).toBeVisible({ timeout: 30_000 });
-  await expect(record.getByText(memo, { exact: false })).toBeVisible({ timeout: 30_000 });
 }
 
 /** Close the visible Transaction History modal (header close button). */
@@ -227,19 +239,14 @@ test('two profiles converge over wallet-api: fund, send, request, pay', async ()
 
     // ── G4: a second tab on A's context (shared storage) shows identical ──
     //    post-send state — balance + the SENT history record with its memo.
+    //    Same context = a true second tab over shared storage; reads from the
+    //    full pull, no dependency on a live wake push.
     const a2 = await profileA.context.newPage();
     await a2.goto('/home');
     await expect(visible(a2, '90.0000 UCT')).toBeVisible({ timeout: 240_000 });
     await expectSentInHistory(a2, TAG_B, MEMO_SEND);
+    await closeHistory(a2);
     await a2.close();
-
-    // ── G1: REAL close+reopen of A over the same user-data-dir — balance ──
-    //    AND history (SENT record + memo) must survive the reopen, replayed
-    //    from wallet-api on a fresh engine (sphere-sdk#549/#550 broke here).
-    a = await profileA.reopen();
-    await expect(visible(a, '90.0000 UCT')).toBeVisible({ timeout: 240_000 });
-    await expectSentInHistory(a, TAG_B, MEMO_SEND);
-    await closeHistory(a);
 
     // ── B receives: wake → mailbox claim → inventory custody → balance ────
     await expect(visible(b, '10.0000 UCT')).toBeVisible({ timeout: 240_000 });
@@ -272,11 +279,20 @@ test('two profiles converge over wallet-api: fund, send, request, pay', async ()
     await expect(visible(b, '15.0000 UCT')).toBeVisible({ timeout: 240_000 });
     await expect(visible(a, '85.0000 UCT')).toBeVisible({ timeout: 60_000 });
 
-    // ── J12: REAL close+reopen of A — the resolved payment-request status ─
-    //    ("Paid Successfully") must survive the reopen, re-hydrated from the
-    //    full pull on a fresh engine (a reload-class bug would drop it).
+    // ── G1 + J12: ONE real close+reopen of A over the same user-data-dir,
+    //    on a fresh in-memory engine, must replay the FULL post-flow state
+    //    from wallet-api:
+    //      • balance 85 UCT (the running balance survives the reopen),
+    //      • G1 — the SENT history record + its memo (sphere-sdk#549/#550),
+    //      • J12 — the resolved payment-request status "Paid Successfully".
+    //    The reopen sits at the end of the live flow on purpose: A's session
+    //    stays continuous through send→request→pay (so the incoming-request
+    //    wake push and its message land on a live Nostr subscription), and the
+    //    reopen then proves all three survive a real browser quit+relaunch.
     a = await profileA.reopen();
     await expect(visible(a, '85.0000 UCT')).toBeVisible({ timeout: 240_000 });
+    await expectSentInHistory(a, TAG_B, MEMO_SEND);
+    await closeHistory(a);
     await a.getByTitle('Payment requests').filter({ visible: true }).first().click();
     await expect(visible(a, 'Payment Requests')).toBeVisible({ timeout: 30_000 });
     await expect(visible(a, 'Paid Successfully')).toBeVisible({ timeout: 240_000 });
