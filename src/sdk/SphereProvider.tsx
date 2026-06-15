@@ -53,7 +53,10 @@ if (import.meta.env.DEV) {
 
 function isIpfsEnabled(): boolean {
   const stored = localStorage.getItem(STORAGE_KEYS.IPFS_ENABLED);
-  return stored !== 'false'; // enabled by default
+  // OFF by default: the token-api Vault is the primary backup/sync now. IPFS is a
+  // second, flaky token-storage provider (slow/unreliable IPNS resolve+publish) sharing
+  // the same load/sync/merge path — opt-in only. An explicit prior choice is respected.
+  return stored === 'true';
 }
 
 /** The Nostr transport provider id (NostrTransportProvider.id). */
