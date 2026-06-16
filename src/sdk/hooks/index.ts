@@ -11,6 +11,8 @@ export { useIpfsSync } from './core/useIpfsSync';
 export type { IpfsSyncStatus, IpfsSyncState, UseIpfsSyncReturn } from './core/useIpfsSync';
 export { useWalletApiSession } from './core/useWalletApiSession';
 export type { WalletApiSessionStatus, UseWalletApiSessionReturn } from './core/useWalletApiSession';
+export { useRealtimeStatus } from './core/useRealtimeStatus';
+export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtimeStatus';
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';

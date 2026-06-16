@@ -81,6 +81,15 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
       requests.unshift(r);
       listeners.get("payment_request:incoming")?.forEach((fn) => fn({ ...r }));
     },
+    // Simulate a resolution driven elsewhere (another window / this wallet's
+    // other session): the SDK advances the status in its own list, THEN emits
+    // the matching event. Mirrors sphere-sdk's paid/rejected/expired surface.
+    _resolveRemote: (id: string, status: "paid" | "rejected" | "expired") => {
+      const r = find(id);
+      if (r) r.status = status;
+      const evt = `payment_request:${status}`;
+      listeners.get(evt)?.forEach((fn) => fn(r ? { ...r } : { id, status }));
+    },
   };
   return sphere;
 }
@@ -122,6 +131,30 @@ describe("useIncomingPaymentRequests", () => {
     await waitFor(() => expect(result.current.requests).toHaveLength(1));
     expect(result.current.pendingCount).toBe(1);
   });
+
+  it.each([
+    ["paid", PaymentRequestStatus.PAID],
+    ["rejected", PaymentRequestStatus.REJECTED],
+    ["expired", PaymentRequestStatus.EXPIRED],
+  ] as const)(
+    "drops a request from the actionable view on payment_request:%s (cross-session)",
+    async (sdkStatus, uiStatus) => {
+      fakeSphere = makeFakeSphere([makeRequest("a")]);
+      const { result } = renderHook(() => useIncomingPaymentRequests());
+      expect(result.current.pendingCount).toBe(1);
+      expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
+
+      // Another window (or this wallet's other session) resolves the request.
+      act(() => {
+        fakeSphere!._resolveRemote("a", sdkStatus);
+      });
+
+      // The request leaves the actionable (PENDING) state — its Pay/Decline
+      // buttons disappear — and the status reflects the resolution.
+      await waitFor(() => expect(result.current.requests[0].status).toBe(uiStatus));
+      expect(result.current.pendingCount).toBe(0);
+    },
+  );
 
   it("pays through payments.payPaymentRequest (no raw transfer + paid flip)", async () => {
     fakeSphere = makeFakeSphere([makeRequest("a")]);

@@ -23,7 +23,7 @@ export interface UseAssetsReturn {
 }
 
 export function useAssets(): UseAssetsReturn {
-  const { sphere } = useSphereContext();
+  const { sphere, walletApiEnabled } = useSphereContext();
   const registryReady = useRegistryReady();
   const queryClient = useQueryClient();
 
@@ -35,6 +35,10 @@ export function useAssets(): UseAssetsReturn {
     },
     enabled: !!sphere,
     staleTime: 30_000,
+    // wallet-api mode: refetch on focus so a tab backgrounded with a dead wake
+    // socket refreshes on return (realtime invalidation is the primary path;
+    // TanStack dedupes). Local-only mode keeps the global default (no server).
+    refetchOnWindowFocus: walletApiEnabled,
   });
 
   // If the token registry finishes loading AFTER the first getAssets() call,

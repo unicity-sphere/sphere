@@ -18,7 +18,7 @@ export interface UseBalanceReturn {
  * @param coinId - Coin ID to get balance for, or undefined for total portfolio value in USD
  */
 export function useBalance(coinId?: string): UseBalanceReturn {
-  const { sphere } = useSphereContext();
+  const { sphere, walletApiEnabled } = useSphereContext();
 
   const query = useQuery({
     queryKey: coinId
@@ -40,6 +40,11 @@ export function useBalance(coinId?: string): UseBalanceReturn {
     },
     enabled: !!sphere,
     staleTime: 30_000,
+    // wallet-api mode: realtime inventory wakes drive invalidation, but a tab
+    // backgrounded with a dead wake socket can miss them — refetch on focus as
+    // a cheap backstop (TanStack dedupes against the realtime path). Local-only
+    // mode keeps the global refetchOnWindowFocus:false (no server to re-poll).
+    refetchOnWindowFocus: walletApiEnabled,
   });
 
   const asset = (coinId && query.data && typeof query.data !== 'number') ? query.data as Asset : null;

@@ -87,10 +87,22 @@ export const useIncomingPaymentRequests = () => {
         // mounted (e.g. the wallet-api sign-in backfill) are not re-emitted.
         refresh();
 
+        // The SDK list is the source of truth: on incoming AND on resolution
+        // (paid / rejected / expired), the SDK advances the request's status in
+        // its own list, then emits. Re-reading drops a request resolved
+        // elsewhere (another window — or this wallet's other session) out of
+        // the actionable (PENDING) state, so its Pay/Decline buttons disappear:
+        // the UI half of the cross-session-sync fix.
         const handler = () => refresh();
         sphere.on('payment_request:incoming', handler);
+        sphere.on('payment_request:paid', handler);
+        sphere.on('payment_request:rejected', handler);
+        sphere.on('payment_request:expired', handler);
         return () => {
             sphere.off('payment_request:incoming', handler);
+            sphere.off('payment_request:paid', handler);
+            sphere.off('payment_request:rejected', handler);
+            sphere.off('payment_request:expired', handler);
         };
     }, [sphere, refresh]);
 
