@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Hash, Receipt } from 'lucide-react';
-import { TokenRegistry, toSmallestUnit } from '@unicitylabs/sphere-sdk';
+import { TokenRegistry, parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -142,8 +142,8 @@ export function SendPaymentRequestModal({ isOpen, onClose, prefill, asModal }: S
   // Validate recipient + amount → go to confirm
   const handleDetailsNext = async () => {
     if (!selectedCoin || !recipient.trim() || !amountInput) return;
-    const targetAmount = toSmallestUnit(amountInput, selectedCoin.decimals);
-    if (targetAmount <= 0n) return;
+    const targetAmount = safeParseTokenAmount(amountInput, selectedCoin.decimals);
+    if (targetAmount === null || targetAmount <= 0n) return;
 
     setIsCheckingRecipient(true);
     setRecipientError(null);
@@ -188,7 +188,7 @@ export function SendPaymentRequestModal({ isOpen, onClose, prefill, asModal }: S
     setError(null);
 
     try {
-      const amount = toSmallestUnit(amountInput, selectedCoin.decimals).toString();
+      const amount = parseTokenAmount(amountInput, selectedCoin.decimals).toString();
       const recipientStr = recipientMode === 'nametag' ? `@${recipient}` : recipient;
 
       const result = await sphere!.payments.sendPaymentRequest(recipientStr, {

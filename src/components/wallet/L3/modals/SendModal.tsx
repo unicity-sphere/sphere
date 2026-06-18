@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check } from 'lucide-react';
 import type { Asset } from '@unicitylabs/sphere-sdk';
-import { toSmallestUnit } from '@unicitylabs/sphere-sdk';
+import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
@@ -131,8 +131,8 @@ export function SendModal({ isOpen, onClose, prefill, asModal }: SendModalProps)
   const handleDetailsNext = async () => {
     if (!selectedAsset || !recipient.trim() || !amountInput) return;
 
-    const targetAmount = toSmallestUnit(amountInput, selectedAsset.decimals);
-    if (targetAmount <= 0n) return;
+    const targetAmount = safeParseTokenAmount(amountInput, selectedAsset.decimals);
+    if (targetAmount === null || targetAmount <= 0n) return;
     if (targetAmount > BigInt(selectedAsset.totalAmount)) return;
 
     setIsCheckingRecipient(true);
@@ -180,7 +180,7 @@ export function SendModal({ isOpen, onClose, prefill, asModal }: SendModalProps)
     setRecipientError(null);
 
     try {
-      const amount = toSmallestUnit(amountInput, selectedAsset.decimals).toString();
+      const amount = parseTokenAmount(amountInput, selectedAsset.decimals).toString();
       await transfer({
         coinId: selectedAsset.coinId,
         amount,
@@ -229,7 +229,7 @@ export function SendModal({ isOpen, onClose, prefill, asModal }: SendModalProps)
 
           {/* 2. DETAILS (recipient + amount) */}
           {step === 'details' && selectedAsset && (() => {
-            const insufficientBalance = amountInput !== '' && toSmallestUnit(amountInput, selectedAsset.decimals) > BigInt(selectedAsset.totalAmount);
+            const insufficientBalance = (safeParseTokenAmount(amountInput, selectedAsset.decimals) ?? 0n) > BigInt(selectedAsset.totalAmount);
             const usdValue = selectedAsset.priceUsd != null && amountInput
               ? (parseFloat(amountInput) * selectedAsset.priceUsd).toFixed(2)
               : null;

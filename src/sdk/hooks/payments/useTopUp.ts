@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { TokenRegistry, toSmallestUnit } from '@unicitylabs/sphere-sdk';
+import { TokenRegistry, parseTokenAmount } from '@unicitylabs/sphere-sdk';
 
 /** Per-coin result of a top-up mint, for partial-success display. */
 export interface TopUpResult {
@@ -69,7 +69,7 @@ export function useTopUp(): UseTopUpReturn {
             return { ...base, success: false, error: 'Not in token registry' };
           }
           const iconUrl = registry.getIconUrl(def.id) ?? undefined;
-          const amount = toSmallestUnit(human, def.decimals ?? 0);
+          const amount = parseTokenAmount(String(human), def.decimals ?? 0);
           try {
             const res = await sphere.payments.mintFungibleToken(def.id, amount);
             return res.success

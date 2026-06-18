@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowDownUp, Loader2, CheckCircle, ChevronDown } from 'lucide-react';
 import { useAssets, useTransfer } from '../../../../sdk';
 import type { Asset } from '@unicitylabs/sphere-sdk';
-import { toSmallestUnit, toHumanReadable } from '@unicitylabs/sphere-sdk';
+import { parseTokenAmount, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
@@ -128,11 +128,11 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     setStep('processing'); setError(null);
     try {
       // 1. Send the "from" asset to the swap stub recipient (unchanged).
-      const fromAmountSmallestUnit = toSmallestUnit(fromAmount, fromAsset.decimals);
+      const fromAmountSmallestUnit = parseTokenAmount(fromAmount, fromAsset.decimals);
       await transfer({ recipient: 'sphere-swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
 
       // 2. Self-mint the "to" asset to this wallet (replaces the faucet call).
-      const toAmountSmallestUnit = toSmallestUnit(exchangeInfo.toAmount.toFixed(toAsset.decimals), toAsset.decimals);
+      const toAmountSmallestUnit = parseTokenAmount(exchangeInfo.toAmount.toFixed(toAsset.decimals), toAsset.decimals);
       const mintResult = await sphere.payments.mintFungibleToken(toAsset.coinId, toAmountSmallestUnit);
       if (!mintResult.success) throw new Error(mintResult.error);
 

@@ -3,7 +3,7 @@ import { type IncomingPaymentRequest, PaymentRequestStatus } from '../hooks/useI
 import { getErrorMessage } from '../../../../sdk/errors';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
-import { AmountFormatUtils } from '../utils/currency';
+import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
 
@@ -126,7 +126,10 @@ interface RequestCardProps {
 
 function RequestCard({ req, error, onPay, onReject, isProcessing, isGlobalDisabled }: RequestCardProps) {
   const isPending = req.status === PaymentRequestStatus.PENDING;
-  const amountDisplay = AmountFormatUtils.formatDisplayAmount(req.amount.toString(), req.coinId);
+  const amountDisplay = formatAmount(req.amount.toString(), {
+    decimals: TokenRegistry.getInstance().getDecimals(req.coinId),
+    maxFractionDigits: 6,
+  });
   const timeAgo = getTimeAgo(req.timestamp);
 
   // Status styling
