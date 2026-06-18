@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plug, Shield } from 'lucide-react';
 import { PERMISSION_SCOPES } from '@unicitylabs/sphere-sdk/connect';
 import type { PermissionScope } from '@unicitylabs/sphere-sdk/connect';
@@ -24,17 +24,21 @@ export function ConnectionApprovalModal() {
   const { pendingApproval, approveConnection, denyConnection } = useConnectContext();
   const [selected, setSelected] = useState<Set<PermissionScope>>(new Set());
 
+  // Initialize the selected permissions whenever a new approval arrives.
+  // identity:read is always granted. (Effect — not setState during render.)
+  useEffect(() => {
+    if (!pendingApproval) {
+      setSelected(new Set());
+      return;
+    }
+    const initial = new Set(pendingApproval.permissions);
+    initial.add(PERMISSION_SCOPES.IDENTITY_READ as PermissionScope);
+    setSelected(initial);
+  }, [pendingApproval]);
+
   if (!pendingApproval) return null;
 
   const { dapp, permissions } = pendingApproval;
-
-  // Initialize selected permissions on first render
-  if (selected.size === 0 && permissions.length > 0) {
-    const initial = new Set(permissions);
-    // identity:read is always granted
-    initial.add(PERMISSION_SCOPES.IDENTITY_READ as PermissionScope);
-    setSelected(initial);
-  }
 
   const togglePermission = (perm: PermissionScope) => {
     if (perm === PERMISSION_SCOPES.IDENTITY_READ) return; // always granted
