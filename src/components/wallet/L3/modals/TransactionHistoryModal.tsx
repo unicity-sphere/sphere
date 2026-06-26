@@ -87,6 +87,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
   // (newest-first) and grow it as the user scrolls near the bottom (lazy loading).
   const PAGE = 40;
   const [visibleCount, setVisibleCount] = useState(PAGE);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const hasMore = visibleCount < history.length;
 
@@ -95,13 +96,16 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
     if (isOpen) setVisibleCount(PAGE);
   }, [isOpen]);
 
-  // Grow the window when the bottom sentinel scrolls into view.
+  // Grow the window when the bottom sentinel scrolls into view. The observer is rooted at the modal's
+  // SCROLL CONTAINER (not the viewport) — the list scrolls inside it, and the framer-motion modal's
+  // transforms break viewport-relative intersection math (the bug where the spinner span forever).
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !hasMore) return;
+    const root = scrollRef.current;
+    if (!node || !root || !hasMore) return;
     const observer = new IntersectionObserver(
       (entries) => { if (entries[0]?.isIntersecting) setVisibleCount((c) => c + PAGE); },
-      { rootMargin: '400px 0px' },
+      { root, rootMargin: '600px 0px' },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -142,7 +146,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
       <ModalHeader variant="screen" title="Transaction History" icon={Clock} onClose={onClose} />
 
       {/* Content - Scrollable */}
-      <div className="relative flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 z-10 min-h-0 bg-transparent">
+      <div ref={scrollRef} className="relative flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 z-10 min-h-0 bg-transparent">
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-orange-500" />
