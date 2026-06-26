@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUpRight, ArrowDownLeft, Loader2, Clock, ChevronDown, Copy, Check } from 'lucide-react';
 import { useTransactionHistory } from '../../../../sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
 
@@ -82,8 +82,33 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const { copiedKey, copy } = useCopyToClipboard();
 
+  // Perf: a long-lived wallet (e.g. the swap wallet) can have tens of thousands of history rows.
+  // Rendering them all — and formatting each with Date.toLocale* — froze the page. Render a window
+  // (newest-first) and grow it as the user scrolls near the bottom (lazy loading).
+  const PAGE = 40;
+  const [visibleCount, setVisibleCount] = useState(PAGE);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasMore = visibleCount < history.length;
+
+  // Reset the window each time the modal opens.
+  useEffect(() => {
+    if (isOpen) setVisibleCount(PAGE);
+  }, [isOpen]);
+
+  // Grow the window when the bottom sentinel scrolls into view.
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) setVisibleCount((c) => c + PAGE); },
+      { rootMargin: '400px 0px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, visibleCount]);
+
   const formattedHistory = useMemo(() => {
-    return history.map(entry => {
+    return history.slice(0, visibleCount).map(entry => {
       const def = registry.getDefinition(entry.coinId);
       const decimals = def?.decimals || 0;
 
@@ -106,7 +131,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
         }),
       };
     });
-  }, [history]);
+  }, [history, visibleCount]);
 
   const toggleExpand = (id: string) => {
     setExpandedId(prev => prev === id ? null : id);
@@ -313,6 +338,11 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                 </motion.div>
               );
             })}
+            {hasMore && (
+              <div ref={sentinelRef} className="flex items-center justify-center py-4">
+                <Loader2 className="w-4 h-4 animate-spin text-orange-500/60" />
+              </div>
+            )}
           </div>
         )}
       </div>
