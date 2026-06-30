@@ -143,7 +143,10 @@ export default defineConfig(({ mode }) => {
       },
       // Dedupe peer deps so file:-linked sphere-ui doesn't pull a second copy of React etc.
       // through its devDependencies, which would break hooks across the module boundary.
-      dedupe: ['react', 'react-dom', 'framer-motion', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
+      // Also dedupe the state-transition SDK so the bridge plugin (file:-linked) and
+      // sphere-sdk share ONE copy — the bridge verifier is registered into sphere-sdk's
+      // engine and must see the same SDK runtime (06 §W0).
+      dedupe: ['react', 'react-dom', 'framer-motion', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities', '@unicitylabs/state-transition-sdk'],
     },
     build: {
       rollupOptions: {

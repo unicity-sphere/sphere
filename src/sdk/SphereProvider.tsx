@@ -20,6 +20,22 @@ import {
   createWalletApiProviders,
 } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 import { SphereContext, type SphereAppProviders } from './SphereContext';
+import { getAppBridges } from '../bridge/loadBridges';
+
+/**
+ * Bridge wiring for `Sphere.init` (06 §W0). Integrity-pins the manifest; if the
+ * manifest is misconfigured we log and run *without* bridges rather than block
+ * the whole wallet (the badge/Bridge UI simply won't appear).
+ */
+function bridgeInit(): { bridgeJustificationVerifiers?: unknown; bridges?: unknown } {
+  try {
+    const { bridgeJustificationVerifiers, bridges } = getAppBridges();
+    return { bridgeJustificationVerifiers, bridges };
+  } catch (err) {
+    logger.warn('SphereProvider', `Bridge manifest disabled: ${err instanceof Error ? err.message : String(err)}`);
+    return {};
+  }
+}
 import {
   getEngineOverride,
   getWalletApiBaseUrl,
@@ -214,6 +230,7 @@ export function SphereProvider({
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
         const { sphere: instance } = await Sphere.init({
           ...browserProviders,
+          ...bridgeInit(),
           network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
           discoverAddresses: false, // Run separately below for UX
           onProgress: setInitProgress,
@@ -290,6 +307,7 @@ export function SphereProvider({
         setInitProgress({ step: 'initializing', message: 'Creating wallet...' });
         const { sphere: instance, generatedMnemonic } = await Sphere.init({
           ...providers,
+          ...bridgeInit(),
           network,
           autoGenerate: true,
           nametag: options?.nametag,
@@ -353,6 +371,7 @@ export function SphereProvider({
       setInitProgress({ step: 'initializing', message: 'Importing wallet...' });
       const instance = await Sphere.import({
         ...providers,
+        ...bridgeInit(),
         network,
         mnemonic,
         nametag: options?.nametag,

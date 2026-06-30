@@ -1,4 +1,4 @@
-import { Plus, ArrowUpRight, ArrowDownUp, Loader2, Coins, Layers, Eye, EyeOff, Wifi, Shield, AlertCircle, FileJson } from 'lucide-react';
+import { Plus, ArrowUpRight, ArrowDownUp, ArrowLeftRight, Loader2, Coins, Layers, Eye, EyeOff, Wifi, Shield, AlertCircle, FileJson } from 'lucide-react';
 import { AnimatePresence, motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -9,6 +9,7 @@ import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow } from '../../shared/components';
 import { SendModal } from '../modals/SendModal';
 import { SwapModal } from '../modals/SwapModal';
+import { BridgeModal } from '../modals/BridgeModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
 import { SeedPhraseModal } from '../modals/SeedPhraseModal';
@@ -158,6 +159,7 @@ export function L3WalletView({
   const [activeTab, setActiveTab] = useState<Tab>('assets');
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
+  const [isBridgeModalOpen, setIsBridgeModalOpen] = useState(false);
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
@@ -351,6 +353,19 @@ export function L3WalletView({
           </motion.button>
         </div>
 
+        {/* Bridge — shown only when a bridged asset (e.g. Tron USDT) is configured */}
+        {(sphere?.bridges?.length ?? 0) > 0 && (
+          <motion.button
+            whileHover={{ scale: 1.02, y: -2 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setIsBridgeModalOpen(true)}
+            className="w-full px-2 py-2.5 sm:px-3 sm:py-3 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] hover:bg-neutral-200 dark:hover:bg-[rgba(255,255,255,0.1)] text-neutral-900 dark:text-white text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>Bridge USDT</span>
+          </motion.button>
+        )}
+
       </div>
 
       <div className="px-6 mb-4 shrink-0">
@@ -403,6 +418,7 @@ export function L3WalletView({
                         delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
                         layer="L3"
                         isNew={newAssetCoinIds.has(asset.coinId)}
+                        bridgedLabel={sphere?.bridgeForCoin(asset.coinId)?.label}
                       />
                     ))
                   )}
@@ -438,6 +454,7 @@ export function L3WalletView({
       <TopUpModal isOpen={isTopUpModalOpen} onClose={() => setIsTopUpModalOpen(false)} />
       <SendModal isOpen={isSendModalOpen} onClose={() => setIsSendModalOpen(false)} />
       <SwapModal isOpen={isSwapModalOpen} onClose={() => setIsSwapModalOpen(false)} />
+      <BridgeModal isOpen={isBridgeModalOpen} onClose={() => setIsBridgeModalOpen(false)} />
       <PaymentRequestsModal
         isOpen={isRequestsOpen}
         onClose={() => setIsRequestsOpen(false)}

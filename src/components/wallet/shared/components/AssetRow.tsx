@@ -11,6 +11,8 @@ interface AssetRowProps {
   layer?: 'L3';
   /** If true, animate entrance. If false, render without animation (asset was already shown) */
   isNew?: boolean;
+  /** When set, render a "bridged" badge (e.g. "USDT · Tron") — 06 §W1. */
+  bridgedLabel?: string;
 }
 
 // Custom comparison: allow re-render when amount or price changes (for number animation)
@@ -28,6 +30,7 @@ function areAssetPropsEqual(prev: AssetRowProps, next: AssetRowProps): boolean {
     prev.showBalances === next.showBalances &&
     prev.layer === next.layer &&
     prev.isNew === next.isNew &&
+    prev.bridgedLabel === next.bridgedLabel &&
     prev.delay === next.delay
   );
 }
@@ -85,7 +88,7 @@ function AnimatedAmount({ value, symbol, decimals, showBalances }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true }: AssetRowProps) {
+export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true, bridgedLabel }: AssetRowProps) {
   const change24h = asset.change24h ?? 0;
   const changeColor = change24h >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
   const changeSign = change24h >= 0 ? '+' : '';
@@ -116,6 +119,11 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
             {layer && (
               <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-orange-500/20 text-orange-600 dark:text-brand-orange">
                 {layer}
+              </span>
+            )}
+            {bridgedLabel && (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400" title={`Bridged from ${bridgedLabel}`}>
+                {bridgedLabel}
               </span>
             )}
             <div className="text-xs text-neutral-500 truncate max-w-25">
