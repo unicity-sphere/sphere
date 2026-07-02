@@ -6,7 +6,7 @@ import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
 import { SubscriptionModal } from './SubscriptionModal';
-import { showToast } from '../../../ui/toast-utils';
+import { useUpgrade } from '../../../upgrade';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -26,6 +26,7 @@ export function SettingsModal({
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
+  const { openUpgrade } = useUpgrade();
 
   return (
     <>
@@ -111,7 +112,7 @@ export function SettingsModal({
       <SubscriptionModal
         isOpen={isSubscriptionOpen}
         onClose={() => setIsSubscriptionOpen(false)}
-        onUpgrade={() => showToast('Upgrade coming soon', 'info')}
+        onUpgrade={() => { setIsSubscriptionOpen(false); openUpgrade('settings'); }}
       />
     </>
   );
