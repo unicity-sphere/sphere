@@ -18,10 +18,18 @@ import {
 import {
   decodeLockEvent,
   TronHttpRpcClient,
+  type TronConstantCaller,
+  type TronRpc,
   TronUsdtLockJustification,
 } from '@unicitylabs/bridge-plugin-tron-usdt';
 
 import type { BridgeStore, PendingLock } from './store';
+
+/**
+ * The node-read surface bridge-in needs (08 "ChainClient" boundary): allowance
+ * reads + tx receipts. `TronHttpRpcClient` satisfies it; tests inject a fake.
+ */
+export type BridgeInRpc = TronConstantCaller & Pick<TronRpc, 'getTransactionInfo'>;
 
 export type BridgeInPhase =
   | 'deriving'
@@ -49,6 +57,8 @@ export interface BridgeInArgs {
   networkId: number;
   /** One-time max approve (fewer prompts on repeat bridges). */
   approveAmount?: bigint;
+  /** Node-read client (allowance + receipts). Defaults to a manifest-configured HTTP client; injectable for tests. */
+  rpc?: BridgeInRpc;
   onProgress?: (p: BridgeInProgress) => void;
 }
 
@@ -64,7 +74,8 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
   const chainPubkey = sphere.identity?.chainPubkey;
   if (!chainPubkey) throw new Error('Wallet identity unavailable');
 
-  const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
+  const rpc: BridgeInRpc =
+    args.rpc ?? new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
 
   progress({ phase: 'deriving' });
   const plan = await buildBridgeInPlan({
@@ -124,7 +135,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     store.updateLock(lockRecord.id, { lockTxid });
     progress({ phase: 'waiting-lock', lockTxid, message: 'Waiting for the lock to land in a block…' });
 
-    const lockEvent = await waitForLock(bridge, lockTxid); // fast-fails on a mined revert
+    const lockEvent = await waitForLock(rpc, bridge, lockTxid); // fast-fails on a mined revert
     lockConfirmed = true;
     store.updateLock(lockRecord.id, {
       status: 'locked',
@@ -166,11 +177,14 @@ export async function resumeBridgeMint(
   bridge: LoadedBridge,
   store: BridgeStore,
   lock: PendingLock,
+  rpc?: BridgeInRpc,
 ): Promise<BridgeInResult> {
   if (!lock.lockTxid) throw new Error('Pending lock has no lock txid — cannot resume');
+  const node =
+    rpc ?? new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
   let lockEvent: LockEventInfo;
   try {
-    lockEvent = await waitForLock(bridge, lock.lockTxid);
+    lockEvent = await waitForLock(node, bridge, lock.lockTxid);
   } catch (e) {
     // A reverted lock never moved funds — mark it terminal so it stops surfacing
     // as a resumable pending mint (08 §1.4). A timeout stays pending to retry.
@@ -229,7 +243,7 @@ async function guardUnchanged(
  * approve) — a redundant approval is safe, a skipped-but-needed one is not.
  */
 async function needsApproval(
-  rpc: TronHttpRpcClient,
+  rpc: BridgeInRpc,
   bridge: LoadedBridge,
   owner: string,
   amount: bigint,
@@ -247,7 +261,7 @@ async function needsApproval(
 }
 
 /** Poll until `txid` is mined; return on success, throw on revert or timeout (08 §1.4). */
-async function waitForReceipt(rpc: TronHttpRpcClient, txid: string, label: string, timeoutMs = 90_000): Promise<void> {
+async function waitForReceipt(rpc: BridgeInRpc, txid: string, label: string, timeoutMs = 90_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const info = await rpc.getTransactionInfo(txid);
@@ -263,8 +277,12 @@ async function waitForReceipt(rpc: TronHttpRpcClient, txid: string, label: strin
 }
 
 /** Poll the Tron node until the lock tx is mined and its `Lock` event is found. */
-async function waitForLock(bridge: LoadedBridge, lockTxid: string, timeoutMs = 120_000): Promise<LockEventInfo> {
-  const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
+async function waitForLock(
+  rpc: BridgeInRpc,
+  bridge: LoadedBridge,
+  lockTxid: string,
+  timeoutMs = 120_000,
+): Promise<LockEventInfo> {
   const vaultHex = bridge.plugin.resolvedConfig.lockContractHex;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
