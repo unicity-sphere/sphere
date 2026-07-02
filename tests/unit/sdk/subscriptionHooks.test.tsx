@@ -12,6 +12,10 @@ vi.mock('@/config/storageKeys', async (orig) => ({
   ...(await orig<typeof import('@/config/storageKeys')>()),
   getStoredSubscriptionKey: () => 'key_abc',
 }));
+vi.mock('@/config/subscription', async (orig) => ({
+  ...(await orig<typeof import('@/config/subscription')>()),
+  SUBSCRIPTION_ENABLED: true,
+}));
 
 import { usePlans, useSubscriptionUsage } from '@/sdk/hooks/subscription';
 
@@ -24,7 +28,7 @@ describe('subscription hooks', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('usePlans returns the plan list', async () => {
-    const { result } = renderHook(() => usePlans(), { wrapper });
+    const { result } = renderHook(() => usePlans(true), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.[0].name).toBe('basic');
   });

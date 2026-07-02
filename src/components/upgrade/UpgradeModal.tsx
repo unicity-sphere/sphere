@@ -21,21 +21,23 @@ interface UpgradeModalProps {
 }
 
 export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
-  const plans = usePlans();
+  const plans = usePlans(isOpen);
   const sub = useSubscription();
   const checkout = useCheckout();
   const queryClient = useQueryClient();
 
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
-  const currentPlanId = sub.data?.pricingPlan?.id ?? 0;
+  const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+  const currentPlanId = sub.data?.pricingPlan?.planId ?? -1;
 
   const handleSelect = async (plan: PlanInfo) => {
     if (plan.planId === currentPlanId) return;
     setError(null);
     try {
-      const { paymentUrl } = await checkout.mutateAsync({ targetPlanId: plan.planId });
-      window.open(paymentUrl, '_blank', 'noopener,noreferrer');
+      const { paymentUrl: url } = await checkout.mutateAsync({ targetPlanId: plan.planId });
+      setPaymentUrl(url);
+      window.open(url, '_blank', 'noopener,noreferrer');
       setStep('awaiting');
 
       const apiKey = getStoredSubscriptionKey();
@@ -62,6 +64,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const handleClose = () => {
     setStep('plans');
     setError(null);
+    setPaymentUrl(null);
     onClose();
   };
 
@@ -120,6 +123,11 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
           <div className="flex flex-col items-center text-center gap-3 py-10">
             <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
             <p className="text-sm">Complete the payment in the new tab. We'll activate your plan automatically.</p>
+            {paymentUrl && (
+              <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="text-orange-500 underline text-sm">
+                Payment page didn't open? Open it here
+              </a>
+            )}
           </div>
         )}
 
