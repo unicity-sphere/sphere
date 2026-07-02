@@ -11,6 +11,8 @@ import { SPHERE_KEYS } from "../../../../sdk/queryKeys";
 import { addrKey } from "../components/addrKey";
 import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
+import { provisionOrRecoverKey, type PlanInfo } from "../../../../services/subscriptionApi";
+import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
 
 export type OnboardingStep =
   | "start"
@@ -21,7 +23,8 @@ export type OnboardingStep =
   | "addressSelection"
   | "nametag"
   | "processing"
-  | "mnemonicBackup";
+  | "mnemonicBackup"
+  | "planCapabilities";
 
 export interface UseOnboardingFlowReturn {
   // Step management
@@ -56,6 +59,11 @@ export interface UseOnboardingFlowReturn {
   handleCompleteOnboarding: () => Promise<void>;
   handleMnemonicBackupComplete: () => void;
   handleDownloadBackup: () => Promise<void>;
+
+  // Subscription plan-capabilities state (post-finalize provisioning)
+  planInfo: PlanInfo | null;
+  planCreated: boolean;
+  handlePlanCapabilitiesContinue: () => void;
 
   // Address selection state (multi-select)
   derivedAddresses: DerivedAddressInfo[];
@@ -92,7 +100,7 @@ export interface UseOnboardingFlowReturn {
 
 export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const queryClient = useQueryClient();
-  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
+  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress, applySubscriptionKey } = useSphereContext();
 
   // Step management — start at "nametag" only if wallet is fully finalized but missing nametag
   // (e.g. page refresh after wallet creation without nametag).
@@ -140,6 +148,10 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const [processingTitle, setProcessingTitle] = useState("Setting up Profile...");
   const [processingCompleteTitle, setProcessingCompleteTitle] = useState("Profile Ready!");
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
+
+  // Subscription plan-capabilities state (post-finalize provisioning)
+  const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
+  const [planCreated, setPlanCreated] = useState(false);
 
   // Debounced nametag availability check with retry on transport failure
   useEffect(() => {
@@ -581,7 +593,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   }, [createWallet, sphere]);
 
   // Finalize wallet and switch to wallet UI
-  const doFinalizeWallet = useCallback(() => {
+  const finishFinalize = useCallback(() => {
     finalizeWallet(importedSphereRef.current ?? undefined);
     importedSphereRef.current = null;
     isCreateFlowRef.current = false;
@@ -591,6 +603,26 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     setStep("start");
   }, [queryClient, finalizeWallet]);
 
+  // Provision/recover the subscription key, then show capabilities. On any
+  // failure (or flag off) fall through to finalize with the env-key fallback.
+  const doFinalizeWallet = useCallback(async () => {
+    const active = importedSphereRef.current ?? sphere;
+    if (SUBSCRIPTION_ENABLED && active) {
+      try {
+        const result = await provisionOrRecoverKey(active);
+        await applySubscriptionKey(result.apiKey);
+        setPlanInfo(result.plan);
+        setPlanCreated(result.created);
+        setStep("planCapabilities");
+        return;
+      } catch (err) {
+        // Non-fatal: keep onboarding working on the env-key fallback.
+        console.warn('subscription provisioning failed; using fallback key', err);
+      }
+    }
+    finishFinalize();
+  }, [sphere, applySubscriptionKey, finishFinalize]);
+
   // Auto-transition when processing completes
   useEffect(() => {
     if (isProcessingComplete && step === "processing") {
@@ -598,7 +630,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         if (isCreateFlowRef.current && generatedMnemonic) {
           setStep("mnemonicBackup");
         } else {
-          doFinalizeWallet();
+          void doFinalizeWallet();
         }
       }, 800);
       return () => clearTimeout(timer);
@@ -607,13 +639,18 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
 
   // Legacy handler kept for interface compatibility (no longer shows "Let's Go")
   const handleCompleteOnboarding = useCallback(async () => {
-    doFinalizeWallet();
+    void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
   // Action: Confirm mnemonic backup (called after user saves recovery phrase)
   const handleMnemonicBackupComplete = useCallback(() => {
-    doFinalizeWallet();
+    void doFinalizeWallet();
   }, [doFinalizeWallet]);
+
+  // Action: Continue from the plan-capabilities screen into the wallet
+  const handlePlanCapabilitiesContinue = useCallback(() => {
+    finishFinalize();
+  }, [finishFinalize]);
 
   // Action: Download wallet backup file
   const handleDownloadBackup = useCallback(async () => {
@@ -797,6 +834,11 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     handleCompleteOnboarding,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+
+    // Subscription plan-capabilities state (post-finalize provisioning)
+    planInfo,
+    planCreated,
+    handlePlanCapabilitiesContinue,
 
     // Address selection state (multi-select)
     derivedAddresses,

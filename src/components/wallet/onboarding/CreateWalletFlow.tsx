@@ -18,6 +18,7 @@ import {
   NametagScreen,
   ProcessingScreen,
   MnemonicBackupScreen,
+  PlanCapabilitiesScreen,
 } from "./components";
 
 export type { OnboardingStep } from "./hooks/useOnboardingFlow";
@@ -57,6 +58,11 @@ export function CreateWalletFlow() {
     isProcessingComplete,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+
+    // Subscription plan-capabilities state (post-finalize provisioning)
+    planInfo,
+    planCreated,
+    handlePlanCapabilitiesContinue,
 
     // Generated mnemonic (for backup screen)
     generatedMnemonic,
@@ -230,6 +236,15 @@ export function CreateWalletFlow() {
             mnemonic={generatedMnemonic}
             onDownloadBackup={handleDownloadBackup}
             onConfirm={handleMnemonicBackupComplete}
+          />
+        )}
+
+        {step === "planCapabilities" && (
+          <PlanCapabilitiesScreen
+            plan={planInfo}
+            created={planCreated}
+            onContinue={handlePlanCapabilitiesContinue}
+            isBusy={isBusy}
           />
         )}
       </AnimatePresence>
