@@ -13,6 +13,7 @@ import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
 import { provisionOrRecoverKey, type PlanInfo } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
+import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
 
 export type OnboardingStep =
   | "start"
@@ -100,7 +101,7 @@ export interface UseOnboardingFlowReturn {
 
 export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const queryClient = useQueryClient();
-  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress, applySubscriptionKey } = useSphereContext();
+  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
 
   // Step management — start at "nametag" only if wallet is fully finalized but missing nametag
   // (e.g. page refresh after wallet creation without nametag).
@@ -610,7 +611,15 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     if (SUBSCRIPTION_ENABLED && active) {
       try {
         const result = await provisionOrRecoverKey(active);
-        await applySubscriptionKey(result.apiKey);
+        // Persist ONLY — do NOT re-init here. Re-initializing now (like
+        // applySubscriptionKey does) would flip walletExists to true and
+        // unmount CreateWalletFlow before the capabilities screen renders.
+        // The stored key becomes the ACTIVE oracle key on the SDK's next
+        // initialize() (page reload / re-init); until then the env
+        // VITE_AGGREGATOR_API_KEY remains the Phase-1 fallback. (Phase 5
+        // will move provisioning ahead of the nametag mint so the key is
+        // used from the first init.)
+        setStoredSubscriptionKey(result.apiKey);
         setPlanInfo(result.plan);
         setPlanCreated(result.created);
         setStep("planCapabilities");
@@ -621,7 +630,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
       }
     }
     finishFinalize();
-  }, [sphere, applySubscriptionKey, finishFinalize]);
+  }, [sphere, finishFinalize]);
 
   // Auto-transition when processing completes
   useEffect(() => {
