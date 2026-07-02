@@ -46,6 +46,9 @@ export interface SphereContextValue {
   /** Toggle IPFS sync on/off (persists to localStorage, triggers reinitialize) */
   toggleIpfs: () => void;
 
+  /** Persist a per-wallet subscription API key and re-init the SDK oracle with it. */
+  applySubscriptionKey: (apiKey: string) => Promise<void>;
+
   /**
    * True when the asset path rides the wallet-api backend (S4 composition).
    * IPFS token sync is unavailable in this mode — server inventory custody

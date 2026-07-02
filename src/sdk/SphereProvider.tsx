@@ -25,6 +25,7 @@ import {
   getWalletApiBaseUrl,
   isWalletApiEnabled,
 } from '../config/walletApi';
+import { getActiveOracleApiKey } from './oracleKey';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -39,6 +40,7 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
+  setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
 import { migrateApprovedSessions } from '../utils/connected-sites';
@@ -118,12 +120,14 @@ function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
  * error is caught by initialize() and surfaced as a visible init error
  * instead of silently composing the legacy local-custody bundle.
  */
-function buildProviders(network: NetworkType): SphereAppProviders {
+function buildProviders(network: NetworkType, apiKey?: string): SphereAppProviders {
   const base = createBrowserProviders({
     network,
     // v2 token engine: aggregator URL + trust base come from the network
-    // preset; only the apiKey is injected (non-secret on testnet2).
-    oracle: { apiKey: import.meta.env.VITE_AGGREGATOR_API_KEY },
+    // preset; the apiKey is the resolved per-wallet subscription key when
+    // provided, else the static env key (non-secret on testnet2, migration
+    // fallback).
+    oracle: { apiKey: apiKey ?? import.meta.env.VITE_AGGREGATOR_API_KEY },
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
     market: true,
@@ -194,7 +198,7 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
-      const browserProviders = buildProviders(network);
+      const browserProviders = buildProviders(network, getActiveOracleApiKey());
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
 
@@ -497,6 +501,12 @@ export function SphereProvider({
     initialize();
   }, [initialize]);
 
+  const applySubscriptionKey = useCallback(async (apiKey: string) => {
+    setStoredSubscriptionKey(apiKey);
+    // Rebuild providers (oracle) with the new key and re-init the SDK.
+    await initialize(0, true);
+  }, [initialize]);
+
   const value: SphereContextValue = {
     sphere,
     providers,
@@ -515,6 +525,7 @@ export function SphereProvider({
     reinitialize: initialize,
     ipfsEnabled,
     toggleIpfs,
+    applySubscriptionKey,
     walletApiEnabled: isWalletApiEnabled(),
   };
 
