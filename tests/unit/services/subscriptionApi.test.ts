@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { provisionOrRecoverKey, getPlans, getUsage } from '@/services/subscriptionApi';
+import { provisionOrRecoverKey, getPlans, getKeyInfo, getUsage, createCheckout } from '@/services/subscriptionApi';
 
 function mockFetchSequence(responses: Array<{ ok?: boolean; status?: number; json: unknown }>) {
   const fn = vi.fn();
@@ -57,12 +57,33 @@ describe('subscriptionApi', () => {
     expect(plans[0].name).toBe('basic');
   });
 
+  it('getKeyInfo: sends X-API-Key header and returns parsed KeyInfo', async () => {
+    const fetchMock = mockFetchSequence([
+      { json: { status: 'active', expiresAt: null, pricingPlan: { id: 1, planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000' } } },
+    ]);
+    const keyInfo = await getKeyInfo('key_abc');
+    expect(keyInfo.status).toBe('active');
+    expect(keyInfo.pricingPlan?.name).toBe('basic');
+    const headers = fetchMock.mock.calls[0][1].headers;
+    expect(headers['x-api-key']).toBe('key_abc');
+  });
+
   it('getUsage: sends X-API-Key header', async () => {
     const fetchMock = mockFetchSequence([{ json: { perDay: { limit: 50000, used: 3, remaining: 49997, resetAt: null }, perSecond: { limit: 5, remaining: 4 } } }]);
     const usage = await getUsage('key_abc');
     expect(usage.perDay.remaining).toBe(49997);
     const headers = fetchMock.mock.calls[0][1].headers;
     expect(headers['x-api-key']).toBe('key_abc');
+  });
+
+  it('createCheckout: sends X-API-Key header, JSON body, and returns parsed CheckoutResult', async () => {
+    const fetchMock = mockFetchSequence([{ json: { paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' } }]);
+    const result = await createCheckout('key_abc', 3, 'https://ret');
+    expect(result).toEqual({ paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' });
+    const headers = fetchMock.mock.calls[0][1].headers;
+    expect(headers['x-api-key']).toBe('key_abc');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toEqual({ targetPlanId: 3, returnUrl: 'https://ret' });
   });
 
   it('throws on non-ok responses', async () => {

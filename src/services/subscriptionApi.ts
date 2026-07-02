@@ -75,7 +75,9 @@ export async function getPlans(): Promise<PlanInfo[]> {
 }
 
 export function getKeyInfo(apiKey: string): Promise<KeyInfo> {
-  return request<KeyInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}`);
+  return request<KeyInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}`, {
+    headers: { 'x-api-key': apiKey },
+  });
 }
 
 export function getUsage(apiKey: string): Promise<UsageInfo> {
