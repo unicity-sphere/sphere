@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
   // the SPA HTML fallback — a proxied URL without a "." (e.g.
   // /coingecko/simple/price?ids=bitcoin) would otherwise be rewritten to
   // index.html and never reach the proxy (the SDK then gets HTML, not JSON).
-  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko', '/wallet-api', '/local-agg'];
+  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko', '/wallet-api', '/local-agg', '/bridge-return'];
 
   // wallet-api backend + LOCAL dev-stack aggregator (docker-compose.dev.yml
   // in the wallet-api repo). Neither serves CORS headers, so the browser app
@@ -43,6 +43,15 @@ export default defineConfig(({ mode }) => {
       target: env.AGGREGATOR_PROXY_TARGET || 'http://127.0.0.1:3001',
       changeOrigin: true,
       rewrite: (p: string) => p.replace(/^\/local-agg/, ''),
+    },
+    // bridge-return-service (prover/crates/service) — runs on the remote prover
+    // box, tunneled to this port via `ssh -L 8787:127.0.0.1:8787`. No CORS
+    // headers on the service, so the browser reaches it through this
+    // same-origin proxy (set VITE_BRIDGE_RETURN_SERVICE_URL=/bridge-return).
+    '/bridge-return': {
+      target: env.BRIDGE_RETURN_PROXY_TARGET || 'http://127.0.0.1:8787',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/bridge-return/, ''),
     },
   };
 

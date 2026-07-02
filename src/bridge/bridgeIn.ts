@@ -6,15 +6,19 @@
  * K-wait). A {BridgeStore} persists the pending lock so a crash resumes the mint.
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
+import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import {
   buildBridgeInPlan,
-  decodeLockEvent,
+  buildSelfMintVerifierService,
   fromHex,
-  TronHttpRpcClient,
-  TronUsdtLockJustification,
   type LoadedBridge,
   type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import {
+  decodeLockEvent,
+  TronHttpRpcClient,
+  TronUsdtLockJustification,
+} from '@unicitylabs/bridge-plugin-tron-usdt';
 
 import type { BridgeStore, PendingLock } from './store';
 
@@ -88,6 +92,10 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
 
   progress({ phase: 'locking', message: 'Lock USDT on Tron…' });
   const lockTxid = await signer.sendCall(plan.lock);
+  // Mutate the local record too, not just the store — mintFromLock below reads
+  // lock.lockTxid off this same object, and store.updateLock only updates the
+  // store's own persisted copy.
+  lockRecord.lockTxid = lockTxid;
   store.updateLock(lockRecord.id, { lockTxid });
   progress({ phase: 'waiting-lock', lockTxid, message: 'Waiting for the lock to land in a block…' });
 
@@ -175,6 +183,13 @@ async function mintFromLock(
     tokenType: bridge.plugin.resolvedConfig.tokenType,
     salt: fromHex(lock.saltHex),
     genesisReason: justification,
+    // The minter trusts its own just-broadcast lock (06 §A1.1) — verify this
+    // one genesis at confirmations:0 instead of the manifest's K=confirmations
+    // threshold (which the shared bridgeJustificationVerifiers service still
+    // enforces for every other verification).
+    mintJustificationVerifierOverride: buildSelfMintVerifierService(bridge, {
+      extractAmount: spherePaymentAmountExtractor,
+    }),
   });
   if (!result.success) throw new Error(result.error);
   return result.tokenId;

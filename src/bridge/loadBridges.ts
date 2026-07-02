@@ -46,6 +46,7 @@ export function loadAppBridges(manifests: BridgeManifest[] = appBridgeManifests(
     coinIdHex: l.plugin.coinIdHex,
     tokenTypeHex: l.plugin.tokenTypeHex,
     label: l.manifest.label,
+    symbol: l.manifest.symbol,
     decimals: l.plugin.decimals,
     confirmations: l.manifest.confirmations,
     chainId: l.manifest.chainId,

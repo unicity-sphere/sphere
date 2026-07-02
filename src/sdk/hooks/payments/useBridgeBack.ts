@@ -7,7 +7,7 @@
  */
 import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ReturnServiceClient } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import { fromHex, ReturnServiceClient, ReturnServiceError } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
 
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
@@ -75,9 +75,34 @@ export function useBridgeClaims(pollMs = 8000) {
       const active = store.activeReturns();
       await Promise.all(
         active.map(async (r) => {
-          if (!r.returnId) return;
+          const client = new ReturnServiceClient(r.returnServiceUrl);
+          if (!r.returnId) {
+            // The burn already happened and is persisted (recovery-critical) —
+            // if the initial POST /returns never landed a returnId (service
+            // outage, transient rejection since fixed, …), retry it here. The
+            // service is idempotent on nullifier, so this is always safe to
+            // repeat: never re-burns, only ever (re)submits the SAME blob.
+            try {
+              const rec = await client.postReturn({
+                tokenCbor: fromHex(r.burnedTokenCborHex),
+                configHash: fromHex(r.configHashHex),
+                reasonBytes: fromHex(r.reasonBytesHex),
+              });
+              store.updateReturn(r.id, { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid });
+            } catch (err) {
+              // `recoverable: false` (e.g. config_hash_mismatch after a vault
+              // redeploy) means resubmitting this exact blob will never work —
+              // stop retrying it every poll and surface it as terminal instead
+              // of silently spinning forever.
+              if (err instanceof ReturnServiceError && !err.recoverable) {
+                store.updateReturn(r.id, { status: 'failed' });
+              }
+              /* else: transient/service down — keep last known status, retry next poll */
+            }
+            return;
+          }
           try {
-            const rec = await new ReturnServiceClient(r.returnServiceUrl).getReturn(r.returnId);
+            const rec = await client.getReturn(r.returnId);
             store.updateReturn(r.id, { status: rec.status, settleTxid: rec.settleTxid });
           } catch {
             /* service down — keep last known status */

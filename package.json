@@ -23,6 +23,7 @@
     "@unicitylabs/bridge-plugin-tron-usdt": "file:../bridge-plugin-tron-usdt",
     "@unicitylabs/sphere-sdk": "file:../sphere-sdk",
     "@unicitylabs/sphere-ui": "^0.1.23",
+    "@unicitylabs/state-transition-sdk": "file:../state-transition-sdk-js",
     "crypto-js": "^4.2.0",
     "elliptic": "^6.6.1",
     "framer-motion": "^12.23.24",

@@ -410,17 +410,25 @@ export function L3WalletView({
                   {assets.length === 0 ? (
                     <EmptyState />
                   ) : (
-                    assets.map((asset, index) => (
-                      <AssetRow
-                        key={asset.coinId}
-                        asset={asset}
-                        showBalances={showBalances}
-                        delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
-                        layer="L3"
-                        isNew={newAssetCoinIds.has(asset.coinId)}
-                        bridgedLabel={sphere?.bridgeForCoin(asset.coinId)?.label}
-                      />
-                    ))
+                    assets.map((asset, index) => {
+                      // Bridged coinIds are bridge-derived (never in the token
+                      // registry), so getAssets() falls back to a truncated-hex
+                      // "symbol" — override it from the bridge manifest, which is
+                      // the one source that actually knows this asset is USDT.
+                      const bridge = sphere?.bridgeForCoin(asset.coinId);
+                      const displayAsset = bridge ? { ...asset, symbol: bridge.symbol, name: bridge.label } : asset;
+                      return (
+                        <AssetRow
+                          key={asset.coinId}
+                          asset={displayAsset}
+                          showBalances={showBalances}
+                          delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
+                          layer="L3"
+                          isNew={newAssetCoinIds.has(asset.coinId)}
+                          bridgedLabel={bridge?.label}
+                        />
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -434,14 +442,20 @@ export function L3WalletView({
                     tokens
                       .filter(t => t.coinId !== 'NAMETAG')
                       .sort((a, b) => b.createdAt - a.createdAt)
-                      .map((token, index) => (
-                        <TokenRow
-                          key={token.id}
-                          token={token}
-                          delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
-                          isNew={newTokenIds.has(token.id)}
-                        />
-                      ))
+                      .map((token, index) => {
+                        // Same registry-miss fallback as the Assets tab — override
+                        // from the bridge manifest when this token's coinId is bridged.
+                        const bridge = sphere?.bridgeForCoin(token.coinId ?? '');
+                        const displayToken = bridge ? { ...token, symbol: bridge.symbol } : token;
+                        return (
+                          <TokenRow
+                            key={token.id}
+                            token={displayToken}
+                            delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
+                            isNew={newTokenIds.has(token.id)}
+                          />
+                        );
+                      })
                   )}
                 </div>
               )}
