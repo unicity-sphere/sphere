@@ -10,6 +10,7 @@ import { ArrowDownLeft, ArrowUpRight, CheckCircle, Loader2, ExternalLink, AlertT
 import { useTokens } from '../../../../sdk';
 import { useBridgeIn } from '../../../../sdk/hooks/payments/useBridgeIn';
 import { useBridgeBack, useBridgeClaims } from '../../../../sdk/hooks/payments/useBridgeBack';
+import { bridgeExplorerTxUrl, isValidBridgeDestination } from '../../../../bridge/loadBridges';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -21,10 +22,6 @@ type InStep = 'form' | 'processing' | 'success';
 interface BridgeModalProps {
   isOpen: boolean;
   onClose: (result?: { success: boolean }) => void;
-}
-
-function nileTx(txid: string): string {
-  return `https://nile.tronscan.org/#/transaction/${txid}`;
 }
 
 export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
@@ -147,8 +144,8 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
             <Loader2 className="w-8 h-8 animate-spin text-brand-orange" />
             <div className="text-sm font-medium">{progressLabel(progress?.phase)}</div>
             {progress?.message && <div className="text-xs text-neutral-500">{progress.message}</div>}
-            {progress?.lockTxid && (
-              <a href={nileTx(progress.lockTxid)} target="_blank" rel="noreferrer" className="text-xs text-brand-orange inline-flex items-center gap-1">
+            {progress?.lockTxid && selectedBridge && (
+              <a href={bridgeExplorerTxUrl(selectedBridge.chainId, progress.lockTxid)} target="_blank" rel="noreferrer" className="text-xs text-brand-orange inline-flex items-center gap-1">
                 lock tx <ExternalLink className="w-3 h-3" />
               </a>
             )}
@@ -166,7 +163,13 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
           </div>
         )}
 
-        {tab === 'out' && <BridgeOutPanel coinIdHex={selectedBridge?.coinIdHex ?? coinIdHex} decimals={selectedBridge?.decimals ?? 6} />}
+        {tab === 'out' && (
+          <BridgeOutPanel
+            coinIdHex={selectedBridge?.coinIdHex ?? coinIdHex}
+            decimals={selectedBridge?.decimals ?? 6}
+            chainId={selectedBridge?.chainId ?? 0}
+          />
+        )}
       </div>
     </WalletScreen>
   );
@@ -192,7 +195,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
  * `queued→proving→submitted→settled` (+ self-settle). Burns one token whole — for
  * a partial amount, split first (existing split flow) and burn the child.
  */
-function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: number }) {
+function BridgeOutPanel({ coinIdHex, decimals, chainId }: { coinIdHex: string; decimals: number; chainId: number }) {
   const { tokens } = useTokens();
   const { bridgeBack, isLoading, error } = useBridgeBack();
   const { claims } = useBridgeClaims();
@@ -207,7 +210,7 @@ function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: 
   const onBurn = async () => {
     setLocalErr(null);
     if (!token) return;
-    if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(dest)) {
+    if (!isValidBridgeDestination(chainId, dest)) {
       setLocalErr('Enter a valid Tron (T…) destination address.');
       return;
     }
@@ -255,7 +258,7 @@ function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: 
               <span className="font-mono text-neutral-500">{c.nullifierHex.slice(0, 10)}…</span>
               <span className={c.status === 'settled' ? 'text-green-500' : 'text-amber-500'}>{c.status}</span>
               {c.settleTxid && (
-                <a href={nileTx(c.settleTxid)} target="_blank" rel="noreferrer" className="text-brand-orange inline-flex items-center gap-1">tx <ExternalLink className="w-3 h-3" /></a>
+                <a href={bridgeExplorerTxUrl(chainId, c.settleTxid)} target="_blank" rel="noreferrer" className="text-brand-orange inline-flex items-center gap-1">tx <ExternalLink className="w-3 h-3" /></a>
               )}
             </div>
           ))}

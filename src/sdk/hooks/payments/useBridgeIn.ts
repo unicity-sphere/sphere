@@ -45,7 +45,7 @@ export function useBridgeIn(opts: UseBridgeInArgs = {}) {
       if (!bridge) throw new Error(`No bridge configured for coin ${req.coinIdHex}`);
 
       const signer = opts.signer ?? new TronLinkSigner(undefined, bridge.manifest.chainId);
-      const networkId = networkIdFromSphere(sphere);
+      const networkId = unicityNetworkId(sphere);
       const amount = BigInt(req.amount);
       const MAX_UINT256 = (1n << 256n) - 1n;
 
@@ -99,10 +99,16 @@ function refreshBalances(queryClient: ReturnType<typeof useQueryClient>): void {
   queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.assets.all });
 }
 
-/** Network id the wallet mints on. The trust base is the source of truth; testnet2 = 4. */
-function networkIdFromSphere(sphere: { bridges?: unknown }): number {
-  void sphere;
-  // testnet2 networkId; the SDK derives the real id from its trust base internally.
-  // buildBridgeInPlan only needs it for TokenId.fromSalt (must match the mint network).
-  return 4;
+/**
+ * The Unicity network id the wallet mints on — read from the SDK's root trust base
+ * (`sphere.networkId`, e.g. testnet2 = 4), the single source of truth. The bridge-in
+ * plan needs it for `TokenId.fromSalt`, which MUST match the mint network, so we
+ * fail loudly rather than derive a wrong-network token id from a stale default.
+ */
+function unicityNetworkId(sphere: { networkId?: number }): number {
+  const id = sphere.networkId;
+  if (typeof id !== 'number') {
+    throw new Error('Unicity network id unavailable (trust base not loaded); cannot bridge in yet.');
+  }
+  return id;
 }

@@ -8,6 +8,8 @@
 import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import type { SphereBridgeInfo } from '@unicitylabs/sphere-sdk';
 import {
+  explorerTxUrl,
+  isValidTronAddress,
   loadBridges as loadBridgesFacade,
   NILE_USDT_BRIDGE,
   withReturnServiceUrl,
@@ -16,6 +18,21 @@ import {
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
 
 export type { BridgeManifest, LoadedBridge };
+
+/**
+ * Chain-agnostic UI helpers (08 §8): the modal asks the bridge for its explorer
+ * URL / destination validation by `chainId`, instead of hardcoding a Nile URL or
+ * the Tron address shape. A second chain's plugin supplies its own.
+ */
+export function bridgeExplorerTxUrl(chainId: number, txid: string): string {
+  return explorerTxUrl(chainId, txid);
+}
+
+/** Whether `addr` is a valid destination on the given bridge's source chain. */
+export function isValidBridgeDestination(chainId: number, addr: string): boolean {
+  void chainId; // single chain today; dispatch on chainId when a second lands
+  return isValidTronAddress(addr);
+}
 
 /** Resolved bridges: engine verifiers + UI metadata + the loaded plugins (for flows). */
 export interface AppBridges {
