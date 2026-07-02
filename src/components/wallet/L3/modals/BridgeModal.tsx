@@ -127,8 +127,9 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
             </label>
 
             <p className="text-xs text-neutral-500">
-              You'll sign two Tron transactions in TronLink (approve, then lock). The bridged token mints
-              immediately and is spendable; it's "final for others" after {selectedBridge?.confirmations} blocks.
+              You'll sign in TronLink — just the lock if the vault is already approved, otherwise an approval
+              first. The bridged token mints immediately and is spendable; it's "final for others" after{' '}
+              {selectedBridge?.confirmations} blocks.
             </p>
 
             {error && (

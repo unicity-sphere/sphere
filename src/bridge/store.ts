@@ -72,11 +72,13 @@ function read(addressKey: string): BridgeState {
   }
 }
 
-function write(addressKey: string, state: BridgeState): void {
+/** Persist state; returns false when storage is full/unavailable (fail-closed callers check). */
+function write(addressKey: string, state: BridgeState): boolean {
   try {
     localStorage.setItem(KEY_PREFIX + addressKey, JSON.stringify(state));
+    return true;
   } catch {
-    // Storage full / unavailable — recovery degrades but the lock is still on-chain.
+    return false;
   }
 }
 
@@ -93,12 +95,17 @@ export class BridgeStore {
     return this.listLocks().filter((l) => l.status === 'locking' || l.status === 'locked');
   }
 
-  public persistPendingLock(lock: PendingLock): void {
+  /**
+   * Persist a pending lock. Returns `false` if storage was unavailable — the
+   * bridge-in caller treats that as fail-closed and refuses to lock (08 §1.5),
+   * since a lock with no recorded salt is unmintable.
+   */
+  public persistPendingLock(lock: PendingLock): boolean {
     const state = read(this.addressKey);
     const i = state.locks.findIndex((l) => l.id === lock.id);
     if (i >= 0) state.locks[i] = lock;
     else state.locks.push(lock);
-    write(this.addressKey, state);
+    return write(this.addressKey, state);
   }
 
   public updateLock(id: string, patch: Partial<PendingLock>): void {

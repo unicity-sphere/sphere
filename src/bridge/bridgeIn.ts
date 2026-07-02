@@ -11,6 +11,7 @@ import {
   buildBridgeInPlan,
   buildSelfMintVerifierService,
   fromHex,
+  queryAllowance,
   type LoadedBridge,
   type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
@@ -63,6 +64,8 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
   const chainPubkey = sphere.identity?.chainPubkey;
   if (!chainPubkey) throw new Error('Wallet identity unavailable');
 
+  const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
+
   progress({ phase: 'deriving' });
   const plan = await buildBridgeInPlan({
     plugin: bridge.plugin,
@@ -72,7 +75,15 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     approveAmount: args.approveAmount,
   });
 
-  // Persist the intent BEFORE any Tron tx, so a crash mid-lock is recoverable.
+  // Connect once (08 §1.2) and pin {account, network}; verify the wallet is on
+  // this bridge's chain BEFORE any signing (08 §1.3). The pin is re-checked live
+  // before every signature below (08 §1.4).
+  const owner = await signer.connect();
+  const network = await signer.getNetwork();
+  assertOnChain(network, bridge);
+
+  // Persist the intent BEFORE any Tron tx — fail-closed (08 §1.5): a lock whose
+  // salt we couldn't record is unmintable, so refuse to lock rather than strand it.
   const lockRecord: PendingLock = {
     id: plan.tokenIdHex,
     coinIdHex: bridge.plugin.coinIdHex,
@@ -85,36 +96,69 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     createdAt: Date.now(),
     status: 'locking',
   };
-  store.persistPendingLock(lockRecord);
+  if (!store.persistPendingLock(lockRecord)) {
+    throw new Error('Could not save the pending bridge-in locally; not locking (the mint would be unrecoverable).');
+  }
 
-  progress({ phase: 'approving', message: 'Approve USDT on Tron…' });
-  await signer.sendCall(plan.approve);
+  let lockConfirmed = false;
+  try {
+    // Skip the approval entirely when the vault's allowance already covers the
+    // amount (08 §1.1) — a repeat bridge-in becomes a single `lock` prompt.
+    if (await needsApproval(rpc, bridge, owner, amount)) {
+      await guardUnchanged(signer, owner, network, bridge); // re-check right before signing
+      progress({ phase: 'approving', message: 'Approve USDT on Tron…' });
+      const approveTxid = await signer.sendCall(plan.approve);
+      // Wait for the approval to land + succeed before locking (08 §1.4); a revert
+      // throws here instead of degrading into a lock-not-found timeout.
+      progress({ phase: 'approving', message: 'Waiting for the approval to confirm…' });
+      await waitForReceipt(rpc, approveTxid, 'approval');
+    }
 
-  progress({ phase: 'locking', message: 'Lock USDT on Tron…' });
-  const lockTxid = await signer.sendCall(plan.lock);
-  // Mutate the local record too, not just the store — mintFromLock below reads
-  // lock.lockTxid off this same object, and store.updateLock only updates the
-  // store's own persisted copy.
-  lockRecord.lockTxid = lockTxid;
-  store.updateLock(lockRecord.id, { lockTxid });
-  progress({ phase: 'waiting-lock', lockTxid, message: 'Waiting for the lock to land in a block…' });
+    await guardUnchanged(signer, owner, network, bridge); // re-check right before the lock
+    progress({ phase: 'locking', message: 'Lock USDT on Tron…' });
+    const lockTxid = await signer.sendCall(plan.lock);
+    // Mutate the local record too, not just the store — mintFromLock below reads
+    // lock.lockTxid off this same object, and store.updateLock only updates the
+    // store's own persisted copy.
+    lockRecord.lockTxid = lockTxid;
+    store.updateLock(lockRecord.id, { lockTxid });
+    progress({ phase: 'waiting-lock', lockTxid, message: 'Waiting for the lock to land in a block…' });
 
-  const lockEvent = await waitForLock(bridge, lockTxid);
-  store.updateLock(lockRecord.id, {
-    status: 'locked',
-    nonce: Number(lockEvent.nonce),
-    lockBlock: Number(lockEvent.blockNumber),
-    logIndex: lockEvent.logIndex,
-  });
+    const lockEvent = await waitForLock(bridge, lockTxid); // fast-fails on a mined revert
+    lockConfirmed = true;
+    store.updateLock(lockRecord.id, {
+      status: 'locked',
+      nonce: Number(lockEvent.nonce),
+      lockBlock: Number(lockEvent.blockNumber),
+      logIndex: lockEvent.logIndex,
+    });
 
-  progress({ phase: 'minting', lockTxid, message: 'Minting the bridged token…' });
-  const tokenId = await mintFromLock(sphere, bridge, lockRecord, lockEvent, amount);
-  store.updateLock(lockRecord.id, { status: 'minted' });
-  store.removeLock(lockRecord.id);
+    progress({ phase: 'minting', lockTxid, message: 'Minting the bridged token…' });
+    const tokenId = await mintFromLock(sphere, bridge, lockRecord, lockEvent, amount);
+    store.updateLock(lockRecord.id, { status: 'minted' });
+    store.removeLock(lockRecord.id);
 
-  progress({ phase: 'done', lockTxid });
-  return { tokenId, amount };
+    progress({ phase: 'done', lockTxid });
+    return { tokenId, amount };
+  } catch (e) {
+    // Terminal pending-record handling (08 §1.4). With no on-chain lock confirmed,
+    // nothing is locked: drop the intent (retry starts fresh with a new salt) — or,
+    // if a lock broadcast but is *known* reverted, mark it failed. A lock that
+    // merely timed out is left as-is (it may still confirm; resume handles it). The
+    // record is kept only once the mint failed AFTER a confirmed lock (resumable).
+    if (!lockConfirmed) {
+      if (lockRecord.lockTxid && e instanceof TxRevertedError) {
+        store.updateLock(lockRecord.id, { status: 'failed' });
+      } else if (!lockRecord.lockTxid) {
+        store.removeLock(lockRecord.id);
+      }
+    }
+    throw e;
+  }
 }
+
+/** A transaction that was mined but reverted (distinguished from a timeout). */
+export class TxRevertedError extends Error {}
 
 /** Resume a mint for a lock that already landed on-chain (crash recovery). */
 export async function resumeBridgeMint(
@@ -124,7 +168,15 @@ export async function resumeBridgeMint(
   lock: PendingLock,
 ): Promise<BridgeInResult> {
   if (!lock.lockTxid) throw new Error('Pending lock has no lock txid — cannot resume');
-  const lockEvent = await waitForLock(bridge, lock.lockTxid);
+  let lockEvent: LockEventInfo;
+  try {
+    lockEvent = await waitForLock(bridge, lock.lockTxid);
+  } catch (e) {
+    // A reverted lock never moved funds — mark it terminal so it stops surfacing
+    // as a resumable pending mint (08 §1.4). A timeout stays pending to retry.
+    if (e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
+    throw e;
+  }
   const amount = BigInt(lock.amount);
   const tokenId = await mintFromLock(sphere, bridge, lock, lockEvent, amount);
   store.updateLock(lock.id, { status: 'minted' });
@@ -138,6 +190,78 @@ interface LockEventInfo {
   logIndex: number;
 }
 
+/** Assert a chainId matches this bridge, or throw a clear wrong-network error (08 §1.3). */
+function assertOnChain(network: number, bridge: LoadedBridge): void {
+  const expected = bridge.manifest.chainId;
+  if (network !== expected) {
+    throw new Error(
+      `Wrong Tron network: your wallet is on chainId ${network}, but ${bridge.manifest.label} ` +
+        `requires chainId ${expected}. Switch networks in your wallet and try again.`,
+    );
+  }
+}
+
+/**
+ * Re-read the wallet's live {account, network} and compare to the values pinned
+ * at flow start (08 §1.4). Called immediately before every signature so a
+ * mid-flow account/network switch aborts rather than signing on the wrong
+ * chain/account. TronLink's `getAddress`/`getNetwork` read live (no cache).
+ */
+async function guardUnchanged(
+  signer: TronSigner,
+  pinnedOwner: string,
+  pinnedNetwork: number,
+  bridge: LoadedBridge,
+): Promise<void> {
+  const [account, network] = await Promise.all([signer.getAddress(), signer.getNetwork()]);
+  assertOnChain(network, bridge);
+  if (network !== pinnedNetwork) {
+    throw new Error('Your wallet network changed during the bridge-in. Re-open Bridge to try again.');
+  }
+  if (account !== pinnedOwner) {
+    throw new Error('Your wallet account changed during the bridge-in. Re-open Bridge to try again.');
+  }
+}
+
+/**
+ * True when an `approve` is still required (08 §1.1). Reads the current
+ * `allowance(owner, vault)`; on a read failure, defaults to `true` (send the
+ * approve) — a redundant approval is safe, a skipped-but-needed one is not.
+ */
+async function needsApproval(
+  rpc: TronHttpRpcClient,
+  bridge: LoadedBridge,
+  owner: string,
+  amount: bigint,
+): Promise<boolean> {
+  try {
+    const allowance = await queryAllowance(rpc, {
+      assetAddress: bridge.plugin.resolvedConfig.assetContractHex,
+      owner,
+      spender: bridge.plugin.resolvedConfig.lockContractHex,
+    });
+    return allowance < amount;
+  } catch {
+    return true;
+  }
+}
+
+/** Poll until `txid` is mined; return on success, throw on revert or timeout (08 §1.4). */
+async function waitForReceipt(rpc: TronHttpRpcClient, txid: string, label: string, timeoutMs = 90_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const info = await rpc.getTransactionInfo(txid);
+    if (info) {
+      if (info.success) return;
+      throw new TxRevertedError(`The Tron ${label} transaction reverted. Please try again.`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for the Tron ${label} to confirm.`);
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
 /** Poll the Tron node until the lock tx is mined and its `Lock` event is found. */
 async function waitForLock(bridge: LoadedBridge, lockTxid: string, timeoutMs = 120_000): Promise<LockEventInfo> {
   const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
@@ -145,7 +269,12 @@ async function waitForLock(bridge: LoadedBridge, lockTxid: string, timeoutMs = 1
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const info = await rpc.getTransactionInfo(lockTxid);
-    if (info && info.success) {
+    if (info) {
+      // Mined-but-reverted: fail fast (08 §1.4) — nothing is locked; no point
+      // waiting out the timeout. Distinguished so the caller can mark it failed.
+      if (!info.success) {
+        throw new TxRevertedError('The Tron lock transaction reverted; nothing was locked.');
+      }
       const logIndex = info.logs.findIndex((l) => l.address.toLowerCase() === vaultHex);
       const decoded = logIndex >= 0 ? decodeLockEvent(info.logs[logIndex]) : null;
       if (decoded) {
