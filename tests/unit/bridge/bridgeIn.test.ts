@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   loadBridges,
   NILE_USDT_BRIDGE,
+  type BridgeSourceAdapter,
   type TronCall,
   type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
@@ -204,6 +205,63 @@ describe('runBridgeIn', () => {
     const rec = store.only();
     expect(rec.lockTxid).toBe(LOCK_TX);
     expect(rec.status).toBe('failed'); // kept but terminal, not a zombie pending mint
+  });
+});
+
+describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
+  it('runs a single-signature deposit strategy through the same orchestration', async () => {
+    // A fake second-chain adapter: one opaque step, no approve/allowance — the
+    // EIP-3009-style single-signature deposit. Sphere must run it unchanged.
+    const adapterSends: string[] = [];
+    const buildMintRequest = vi.fn(() => ({}) as never);
+    const adapter: BridgeSourceAdapter = {
+      async prepareDeposit() {
+        return {
+          recovery: {
+            tokenIdHex: 'ab'.repeat(32),
+            saltHex: 'cd'.repeat(32),
+            recipientCommitmentHex: 'ef'.repeat(32),
+            coinIdHex: '12'.repeat(32),
+            tokenTypeHex: '34'.repeat(32),
+            chainId: CHAIN,
+          },
+          steps: [
+            {
+              label: 'Authorize deposit (single signature)…',
+              awaitReceipt: false,
+              send: async () => {
+                adapterSends.push('authorize');
+                return 'a1'.repeat(32);
+              },
+            },
+          ],
+          commitIndex: 0,
+        };
+      },
+      decodeCommit: () => ({ nonce: 1n, blockNumber: 2n, logIndex: 0 }),
+      buildMintRequest,
+    };
+
+    const signer = new FakeSigner(); // used only for connect + guard (account/network)
+    const store = new FakeStore();
+    const sphere = fakeSphere();
+    const res = await runBridgeIn({
+      sphere,
+      bridge,
+      signer,
+      store: asStore(store),
+      amount: AMOUNT,
+      networkId: 4,
+      adapter,
+      // committing receipt is a plain success; the fake adapter's decodeCommit ignores it
+      rpc: fakeRpc({ allowance: 0n, lock: { blockNumber: 2n, success: true, logs: [] } }),
+    });
+
+    expect(adapterSends).toEqual(['authorize']); // one signature, no approve step
+    expect(signer.sent).toHaveLength(0); // Sphere signed via the opaque step, not the Tron signer
+    expect(buildMintRequest).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ tokenId: 'MINTED', amount: AMOUNT });
+    expect(store.locks.size).toBe(0);
   });
 });
 
