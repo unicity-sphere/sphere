@@ -8,3 +8,7 @@ export const SUBSCRIPTION_API_URL =
 
 export const SUBSCRIPTION_ENABLED =
   import.meta.env.VITE_SUBSCRIPTION_ENABLED === 'true';
+
+/** When true, the SGW client returns canned data instead of hitting the network — lets the UI be built before the backend is live. */
+export const SUBSCRIPTION_MOCK =
+  import.meta.env.VITE_SUBSCRIPTION_MOCK === 'true';

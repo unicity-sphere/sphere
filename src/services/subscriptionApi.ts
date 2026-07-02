@@ -4,7 +4,8 @@
  * the returned apiKey via the X-API-Key header. Contract: design spec §4–5.
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
-import { SUBSCRIPTION_API_URL } from '../config/subscription';
+import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
+import * as mock from './subscriptionApi.mock';
 
 export interface PlanInfo {
   planId: number;
@@ -61,6 +62,7 @@ function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, 
  * free-plan key. Used by BOTH create (created=true) and restore (created=false).
  */
 export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionResult> {
+  if (SUBSCRIPTION_MOCK) return mock.mockProvision;
   const pubkey = sphere.identity?.chainPubkey;
   if (!pubkey) throw new Error('Wallet identity unavailable (no chainPubkey)');
 
@@ -70,23 +72,27 @@ export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionRe
 }
 
 export async function getPlans(): Promise<PlanInfo[]> {
+  if (SUBSCRIPTION_MOCK) return mock.mockPlans;
   const data = await request<{ availablePlans: PlanInfo[] }>('/api/payment/plans');
   return data.availablePlans;
 }
 
 export function getKeyInfo(apiKey: string): Promise<KeyInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockKeyInfo);
   return request<KeyInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}`, {
     headers: { 'x-api-key': apiKey },
   });
 }
 
 export function getUsage(apiKey: string): Promise<UsageInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockUsage);
   return request<UsageInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}/usage`, {
     headers: { 'x-api-key': apiKey },
   });
 }
 
 export function createCheckout(apiKey: string, targetPlanId: number, returnUrl?: string): Promise<CheckoutResult> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockCheckout);
   return postJson<CheckoutResult>(
     '/api/payment/checkout',
     { targetPlanId, ...(returnUrl ? { returnUrl } : {}) },
