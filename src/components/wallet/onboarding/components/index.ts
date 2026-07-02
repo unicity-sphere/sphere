@@ -11,3 +11,4 @@ export { addrKey, parseAddrKey } from "./addrKey";
 export { NametagScreen, type NametagAvailability } from "./NametagScreen";
 export { ProcessingScreen } from "./ProcessingScreen";
 export { MnemonicBackupScreen } from "./MnemonicBackupScreen";
+export { PlanCapabilitiesScreen } from "./PlanCapabilitiesScreen";
