@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
+import { SubscriptionModal } from './SubscriptionModal';
+import { showToast } from '../../../ui/toast-utils';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -23,6 +25,7 @@ export function SettingsModal({
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
+  const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
 
   return (
     <>
@@ -55,6 +58,14 @@ export function SettingsModal({
             color="neutral"
             label="Connected Sites"
             onClick={() => setIsConnectedSitesOpen(true)}
+          />
+
+          <MenuButton
+            icon={CreditCard}
+            color="orange"
+            label="Subscription"
+            subtitle="Manage your plan"
+            onClick={() => setIsSubscriptionOpen(true)}
           />
 
           <MenuButton
@@ -95,6 +106,12 @@ export function SettingsModal({
       <ConnectedSitesModal
         isOpen={isConnectedSitesOpen}
         onClose={() => setIsConnectedSitesOpen(false)}
+      />
+
+      <SubscriptionModal
+        isOpen={isSubscriptionOpen}
+        onClose={() => setIsSubscriptionOpen(false)}
+        onUpgrade={() => showToast('Upgrade coming soon', 'info')}
       />
     </>
   );
