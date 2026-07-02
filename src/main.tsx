@@ -10,6 +10,7 @@ import { ThemeInitializer } from './components/theme'
 import { SphereProvider } from './sdk/SphereProvider'
 import { ServicesProvider } from './contexts/ServicesProvider'
 import { ConnectProvider } from './components/connect'
+import { UpgradeProvider } from './components/upgrade'
 import { ToastContainer } from './components/ui/Toast'
 
 createRoot(document.getElementById('root')!).render(
@@ -18,12 +19,14 @@ createRoot(document.getElementById('root')!).render(
       <SphereProvider network="testnet2">
         <ServicesProvider>
           <ConnectProvider>
-            <ThemeInitializer>
-              <BrowserRouter basename={import.meta.env.BASE_URL}>
-                <App />
-              </BrowserRouter>
-              <ToastContainer />
-            </ThemeInitializer>
+            <UpgradeProvider>
+              <ThemeInitializer>
+                <BrowserRouter basename={import.meta.env.BASE_URL}>
+                  <App />
+                </BrowserRouter>
+                <ToastContainer />
+              </ThemeInitializer>
+            </UpgradeProvider>
           </ConnectProvider>
         </ServicesProvider>
       </SphereProvider>
