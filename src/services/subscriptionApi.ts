@@ -12,7 +12,13 @@ export interface PlanInfo {
   name: string;
   requestsPerSecond: number;
   requestsPerDay: number;
-  price: string; // decimal string
+  price: string; // legacy on-chain amount (UCT smallest units) — NOT for display
+  /**
+   * USD display price as a decimal string, e.g. "9.99"; "0"/absent = free.
+   * Shown on the plan cards. The external checkout page lets the user pick the
+   * actual payment currency; this is only the reference/base price.
+   */
+  priceUsd?: string;
 }
 
 export interface ProvisionResult {

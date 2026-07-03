@@ -14,19 +14,30 @@ export function isPopularPlan(plan: PlanInfo): boolean {
 }
 
 export function isFreePlan(plan: PlanInfo): boolean {
+  if (plan.priceUsd != null && plan.priceUsd !== '') {
+    const n = Number(plan.priceUsd);
+    return !Number.isFinite(n) || n <= 0;
+  }
   return !plan.price || plan.price === '0';
 }
 
 /**
- * The big price shown on a card. `price` is a decimal string (possibly huge —
- * it can exceed Number range), so group it via BigInt. `"0"`/empty → "Free".
+ * The big price shown on a card, in USD ("$9.99"), from `priceUsd`. `"0"`/absent
+ * → "Free". Falls back to the legacy on-chain `price` (grouped integer) only if
+ * the backend hasn't populated `priceUsd` yet — see docs/subscription-integration-handoff.md.
  */
-export function formatPlanPrice(price: string): string {
-  if (!price || price === '0') return 'Free';
+export function formatPlanPrice(plan: PlanInfo): string {
+  if (plan.priceUsd != null && plan.priceUsd !== '') {
+    const n = Number(plan.priceUsd);
+    if (!Number.isFinite(n) || n <= 0) return 'Free';
+    return `$${n.toFixed(2)}`;
+  }
+  // Fallback until the backend adds priceUsd: legacy integer price (UCT units).
+  if (!plan.price || plan.price === '0') return 'Free';
   try {
-    return BigInt(price).toLocaleString();
+    return BigInt(plan.price).toLocaleString();
   } catch {
-    return price;
+    return plan.price;
   }
 }
 

@@ -20,7 +20,7 @@ interface PlanCardProps {
 }
 
 export function PlanCard({ plan, current, popular, onSelect, loading, disabled }: PlanCardProps) {
-  const price = formatPlanPrice(plan.price);
+  const price = formatPlanPrice(plan);
   const features = planFeatures(plan);
   const showCta = !!onSelect && !current;
   const accent = current ? 'emerald' : popular ? 'orange' : 'neutral';
@@ -31,10 +31,10 @@ export function PlanCard({ plan, current, popular, onSelect, loading, disabled }
       transition={{ duration: 0.15 }}
       className={`relative flex flex-col rounded-2xl border p-6 ${
         current
-          ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
+          ? 'border-emerald-500/30 bg-emerald-500/6'
           : popular
-            ? 'border-orange-500/40 bg-orange-500/[0.06] shadow-[0_0_0_1px_rgba(249,115,22,0.15)]'
-            : 'border-neutral-200 bg-neutral-50 dark:border-white/8 dark:bg-white/[0.04]'
+            ? 'border-orange-500/40 bg-orange-500/6 shadow-[0_0_0_1px_rgba(249,115,22,0.15)]'
+            : 'border-neutral-200 bg-neutral-50 dark:border-white/8 dark:bg-white/4'
       }`}
     >
       {/* Badge (Current takes precedence over Popular) */}
@@ -70,7 +70,7 @@ export function PlanCard({ plan, current, popular, onSelect, loading, disabled }
       </div>
 
       {/* CTA */}
-      <div className="mt-5 min-h-[40px]">
+      <div className="mt-5 min-h-10">
         {current ? (
           <div className="w-full rounded-xl border border-emerald-500/30 py-2 text-center text-sm font-medium text-emerald-500">
             Your current plan

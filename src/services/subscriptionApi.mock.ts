@@ -6,10 +6,10 @@
 import type { PlanInfo, UsageInfo, KeyInfo, ProvisionResult, CheckoutResult } from './subscriptionApi';
 
 export const mockPlans: PlanInfo[] = [
-  { planId: 0, name: 'free', requestsPerSecond: 2, requestsPerDay: 500, price: '0' },
-  { planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000' },
-  { planId: 2, name: 'standard', requestsPerSecond: 10, requestsPerDay: 100000, price: '5000000' },
-  { planId: 3, name: 'premium', requestsPerSecond: 20, requestsPerDay: 500000, price: '10000000' },
+  { planId: 0, name: 'free', requestsPerSecond: 2, requestsPerDay: 500, price: '0', priceUsd: '0' },
+  { planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000', priceUsd: '4.99' },
+  { planId: 2, name: 'standard', requestsPerSecond: 10, requestsPerDay: 100000, price: '5000000', priceUsd: '9.99' },
+  { planId: 3, name: 'premium', requestsPerSecond: 20, requestsPerDay: 500000, price: '10000000', priceUsd: '29.99' },
 ];
 
 export const mockProvision: ProvisionResult = { apiKey: 'key_mock_free', plan: mockPlans[0], created: true };

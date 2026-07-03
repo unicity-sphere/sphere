@@ -11,26 +11,28 @@ const plan = (over: Partial<PlanInfo>): PlanInfo => ({
   ...over,
 });
 
-describe('formatPlanPrice', () => {
-  it('renders "Free" for zero/empty', () => {
-    expect(formatPlanPrice('0')).toBe('Free');
-    expect(formatPlanPrice('')).toBe('Free');
+describe('formatPlanPrice (USD)', () => {
+  it('renders USD from priceUsd', () => {
+    expect(formatPlanPrice(plan({ priceUsd: '9.99' }))).toBe('$9.99');
+    expect(formatPlanPrice(plan({ priceUsd: '4' }))).toBe('$4.00');
+    expect(formatPlanPrice(plan({ priceUsd: '29.9' }))).toBe('$29.90');
   });
-  it('groups big decimal-string amounts (beyond Number range)', () => {
-    expect(formatPlanPrice('10000000')).toBe((10_000_000).toLocaleString());
-    expect(formatPlanPrice('123456789012345678901234567890')).toBe(
-      BigInt('123456789012345678901234567890').toLocaleString(),
-    );
+  it('renders "Free" for a zero/absent USD price', () => {
+    expect(formatPlanPrice(plan({ priceUsd: '0' }))).toBe('Free');
+    expect(formatPlanPrice(plan({ priceUsd: '', price: '0' }))).toBe('Free');
   });
-  it('falls back to the raw string on a non-numeric value', () => {
-    expect(formatPlanPrice('abc')).toBe('abc');
+  it('falls back to the legacy integer price only when priceUsd is absent', () => {
+    expect(formatPlanPrice(plan({ priceUsd: undefined, price: '10000000' }))).toBe((10_000_000).toLocaleString());
+    expect(formatPlanPrice(plan({ priceUsd: undefined, price: '0' }))).toBe('Free');
   });
 });
 
 describe('isFreePlan / isPopularPlan', () => {
-  it('detects the free plan by price', () => {
-    expect(isFreePlan(plan({ price: '0' }))).toBe(true);
-    expect(isFreePlan(plan({ price: '1000000' }))).toBe(false);
+  it('detects the free plan by USD price (with legacy fallback)', () => {
+    expect(isFreePlan(plan({ priceUsd: '0' }))).toBe(true);
+    expect(isFreePlan(plan({ priceUsd: '9.99' }))).toBe(false);
+    expect(isFreePlan(plan({ priceUsd: undefined, price: '0' }))).toBe(true);
+    expect(isFreePlan(plan({ priceUsd: undefined, price: '1000000' }))).toBe(false);
   });
   it('flags only the standard plan as popular (case-insensitive)', () => {
     expect(isPopularPlan(plan({ name: 'Standard' }))).toBe(true);

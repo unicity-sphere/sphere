@@ -69,9 +69,17 @@ Verify signature, then **get-or-create** the identity's free-plan key. Unauthent
 - This one endpoint serves BOTH create and restore (idempotent). It requires binding key↔identity in the DB (e.g. add a `pubkey` column to `api_keys`, or a join table).
 - **Precondition:** a **free/default plan** must exist and be assignable so the returned key is immediately usable for `certification_request` (a plan-less key 401s).
 
-### 3.3 `GET /api/payment/plans` — EXISTS
-- **Response 200:** `{ "availablePlans": [ { "planId": <int>, "name": <str>, "requestsPerSecond": <int>, "requestsPerDay": <int>, "price": "<decimal string>" }, ... ] }`
-- Sphere uses this for the upgrade modal's plan grid.
+### 3.3 `GET /api/payment/plans` — EXISTS (needs a `priceUsd` field added)
+- **Response 200:** `{ "availablePlans": [ PlanInfo, ... ] }` where `PlanInfo`:
+  ```json
+  { "planId": <int>, "name": <str>, "requestsPerSecond": <int>, "requestsPerDay": <int>,
+    "price": "<decimal string>",   // legacy on-chain amount (UCT smallest units) — kept for compat
+    "priceUsd": "<decimal string>" // NEW — USD display price, e.g. "9.99"; "0"/absent = free
+  }
+  ```
+- **`priceUsd` is required for the cards.** The plan cards show the **USD** price (e.g. `$9.99`); the **external checkout page** is where the user picks the actual payment currency, so `priceUsd` is just the reference/base price. If `priceUsd` is absent the client falls back to showing the legacy integer `price` (not desired) — so populate it.
+- The same `PlanInfo` shape (with `priceUsd`) should be returned as the `plan` object in `POST /auth/verify` (§3.2), so the onboarding "your free plan" card shows a consistent `Free`.
+- Sphere uses this for the upgrade modal's plan grid and the onboarding all-plans screen.
 
 ### 3.4 `GET /api/payment/key/{apiKey}` — EXISTS
 - Auth today: none (the `{apiKey}` in the path is a lookup value). Sphere ALSO sends `X-API-Key: {apiKey}` (harmless; if you unify auth later, keep accepting it).
