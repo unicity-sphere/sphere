@@ -31,7 +31,7 @@ export function useBridgeBack() {
   const mutation = useMutation({
     mutationFn: async (req: BridgeBackRequest) => {
       if (!sphere) throw new Error('Wallet not initialized');
-      const bridge = getAppBridges().loaded.find((l) => l.plugin.coinIdHex === req.coinIdHex.toLowerCase());
+      const bridge = getAppBridges().registry.byCoinId(req.coinIdHex);
       if (!bridge) throw new Error(`No bridge for coin ${req.coinIdHex}`);
       return runBridgeBack({
         sphere,

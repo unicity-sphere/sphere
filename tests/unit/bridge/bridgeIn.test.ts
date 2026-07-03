@@ -7,16 +7,18 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
+  createTronSourceAdapter,
   loadBridges,
   NILE_USDT_BRIDGE,
   type BridgeSourceAdapter,
   type TronCall,
   type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import { LOCK_EVENT_TOPIC0, type TronTxInfo } from '@unicitylabs/bridge-plugin-tron-usdt';
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 
-import { runBridgeIn, resumeBridgeMint, TxRevertedError, type BridgeInRpc } from '@/bridge/bridgeIn';
+import { runBridgeIn, resumeBridgeMint, TxRevertedError, type ReceiptReader } from '@/bridge/bridgeIn';
 import type { BridgeStore, PendingLock } from '@/bridge/store';
 
 const bridge = loadBridges(NILE_USDT_BRIDGE)[0];
@@ -46,11 +48,19 @@ const lockMined: TronTxInfo = {
 };
 const lockReverted: TronTxInfo = { blockNumber: 12n, success: false, logs: [] };
 
-/** Fake node: a fixed allowance + per-txid receipts, recording read order. */
+/**
+ * Fake node: a fixed allowance (for the adapter) + per-txid receipts (for the
+ * orchestrator's {ReceiptReader}), recording read order. Satisfies both the
+ * adapter's allowance reader and the neutral receipt reader.
+ */
+type FakeRpc = {
+  triggerConstantContract(): Promise<string>;
+  getTransactionInfo(txid: string): Promise<TronTxInfo | null>;
+};
 function fakeRpc(
   opts: { allowance: bigint; approve?: TronTxInfo | null; lock?: TronTxInfo | null },
   timeline: string[] = [],
-): BridgeInRpc {
+): FakeRpc {
   return {
     async triggerConstantContract() {
       return opts.allowance.toString(16).padStart(64, '0');
@@ -61,6 +71,13 @@ function fakeRpc(
     },
   };
 }
+
+/** Wrap a fake node's `getTransactionInfo` as the neutral {ReceiptReader}. */
+const receiptsOf = (rpc: FakeRpc): ReceiptReader => ({ getReceipt: (txid) => rpc.getTransactionInfo(txid) });
+
+/** Build the real Tron source adapter over the fake signer + node (the caller's job now). */
+const tronAdapterOf = (signer: TronSigner, rpc: FakeRpc): BridgeSourceAdapter =>
+  createTronSourceAdapter(bridge, signer, rpc, { extractAmount: spherePaymentAmountExtractor });
 
 class FakeSigner implements TronSigner {
   public account = OWNER;
@@ -115,19 +132,21 @@ const asStore = (s: FakeStore) => s as unknown as BridgeStore;
 function run(over: {
   signer: FakeSigner;
   store: FakeStore;
-  rpc: BridgeInRpc;
+  rpc: FakeRpc;
   approveAmount?: bigint;
   sphere?: Sphere;
 }) {
   return runBridgeIn({
     sphere: over.sphere ?? fakeSphere(),
-    bridge,
-    signer: over.signer,
+    wallet: over.signer,
+    receipts: receiptsOf(over.rpc),
+    adapter: tronAdapterOf(over.signer, over.rpc),
+    expectedNetwork: CHAIN,
+    chainLabel: bridge.manifest.label,
     store: asStore(over.store),
     amount: AMOUNT,
     networkId: 4,
     approveAmount: over.approveAmount,
-    rpc: over.rpc,
   });
 }
 
@@ -168,7 +187,7 @@ describe('runBridgeIn', () => {
     const signer = new FakeSigner();
     signer.network = CHAIN + 1;
     const store = new FakeStore();
-    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n }) })).rejects.toThrow(/Wrong Tron network/);
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n }) })).rejects.toThrow(/Wrong network/);
 
     expect(signer.sent).toHaveLength(0);
     expect(store.locks.size).toBe(0); // never even persisted
@@ -247,14 +266,15 @@ describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
     const sphere = fakeSphere();
     const res = await runBridgeIn({
       sphere,
-      bridge,
-      signer,
+      wallet: signer,
+      // committing receipt is a plain success; the fake adapter's decodeCommit ignores it
+      receipts: receiptsOf(fakeRpc({ allowance: 0n, lock: { blockNumber: 2n, success: true, logs: [] } })),
+      adapter,
+      expectedNetwork: CHAIN,
+      chainLabel: bridge.manifest.label,
       store: asStore(store),
       amount: AMOUNT,
       networkId: 4,
-      adapter,
-      // committing receipt is a plain success; the fake adapter's decodeCommit ignores it
-      rpc: fakeRpc({ allowance: 0n, lock: { blockNumber: 2n, success: true, logs: [] } }),
     });
 
     expect(adapterSends).toEqual(['authorize']); // one signature, no approve step
@@ -283,8 +303,9 @@ describe('resumeBridgeMint', () => {
     };
     store.locks.set(lock.id, lock);
 
+    const rpc = fakeRpc({ allowance: 0n, lock: lockReverted });
     await expect(
-      resumeBridgeMint(fakeSphere(), bridge, asStore(store), lock, fakeRpc({ allowance: 0n, lock: lockReverted })),
+      resumeBridgeMint(fakeSphere(), tronAdapterOf(new FakeSigner(), rpc), receiptsOf(rpc), asStore(store), lock),
     ).rejects.toBeInstanceOf(TxRevertedError);
 
     expect(store.locks.get('lock-1')?.status).toBe('failed');

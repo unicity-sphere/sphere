@@ -7,15 +7,24 @@
  */
 import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import type { SphereBridgeInfo } from '@unicitylabs/sphere-sdk';
+import { TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
+  buildBridgeRegistry,
+  createTronSourceAdapter,
   explorerTxUrl,
   isValidTronAddress,
   loadBridges as loadBridgesFacade,
   NILE_USDT_BRIDGE,
+  TronLinkSigner,
   withReturnServiceUrl,
   type BridgeManifest,
+  type BridgeRegistry,
+  type BridgeSourceAdapter,
   type LoadedBridge,
+  type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+
+import type { BridgeInDeps, ReceiptReader } from './bridgeIn';
 
 export type { BridgeManifest, LoadedBridge };
 
@@ -34,14 +43,14 @@ export function isValidBridgeDestination(chainId: number, addr: string): boolean
   return isValidTronAddress(addr);
 }
 
-/** Resolved bridges: engine verifiers + UI metadata + the loaded plugins (for flows). */
+/** Resolved bridges: engine verifiers + UI metadata + the indexed plugins (for flows). */
 export interface AppBridges {
   /** Forwarded into `Sphere.init({ bridgeJustificationVerifiers })`. */
   readonly bridgeJustificationVerifiers: LoadedBridge['plugin']['verifier'][];
   /** Forwarded into `Sphere.init({ bridges })` — drives the UI badge + flows. */
   readonly bridges: SphereBridgeInfo[];
-  /** The resolved plugins keyed by coinIdHex — the in/out flows use these. */
-  readonly loaded: readonly LoadedBridge[];
+  /** The resolved bridges, indexed by family+chain+asset / coinId / tokenType. */
+  readonly registry: BridgeRegistry;
 }
 
 /** The manifests this app ships. Override the return-service URL from env. */
@@ -75,7 +84,7 @@ export function loadAppBridges(manifests: BridgeManifest[] = appBridgeManifests(
   return {
     bridgeJustificationVerifiers: loaded.map((l) => l.plugin.verifier),
     bridges,
-    loaded,
+    registry: buildBridgeRegistry(loaded),
   };
 }
 
@@ -85,3 +94,43 @@ export function getAppBridges(): AppBridges {
   if (!cached) cached = loadAppBridges();
   return cached;
 }
+
+/**
+ * Composition root for the chain-neutral bridge-in orchestrator (08 Phase 4). The
+ * orchestrator (`runBridgeIn`) contains no Tron; this is where the concrete Tron
+ * wiring — the TronLink wallet, the HTTP node client, and the source adapter — is
+ * assembled into the neutral {BridgeInDeps} it runs on. A second chain adds its own
+ * factory here; nothing in `bridgeIn.ts` changes.
+ */
+export function createBridgeInDeps(bridge: LoadedBridge, signer?: TronSigner): BridgeInDeps {
+  const wallet: TronSigner = signer ?? new TronLinkSigner(undefined, bridge.manifest.chainId);
+  const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
+  const adapter = createTronSourceAdapter(bridge, wallet, rpc, { extractAmount: spherePaymentAmountExtractor });
+  return {
+    wallet,
+    receipts: receiptReaderFor(rpc),
+    adapter,
+    expectedNetwork: bridge.manifest.chainId,
+    chainLabel: bridge.manifest.label,
+  };
+}
+
+/** Recovery deps for `resumeBridgeMint` (decode + mint only — never signs). */
+export function createResumeDeps(bridge: LoadedBridge): { adapter: BridgeSourceAdapter; receipts: ReceiptReader } {
+  const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
+  const adapter = createTronSourceAdapter(bridge, RESUME_NOOP_WALLET, rpc, { extractAmount: spherePaymentAmountExtractor });
+  return { adapter, receipts: receiptReaderFor(rpc) };
+}
+
+/** Adapt a Tron node client's `getTransactionInfo` to the neutral {ReceiptReader}. */
+function receiptReaderFor(rpc: TronHttpRpcClient): ReceiptReader {
+  return { getReceipt: (txid) => rpc.getTransactionInfo(txid) };
+}
+
+/** A wallet that never signs — the adapter needs one for decode/mint-only recovery. */
+const RESUME_NOOP_WALLET = {
+  getAddress: async () => '',
+  sendCall: async (): Promise<string> => {
+    throw new Error('resumeBridgeMint does not sign');
+  },
+};

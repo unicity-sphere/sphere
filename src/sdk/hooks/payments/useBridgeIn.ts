@@ -6,11 +6,11 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { TronLinkSigner, type TronSigner } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import type { TronSigner } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
 
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getAppBridges } from '../../../bridge/loadBridges';
+import { createBridgeInDeps, createResumeDeps, getAppBridges } from '../../../bridge/loadBridges';
 import { bridgeStoreFor } from '../../../bridge/store';
 import { runBridgeIn, resumeBridgeMint, type BridgeInProgress } from '../../../bridge/bridgeIn';
 
@@ -41,18 +41,16 @@ export function useBridgeIn(opts: UseBridgeInArgs = {}) {
   const mutation = useMutation({
     mutationFn: async (req: BridgeInRequest) => {
       if (!sphere) throw new Error('Wallet not initialized');
-      const bridge = getAppBridges().loaded.find((l) => l.plugin.coinIdHex === req.coinIdHex.toLowerCase());
+      const bridge = getAppBridges().registry.byCoinId(req.coinIdHex);
       if (!bridge) throw new Error(`No bridge configured for coin ${req.coinIdHex}`);
 
-      const signer = opts.signer ?? new TronLinkSigner(undefined, bridge.manifest.chainId);
       const networkId = unicityNetworkId(sphere);
       const amount = BigInt(req.amount);
       const MAX_UINT256 = (1n << 256n) - 1n;
 
       return runBridgeIn({
         sphere,
-        bridge,
-        signer,
+        ...createBridgeInDeps(bridge, opts.signer),
         store,
         amount,
         networkId,
@@ -67,10 +65,11 @@ export function useBridgeIn(opts: UseBridgeInArgs = {}) {
     if (!sphere) return;
     for (const lock of store.pendingMints()) {
       if (!lock.lockTxid) continue;
-      const bridge = getAppBridges().loaded.find((l) => l.plugin.coinIdHex === lock.coinIdHex);
+      const bridge = getAppBridges().registry.byCoinId(lock.coinIdHex);
       if (!bridge) continue;
       try {
-        await resumeBridgeMint(sphere, bridge, store, lock);
+        const { adapter, receipts } = createResumeDeps(bridge);
+        await resumeBridgeMint(sphere, adapter, receipts, store, lock);
       } catch {
         // leave it pending; the user can retry
       }
