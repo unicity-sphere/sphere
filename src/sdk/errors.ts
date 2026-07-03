@@ -11,6 +11,9 @@ const FRIENDLY_OVERRIDES: Partial<Record<SphereErrorCode, string>> = {
   DECRYPTION_ERROR: 'Wrong password',
   STORAGE_ERROR: 'Storage error',
   MODULE_NOT_AVAILABLE: 'Feature not available',
+  // #631/#633: a possibly-certified send. useTransfer already converts this to a pending
+  // success (so the send path never re-sends); this is a friendly fallback for any other surface.
+  CERTIFICATION_UNCONFIRMED: 'Payment sent — confirming on-chain. No need to resend.',
 };
 
 /**

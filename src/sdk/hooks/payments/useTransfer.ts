@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
+import { getErrorCode } from '../../errors';
 import type { TransferResult } from '@unicitylabs/sphere-sdk';
 
 export interface TransferParams {
@@ -25,12 +26,24 @@ export function useTransfer(): UseTransferReturn {
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
       if (!sphere) throw new Error('Wallet not initialized');
-      return sphere.payments.send({
-        coinId: params.coinId,
-        amount: params.amount,
-        recipient: params.recipient,
-        memo: params.memo,
-      });
+      try {
+        return await sphere.payments.send({
+          coinId: params.coinId,
+          amount: params.amount,
+          recipient: params.recipient,
+          memo: params.memo,
+        });
+      } catch (e) {
+        // #631/#633: a POSSIBLY-CERTIFIED send rejects with ProofUnconfirmedError
+        // (code CERTIFICATION_UNCONFIRMED) — the spend may already be final on-chain and
+        // the SDK keeps the intent OPEN, so resume completes it under the same transferId.
+        // Treat it as a delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a
+        // fresh send() would consume a DIFFERENT source and double-pay the recipient.
+        if (getErrorCode(e) === 'CERTIFICATION_UNCONFIRMED') {
+          return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
+        }
+        throw e;
+      }
     },
     onSuccess: () => {
       // Force refetch all payment queries with fresh data.
