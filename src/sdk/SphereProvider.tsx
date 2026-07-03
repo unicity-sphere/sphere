@@ -8,7 +8,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
-import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
+import type { InitProgress, NetworkType, SphereInitOptions } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
   createBrowserProviders,
@@ -27,10 +27,18 @@ import { getAppBridges } from '../bridge/loadBridges';
  * manifest is misconfigured we log and run *without* bridges rather than block
  * the whole wallet (the badge/Bridge UI simply won't appear).
  */
-function bridgeInit(): { bridgeJustificationVerifiers?: unknown; bridges?: unknown } {
+function bridgeInit(): Pick<SphereInitOptions, 'bridgeJustificationVerifiers' | 'bridges'> {
   try {
     const { bridgeJustificationVerifiers, bridges } = getAppBridges();
-    return { bridgeJustificationVerifiers, bridges };
+    // The verifiers carry a state-transition-sdk `IMintJustificationVerifier` type
+    // resolved from the root STS copy (2.0.0), while sphere-sdk expects its own
+    // bundled copy (2.0.0-rc) — same code, distinct npm identity. Runtime-compatible
+    // (the bridge suite exercises mint end-to-end); cast at this one boundary.
+    return {
+      bridgeJustificationVerifiers:
+        bridgeJustificationVerifiers as unknown as SphereInitOptions['bridgeJustificationVerifiers'],
+      bridges,
+    };
   } catch (err) {
     logger.warn('SphereProvider', `Bridge manifest disabled: ${err instanceof Error ? err.message : String(err)}`);
     return {};

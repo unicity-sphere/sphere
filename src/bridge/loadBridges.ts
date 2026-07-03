@@ -6,7 +6,12 @@
  * / derivation stays in `@unicitylabs/bridge-plugin-tron-usdt`.
  */
 import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
-import type { SphereBridgeInfo } from '@unicitylabs/sphere-sdk';
+import type { SphereInitOptions } from '@unicitylabs/sphere-sdk';
+
+// The SDK declares `SphereBridgeInfo` internally but does not export it; derive it
+// from the exported `SphereInitOptions.bridges` element type so we stay in lockstep
+// with whatever the installed SDK expects for `Sphere.init({ bridges })`.
+type SphereBridgeInfo = NonNullable<SphereInitOptions['bridges']>[number];
 import { TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
   bridgePresentation,

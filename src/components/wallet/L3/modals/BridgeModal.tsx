@@ -5,7 +5,6 @@
  * return service (07) and is shown when a returnable bridged balance exists.
  */
 import { useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
 import { ArrowDownLeft, ArrowUpRight, CheckCircle, Loader2, ExternalLink, AlertTriangle } from 'lucide-react';
 import { useTokens } from '../../../../sdk';
 import { useBridgeIn } from '../../../../sdk/hooks/payments/useBridgeIn';
@@ -215,7 +214,7 @@ function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: 
       return;
     }
     try {
-      await bridgeBack({ coinIdHex, tokenId: token.id, destination: dest, amount: String(token.totalAmount ?? token.amount ?? '0') });
+      await bridgeBack({ coinIdHex, tokenId: token.id, destination: dest, amount: String(token.amount ?? '0') });
     } catch {
       /* surfaced via error */
     }
@@ -231,7 +230,7 @@ function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: 
         <label className="text-xs text-neutral-500">Token to return</label>
         <select value={token?.id} onChange={(e) => setTokenId(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-sm">
           {returnable.map((t) => (
-            <option key={t.id} value={t.id}>{(Number(t.totalAmount ?? t.amount ?? 0) / 10 ** decimals).toFixed(decimals)} USDT</option>
+            <option key={t.id} value={t.id}>{(Number(t.amount ?? 0) / 10 ** decimals).toFixed(decimals)} USDT</option>
           ))}
         </select>
       </div>

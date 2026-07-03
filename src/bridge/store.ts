@@ -53,7 +53,9 @@ export interface PendingReturn {
   returnId?: string;
   settleTxid?: string;
   readonly createdAt: number;
-  status: 'queued' | 'proving' | 'submitted' | 'settled' | 'failed' | 'stale';
+  // Service statuses (return-client `ReturnStatus`) + local-only `stale`. Keep in
+  // sync with `@unicitylabs/bridge-plugin-tron-usdt` ReturnStatus (adds `proven`).
+  status: 'queued' | 'proving' | 'proven' | 'submitted' | 'settled' | 'failed' | 'stale';
 }
 
 interface BridgeState {
@@ -84,7 +86,12 @@ function write(addressKey: string, state: BridgeState): boolean {
 
 /** A per-address handle over the persisted bridge recovery material. */
 export class BridgeStore {
-  public constructor(private readonly addressKey: string) {}
+  // Explicit field (not a constructor parameter property) — parameter properties
+  // emit runtime code and are disallowed under `erasableSyntaxOnly`.
+  private readonly addressKey: string;
+  public constructor(addressKey: string) {
+    this.addressKey = addressKey;
+  }
 
   // --- pending locks (bridge-in) -------------------------------------------
   public listLocks(): PendingLock[] {

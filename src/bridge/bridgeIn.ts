@@ -292,7 +292,13 @@ async function mint(
   adapter: BridgeSourceAdapter,
   args: { saltHex: string; amount: bigint; commit: CommitInfo; commitTxid: string },
 ): Promise<string> {
-  const result = await sphere.payments.bridgeMint(adapter.buildMintRequest(args));
+  // The mint request's `mintJustificationVerifierOverride` is a state-transition-sdk
+  // type. bridge-core resolves it from the root STS copy (2.0.0) while sphere-sdk
+  // bundles its own (2.0.0-rc) — same code, different npm identity, so the types are
+  // nominally distinct though runtime-compatible (proven by the bridge test suite).
+  // Cast at this single boundary rather than duplicating the STS install.
+  const req = adapter.buildMintRequest(args) as unknown as Parameters<typeof sphere.payments.bridgeMint>[0];
+  const result = await sphere.payments.bridgeMint(req);
   if (!result.success) throw new Error(result.error);
   return result.tokenId;
 }
