@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { createElement, type ReactNode } from 'react';
+import { createElement, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SphereError } from '@unicitylabs/sphere-sdk';
 import { useTransfer } from '../../../src/sdk/hooks/payments/useTransfer';
@@ -13,10 +13,12 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
   useSphereContext: () => ({ sphere: fakeSphere }),
 }));
 
-function wrapper({ children }: { children: ReactNode }) {
-  const qc = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-  });
+function Wrapper({ children }: { children: ReactNode }) {
+  // One stable client per wrapper instance — a fresh QueryClient on each render
+  // would reset mutation state mid-test and flake.
+  const [qc] = useState(
+    () => new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } }),
+  );
   return createElement(QueryClientProvider, { client: qc }, children);
 }
 
@@ -32,7 +34,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
       new SphereError('certification unconfirmed — the source spend may be on-chain', 'CERTIFICATION_UNCONFIRMED'),
     );
     fakeSphere = { payments: { send } };
-    const { result } = renderHook(() => useTransfer(), { wrapper });
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
     await act(async () => {
@@ -49,7 +51,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
     fakeSphere = { payments: { send } };
-    const { result } = renderHook(() => useTransfer(), { wrapper });
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await expect(
       act(async () => {
@@ -62,7 +64,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
     fakeSphere = { payments: { send } };
-    const { result } = renderHook(() => useTransfer(), { wrapper });
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
     await act(async () => {

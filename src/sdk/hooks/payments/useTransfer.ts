@@ -40,6 +40,9 @@ export function useTransfer(): UseTransferReturn {
         // Treat it as a delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a
         // fresh send() would consume a DIFFERENT source and double-pay the recipient.
         if (getErrorCode(e) === 'CERTIFICATION_UNCONFIRMED') {
+          // `id` is intentionally empty: ProofUnconfirmedError carries no transferId
+          // (the still-open intent + resume own it), and no send UI reads result.id
+          // on this path — it exists only to render the "pending" state.
           return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
         }
         throw e;
