@@ -15,35 +15,18 @@
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import type {
   BridgeSourceAdapter,
+  ChainWallet,
   CommitInfo,
-} from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+  ReceiptReader,
+} from '@unicitylabs/bridge-core';
 
 import type { BridgeStore, PendingLock } from './store';
 
-/**
- * The wallet capabilities the orchestrator needs (08 "ChainWallet" boundary):
- * connect once, then read the **live** account/network before every signature.
- * No signing here — the deposit steps sign via the wallet the adapter closed over.
- */
-export interface ChainWallet {
-  connect(): Promise<string>;
-  getAddress(): Promise<string>;
-  getNetwork(): Promise<number>;
-}
-
-/**
- * A committing/approval tx receipt the orchestrator inspects only for revert; the
- * rest is opaque and handed back to the adapter's `decodeCommit`. `null` until the
- * tx is mined.
- */
-export interface TxReceipt {
-  readonly success: boolean;
-}
-
-/** Node-read surface the orchestrator needs (08 "ChainClient" boundary): receipts. */
-export interface ReceiptReader {
-  getReceipt(txid: string): Promise<TxReceipt | null>;
-}
+// The neutral boundary interfaces (ChainWallet, ReceiptReader, TxReceipt,
+// BridgeSourceAdapter) live in @unicitylabs/bridge-core (08 Phase 4 item 1) — this
+// orchestrator imports no chain package. Re-exported for back-compat with existing
+// importers (tests, hooks).
+export type { ChainWallet, ReceiptReader, TxReceipt } from '@unicitylabs/bridge-core';
 
 /** The chain wiring the orchestrator runs on — built by the composition root. */
 export interface BridgeInDeps {
