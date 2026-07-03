@@ -26,6 +26,8 @@ export interface BridgeInRequest {
   amount: string;
   /** One-time max approve to reduce future prompts. */
   maxApprove?: boolean;
+  /** Signer for the wallet the user picked (08 Phase 3); falls back to `opts.signer`/TronLink. */
+  signer?: TronSigner;
 }
 
 export function useBridgeIn(opts: UseBridgeInArgs = {}) {
@@ -50,7 +52,7 @@ export function useBridgeIn(opts: UseBridgeInArgs = {}) {
 
       return runBridgeIn({
         sphere,
-        ...createBridgeInDeps(bridge, opts.signer),
+        ...createBridgeInDeps(bridge, req.signer ?? opts.signer),
         store,
         amount,
         networkId,

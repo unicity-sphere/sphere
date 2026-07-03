@@ -9,7 +9,7 @@ import { ArrowDownLeft, ArrowUpRight, CheckCircle, Loader2, ExternalLink, AlertT
 import { useTokens } from '../../../../sdk';
 import { useBridgeIn } from '../../../../sdk/hooks/payments/useBridgeIn';
 import { useBridgeBack, useBridgeClaims } from '../../../../sdk/hooks/payments/useBridgeBack';
-import { bridgePresentationFor } from '../../../../bridge/loadBridges';
+import { bridgePresentationFor, getAppTronWallets, type TronWalletProvider } from '../../../../bridge/loadBridges';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -36,6 +36,9 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
 
   const { bridgeIn, progress, result, reset } = useBridgeIn();
 
+  // The wallets the picker offers (TronLink always; WalletConnect when configured).
+  const wallets = useMemo(() => getAppTronWallets(), []);
+
   const selectedBridge = useMemo(
     () => bridges.find((b) => b.coinIdHex === coinIdHex) ?? bridges[0],
     [bridges, coinIdHex],
@@ -49,7 +52,7 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
     onClose(success ? { success: true } : undefined);
   };
 
-  const onBridgeIn = async () => {
+  const onBridgeIn = async (provider: TronWalletProvider) => {
     if (!selectedBridge) return;
     setError(null);
     const decimals = selectedBridge.decimals;
@@ -58,9 +61,17 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
       setError('Enter an amount greater than zero.');
       return;
     }
+    // The picked wallet supplies the signer; the flow drives it uniformly (08 Phase 3).
+    let signer: ReturnType<TronWalletProvider['create']>;
+    try {
+      signer = provider.create(selectedBridge.chainId);
+    } catch (e) {
+      setError(getErrorMessage(e));
+      return;
+    }
     setStep('processing');
     try {
-      await bridgeIn({ coinIdHex: selectedBridge.coinIdHex, amount: amount.toString(), maxApprove });
+      await bridgeIn({ coinIdHex: selectedBridge.coinIdHex, amount: amount.toString(), maxApprove, signer });
       setStep('success');
     } catch (e) {
       setError(getErrorMessage(e));
@@ -123,7 +134,7 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
             </label>
 
             <p className="text-xs text-neutral-500">
-              You'll sign in TronLink — just the lock if the vault is already approved, otherwise an approval
+              You'll sign in your wallet — just the lock if the vault is already approved, otherwise an approval
               first. The bridged token mints immediately and is spendable; it's "final for others" after{' '}
               {selectedBridge?.confirmations} blocks.
             </p>
@@ -134,7 +145,13 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
               </div>
             )}
 
-            <Button onClick={onBridgeIn} className="w-full">Bridge in with TronLink</Button>
+            <div className="space-y-2">
+              {wallets.map((w) => (
+                <Button key={w.id} onClick={() => onBridgeIn(w)} className="w-full">
+                  Bridge in with {w.name}
+                </Button>
+              ))}
+            </div>
           </>
         )}
 

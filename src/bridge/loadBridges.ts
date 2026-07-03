@@ -14,6 +14,7 @@ import type { SphereInitOptions } from '@unicitylabs/sphere-sdk';
 type SphereBridgeInfo = NonNullable<SphereInitOptions['bridges']>[number];
 import { TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
+  availableTronWallets,
   bridgePresentation,
   buildBridgeRegistry,
   createTronSourceAdapter,
@@ -27,9 +28,11 @@ import {
   type BridgeSourceAdapter,
   type LoadedBridge,
   type TronSigner,
+  type TronWalletProvider,
 } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
 
 import type { BridgeInDeps, ReceiptReader } from './bridgeIn';
+import { appTronWalletConfig } from './walletconnect';
 
 export type { BridgeManifest, LoadedBridge };
 
@@ -127,6 +130,17 @@ export function createResumeDeps(bridge: LoadedBridge): { adapter: BridgeSourceA
 function receiptReaderFor(rpc: TronHttpRpcClient): ReceiptReader {
   return { getReceipt: (txid) => rpc.getTransactionInfo(txid) };
 }
+
+/**
+ * The Tron wallets the bridge-in picker offers (08 Phase 3): TronLink always, plus
+ * WalletConnect when configured (`VITE_WALLETCONNECT_PROJECT_ID`). Each provider
+ * `create`s a `TronSigner` the flow drives uniformly.
+ */
+export function getAppTronWallets(): TronWalletProvider[] {
+  return availableTronWallets(appTronWalletConfig());
+}
+
+export type { TronWalletProvider };
 
 /** A wallet that never signs — the adapter needs one for decode/mint-only recovery. */
 const RESUME_NOOP_WALLET = {
