@@ -9,15 +9,15 @@ import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engi
 import type { SphereBridgeInfo } from '@unicitylabs/sphere-sdk';
 import { TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
+  bridgePresentation,
   buildBridgeRegistry,
   createTronSourceAdapter,
-  explorerTxUrl,
-  isValidTronAddress,
   loadBridges as loadBridgesFacade,
   NILE_USDT_BRIDGE,
   TronLinkSigner,
   withReturnServiceUrl,
   type BridgeManifest,
+  type BridgePresentation,
   type BridgeRegistry,
   type BridgeSourceAdapter,
   type LoadedBridge,
@@ -29,18 +29,14 @@ import type { BridgeInDeps, ReceiptReader } from './bridgeIn';
 export type { BridgeManifest, LoadedBridge };
 
 /**
- * Chain-agnostic UI helpers (08 §8): the modal asks the bridge for its explorer
- * URL / destination validation by `chainId`, instead of hardcoding a Nile URL or
- * the Tron address shape. A second chain's plugin supplies its own.
+ * The chain-specific UI presentation (explorer link + address validation) for a
+ * bridged coin, resolved through the registry (08 §8). The modal asks the bridge —
+ * it never hardcodes a chain's explorer URL or address shape, nor keys on a numeric
+ * `chainId`. `undefined` if the coin isn't a configured bridge.
  */
-export function bridgeExplorerTxUrl(chainId: number, txid: string): string {
-  return explorerTxUrl(chainId, txid);
-}
-
-/** Whether `addr` is a valid destination on the given bridge's source chain. */
-export function isValidBridgeDestination(chainId: number, addr: string): boolean {
-  void chainId; // single chain today; dispatch on chainId when a second lands
-  return isValidTronAddress(addr);
+export function bridgePresentationFor(coinIdHex: string): BridgePresentation | undefined {
+  const bridge = getAppBridges().registry.byCoinId(coinIdHex);
+  return bridge ? bridgePresentation(bridge) : undefined;
 }
 
 /** Resolved bridges: engine verifiers + UI metadata + the indexed plugins (for flows). */

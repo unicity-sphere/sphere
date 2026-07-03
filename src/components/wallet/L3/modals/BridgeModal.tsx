@@ -10,7 +10,7 @@ import { ArrowDownLeft, ArrowUpRight, CheckCircle, Loader2, ExternalLink, AlertT
 import { useTokens } from '../../../../sdk';
 import { useBridgeIn } from '../../../../sdk/hooks/payments/useBridgeIn';
 import { useBridgeBack, useBridgeClaims } from '../../../../sdk/hooks/payments/useBridgeBack';
-import { bridgeExplorerTxUrl, isValidBridgeDestination } from '../../../../bridge/loadBridges';
+import { bridgePresentationFor } from '../../../../bridge/loadBridges';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -145,7 +145,7 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
             <div className="text-sm font-medium">{progressLabel(progress?.phase)}</div>
             {progress?.message && <div className="text-xs text-neutral-500">{progress.message}</div>}
             {progress?.lockTxid && selectedBridge && (
-              <a href={bridgeExplorerTxUrl(selectedBridge.chainId, progress.lockTxid)} target="_blank" rel="noreferrer" className="text-xs text-brand-orange inline-flex items-center gap-1">
+              <a href={bridgePresentationFor(selectedBridge.coinIdHex)?.explorerTxUrl(progress.lockTxid)} target="_blank" rel="noreferrer" className="text-xs text-brand-orange inline-flex items-center gap-1">
                 lock tx <ExternalLink className="w-3 h-3" />
               </a>
             )}
@@ -167,7 +167,6 @@ export function BridgeModal({ isOpen, onClose }: BridgeModalProps) {
           <BridgeOutPanel
             coinIdHex={selectedBridge?.coinIdHex ?? coinIdHex}
             decimals={selectedBridge?.decimals ?? 6}
-            chainId={selectedBridge?.chainId ?? 0}
           />
         )}
       </div>
@@ -195,12 +194,13 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
  * `queued→proving→submitted→settled` (+ self-settle). Burns one token whole — for
  * a partial amount, split first (existing split flow) and burn the child.
  */
-function BridgeOutPanel({ coinIdHex, decimals, chainId }: { coinIdHex: string; decimals: number; chainId: number }) {
+function BridgeOutPanel({ coinIdHex, decimals }: { coinIdHex: string; decimals: number }) {
   const { tokens } = useTokens();
   const { bridgeBack, isLoading, error } = useBridgeBack();
   const { claims } = useBridgeClaims();
   const [dest, setDest] = useState('');
   const [localErr, setLocalErr] = useState<string | null>(null);
+  const presentation = useMemo(() => bridgePresentationFor(coinIdHex), [coinIdHex]);
 
   // Bridged tokens of this coin the user can return.
   const returnable = (tokens ?? []).filter((t) => t.coinId?.toLowerCase() === coinIdHex);
@@ -210,7 +210,7 @@ function BridgeOutPanel({ coinIdHex, decimals, chainId }: { coinIdHex: string; d
   const onBurn = async () => {
     setLocalErr(null);
     if (!token) return;
-    if (!isValidBridgeDestination(chainId, dest)) {
+    if (!presentation?.validateAddress(dest)) {
       setLocalErr('Enter a valid Tron (T…) destination address.');
       return;
     }
@@ -258,7 +258,7 @@ function BridgeOutPanel({ coinIdHex, decimals, chainId }: { coinIdHex: string; d
               <span className="font-mono text-neutral-500">{c.nullifierHex.slice(0, 10)}…</span>
               <span className={c.status === 'settled' ? 'text-green-500' : 'text-amber-500'}>{c.status}</span>
               {c.settleTxid && (
-                <a href={bridgeExplorerTxUrl(chainId, c.settleTxid)} target="_blank" rel="noreferrer" className="text-brand-orange inline-flex items-center gap-1">tx <ExternalLink className="w-3 h-3" /></a>
+                <a href={presentation?.explorerTxUrl(c.settleTxid)} target="_blank" rel="noreferrer" className="text-brand-orange inline-flex items-center gap-1">tx <ExternalLink className="w-3 h-3" /></a>
               )}
             </div>
           ))}
