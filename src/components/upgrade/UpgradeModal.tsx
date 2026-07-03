@@ -29,7 +29,8 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
-  const currentPlanId = sub.data?.pricingPlan?.planId ?? -1;
+  // key-info's plan node uses `id` (plans use `planId` for the same value) — API.md
+  const currentPlanId = sub.data?.pricingPlan?.id ?? -1;
 
   const handleSelect = async (plan: PlanInfo) => {
     if (plan.planId === currentPlanId) return;

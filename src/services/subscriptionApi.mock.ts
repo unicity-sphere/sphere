@@ -22,7 +22,7 @@ export const mockUsage: UsageInfo = {
 export const mockKeyInfo: KeyInfo = {
   status: 'active',
   expiresAt: '2026-08-01T00:00:00Z',
-  pricingPlan: { id: 0, planId: 0, name: 'free', requestsPerSecond: 2, requestsPerDay: 500, price: '0' },
+  pricingPlan: { id: 0, name: 'free', requestsPerSecond: 2, requestsPerDay: 500, price: '0' },
 };
 
 export const mockCheckout: CheckoutResult = {

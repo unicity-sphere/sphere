@@ -29,7 +29,16 @@ export interface UsageInfo {
 export interface KeyInfo {
   status: string;
   expiresAt: string | null;
-  pricingPlan: (PlanInfo & { id: number }) | null;
+  // NB: the key-info endpoint's plan node uses `id` (NOT `planId`) for the plan
+  // id — /api/payment/plans uses `planId` for the same value. See
+  // aggregator-subscription docs/API.md (GET /api/payment/key/{apiKey}).
+  pricingPlan: {
+    id: number;
+    name: string;
+    requestsPerSecond: number;
+    requestsPerDay: number;
+    price: string;
+  } | null;
 }
 
 export interface CheckoutResult {
