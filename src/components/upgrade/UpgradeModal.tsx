@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Sparkles, Check, Loader2, AlertTriangle } from 'lucide-react';
+import { X, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import { PlansGrid } from '../subscription/PlansGrid';
+import { UpgradeSuccess } from './UpgradeSuccess';
 import { usePlans, useSubscription, useCheckout } from '../../sdk/hooks/subscription';
 import { pollForPlan } from '../../sdk/subscription/pollForPlan';
 import { getKeyInfo, type PlanInfo } from '../../services/subscriptionApi';
@@ -31,6 +32,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
   const [selectingId, setSelectingId] = useState<number | null>(null);
+  const [upgradedPlan, setUpgradedPlan] = useState<PlanInfo | null>(null);
   // key-info's plan node uses `id` (plans use `planId` for the same value) — API.md
   const currentPlanId = sub.data?.pricingPlan?.id ?? -1;
 
@@ -53,6 +55,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
 
       if (activated) {
         await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
+        setUpgradedPlan(plan);
         setStep('success');
         showToast(`Upgraded to ${plan.name}`, 'success', 4000);
       } else {
@@ -71,6 +74,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setStep('plans');
     setError(null);
     setPaymentUrl(null);
+    setUpgradedPlan(null);
     onClose();
   };
 
@@ -151,17 +155,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
               </div>
             )}
 
-            {step === 'success' && (
-              <div className="flex flex-col items-center gap-4 py-24 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15">
-                  <Check className="h-8 w-8 text-emerald-500" />
-                </div>
-                <p className="text-lg font-semibold">Plan upgraded</p>
-                <Button variant="primary" onClick={handleClose}>
-                  Done
-                </Button>
-              </div>
-            )}
+            {step === 'success' && <UpgradeSuccess plan={upgradedPlan} onDone={handleClose} />}
 
             {step === 'error' && (
               <div className="flex flex-col items-center gap-4 py-24 text-center">

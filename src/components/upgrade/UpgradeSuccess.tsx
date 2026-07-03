@@ -1,0 +1,125 @@
+/**
+ * Celebratory success view shown after a subscription upgrade completes:
+ * a spring-popped check with a pulsing ring, a light confetti burst, the new
+ * plan name, and the limits/features it unlocked.
+ */
+import { useMemo } from 'react';
+import { motion } from 'framer-motion';
+import { Check, Sparkles } from 'lucide-react';
+import { Button } from '../wallet/ui';
+import type { PlanInfo } from '../../services/subscriptionApi';
+import { planFeatures } from '../subscription/planFeatures';
+
+const CONFETTI_COLORS = ['#f97316', '#10b981', '#a855f7', '#ec4899', '#3b82f6', '#eab308'];
+
+function Confetti() {
+  // Positions are randomized once per mount (app runtime, not a workflow).
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 28 }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 0.25,
+        duration: 1.8 + Math.random() * 1.4,
+        rotate: (Math.random() - 0.5) * 720,
+        drift: (Math.random() - 0.5) * 80,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        size: 6 + Math.random() * 6,
+      })),
+    [],
+  );
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+      {pieces.map((p) => (
+        <motion.span
+          key={p.id}
+          className="absolute top-0 rounded-sm"
+          style={{ left: `${p.left}%`, width: p.size, height: p.size * 0.6, backgroundColor: p.color }}
+          initial={{ y: -24, opacity: 0, rotate: 0 }}
+          animate={{ y: '90vh', x: p.drift, rotate: p.rotate, opacity: [0, 1, 1, 0] }}
+          transition={{ duration: p.duration, delay: p.delay, ease: 'easeIn' }}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface UpgradeSuccessProps {
+  plan: PlanInfo | null;
+  onDone: () => void;
+}
+
+export function UpgradeSuccess({ plan, onDone }: UpgradeSuccessProps) {
+  const features = plan ? planFeatures(plan) : [];
+
+  return (
+    <div className="relative flex min-h-[70vh] flex-col items-center justify-center gap-6 py-12 text-center">
+      <Confetti />
+
+      {/* Animated check with a pulsing ring */}
+      <motion.div
+        initial={{ scale: 0, rotate: -25 }}
+        animate={{ scale: 1, rotate: 0 }}
+        transition={{ type: 'spring', stiffness: 220, damping: 13 }}
+        className="relative"
+      >
+        <motion.span
+          className="absolute inset-0 rounded-full bg-emerald-500/25"
+          initial={{ scale: 0.6, opacity: 0.7 }}
+          animate={{ scale: 2.2, opacity: 0 }}
+          transition={{ duration: 1.2, repeat: Infinity, repeatDelay: 0.4, ease: 'easeOut' }}
+        />
+        <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-lg shadow-emerald-500/30">
+          <Check className="h-10 w-10 text-white" strokeWidth={3} />
+        </div>
+      </motion.div>
+
+      {/* Headline */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="space-y-1.5"
+      >
+        <div className="flex items-center justify-center gap-1.5 text-sm font-medium text-emerald-500">
+          <Sparkles className="h-4 w-4" /> Upgrade complete
+        </div>
+        <h2 className="text-3xl font-bold">
+          You&apos;re on{' '}
+          <span className="bg-gradient-to-r from-orange-500 to-pink-500 bg-clip-text capitalize text-transparent">
+            {plan?.name ?? 'your new plan'}
+          </span>
+        </h2>
+        {plan && (
+          <p className="text-sm text-neutral-500 dark:text-white/50">
+            {plan.requestsPerDay.toLocaleString()} commitments/day · up to {plan.requestsPerSecond}/second
+          </p>
+        )}
+      </motion.div>
+
+      {/* What it unlocked */}
+      {features.length > 0 && (
+        <motion.ul
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="w-full max-w-xs space-y-2.5 rounded-2xl border border-neutral-200 bg-neutral-50 p-5 text-left dark:border-white/8 dark:bg-white/4"
+        >
+          {features.map((feature) => (
+            <li key={feature} className="flex items-center gap-2.5 text-sm text-neutral-700 dark:text-white/70">
+              <Check className="h-4 w-4 shrink-0 text-emerald-500" />
+              <span>{feature}</span>
+            </li>
+          ))}
+        </motion.ul>
+      )}
+
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.45 }}>
+        <Button variant="primary" onClick={onDone}>
+          Start sending
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
