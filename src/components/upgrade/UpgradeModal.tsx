@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Sparkles, Check, ArrowRight, Loader2, AlertTriangle } from 'lucide-react';
-import { WalletScreen } from '../wallet/ui/WalletScreen';
-import { ModalHeader, Button } from '../wallet/ui';
+import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { X, Sparkles, Check, Loader2, AlertTriangle } from 'lucide-react';
+import { Button } from '../wallet/ui';
+import { PlansGrid } from '../subscription/PlansGrid';
 import { usePlans, useSubscription, useCheckout } from '../../sdk/hooks/subscription';
 import { pollForPlan } from '../../sdk/subscription/pollForPlan';
 import { getKeyInfo, type PlanInfo } from '../../services/subscriptionApi';
@@ -29,12 +30,14 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+  const [selectingId, setSelectingId] = useState<number | null>(null);
   // key-info's plan node uses `id` (plans use `planId` for the same value) — API.md
   const currentPlanId = sub.data?.pricingPlan?.id ?? -1;
 
   const handleSelect = async (plan: PlanInfo) => {
     if (plan.planId === currentPlanId) return;
     setError(null);
+    setSelectingId(plan.planId);
     try {
       const { paymentUrl: url } = await checkout.mutateAsync({ targetPlanId: plan.planId });
       setPaymentUrl(url);
@@ -59,6 +62,8 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     } catch (e) {
       setStep('error');
       setError(e instanceof Error ? e.message : 'Checkout failed');
+    } finally {
+      setSelectingId(null);
     }
   };
 
@@ -69,86 +74,108 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     onClose();
   };
 
-  return (
-    // asModal: this modal is mounted globally (UpgradeProvider sits at the app
-    // root, outside any `relative`-positioned wallet-panel shell), so the default
-    // slide-in panel (`position: absolute`, z-10) would have no containing block
-    // to confine it to and would stack below the sticky Header (z-50). BaseModal
-    // (fixed, z-100, with backdrop) is the same pattern ConnectionApprovalModal
-    // uses for its own app-root-level modal.
-    <WalletScreen isOpen={isOpen} onClose={handleClose} asModal>
-      <ModalHeader variant="screen" title="Upgrade plan" icon={Sparkles} iconVariant="gradient" onClose={handleClose} />
-
-      <div className="px-5 py-6 space-y-3 flex-1 overflow-y-auto">
-        {reason === 'quota' && step === 'plans' && (
-          <div className="flex items-start gap-2 p-3 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 text-sm">
-            <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
-            <span>You've reached your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
-          </div>
-        )}
-
-        {step === 'plans' && plans.data?.map((plan) => {
-          const isCurrent = plan.planId === currentPlanId;
-          return (
-            <motion.button
-              key={plan.planId}
-              whileHover={isCurrent ? {} : { scale: 1.01 }}
-              whileTap={isCurrent ? {} : { scale: 0.99 }}
-              disabled={isCurrent || checkout.isPending}
-              onClick={() => handleSelect(plan)}
-              className={`w-full p-5 flex items-center gap-4 rounded-2xl border text-left transition-colors ${
-                isCurrent
-                  ? 'bg-emerald-500/10 border-emerald-500/20 cursor-default'
-                  : 'bg-neutral-50 dark:bg-white/4 border-neutral-200 dark:border-white/8 hover:bg-neutral-100 dark:hover:bg-white/8'
-              }`}
+  return createPortal(
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          className="fixed inset-0 z-100 overflow-y-auto bg-white/95 backdrop-blur-sm dark:bg-neutral-950/92"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          {/* Header */}
+          <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-orange-500" />
+              <span className="text-lg font-semibold">Choose your plan</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Close"
+              className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-black/5 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-white"
             >
-              <div className="w-12 h-12 rounded-2xl bg-orange-500/10 flex items-center justify-center shrink-0">
-                <Sparkles className="w-6 h-6 text-orange-500" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold font-mono capitalize">{plan.name}</div>
-                <div className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
-                  {plan.requestsPerDay.toLocaleString()} tx/day · {plan.requestsPerSecond}/s
-                </div>
-              </div>
-              {isCurrent ? (
-                <span className="flex items-center gap-1 text-xs text-emerald-500"><Check className="w-4 h-4" /> Current</span>
-              ) : (
-                <ArrowRight className="w-4 h-4 text-neutral-400 dark:text-neutral-600 shrink-0" />
-              )}
-            </motion.button>
-          );
-        })}
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
-        {step === 'awaiting' && (
-          <div className="flex flex-col items-center text-center gap-3 py-10">
-            <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
-            <p className="text-sm">Complete the payment in the new tab. We'll activate your plan automatically.</p>
-            {paymentUrl && (
-              <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="text-orange-500 underline text-sm">
-                Payment page didn't open? Open it here
-              </a>
+          <div className="mx-auto w-full max-w-5xl px-4 pb-20 sm:px-8">
+            {step === 'plans' && (
+              <>
+                <div className="mb-8 text-center">
+                  <h2 className="text-2xl font-bold sm:text-3xl">Unlock more commitments</h2>
+                  <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
+                    Pick the plan that fits how much you transact.
+                  </p>
+                </div>
+
+                {reason === 'quota' && (
+                  <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                    <span>You've hit your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
+                  </div>
+                )}
+
+                {plans.isLoading && (
+                  <div className="py-20 text-center text-neutral-400">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+                  </div>
+                )}
+                {plans.isError && (
+                  <div className="py-20 text-center text-sm text-neutral-500 dark:text-white/45">
+                    Couldn't load plans. Please try again later.
+                  </div>
+                )}
+                {plans.data && (
+                  <PlansGrid
+                    plans={plans.data}
+                    currentPlanId={currentPlanId}
+                    onSelect={handleSelect}
+                    loadingPlanId={selectingId}
+                    disabled={checkout.isPending}
+                  />
+                )}
+              </>
+            )}
+
+            {step === 'awaiting' && (
+              <div className="flex flex-col items-center gap-3 py-24 text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+                <p className="text-sm">Complete the payment in the new tab — we'll activate your plan automatically.</p>
+                {paymentUrl && (
+                  <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-orange-500 underline">
+                    Payment page didn't open? Open it here
+                  </a>
+                )}
+              </div>
+            )}
+
+            {step === 'success' && (
+              <div className="flex flex-col items-center gap-4 py-24 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15">
+                  <Check className="h-8 w-8 text-emerald-500" />
+                </div>
+                <p className="text-lg font-semibold">Plan upgraded</p>
+                <Button variant="primary" onClick={handleClose}>
+                  Done
+                </Button>
+              </div>
+            )}
+
+            {step === 'error' && (
+              <div className="flex flex-col items-center gap-4 py-24 text-center">
+                <AlertTriangle className="h-8 w-8 text-yellow-500" />
+                <p className="max-w-md text-sm">{error}</p>
+                <Button variant="secondary" onClick={() => setStep('plans')}>
+                  Back to plans
+                </Button>
+              </div>
             )}
           </div>
-        )}
-
-        {step === 'success' && (
-          <div className="flex flex-col items-center text-center gap-3 py-10">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 flex items-center justify-center">
-              <Check className="w-7 h-7 text-emerald-500" />
-            </div>
-            <p className="font-semibold">Plan upgraded</p>
-          </div>
-        )}
-
-        {step === 'error' && (
-          <div className="flex flex-col items-center text-center gap-3 py-10">
-            <AlertTriangle className="w-8 h-8 text-yellow-500" />
-            <p className="text-sm">{error}</p>
-            <Button variant="secondary" onClick={() => setStep('plans')}>Back to plans</Button>
-          </div>
-        )}
-      </div>
-    </WalletScreen>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 }

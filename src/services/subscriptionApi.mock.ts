@@ -15,7 +15,14 @@ export const mockPlans: PlanInfo[] = [
 export const mockProvision: ProvisionResult = { apiKey: 'key_mock_free', plan: mockPlans[0], created: true };
 
 export const mockUsage: UsageInfo = {
-  perDay: { limit: 500, used: 497, remaining: 3, resetAt: null }, // low remaining → exercises the gate UX
+  // low remaining → exercises the near-limit UI; resetAt a few hours out so the
+  // Settings reset-countdown is visibly ticking in the demo.
+  perDay: {
+    limit: 500,
+    used: 497,
+    remaining: 3,
+    resetAt: new Date(Date.now() + 6 * 3_600_000 + 23 * 60_000).toISOString(),
+  },
   perSecond: { limit: 2, remaining: 2 },
 };
 

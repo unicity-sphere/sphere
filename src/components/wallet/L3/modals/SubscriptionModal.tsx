@@ -1,8 +1,9 @@
-import { CreditCard, Sparkles, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CreditCard, Sparkles, Zap, Timer } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, EmptyState, AlertMessage } from '../../ui';
 import { useSubscription, useSubscriptionUsage } from '../../../../sdk/hooks/subscription';
-import { usagePercent, formatExpiry } from '../../../../sdk/subscription/usage';
+import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../../sdk/subscription/usage';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -41,23 +42,26 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
               </div>
             </div>
 
-            {/* Usage bars */}
+            {/* Usage bars (limits are commitments, not transactions) */}
             <div className="space-y-4">
               <UsageBar
                 icon={Zap}
-                label="Daily transactions"
+                label="Daily commitments"
                 used={usage.data?.perDay.used ?? 0}
                 limit={usage.data?.perDay.limit ?? plan.requestsPerDay}
                 loading={usage.isLoading}
               />
               <UsageBar
                 icon={Zap}
-                label="Per second"
-                used={(usage.data ? usage.data.perSecond.limit - usage.data.perSecond.remaining : 0)}
+                label="Commitments / second"
+                used={usage.data ? usage.data.perSecond.limit - usage.data.perSecond.remaining : 0}
                 limit={usage.data?.perSecond.limit ?? plan.requestsPerSecond}
                 loading={usage.isLoading}
               />
             </div>
+
+            {/* Countdown to the daily limit reset */}
+            <ResetRow resetAt={usage.data?.perDay.resetAt ?? null} active={isOpen} loading={usage.isLoading} />
           </>
         )}
       </div>
@@ -91,6 +95,28 @@ function UsageBar({ icon: Icon, label, used, limit, loading }: {
           style={{ width: `${pct}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+/** Live countdown to the daily-limit reset; ticks only while the modal is open. */
+function ResetRow({ resetAt, active, loading }: { resetAt: string | null; active: boolean; loading?: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+
+  const ms = msUntil(resetAt, now);
+  return (
+    <div className="flex items-center justify-between rounded-2xl bg-neutral-50 dark:bg-white/4 px-4 py-3 text-sm">
+      <span className="flex items-center gap-2 text-neutral-600 dark:text-white/60">
+        <Timer className="w-4 h-4" /> Daily limit resets in
+      </span>
+      <span className="font-mono text-neutral-900 dark:text-white">
+        {loading ? '…' : ms === null ? 'continuously' : ms === 0 ? 'now' : formatCountdown(ms)}
+      </span>
     </div>
   );
 }
