@@ -19,6 +19,8 @@
     "@tailwindcss/vite": "^4.1.16",
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-table": "^8.21.3",
+    "@tronweb3/tronwallet-adapters": "^1.3.0",
+    "@tronweb3/walletconnect-tron": "^4.0.3",
     "@types/katex": "^0.16.7",
     "@unicitylabs/bridge-core": "file:../bridge-core",
     "@unicitylabs/bridge-plugin-tron-usdt": "file:../bridge-plugin-tron-usdt",
@@ -34,6 +36,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.9.6",
+    "tronweb": "^6.4.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
