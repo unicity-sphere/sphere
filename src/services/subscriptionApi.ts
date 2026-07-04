@@ -5,6 +5,7 @@
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
+import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
 
 export interface PlanInfo {
@@ -23,28 +24,25 @@ export interface PlanInfo {
 
 export interface ProvisionResult {
   apiKey: string;
-  plan: PlanInfo;
+  /** Plan NAME string, e.g. "free" — the gateway does not return a plan object here. */
+  plan: string;
   created: boolean;
 }
 
-export interface UsageInfo {
-  perDay: { limit: number; used: number; remaining: number; resetAt: string | null };
-  perSecond: { limit: number; remaining: number };
-}
-
-export interface KeyInfo {
-  status: string;
-  expiresAt: string | null;
-  // NB: the key-info endpoint's plan node uses `id` (NOT `planId`) for the plan
-  // id — /api/payment/plans uses `planId` for the same value. See
-  // aggregator-subscription docs/API.md (GET /api/payment/key/{apiKey}).
-  pricingPlan: {
-    id: number;
-    name: string;
-    requestsPerSecond: number;
-    requestsPerDay: number;
-    price: string;
-  } | null;
+export interface UtilizationInfo {
+  status: 'active' | 'expired' | 'inactive';
+  plan: { name: string; requestsPerMinute: number; requestsPerDay: number } | null;
+  activeUntil: string | null;
+  utilization: {
+    consumedPerMinute: number;
+    maxPerMinute: number;
+    availablePerMinute: number;
+    utilizationPercentPerMinute: number;
+    consumedPerDay: number;
+    maxPerDay: number;
+    availablePerDay: number;
+    utilizationPercentPerDay: number;
+  };
 }
 
 export interface CheckoutResult {
@@ -73,8 +71,11 @@ function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, 
 }
 
 /**
- * Challenge -> signMessage -> verify. Idempotent get-or-create of the wallet's
- * free-plan key. Used by BOTH create (created=true) and restore (created=false).
+ * Challenge -> validate -> signMessage -> verify. Idempotent get-or-create of
+ * the wallet's free-plan key. Used by BOTH create (created=true) and restore
+ * (created=false). The challenge template is validated before signing so the
+ * wallet never signs unverified server-chosen text; it is still signed
+ * VERBATIM (never re-serialized) once validated.
  */
 export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionResult> {
   if (SUBSCRIPTION_MOCK) return mock.mockProvision;
@@ -82,28 +83,15 @@ export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionRe
   if (!pubkey) throw new Error('Wallet identity unavailable (no chainPubkey)');
 
   const { nonce, challenge } = await postJson<Challenge>('/auth/challenge', { pubkey });
+  verifySgwChallenge(challenge, { pubkey, nonce }); // never sign unverified server text
   const signature = sphere.signMessage(challenge);
   return postJson<ProvisionResult>('/auth/verify', { nonce, signature });
 }
 
-export async function getPlans(): Promise<PlanInfo[]> {
-  if (SUBSCRIPTION_MOCK) return mock.mockPlans;
-  const data = await request<{ availablePlans: PlanInfo[] }>('/api/payment/plans');
-  return data.availablePlans;
-}
-
-export function getKeyInfo(apiKey: string): Promise<KeyInfo> {
-  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockKeyInfo);
-  return request<KeyInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}`, {
-    headers: { 'x-api-key': apiKey },
-  });
-}
-
-export function getUsage(apiKey: string): Promise<UsageInfo> {
-  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockUsage);
-  return request<UsageInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}/usage`, {
-    headers: { 'x-api-key': apiKey },
-  });
+/** Combined plan + usage snapshot for the current key. Replaces getKeyInfo/getUsage. */
+export function getUtilization(apiKey: string): Promise<UtilizationInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockUtilization);
+  return request<UtilizationInfo>('/api/utilization', { headers: { 'x-api-key': apiKey } });
 }
 
 export function createCheckout(apiKey: string, targetPlanId: number, returnUrl?: string): Promise<CheckoutResult> {

@@ -5,24 +5,34 @@ vi.mock('@/config/subscription', async (orig) => ({
   SUBSCRIPTION_MOCK: true,
 }));
 
-import { getPlans, getUsage } from '@/services/subscriptionApi';
+import { provisionOrRecoverKey, getUtilization } from '@/services/subscriptionApi';
 
 describe('subscriptionApi mock mode', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('returns canned plans without calling fetch', async () => {
+  it('returns a canned provision result without calling fetch', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const plans = await getPlans();
-    expect(plans.length).toBeGreaterThan(0);
+    const sphere = {
+      identity: { chainPubkey: '02aa'.padEnd(66, 'b') },
+      signMessage: vi.fn(),
+    } as unknown as import('@unicitylabs/sphere-sdk').Sphere;
+
+    const result = await provisionOrRecoverKey(sphere);
+
+    expect(result.plan).toBe('free');
+    expect(typeof result.plan).toBe('string');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('returns canned usage without calling fetch', async () => {
+  it('returns canned utilization without calling fetch', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const usage = await getUsage('key_mock');
-    expect(usage.perDay.limit).toBeGreaterThan(0);
+
+    const utilization = await getUtilization('key_mock');
+
+    expect(utilization.plan?.name).toBe('free');
+    expect(utilization.utilization.maxPerDay).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,10 @@ import { describe, it, expect } from 'vitest';
 import { signMessage, recoverPubkeyFromSignature } from '@unicitylabs/sphere-sdk';
 
 // Golden vector — design spec §4.1. Generated from the SDK's documented scheme.
+// NB: the message body below (key=value multi-line) is illustrative for pinning
+// the crypto envelope (signMessage/recoverPubkeyFromSignature) only — it does
+// NOT reflect the real SGW challenge JSON format. The real format is a single
+// JSON line under the SGW_CHALLENGE_PREFIX; see src/services/sgwChallenge.ts.
 const PRIV = '1111111111111111111111111111111111111111111111111111111111111111';
 const PUBKEY = '034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa';
 const MESSAGE =
