@@ -3,13 +3,14 @@
  * subscription UI (Phases 2–4) be built and visually verified without a
  * live backend. Shapes must match the real client's types exactly.
  */
-import type { PlanInfo, UtilizationInfo, ProvisionResult, CheckoutResult } from './subscriptionApi';
+import type { PlanInfo, UtilizationInfo, ProvisionResult, CheckoutResult, OrderStatusInfo } from './subscriptionApi';
 
+// Per-minute values are the seeded gateway plans (V25 = old rps × 60; V23 cents).
 export const mockPlans: PlanInfo[] = [
-  { planId: 0, name: 'free', requestsPerSecond: 2, requestsPerDay: 500, price: '0', priceUsd: '0' },
-  { planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000', priceUsd: '4.99' },
-  { planId: 2, name: 'standard', requestsPerSecond: 10, requestsPerDay: 100000, price: '5000000', priceUsd: '9.99' },
-  { planId: 3, name: 'premium', requestsPerSecond: 20, requestsPerDay: 500000, price: '10000000', priceUsd: '29.99' },
+  { planId: 2, name: 'basic', requestsPerMinute: 300, requestsPerDay: 50000, priceCents: 500, fiatCurrency: 'USD' },
+  { planId: 3, name: 'standard', requestsPerMinute: 600, requestsPerDay: 100000, priceCents: 1500, fiatCurrency: 'USD' },
+  { planId: 4, name: 'premium', requestsPerMinute: 1200, requestsPerDay: 500000, priceCents: 3000, fiatCurrency: 'USD' },
+  { planId: 5, name: 'enterprise', requestsPerMinute: 3000, requestsPerDay: 1000000, priceCents: 10000, fiatCurrency: 'USD' },
 ];
 
 export const mockProvision: ProvisionResult = { apiKey: 'sk_mock_free', plan: 'free', created: true };
@@ -31,6 +32,16 @@ export const mockUtilization: UtilizationInfo = {
 };
 
 export const mockCheckout: CheckoutResult = {
-  paymentUrl: 'https://pay.example.test/checkout/mock-session',
-  sessionId: 'mock-session',
+  orderId: 'ssc-mock',
+  redirectUrl: 'https://pay.example.test/gateway?token=mock',
+};
+
+export const mockOrderStatus: OrderStatusInfo = {
+  orderId: 'ssc-mock',
+  status: 'paid',
+  statusName: 'Confirmed',
+  fulfilled: true,
+  confirming: false,
+  apiKey: 'sk_mock_upgraded',
+  keyShownOnce: true,
 };

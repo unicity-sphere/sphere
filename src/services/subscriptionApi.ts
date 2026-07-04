@@ -9,17 +9,12 @@ import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
 
 export interface PlanInfo {
-  planId: number;
+  planId: number; // store endpoint calls this `id`
   name: string;
-  requestsPerSecond: number;
+  requestsPerMinute: number;
   requestsPerDay: number;
-  price: string; // legacy on-chain amount (UCT smallest units) — NOT for display
-  /**
-   * USD display price as a decimal string, e.g. "9.99"; "0"/absent = free.
-   * Shown on the plan cards. The external checkout page lets the user pick the
-   * actual payment currency; this is only the reference/base price.
-   */
-  priceUsd?: string;
+  priceCents: number; // 0 = free (synthetic card only — store list excludes free)
+  fiatCurrency: string;
 }
 
 export interface ProvisionResult {
@@ -46,8 +41,27 @@ export interface UtilizationInfo {
 }
 
 export interface CheckoutResult {
-  paymentUrl: string;
-  sessionId: string;
+  orderId: string;
+  redirectUrl: string;
+}
+
+export interface OrderStatusInfo {
+  orderId: string;
+  status: 'created' | 'pending' | 'paid' | 'failed';
+  statusName: string;
+  fulfilled: boolean;
+  confirming: boolean;
+  apiKey?: string; // revealed exactly once, when fulfilled
+  keyShownOnce?: boolean;
+}
+
+interface StorePlanWire {
+  id: number;
+  name: string;
+  requestsPerMinute: number;
+  requestsPerDay: number;
+  priceCents: number;
+  fiatCurrency: string;
 }
 
 interface Challenge {
@@ -94,11 +108,21 @@ export function getUtilization(apiKey: string): Promise<UtilizationInfo> {
   return request<UtilizationInfo>('/api/utilization', { headers: { 'x-api-key': apiKey } });
 }
 
-export function createCheckout(apiKey: string, targetPlanId: number, returnUrl?: string): Promise<CheckoutResult> {
+/** Store (Paymento) catalog — maps the store's `id` field to `planId`. */
+export async function getStorePlans(): Promise<PlanInfo[]> {
+  if (SUBSCRIPTION_MOCK) return mock.mockPlans;
+  const data = await request<{ availablePlans: StorePlanWire[] }>('/api/paymento/plans');
+  return data.availablePlans.map(({ id, ...rest }) => ({ planId: id, ...rest }));
+}
+
+/** Starts a Paymento checkout session for the given plan; redirect the user to `redirectUrl`. */
+export function createStoreCheckout(planId: number, email: string): Promise<CheckoutResult> {
   if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockCheckout);
-  return postJson<CheckoutResult>(
-    '/api/payment/checkout',
-    { targetPlanId, ...(returnUrl ? { returnUrl } : {}) },
-    { 'x-api-key': apiKey },
-  );
+  return postJson<CheckoutResult>('/api/paymento/checkout', { planId, email });
+}
+
+/** Polls the fulfillment status of a checkout order; apiKey is surfaced exactly once, when fulfilled. */
+export function getOrderStatus(orderId: string): Promise<OrderStatusInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockOrderStatus);
+  return request<OrderStatusInfo>(`/api/paymento/order-status?orderId=${encodeURIComponent(orderId)}`);
 }

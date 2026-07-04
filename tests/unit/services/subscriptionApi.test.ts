@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { provisionOrRecoverKey, getUtilization, createCheckout } from '@/services/subscriptionApi';
+import {
+  provisionOrRecoverKey,
+  getUtilization,
+  getStorePlans,
+  createStoreCheckout,
+  getOrderStatus,
+} from '@/services/subscriptionApi';
 
 const PUBKEY = '02aa'.padEnd(66, 'b');
 const NONCE = '6f7c2e1a-8b1d-4f3e-9c5a-2d4b6e8f0a1c';
@@ -104,14 +110,37 @@ describe('subscriptionApi', () => {
     expect(result).toEqual(body);
   });
 
-  it('createCheckout: sends X-API-Key header, JSON body, and returns parsed CheckoutResult', async () => {
-    const fetchMock = mockFetchSequence([{ json: { paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' } }]);
-    const result = await createCheckout('key_abc', 3, 'https://ret');
-    expect(result).toEqual({ paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' });
-    const headers = fetchMock.mock.calls[0][1].headers;
-    expect(headers['x-api-key']).toBe('key_abc');
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toEqual({ targetPlanId: 3, returnUrl: 'https://ret' });
+  it('getStorePlans maps store id → planId', async () => {
+    mockFetchOnce({
+      json: {
+        availablePlans: [
+          { id: 2, name: 'basic', requestsPerMinute: 300, requestsPerDay: 50000, priceCents: 500, fiatCurrency: 'USD' },
+        ],
+      },
+    });
+    const plans = await getStorePlans();
+    expect(plans).toEqual([
+      { planId: 2, name: 'basic', requestsPerMinute: 300, requestsPerDay: 50000, priceCents: 500, fiatCurrency: 'USD' },
+    ]);
+  });
+
+  it('createStoreCheckout posts planId+email and returns orderId+redirectUrl', async () => {
+    const fetchSpy = mockFetchOnce({ json: { orderId: 'ssc-1', redirectUrl: 'https://app.paymento.io/gateway?token=t' } });
+    const res = await createStoreCheckout(2, 'a@b.c');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/paymento/checkout'),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ planId: 2, email: 'a@b.c' }) }),
+    );
+    expect(res.orderId).toBe('ssc-1');
+  });
+
+  it('getOrderStatus passes orderId and surfaces the one-time apiKey', async () => {
+    mockFetchOnce({
+      json: { orderId: 'ssc-1', status: 'paid', statusName: 'Confirmed', fulfilled: true, confirming: false, apiKey: 'sk_new', keyShownOnce: true },
+    });
+    const res = await getOrderStatus('ssc-1');
+    expect(res.status).toBe('paid');
+    expect(res.apiKey).toBe('sk_new');
   });
 
   it('throws on non-ok responses', async () => {
