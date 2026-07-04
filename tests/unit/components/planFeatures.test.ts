@@ -1,54 +1,77 @@
 import { describe, it, expect } from 'vitest';
-import { formatPlanPrice, planFeatures, isPopularPlan, isFreePlan } from '@/components/subscription/planFeatures';
+import {
+  formatPlanPrice,
+  isFreePlan,
+  isPopularPlan,
+  planFeatures,
+  syntheticCurrentPlan,
+} from '@/components/subscription/planFeatures';
 import type { PlanInfo } from '@/services/subscriptionApi';
 
-const plan = (over: Partial<PlanInfo>): PlanInfo => ({
-  planId: 1,
+const basic: PlanInfo = {
+  planId: 2,
   name: 'basic',
-  requestsPerSecond: 5,
+  requestsPerMinute: 300,
   requestsPerDay: 50000,
-  price: '1000000',
-  ...over,
-});
+  priceCents: 500,
+  fiatCurrency: 'USD',
+};
 
-describe('formatPlanPrice (USD)', () => {
-  it('renders USD from priceUsd', () => {
-    expect(formatPlanPrice(plan({ priceUsd: '9.99' }))).toBe('$9.99');
-    expect(formatPlanPrice(plan({ priceUsd: '4' }))).toBe('$4.00');
-    expect(formatPlanPrice(plan({ priceUsd: '29.9' }))).toBe('$29.90');
-  });
-  it('renders "Free" for a zero/absent USD price', () => {
-    expect(formatPlanPrice(plan({ priceUsd: '0' }))).toBe('Free');
-    expect(formatPlanPrice(plan({ priceUsd: '', price: '0' }))).toBe('Free');
-  });
-  it('falls back to the legacy integer price only when priceUsd is absent', () => {
-    expect(formatPlanPrice(plan({ priceUsd: undefined, price: '10000000' }))).toBe((10_000_000).toLocaleString());
-    expect(formatPlanPrice(plan({ priceUsd: undefined, price: '0' }))).toBe('Free');
+describe('formatPlanPrice', () => {
+  it('formats priceCents as dollars', () => {
+    expect(formatPlanPrice(basic)).toBe('$5.00');
+    expect(formatPlanPrice({ ...basic, priceCents: 1550 })).toBe('$15.50');
+    expect(formatPlanPrice({ ...basic, priceCents: 0 })).toBe('Free');
   });
 });
 
 describe('isFreePlan / isPopularPlan', () => {
-  it('detects the free plan by USD price (with legacy fallback)', () => {
-    expect(isFreePlan(plan({ priceUsd: '0' }))).toBe(true);
-    expect(isFreePlan(plan({ priceUsd: '9.99' }))).toBe(false);
-    expect(isFreePlan(plan({ priceUsd: undefined, price: '0' }))).toBe(true);
-    expect(isFreePlan(plan({ priceUsd: undefined, price: '1000000' }))).toBe(false);
+  it('detects the free plan by priceCents', () => {
+    expect(isFreePlan({ ...basic, priceCents: 0 })).toBe(true);
+    expect(isFreePlan(basic)).toBe(false);
   });
+
   it('flags only the standard plan as popular (case-insensitive)', () => {
-    expect(isPopularPlan(plan({ name: 'Standard' }))).toBe(true);
-    expect(isPopularPlan(plan({ name: 'standard' }))).toBe(true);
-    expect(isPopularPlan(plan({ name: 'premium' }))).toBe(false);
+    expect(isPopularPlan({ ...basic, name: 'Standard' })).toBe(true);
+    expect(isPopularPlan({ ...basic, name: 'standard' })).toBe(true);
+    expect(isPopularPlan({ ...basic, name: 'premium' })).toBe(false);
   });
 });
 
 describe('planFeatures', () => {
-  it('derives commitments-based bullets from plan fields', () => {
-    const f = planFeatures(plan({ requestsPerDay: 50000, requestsPerSecond: 5, price: '1000000' }));
-    expect(f[0]).toBe(`${(50000).toLocaleString()} commitments per day`);
-    expect(f[1]).toBe('Up to 5 commitments per second');
-    expect(f[2]).toBe('30-day subscription');
+  it('derives per-minute feature copy', () => {
+    expect(planFeatures(basic)).toEqual([
+      '50,000 commitments per day',
+      'Up to 300 commitments per minute',
+      '30-day subscription',
+    ]);
   });
+
   it('marks the free plan with a no-payment bullet', () => {
-    expect(planFeatures(plan({ price: '0' }))[2]).toBe('Free — no payment required');
+    expect(planFeatures({ ...basic, priceCents: 0 })[2]).toBe('Free — no payment required');
+  });
+});
+
+describe('syntheticCurrentPlan', () => {
+  it('synthesizes the current free card from utilization', () => {
+    const util = {
+      status: 'active',
+      activeUntil: null,
+      plan: { name: 'free', requestsPerMinute: 60, requestsPerDay: 1000 },
+      utilization: {},
+    } as never;
+    expect(syntheticCurrentPlan(util)).toEqual({
+      planId: -1,
+      name: 'free',
+      requestsPerMinute: 60,
+      requestsPerDay: 1000,
+      priceCents: 0,
+      fiatCurrency: 'USD',
+    });
+  });
+
+  it('returns null when utilization has no plan', () => {
+    const util = { status: 'inactive', activeUntil: null, plan: null, utilization: {} } as never;
+    expect(syntheticCurrentPlan(util)).toBeNull();
   });
 });
