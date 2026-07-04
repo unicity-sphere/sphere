@@ -52,7 +52,7 @@ export default defineConfig(({ mode }) => {
   // Target is the aggregator-subscription repo's local docker-compose stack.
   const sgwProxy = {
     '/sgw': {
-      target: process.env.SGW_PROXY_TARGET ?? 'http://127.0.0.1:8080',
+      target: env.SGW_PROXY_TARGET || 'http://127.0.0.1:8080',
       changeOrigin: true,
       rewrite: (p: string) => p.replace(/^\/sgw/, ''),
     },
