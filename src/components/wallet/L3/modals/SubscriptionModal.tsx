@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { CreditCard, Sparkles, Zap, Timer } from 'lucide-react';
+import { CreditCard, Sparkles, Zap, Timer, KeyRound, Eye, EyeOff, Copy } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, EmptyState, AlertMessage } from '../../ui';
-import { useSubscription, useSubscriptionUsage } from '../../../../sdk/hooks/subscription';
+import { useUtilization } from '../../../../sdk/hooks/subscription';
 import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../../sdk/subscription/usage';
+import { getStoredSubscriptionKey } from '../../../../config/storageKeys';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -12,21 +13,28 @@ interface SubscriptionModalProps {
 }
 
 export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionModalProps) {
-  const sub = useSubscription();
-  const usage = useSubscriptionUsage();
-  const plan = sub.data?.pricingPlan;
+  const util = useUtilization();
+  const data = util.data;
+  const plan = data?.plan ?? null;
+  const apiKey = getStoredSubscriptionKey();
 
   return (
     <WalletScreen isOpen={isOpen} onClose={onClose}>
       <ModalHeader variant="screen" title="Subscription" icon={CreditCard} iconVariant="gradient" onClose={onClose} />
 
       <div className="px-5 py-6 space-y-5 flex-1 overflow-y-auto">
-        {sub.isError && (
+        {util.isError && (
           <AlertMessage variant="error">Couldn't load your subscription. Try again later.</AlertMessage>
         )}
 
-        {!sub.isError && !plan && !sub.isLoading && (
-          <EmptyState icon={Sparkles} title="No active plan" description="You don't have an active subscription yet." />
+        {data?.status === 'expired' && (
+          <AlertMessage variant="warning">
+            Your plan expired {formatExpiry(data.activeUntil)}. Renew to keep higher limits.
+          </AlertMessage>
+        )}
+
+        {data?.status === 'inactive' && !util.isLoading && (
+          <EmptyState icon={Sparkles} title="No active plan" description="Get a plan to raise your commitment limits." />
         )}
 
         {plan && (
@@ -38,7 +46,7 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
                 <span className="font-semibold font-mono capitalize">{plan.name} plan</span>
               </div>
               <div className="text-xs text-neutral-500 dark:text-white/45">
-                Renews / expires: {formatExpiry(sub.data?.expiresAt ?? null)}
+                Renews / expires: {formatExpiry(data?.activeUntil ?? null)}
               </div>
             </div>
 
@@ -47,28 +55,30 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
               <UsageBar
                 icon={Zap}
                 label="Daily commitments"
-                used={usage.data?.perDay.used ?? 0}
-                limit={usage.data?.perDay.limit ?? plan.requestsPerDay}
-                loading={usage.isLoading}
+                used={data?.utilization.consumedPerDay ?? 0}
+                limit={data?.utilization.maxPerDay ?? plan?.requestsPerDay ?? 0}
+                loading={util.isLoading}
               />
               <UsageBar
                 icon={Zap}
-                label="Commitments / second"
-                used={usage.data ? usage.data.perSecond.limit - usage.data.perSecond.remaining : 0}
-                limit={usage.data?.perSecond.limit ?? plan.requestsPerSecond}
-                loading={usage.isLoading}
+                label="Commitments / minute"
+                used={data?.utilization.consumedPerMinute ?? 0}
+                limit={data?.utilization.maxPerMinute ?? plan?.requestsPerMinute ?? 0}
+                loading={util.isLoading}
               />
             </div>
 
-            {/* Countdown to the daily limit reset */}
-            <ResetRow resetAt={usage.data?.perDay.resetAt ?? null} active={isOpen} loading={usage.isLoading} />
+            {/* Countdown to the daily limit reset — bucket4j refills continuously today; kept for when the gateway adds a reset time */}
+            <ResetRow resetAt={null} active={isOpen} loading={util.isLoading} />
           </>
         )}
+
+        {apiKey && <ApiKeyRow apiKey={apiKey} />}
       </div>
 
       <div className="px-5 pb-6">
         <Button variant="primary" fullWidth icon={Sparkles} onClick={onUpgrade} disabled={!onUpgrade}>
-          Upgrade plan
+          {data?.status === 'expired' ? 'Renew plan' : 'Upgrade plan'}
         </Button>
       </div>
     </WalletScreen>
@@ -117,6 +127,34 @@ function ResetRow({ resetAt, active, loading }: { resetAt: string | null; active
       <span className="font-mono text-neutral-900 dark:text-white">
         {loading ? '…' : ms === null ? 'continuously' : ms === 0 ? 'now' : formatCountdown(ms)}
       </span>
+    </div>
+  );
+}
+
+function ApiKeyRow({ apiKey }: { apiKey: string }) {
+  const [visible, setVisible] = useState(false);
+  const masked = `${apiKey.slice(0, 5)}…${apiKey.slice(-4)}`;
+  return (
+    <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-white/4">
+      <div className="flex items-center justify-between text-sm">
+        <span className="flex items-center gap-2 text-neutral-600 dark:text-white/60">
+          <KeyRound className="h-4 w-4" /> API key
+        </span>
+        <span className="flex items-center gap-1.5">
+          <code className="font-mono text-xs">{visible ? apiKey : masked}</code>
+          <button type="button" aria-label={visible ? 'Hide key' : 'Show key'} onClick={() => setVisible(!visible)}
+            className="rounded p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white">
+            {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+          <button type="button" aria-label="Copy key" onClick={() => navigator.clipboard.writeText(apiKey)}
+            className="rounded p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white">
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-white/40">
+        Purchased keys aren't tied to your wallet identity — keep a copy. Restore recovers only the free key.
+      </p>
     </div>
   );
 }
