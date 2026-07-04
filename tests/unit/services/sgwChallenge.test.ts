@@ -1,4 +1,4 @@
-import { verifySgwChallenge, SgwChallengeError, SGW_CHALLENGE_PREFIX } from '../../../src/services/sgwChallenge';
+import { verifySgwChallenge, SgwChallengeError, SGW_CHALLENGE_PREFIX } from '@/services/sgwChallenge';
 
 const PUBKEY = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const NONCE = '6f7c2e1a-8b1d-4f3e-9c5a-2d4b6e8f0a1c';
