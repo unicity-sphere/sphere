@@ -9,23 +9,28 @@ import { motion } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
 import { Button } from '../../ui';
 import { PlansGrid } from '../../../subscription/PlansGrid';
-import { usePlans } from '../../../../sdk/hooks/subscription';
-import type { PlanInfo } from '../../../../services/subscriptionApi';
+import { usePlans, useUtilization } from '../../../../sdk/hooks/subscription';
+import { syntheticCurrentPlan } from '../../../subscription/planFeatures';
 
 interface PlanCapabilitiesScreenProps {
-  /** The provisioned (free) plan — becomes the highlighted "current" card. */
-  plan: PlanInfo | null;
+  /** Plan NAME provisioned during finalize (fallback header copy if utilization hasn't loaded yet). */
+  planName: string | null;
   created: boolean;
   onContinue: () => void;
   isBusy?: boolean;
 }
 
-export function PlanCapabilitiesScreen({ plan, created, onContinue, isBusy }: PlanCapabilitiesScreenProps) {
+export function PlanCapabilitiesScreen({ planName, created, onContinue, isBusy }: PlanCapabilitiesScreenProps) {
   // Onboarding only reaches this screen when the subscription feature is on, so
   // usePlans(true) fetches the full list (mock-backed under VITE_SUBSCRIPTION_MOCK).
   const plans = usePlans(true);
-  const currentPlanId = plan?.planId ?? 0;
-  const list = plans.data ?? (plan ? [plan] : []);
+  // Key was persisted right before this screen renders — utilization gives the
+  // authoritative synthetic "current" card (with real limits). Non-blocking on
+  // failure: the header/grid still render from planName / the store list alone.
+  const util = useUtilization();
+  const current = util.data ? syntheticCurrentPlan(util.data) : null;
+  const list = [...(current ? [current] : []), ...(plans.data ?? [])];
+  const currentName = current?.name ?? planName;
 
   return createPortal(
     <motion.div
@@ -45,13 +50,13 @@ export function PlanCapabilitiesScreen({ plan, created, onContinue, isBusy }: Pl
             {created ? 'Your plan is ready' : 'Subscription restored'}
           </h2>
           <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
-            {plan
-              ? `You're on the ${plan.name} plan — here's everything you can upgrade to.`
+            {currentName
+              ? `You're on the ${currentName} plan — here's everything you can upgrade to.`
               : 'Your subscription is active.'}
           </p>
         </div>
 
-        {list.length > 0 && <PlansGrid plans={list} currentPlanId={currentPlanId} />}
+        {list.length > 0 && <PlansGrid plans={list} currentPlanName={currentName} />}
 
         <div className="mx-auto mt-10 w-full max-w-xs">
           <Button variant="primary" fullWidth loading={isBusy} onClick={onContinue}>

@@ -11,9 +11,10 @@ import { SPHERE_KEYS } from "../../../../sdk/queryKeys";
 import { addrKey } from "../components/addrKey";
 import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
-import { provisionOrRecoverKey, type PlanInfo } from "../../../../services/subscriptionApi";
+import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
 import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
+import { saveScopedKey } from "../../../../sdk/subscription/keyVault";
 
 export type OnboardingStep =
   | "start"
@@ -62,7 +63,7 @@ export interface UseOnboardingFlowReturn {
   handleDownloadBackup: () => Promise<void>;
 
   // Subscription plan-capabilities state (post-finalize provisioning)
-  planInfo: PlanInfo | null;
+  planName: string | null;
   planCreated: boolean;
   handlePlanCapabilitiesContinue: () => void;
 
@@ -101,7 +102,7 @@ export interface UseOnboardingFlowReturn {
 
 export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const queryClient = useQueryClient();
-  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
+  const { sphere, network, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
 
   // Step management — start at "nametag" only if wallet is fully finalized but missing nametag
   // (e.g. page refresh after wallet creation without nametag).
@@ -151,7 +152,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
 
   // Subscription plan-capabilities state (post-finalize provisioning)
-  const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
+  const [planName, setPlanName] = useState<string | null>(null);
   const [planCreated, setPlanCreated] = useState(false);
 
   // Debounced nametag availability check with retry on transport failure
@@ -620,7 +621,9 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         // will move provisioning ahead of the nametag mint so the key is
         // used from the first init.)
         setStoredSubscriptionKey(result.apiKey);
-        setPlanInfo(result.plan);
+        // Durable per-identity copy; non-fatal if it fails (cache still set).
+        await saveScopedKey(active, network, result.apiKey).catch(() => {});
+        setPlanName(result.plan);
         setPlanCreated(result.created);
         setStep("planCapabilities");
         return;
@@ -630,7 +633,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
       }
     }
     finishFinalize();
-  }, [sphere, finishFinalize]);
+  }, [sphere, network, finishFinalize]);
 
   // Auto-transition when processing completes
   useEffect(() => {
@@ -845,7 +848,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     handleDownloadBackup,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
-    planInfo,
+    planName,
     planCreated,
     handlePlanCapabilitiesContinue,
 

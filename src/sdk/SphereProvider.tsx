@@ -532,6 +532,7 @@ export function SphereProvider({
   const value: SphereContextValue = {
     sphere,
     providers,
+    network,
     isLoading,
     isInitialized: !!sphere,
     walletExists,
