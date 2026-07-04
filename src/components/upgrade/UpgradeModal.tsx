@@ -36,6 +36,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [selectedPlan, setSelectedPlan] = useState<PlanInfo | null>(null);
   const [email, setEmail] = useState('');
   const [claimKey, setClaimKey] = useState('');
+  const [claiming, setClaiming] = useState(false);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
 
   const currentPlanName = util.data?.plan?.name ?? null;
@@ -58,6 +59,22 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setNewApiKey(key);
     setStep('success');
     showToast(`Upgraded to ${selectedPlan?.name ?? 'new plan'}`, 'success', 4000);
+  };
+
+  // Claim-step activation: adoptKey can reject (e.g. storage blocked while
+  // persisting the key) — surface it on the error step instead of leaving the
+  // user stuck. claimKey is kept so "I have a key" lets them retry.
+  const activateClaimKey = async () => {
+    setClaiming(true);
+    setError(null);
+    try {
+      await adoptKey(claimKey);
+    } catch (e) {
+      setStep('error');
+      setError(e instanceof Error ? e.message : 'Failed to activate the key');
+    } finally {
+      setClaiming(false);
+    }
   };
 
   const startCheckout = async () => {
@@ -97,6 +114,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setSelectedPlan(null);
     setEmail('');
     setClaimKey('');
+    setClaiming(false);
     setNewApiKey(null);
     onClose();
   };
@@ -224,7 +242,8 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   variant="primary"
                   fullWidth
                   disabled={!/^sk_[0-9a-f]{32}$/.test(claimKey)}
-                  onClick={() => adoptKey(claimKey)}
+                  loading={claiming}
+                  onClick={activateClaimKey}
                 >
                   Activate
                 </Button>
