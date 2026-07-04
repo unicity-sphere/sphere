@@ -1,4 +1,3 @@
 export { usePlans } from './usePlans';
-export { useSubscription } from './useSubscription';
-export { useSubscriptionUsage } from './useSubscriptionUsage';
+export { useUtilization } from './useUtilization';
 export { useCheckout } from './useCheckout';

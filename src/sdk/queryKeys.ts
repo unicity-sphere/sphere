@@ -55,9 +55,8 @@ export const SPHERE_KEYS = {
 
   subscription: {
     all: ['sphere', 'subscription'] as const,
-    key: (apiKey: string) => ['sphere', 'subscription', 'key', apiKey] as const,
+    utilization: (apiKey: string) => ['sphere', 'subscription', 'utilization', apiKey] as const,
     plans: ['sphere', 'subscription', 'plans'] as const,
-    usage: (apiKey: string) => ['sphere', 'subscription', 'usage', apiKey] as const,
   },
 } as const;
 
