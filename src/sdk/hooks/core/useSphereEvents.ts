@@ -177,6 +177,20 @@ export function useSphereEvents(): void {
       );
     };
 
+    // sphere-sdk#501 / E.4: a certified split is STUCK on a keep-open checkpoint
+    // error (a lost/withheld burn checkpoint, or a trust-base rotation). The
+    // intent stays OPEN and the funds are safe — it retries on the next resume —
+    // but the E.4 contract requires a LOUD signal (not a silent retry) so the
+    // holder can act (or reach support) rather than assume the split completed.
+    const handleSplitCheckpointStuck = (data: { transferId: string; code: string; error: string }) => {
+      showToast(
+        `A split payment is stuck settling (${data.code}) — your funds are safe and it will retry on ` +
+          `reconnect. If it persists, contact support with reference ${data.transferId.slice(0, 8)}.`,
+        'error',
+        15000,
+      );
+    };
+
     sphere.on('transfer:incoming', handleIncomingTransfer);
     sphere.on('transfer:confirmed', handleTransferConfirmed);
     // sphere-sdk 0.10.6 (#621/#622): a send whose recipient delivery is deferred (full mailbox / 429,
@@ -195,6 +209,7 @@ export function useSphereEvents(): void {
     sphere.on('composing:started', handleComposingStarted);
     sphere.on('payment_request:incoming', handlePaymentRequestIncoming);
     sphere.on('storage:degraded', handleStorageDegraded);
+    sphere.on('split:checkpoint-stuck', handleSplitCheckpointStuck);
 
     return () => {
       if (invalidateTimerRef.current) {
@@ -215,6 +230,7 @@ export function useSphereEvents(): void {
       sphere.off('composing:started', handleComposingStarted);
       sphere.off('payment_request:incoming', handlePaymentRequestIncoming);
       sphere.off('storage:degraded', handleStorageDegraded);
+      sphere.off('split:checkpoint-stuck', handleSplitCheckpointStuck);
     };
   }, [sphere, queryClient]);
 }
