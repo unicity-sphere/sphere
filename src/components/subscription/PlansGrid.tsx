@@ -9,7 +9,8 @@ import type { PlanInfo } from '../../services/subscriptionApi';
 
 interface PlansGridProps {
   plans: PlanInfo[];
-  currentPlanId: number;
+  /** Name of the wallet's current plan (matched case-insensitively) — utilization exposes no plan id. */
+  currentPlanName: string | null;
   /** Provide to make cards selectable (upgrade flow). Omit for an info-only grid. */
   onSelect?: (plan: PlanInfo) => void;
   /** planId currently being processed (shows a spinner on that card's CTA). */
@@ -18,14 +19,14 @@ interface PlansGridProps {
   disabled?: boolean;
 }
 
-export function PlansGrid({ plans, currentPlanId, onSelect, loadingPlanId, disabled }: PlansGridProps) {
+export function PlansGrid({ plans, currentPlanName, onSelect, loadingPlanId, disabled }: PlansGridProps) {
   return (
     <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
       {plans.map((plan) => (
         <PlanCard
           key={plan.planId}
           plan={plan}
-          current={plan.planId === currentPlanId}
+          current={plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()}
           popular={isPopularPlan(plan)}
           onSelect={onSelect}
           loading={loadingPlanId === plan.planId}

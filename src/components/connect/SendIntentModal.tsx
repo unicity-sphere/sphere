@@ -3,6 +3,8 @@ import { Send } from 'lucide-react';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer } from '../../sdk';
 import { getErrorMessage } from '../../sdk/errors';
+import { QuotaBlockedError } from '../../sdk/quotaGate';
+import { useUpgrade } from '../upgrade';
 import { IntentConfirmModal } from './IntentConfirmModal';
 
 interface SendIntentModalProps {
@@ -32,6 +34,7 @@ interface SendIntentModalProps {
 export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject, onCancel }: SendIntentModalProps) {
   const { assets } = useAssets();
   const { transfer } = useTransfer();
+  const { openUpgrade } = useUpgrade();
   const [busy, setBusy] = useState(false);
 
   // Prefer the held asset (gives balance); fall back to the registry for
@@ -57,6 +60,23 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
       await transfer({ coinId, amount, recipient, ...(memo ? { memo } : {}) });
       onResolve();
     } catch (err) {
+      // Proactive quota block (useTransfer's mutationFn, Task 3) does NOT open
+      // the Upgrade modal itself — that only happens on the reactive
+      // CERTIFICATION_UNCONFIRMED 429/401 branch (Task 4). This modal unmounts
+      // as soon as onReject resolves the intent, so — unlike SendModal, which
+      // stays on its confirm step and lets the user click an Upgrade button —
+      // there's no lingering UI here to host that CTA. Open it directly so the
+      // dApp user still gets an upgrade path, mirroring SendModal's intent
+      // without double-opening (the hook never opens it on this path).
+      if (err instanceof QuotaBlockedError) {
+        openUpgrade(err.reason === 'expired' ? 'expired' : 'quota');
+        onReject(
+          err.reason === 'expired'
+            ? 'Wallet subscription expired'
+            : 'Wallet subscription quota exceeded'
+        );
+        return;
+      }
       // Tell the dApp it failed instead of leaving the request hanging; the
       // wallet's global query handler also surfaces a toast.
       onReject(getErrorMessage(err));

@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { provisionOrRecoverKey, getPlans, getKeyInfo, getUsage, createCheckout } from '@/services/subscriptionApi';
+import {
+  provisionOrRecoverKey,
+  getUtilization,
+  getStorePlans,
+  createStoreCheckout,
+  getOrderStatus,
+} from '@/services/subscriptionApi';
 
-function mockFetchSequence(responses: Array<{ ok?: boolean; status?: number; json: unknown }>) {
+const PUBKEY = '02aa'.padEnd(66, 'b');
+const NONCE = '6f7c2e1a-8b1d-4f3e-9c5a-2d4b6e8f0a1c';
+
+function mockFetchSequence(responses: Array<{ url?: string; ok?: boolean; status?: number; json: unknown }>) {
   const fn = vi.fn();
   for (const r of responses) {
     fn.mockResolvedValueOnce({
@@ -14,35 +23,59 @@ function mockFetchSequence(responses: Array<{ ok?: boolean; status?: number; jso
   return fn;
 }
 
-const fakeSphere = {
-  identity: { chainPubkey: '02aa'.padEnd(66, 'b') },
-  signMessage: vi.fn((msg: string) => `sig(${msg})`),
-} as unknown as import('@unicitylabs/sphere-sdk').Sphere;
+function mockFetchOnce(response: { url?: string; ok?: boolean; status?: number; json: unknown }) {
+  return mockFetchSequence([response]);
+}
 
 describe('subscriptionApi', () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
-  it('provisionOrRecoverKey: challenge -> sign -> verify', async () => {
+  it('provisionOrRecoverKey validates the challenge and returns plan as string', async () => {
+    const challenge =
+      'unicity:sgw:auth:v1\n' +
+      JSON.stringify({
+        network: 'testnet2',
+        pubkey: PUBKEY,
+        nonce: NONCE,
+        issuedAt: new Date(Date.now() - 1000).toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+        expiresAt: new Date(Date.now() + 4 * 60_000).toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+      });
     const fetchMock = mockFetchSequence([
-      { json: { nonce: 'n1', challenge: 'CHALLENGE_STRING', expiresAt: 'x' } },
-      { json: { apiKey: 'key_abc', plan: { planId: 0, name: 'free', requestsPerSecond: 5, requestsPerDay: 50000, price: '0' }, created: true } },
+      { url: '/auth/challenge', json: { nonce: NONCE, challenge, expiresAt: '2026-07-03T12:05:00.000Z' } },
+      { url: '/auth/verify', json: { apiKey: 'sk_abc', plan: 'free', created: true } },
     ]);
+    const sphere = { identity: { chainPubkey: PUBKEY }, signMessage: vi.fn(() => '1f'.padEnd(130, '0')) };
 
-    const result = await provisionOrRecoverKey(fakeSphere);
+    const result = await provisionOrRecoverKey(sphere as never);
 
     // challenge POST body carries the pubkey
     const challengeCall = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(challengeCall).toEqual({ pubkey: fakeSphere.identity!.chainPubkey });
-    // wallet signed the exact challenge string
-    expect(fakeSphere.signMessage).toHaveBeenCalledWith('CHALLENGE_STRING');
+    expect(challengeCall).toEqual({ pubkey: PUBKEY });
+    // wallet signed the exact (validated) challenge string, verbatim
+    expect(sphere.signMessage).toHaveBeenCalledWith(challenge);
     // verify POST body carries nonce + signature (no pubkey needed — server recovers it)
     const verifyCall = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(verifyCall).toEqual({ nonce: 'n1', signature: 'sig(CHALLENGE_STRING)' });
+    expect(verifyCall).toEqual({ nonce: NONCE, signature: '1f'.padEnd(130, '0') });
 
-    expect(result.apiKey).toBe('key_abc');
-    expect(result.created).toBe(true);
-    expect(result.plan.name).toBe('free');
+    expect(result).toEqual({ apiKey: 'sk_abc', plan: 'free', created: true });
+  });
+
+  it('provisionOrRecoverKey refuses to sign a tampered challenge', async () => {
+    const bad =
+      'unicity:sgw:auth:v1\n' +
+      JSON.stringify({
+        network: 'testnet2',
+        pubkey: '02' + 'a'.repeat(64),
+        nonce: NONCE,
+        issuedAt: '2026-07-03T12:00:00.000Z',
+        expiresAt: '2026-07-03T12:05:00.000Z',
+      });
+    mockFetchSequence([{ url: '/auth/challenge', json: { nonce: NONCE, challenge: bad, expiresAt: '' } }]);
+    const sphere = { identity: { chainPubkey: PUBKEY }, signMessage: vi.fn() };
+
+    await expect(provisionOrRecoverKey(sphere as never)).rejects.toThrow(/SGW challenge rejected/);
+    expect(sphere.signMessage).not.toHaveBeenCalled();
   });
 
   it('provisionOrRecoverKey: throws if identity is missing', async () => {
@@ -50,44 +83,77 @@ describe('subscriptionApi', () => {
     await expect(provisionOrRecoverKey(noIdentity)).rejects.toThrow(/identity/i);
   });
 
-  it('getPlans: unwraps availablePlans', async () => {
-    mockFetchSequence([{ json: { availablePlans: [{ planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000' }] } }]);
-    const plans = await getPlans();
-    expect(plans).toHaveLength(1);
-    expect(plans[0].name).toBe('basic');
+  it('getUtilization calls GET /api/utilization with X-API-Key and returns the flat shape', async () => {
+    const body = {
+      status: 'active',
+      activeUntil: null,
+      plan: { name: 'free', requestsPerMinute: 60, requestsPerDay: 1000 },
+      utilization: {
+        consumedPerMinute: 3,
+        maxPerMinute: 60,
+        availablePerMinute: 57,
+        utilizationPercentPerMinute: 5,
+        consumedPerDay: 42,
+        maxPerDay: 1000,
+        availablePerDay: 958,
+        utilizationPercentPerDay: 4,
+      },
+    };
+    const fetchSpy = mockFetchOnce({ json: body });
+
+    const result = await getUtilization('sk_abc');
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/utilization'),
+      expect.objectContaining({ headers: { 'x-api-key': 'sk_abc' } }),
+    );
+    expect(result).toEqual(body);
   });
 
-  it('getKeyInfo: sends X-API-Key header and returns parsed KeyInfo', async () => {
-    const fetchMock = mockFetchSequence([
-      { json: { status: 'active', expiresAt: null, pricingPlan: { id: 1, planId: 1, name: 'basic', requestsPerSecond: 5, requestsPerDay: 50000, price: '1000000' } } },
+  it('getStorePlans maps store id → planId', async () => {
+    mockFetchOnce({
+      json: {
+        availablePlans: [
+          { id: 2, name: 'basic', requestsPerMinute: 300, requestsPerDay: 50000, priceCents: 500, fiatCurrency: 'USD' },
+        ],
+      },
+    });
+    const plans = await getStorePlans();
+    expect(plans).toEqual([
+      { planId: 2, name: 'basic', requestsPerMinute: 300, requestsPerDay: 50000, priceCents: 500, fiatCurrency: 'USD' },
     ]);
-    const keyInfo = await getKeyInfo('key_abc');
-    expect(keyInfo.status).toBe('active');
-    expect(keyInfo.pricingPlan?.name).toBe('basic');
-    const headers = fetchMock.mock.calls[0][1].headers;
-    expect(headers['x-api-key']).toBe('key_abc');
   });
 
-  it('getUsage: sends X-API-Key header', async () => {
-    const fetchMock = mockFetchSequence([{ json: { perDay: { limit: 50000, used: 3, remaining: 49997, resetAt: null }, perSecond: { limit: 5, remaining: 4 } } }]);
-    const usage = await getUsage('key_abc');
-    expect(usage.perDay.remaining).toBe(49997);
-    const headers = fetchMock.mock.calls[0][1].headers;
-    expect(headers['x-api-key']).toBe('key_abc');
+  it('createStoreCheckout posts planId+email and returns orderId+redirectUrl', async () => {
+    const fetchSpy = mockFetchOnce({ json: { orderId: 'ssc-1', redirectUrl: 'https://app.paymento.io/gateway?token=t' } });
+    const res = await createStoreCheckout(2, 'a@b.c');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/paymento/checkout'),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ planId: 2, email: 'a@b.c' }) }),
+    );
+    expect(res.orderId).toBe('ssc-1');
   });
 
-  it('createCheckout: sends X-API-Key header, JSON body, and returns parsed CheckoutResult', async () => {
-    const fetchMock = mockFetchSequence([{ json: { paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' } }]);
-    const result = await createCheckout('key_abc', 3, 'https://ret');
-    expect(result).toEqual({ paymentUrl: 'https://pay.example/session', sessionId: 'sess_123' });
-    const headers = fetchMock.mock.calls[0][1].headers;
-    expect(headers['x-api-key']).toBe('key_abc');
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toEqual({ targetPlanId: 3, returnUrl: 'https://ret' });
+  it('getOrderStatus passes orderId and surfaces the one-time apiKey', async () => {
+    mockFetchOnce({
+      json: { orderId: 'ssc-1', status: 'paid', statusName: 'Confirmed', fulfilled: true, confirming: false, apiKey: 'sk_new', keyShownOnce: true },
+    });
+    const res = await getOrderStatus('ssc-1');
+    expect(res.status).toBe('paid');
+    expect(res.apiKey).toBe('sk_new');
   });
 
   it('throws on non-ok responses', async () => {
     mockFetchSequence([{ ok: false, status: 500, json: {} }]);
-    await expect(getPlans()).rejects.toThrow(/500/);
+    await expect(getUtilization('key_abc')).rejects.toThrow(/500/);
+  });
+
+  it("surfaces the gateway's error message on non-ok responses", async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 503,
+      json: { error: "Store isn't configured yet — the operator still needs to add Paymento API credentials." },
+    });
+    await expect(createStoreCheckout(2, 'a@b.c')).rejects.toThrow(/Store isn't configured yet/);
   });
 });

@@ -26,6 +26,9 @@ import {
   isWalletApiEnabled,
 } from '../config/walletApi';
 import { getActiveOracleApiKey } from './oracleKey';
+import { SUBSCRIPTION_ENABLED } from '../config/subscription';
+import { loadScopedKey, saveScopedKey } from './subscription/keyVault';
+import { provisionOrRecoverKey } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -40,6 +43,7 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
+  getStoredSubscriptionKey,
   setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
@@ -226,6 +230,35 @@ export function SphereProvider({
         setInitProgress(null);
         sphereRef.current = instance;
         setSphere(instance);
+
+        // Reconcile the boot cache against this identity's scoped key so a
+        // wallet/network switch picks up ITS subscription key instead of the
+        // previous wallet's (the boot cache is a single global slot — see
+        // config/storageKeys.ts). Guarded so it only re-inits on a real
+        // difference, never in a loop. Wallets that predate the subscription
+        // feature (or whose onboarding provisioning failed) have no key at
+        // all — recover/create their free key here, same idempotent
+        // get-or-create the onboarding runs; the env-key fallback keeps the
+        // wallet fully working if this fails (non-fatal until the Phase 5
+        // cutover).
+        if (SUBSCRIPTION_ENABLED) {
+          void loadScopedKey(instance, network).then(async (scoped) => {
+            if (scoped && scoped !== getStoredSubscriptionKey()) {
+              setStoredSubscriptionKey(scoped);
+              void initialize(0, true); // rebuild oracle with this identity's key
+              return;
+            }
+            if (!scoped && !getStoredSubscriptionKey() && instance.identity?.chainPubkey) {
+              try {
+                const result = await provisionOrRecoverKey(instance);
+                await saveScopedKey(instance, network, result.apiKey); // also sets the boot cache
+                void initialize(0, true); // rebuild oracle with the fresh key
+              } catch (err) {
+                console.warn('subscription auto-provisioning failed; using fallback key', err);
+              }
+            }
+          });
+        }
         // Send welcome DMs after relay delivers historical messages (EOSE)
         {
           let welcomed = false;
@@ -503,13 +536,19 @@ export function SphereProvider({
 
   const applySubscriptionKey = useCallback(async (apiKey: string) => {
     setStoredSubscriptionKey(apiKey);
+    const instance = sphereRef.current;
+    if (instance?.identity?.chainPubkey) {
+      // Best-effort: scoped entry is a durability upgrade, not a gate.
+      await saveScopedKey(instance, network, apiKey).catch(() => {});
+    }
     // Rebuild providers (oracle) with the new key and re-init the SDK.
     await initialize(0, true);
-  }, [initialize]);
+  }, [initialize, network]);
 
   const value: SphereContextValue = {
     sphere,
     providers,
+    network,
     isLoading,
     isInitialized: !!sphere,
     walletExists,

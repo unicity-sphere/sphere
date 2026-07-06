@@ -5,51 +5,63 @@
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
+import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
 
 export interface PlanInfo {
-  planId: number;
+  planId: number; // store endpoint calls this `id`
   name: string;
-  requestsPerSecond: number;
+  requestsPerMinute: number;
   requestsPerDay: number;
-  price: string; // legacy on-chain amount (UCT smallest units) — NOT for display
-  /**
-   * USD display price as a decimal string, e.g. "9.99"; "0"/absent = free.
-   * Shown on the plan cards. The external checkout page lets the user pick the
-   * actual payment currency; this is only the reference/base price.
-   */
-  priceUsd?: string;
+  priceCents: number; // 0 = free (synthetic card only — store list excludes free)
+  fiatCurrency: string;
 }
 
 export interface ProvisionResult {
   apiKey: string;
-  plan: PlanInfo;
+  /** Plan NAME string, e.g. "free" — the gateway does not return a plan object here. */
+  plan: string;
   created: boolean;
 }
 
-export interface UsageInfo {
-  perDay: { limit: number; used: number; remaining: number; resetAt: string | null };
-  perSecond: { limit: number; remaining: number };
-}
-
-export interface KeyInfo {
-  status: string;
-  expiresAt: string | null;
-  // NB: the key-info endpoint's plan node uses `id` (NOT `planId`) for the plan
-  // id — /api/payment/plans uses `planId` for the same value. See
-  // aggregator-subscription docs/API.md (GET /api/payment/key/{apiKey}).
-  pricingPlan: {
-    id: number;
-    name: string;
-    requestsPerSecond: number;
-    requestsPerDay: number;
-    price: string;
-  } | null;
+export interface UtilizationInfo {
+  status: 'active' | 'expired' | 'inactive';
+  plan: { name: string; requestsPerMinute: number; requestsPerDay: number } | null;
+  activeUntil: string | null;
+  utilization: {
+    consumedPerMinute: number;
+    maxPerMinute: number;
+    availablePerMinute: number;
+    utilizationPercentPerMinute: number;
+    consumedPerDay: number;
+    maxPerDay: number;
+    availablePerDay: number;
+    utilizationPercentPerDay: number;
+  };
 }
 
 export interface CheckoutResult {
-  paymentUrl: string;
-  sessionId: string;
+  orderId: string;
+  redirectUrl: string;
+}
+
+export interface OrderStatusInfo {
+  orderId: string;
+  status: 'created' | 'pending' | 'paid' | 'failed';
+  statusName: string;
+  fulfilled: boolean;
+  confirming: boolean;
+  apiKey?: string; // revealed exactly once, when fulfilled
+  keyShownOnce?: boolean;
+}
+
+interface StorePlanWire {
+  id: number;
+  name: string;
+  requestsPerMinute: number;
+  requestsPerDay: number;
+  priceCents: number;
+  fiatCurrency: string;
 }
 
 interface Challenge {
@@ -60,7 +72,12 @@ interface Challenge {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${SUBSCRIPTION_API_URL}${path}`, init);
-  if (!res.ok) throw new Error(`subscription ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    // The gateway sends {"error": "<human-readable message>"} — surface it.
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    const detail = typeof body?.error === 'string' && body.error !== '' ? body.error : null;
+    throw new Error(detail ?? `subscription ${path} failed: ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -73,8 +90,11 @@ function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, 
 }
 
 /**
- * Challenge -> signMessage -> verify. Idempotent get-or-create of the wallet's
- * free-plan key. Used by BOTH create (created=true) and restore (created=false).
+ * Challenge -> validate -> signMessage -> verify. Idempotent get-or-create of
+ * the wallet's free-plan key. Used by BOTH create (created=true) and restore
+ * (created=false). The challenge template is validated before signing so the
+ * wallet never signs unverified server-chosen text; it is still signed
+ * VERBATIM (never re-serialized) once validated.
  */
 export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionResult> {
   if (SUBSCRIPTION_MOCK) return mock.mockProvision;
@@ -82,35 +102,32 @@ export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionRe
   if (!pubkey) throw new Error('Wallet identity unavailable (no chainPubkey)');
 
   const { nonce, challenge } = await postJson<Challenge>('/auth/challenge', { pubkey });
+  verifySgwChallenge(challenge, { pubkey, nonce }); // never sign unverified server text
   const signature = sphere.signMessage(challenge);
   return postJson<ProvisionResult>('/auth/verify', { nonce, signature });
 }
 
-export async function getPlans(): Promise<PlanInfo[]> {
+/** Combined plan + usage snapshot for the current key. Replaces getKeyInfo/getUsage. */
+export function getUtilization(apiKey: string): Promise<UtilizationInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockUtilization);
+  return request<UtilizationInfo>('/api/utilization', { headers: { 'x-api-key': apiKey } });
+}
+
+/** Store (Paymento) catalog — maps the store's `id` field to `planId`. */
+export async function getStorePlans(): Promise<PlanInfo[]> {
   if (SUBSCRIPTION_MOCK) return mock.mockPlans;
-  const data = await request<{ availablePlans: PlanInfo[] }>('/api/payment/plans');
-  return data.availablePlans;
+  const data = await request<{ availablePlans: StorePlanWire[] }>('/api/paymento/plans');
+  return data.availablePlans.map(({ id, ...rest }) => ({ planId: id, ...rest }));
 }
 
-export function getKeyInfo(apiKey: string): Promise<KeyInfo> {
-  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockKeyInfo);
-  return request<KeyInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}`, {
-    headers: { 'x-api-key': apiKey },
-  });
-}
-
-export function getUsage(apiKey: string): Promise<UsageInfo> {
-  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockUsage);
-  return request<UsageInfo>(`/api/payment/key/${encodeURIComponent(apiKey)}/usage`, {
-    headers: { 'x-api-key': apiKey },
-  });
-}
-
-export function createCheckout(apiKey: string, targetPlanId: number, returnUrl?: string): Promise<CheckoutResult> {
+/** Starts a Paymento checkout session for the given plan; redirect the user to `redirectUrl`. */
+export function createStoreCheckout(planId: number, email: string): Promise<CheckoutResult> {
   if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockCheckout);
-  return postJson<CheckoutResult>(
-    '/api/payment/checkout',
-    { targetPlanId, ...(returnUrl ? { returnUrl } : {}) },
-    { 'x-api-key': apiKey },
-  );
+  return postJson<CheckoutResult>('/api/paymento/checkout', { planId, email });
+}
+
+/** Polls the fulfillment status of a checkout order; apiKey is surfaced exactly once, when fulfilled. */
+export function getOrderStatus(orderId: string): Promise<OrderStatusInfo> {
+  if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockOrderStatus);
+  return request<OrderStatusInfo>(`/api/paymento/order-status?orderId=${encodeURIComponent(orderId)}`);
 }

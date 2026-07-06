@@ -5,7 +5,7 @@
  */
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Sparkles } from 'lucide-react';
+import { Check, Copy, Sparkles } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import type { PlanInfo } from '../../services/subscriptionApi';
 import { planFeatures } from '../subscription/planFeatures';
@@ -47,10 +47,12 @@ function Confetti() {
 
 interface UpgradeSuccessProps {
   plan: PlanInfo | null;
+  /** One-time-revealed key from a fresh checkout (or pasted via the claim step) — renders the copy-me key box when set. */
+  apiKey?: string | null;
   onDone: () => void;
 }
 
-export function UpgradeSuccess({ plan, onDone }: UpgradeSuccessProps) {
+export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
   const features = plan ? planFeatures(plan) : [];
 
   return (
@@ -93,7 +95,7 @@ export function UpgradeSuccess({ plan, onDone }: UpgradeSuccessProps) {
         </h2>
         {plan && (
           <p className="text-sm text-neutral-500 dark:text-white/50">
-            {plan.requestsPerDay.toLocaleString()} commitments/day · up to {plan.requestsPerSecond}/second
+            {plan.requestsPerDay.toLocaleString()} commitments/day · up to {plan.requestsPerMinute.toLocaleString()}/minute
           </p>
         )}
       </motion.div>
@@ -113,6 +115,27 @@ export function UpgradeSuccess({ plan, onDone }: UpgradeSuccessProps) {
             </li>
           ))}
         </motion.ul>
+      )}
+
+      {apiKey && (
+        <div className="mx-auto mt-6 w-full max-w-sm rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-left">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-yellow-600 dark:text-yellow-400">Your new API key</span>
+            <button
+              type="button"
+              aria-label="Copy API key"
+              onClick={() => navigator.clipboard.writeText(apiKey)}
+              className="rounded p-1 text-yellow-600 hover:bg-yellow-500/15 dark:text-yellow-400"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <code className="block break-all font-mono text-xs">{apiKey}</code>
+          <p className="mt-2 text-[11px] leading-snug text-yellow-700/80 dark:text-yellow-300/70">
+            Save this key — it's tied to this purchase, not your wallet identity. Restoring the wallet
+            recovers only the free key; paste this one again in Settings if you switch devices.
+          </p>
+        </div>
       )}
 
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.45 }}>

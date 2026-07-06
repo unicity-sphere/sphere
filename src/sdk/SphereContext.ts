@@ -15,6 +15,9 @@ export interface SphereContextValue {
   sphere: Sphere | null;
   providers: SphereAppProviders | null;
 
+  /** L3 network this provider was built for — the single source of truth (SphereProvider's `network` prop). */
+  network: string;
+
   isLoading: boolean;
   isInitialized: boolean;
   walletExists: boolean;

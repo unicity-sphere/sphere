@@ -60,7 +60,7 @@ export function CreateWalletFlow() {
     handleDownloadBackup,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
-    planInfo,
+    planName,
     planCreated,
     handlePlanCapabilitiesContinue,
 
@@ -241,7 +241,7 @@ export function CreateWalletFlow() {
 
         {step === "planCapabilities" && (
           <PlanCapabilitiesScreen
-            plan={planInfo}
+            planName={planName}
             created={planCreated}
             onContinue={handlePlanCapabilitiesContinue}
             isBusy={isBusy}

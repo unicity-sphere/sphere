@@ -1,72 +1,138 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import { PlansGrid } from '../subscription/PlansGrid';
 import { UpgradeSuccess } from './UpgradeSuccess';
-import { usePlans, useSubscription, useCheckout } from '../../sdk/hooks/subscription';
-import { pollForPlan } from '../../sdk/subscription/pollForPlan';
-import { getKeyInfo, type PlanInfo } from '../../services/subscriptionApi';
-import { getStoredSubscriptionKey } from '../../config/storageKeys';
+import { usePlans, useUtilization, useCheckout } from '../../sdk/hooks/subscription';
+import { pollOrderStatus } from '../../sdk/subscription/pollOrder';
+import { getOrderStatus, type PlanInfo } from '../../services/subscriptionApi';
+import { syntheticCurrentPlan, formatPlanPrice } from '../subscription/planFeatures';
 import { SUBSCRIPTION_MOCK } from '../../config/subscription';
 import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
+import { useSphereContext } from '../../sdk/hooks';
+import type { UpgradeReason } from './UpgradeContext';
 
-type Step = 'plans' | 'awaiting' | 'success' | 'error';
+type Step = 'plans' | 'email' | 'awaiting' | 'claim' | 'success' | 'error';
 
 interface UpgradeModalProps {
   isOpen: boolean;
-  reason?: string;
+  reason?: UpgradeReason;
   onClose: () => void;
+}
+
+/**
+ * Banner shown above the plans grid, keyed off why the upgrade modal was
+ * opened. Extracted from UpgradeModal's render body so it can be unit-tested
+ * without mounting the full modal (which pulls in usePlans/useUtilization/
+ * useCheckout/useSphereContext). 'settings' and undefined render nothing.
+ */
+export function UpgradeReasonBanner({ reason }: { reason?: UpgradeReason }) {
+  if (reason === 'quota') {
+    return (
+      <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+        <span>You've hit your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
+      </div>
+    );
+  }
+
+  if (reason === 'expired') {
+    return (
+      <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+        <span>Your plan has expired — renew to restore your limits.</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const plans = usePlans(isOpen);
-  const sub = useSubscription();
+  const util = useUtilization();
   const checkout = useCheckout();
   const queryClient = useQueryClient();
+  const { applySubscriptionKey } = useSphereContext();
 
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
-  const [selectingId, setSelectingId] = useState<number | null>(null);
-  const [upgradedPlan, setUpgradedPlan] = useState<PlanInfo | null>(null);
-  // key-info's plan node uses `id` (plans use `planId` for the same value) — API.md
-  const currentPlanId = sub.data?.pricingPlan?.id ?? -1;
+  const [selectedPlan, setSelectedPlan] = useState<PlanInfo | null>(null);
+  const [email, setEmail] = useState('');
+  const [claimKey, setClaimKey] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [newApiKey, setNewApiKey] = useState<string | null>(null);
 
-  const handleSelect = async (plan: PlanInfo) => {
-    if (plan.planId === currentPlanId) return;
+  const currentPlanName = util.data?.plan?.name ?? null;
+
+  // plans step: grid gets [synthetic current card, ...store plans]
+  const gridPlans = useMemo(() => {
+    const current = util.data ? syntheticCurrentPlan(util.data) : null;
+    return current ? [current, ...(plans.data ?? [])] : (plans.data ?? []);
+  }, [plans.data, util.data]);
+
+  const handleSelect = (plan: PlanInfo) => {
+    if (plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()) return;
+    setSelectedPlan(plan);
+    setStep('email');
+  };
+
+  const adoptKey = async (key: string) => {
+    await applySubscriptionKey(key); // persists (cache + scoped vault) and re-inits the oracle
+    await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
+    setNewApiKey(key);
+    setStep('success');
+    showToast(`Upgraded to ${selectedPlan?.name ?? 'new plan'}`, 'success', 4000);
+  };
+
+  // Claim-step activation: adoptKey can reject (e.g. storage blocked while
+  // persisting the key) — surface it on the error step instead of leaving the
+  // user stuck. claimKey is kept so "I have a key" lets them retry.
+  const activateClaimKey = async () => {
+    setClaiming(true);
     setError(null);
-    setSelectingId(plan.planId);
     try {
-      const { paymentUrl: url } = await checkout.mutateAsync({ targetPlanId: plan.planId });
-      setPaymentUrl(url);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      await adoptKey(claimKey);
+    } catch (e) {
+      setStep('error');
+      setError(e instanceof Error ? e.message : 'Failed to activate the key');
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  const startCheckout = async () => {
+    if (!selectedPlan) return;
+    setError(null);
+    try {
+      const { orderId, redirectUrl } = await checkout.mutateAsync({ planId: selectedPlan.planId, email });
+      setPaymentUrl(redirectUrl);
+      window.open(redirectUrl, '_blank', 'noopener,noreferrer');
       setStep('awaiting');
 
-      const apiKey = getStoredSubscriptionKey();
-      const activated = SUBSCRIPTION_MOCK
-        ? true // mock: no real external payment — show success so the flow is demoable
-        : apiKey
-          ? await pollForPlan(() => getKeyInfo(apiKey), plan.planId)
-          : false;
+      const result = SUBSCRIPTION_MOCK
+        ? { outcome: 'paid' as const, apiKey: 'sk_mock_upgraded' } // demoable without a backend
+        : await pollOrderStatus(() => getOrderStatus(orderId));
 
-      if (activated) {
-        await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
-        setUpgradedPlan(plan);
-        setStep('success');
-        showToast(`Upgraded to ${plan.name}`, 'success', 4000);
+      if (result.outcome === 'paid' && result.apiKey) {
+        await adoptKey(result.apiKey);
+      } else if (result.outcome === 'paid') {
+        setStep('claim'); // reveal consumed by the gateway return page — let the user paste it
+      } else if (result.outcome === 'failed') {
+        setStep('error');
+        setError('The payment was not completed. No charge was made — you can try again.');
       } else {
         setStep('error');
-        setError('Payment not detected yet. If you paid, it may take a few minutes — check again later.');
+        setError('Payment not detected yet. If you paid, open the payment return page — your API key is shown there once — then paste it via "I have a key".');
       }
     } catch (e) {
       setStep('error');
       setError(e instanceof Error ? e.message : 'Checkout failed');
-    } finally {
-      setSelectingId(null);
     }
   };
 
@@ -74,7 +140,11 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setStep('plans');
     setError(null);
     setPaymentUrl(null);
-    setUpgradedPlan(null);
+    setSelectedPlan(null);
+    setEmail('');
+    setClaimKey('');
+    setClaiming(false);
+    setNewApiKey(null);
     onClose();
   };
 
@@ -114,12 +184,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   </p>
                 </div>
 
-                {reason === 'quota' && (
-                  <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
-                    <span>You've hit your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
-                  </div>
-                )}
+                <UpgradeReasonBanner reason={reason} />
 
                 {plans.isLoading && (
                   <div className="py-20 text-center text-neutral-400">
@@ -131,22 +196,52 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                     Couldn't load plans. Please try again later.
                   </div>
                 )}
-                {plans.data && (
-                  <PlansGrid
-                    plans={plans.data}
-                    currentPlanId={currentPlanId}
-                    onSelect={handleSelect}
-                    loadingPlanId={selectingId}
-                    disabled={checkout.isPending}
-                  />
+                {!plans.isLoading && !plans.isError && (
+                  <PlansGrid plans={gridPlans} currentPlanName={currentPlanName} onSelect={handleSelect} />
                 )}
               </>
+            )}
+
+            {step === 'email' && selectedPlan && (
+              <div className="mx-auto flex max-w-md flex-col gap-4 py-16">
+                <div className="text-center">
+                  <h3 className="text-xl font-semibold capitalize">
+                    {selectedPlan.name} — {formatPlanPrice(selectedPlan)} / 30 days
+                  </h3>
+                  <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
+                    Paymento will send the payment link and receipt to this email.
+                  </p>
+                </div>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-orange-500 dark:border-white/10 dark:bg-white/5"
+                />
+                <Button
+                  variant="primary"
+                  fullWidth
+                  disabled={!/\S+@\S+\.\S+/.test(email)}
+                  loading={checkout.isPending}
+                  onClick={startCheckout}
+                >
+                  Continue to payment
+                </Button>
+                <button
+                  type="button"
+                  className="text-sm text-neutral-500 underline dark:text-white/45"
+                  onClick={() => setStep('plans')}
+                >
+                  ← Back to plans
+                </button>
+              </div>
             )}
 
             {step === 'awaiting' && (
               <div className="flex flex-col items-center gap-3 py-24 text-center">
                 <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
-                <p className="text-sm">Complete the payment in the new tab — we'll activate your plan automatically.</p>
+                <p className="text-sm">Complete the payment in the new tab — we'll pick up your new API key automatically.</p>
                 {paymentUrl && (
                   <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-orange-500 underline">
                     Payment page didn't open? Open it here
@@ -155,15 +250,44 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
               </div>
             )}
 
-            {step === 'success' && <UpgradeSuccess plan={upgradedPlan} onDone={handleClose} />}
+            {step === 'claim' && (
+              <div className="mx-auto flex max-w-md flex-col gap-4 py-16 text-center">
+                <h3 className="text-xl font-semibold">Payment confirmed 🎉</h3>
+                <p className="text-sm text-neutral-500 dark:text-white/45">
+                  Your API key was shown on the payment return page. Paste it here to activate it in this wallet.
+                </p>
+                <input
+                  value={claimKey}
+                  onChange={(e) => setClaimKey(e.target.value.trim())}
+                  placeholder="sk_…"
+                  className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-mono text-sm outline-none focus:border-orange-500 dark:border-white/10 dark:bg-white/5"
+                />
+                <Button
+                  variant="primary"
+                  fullWidth
+                  disabled={!/^sk_[0-9a-f]{32}$/.test(claimKey)}
+                  loading={claiming}
+                  onClick={activateClaimKey}
+                >
+                  Activate
+                </Button>
+              </div>
+            )}
+
+            {step === 'success' && <UpgradeSuccess plan={selectedPlan} apiKey={newApiKey} onDone={handleClose} />}
 
             {step === 'error' && (
               <div className="flex flex-col items-center gap-4 py-24 text-center">
                 <AlertTriangle className="h-8 w-8 text-yellow-500" />
                 <p className="max-w-md text-sm">{error}</p>
-                <Button variant="secondary" onClick={() => setStep('plans')}>
-                  Back to plans
-                </Button>
+                <div className="flex gap-3">
+                  <Button variant="secondary" onClick={() => setStep('plans')}>
+                    Back to plans
+                  </Button>
+                  <Button variant="secondary" onClick={() => setStep('claim')}>
+                    I have a key
+                  </Button>
+                </div>
               </div>
             )}
           </div>
