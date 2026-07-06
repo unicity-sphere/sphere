@@ -307,6 +307,33 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     expect(getUtilization).not.toHaveBeenCalled();
   });
 
+  it('still resolves delivery-pending when the annotation itself throws synchronously (401 + storage-blocked iframe)', async () => {
+    // Money-safety invariant: disambiguateGatewayAuthError's FIRST statement
+    // is getStoredSubscriptionKey() → localStorage.getItem, which throws a
+    // SecurityError in storage-blocked iframes. That throw must never escape
+    // ahead of the synthetic pending return — a possibly-certified spend
+    // surfacing as a hard failure invites a re-send (double-pay).
+    vi.mocked(getStoredSubscriptionKey).mockImplementation(() => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    });
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    // Resolved as pending, NOT rejected — annotation failure is swallowed.
+    expect(res?.deliveryPending).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(openUpgradeMock).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
   it('never annotates when SUBSCRIPTION_ENABLED is false, even on a 429 cause', async () => {
     (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
     const send = vi.fn().mockRejectedValue(

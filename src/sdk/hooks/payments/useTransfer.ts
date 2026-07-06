@@ -63,10 +63,13 @@ export interface UseTransferReturn {
 export function useTransfer(): UseTransferReturn {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
-  // Rules of hooks: must be called unconditionally at the top level. Safe
-  // everywhere useTransfer is used — UpgradeProvider is mounted above the
-  // whole app tree (main.tsx), so every consumer (SendModal, SendIntentModal,
-  // SwapModal) is already under it.
+  // Rules of hooks: must be called unconditionally at the top level. This
+  // requires UpgradeProvider to stay mounted ABOVE ConnectProvider in
+  // main.tsx: ConnectProvider renders ConnectIntentHandler (and thus
+  // SendIntentModal → useTransfer) as a SIBLING of its children, so only
+  // providers above ConnectProvider are ancestors of the Connect intent
+  // modals. Reordering main.tsx would make this throw on the dApp
+  // send-intent path.
   const { openUpgrade } = useUpgrade();
 
   const mutation = useMutation({
@@ -109,13 +112,25 @@ export function useTransfer(): UseTransferReturn {
           // synthetic pending result below is returned in ALL cases,
           // regardless of the branch taken here; #631/#633 keep-open
           // semantics are never altered by this block.
+          // INVARIANT: nothing in this annotation block may throw past it —
+          // a possibly-certified spend MUST reach the synthetic pending
+          // return below, or the UI would misreport a finalized-on-chain
+          // spend as a re-sendable failure (double-pay risk). Even the
+          // "synchronous" parts can throw (e.g. getStoredSubscriptionKey →
+          // localStorage.getItem raises SecurityError in storage-blocked
+          // iframes), so the whole block is fail-open.
           if (SUBSCRIPTION_ENABLED) {
-            if (isQuotaRateLimit(e)) {
-              openUpgrade('quota');
-            } else if (isGatewayAuthError(e)) {
-              // Fire-and-forget: the ~/api/utilization round trip must never
-              // delay the pending result below.
-              disambiguateGatewayAuthError(openUpgrade);
+            try {
+              if (isQuotaRateLimit(e)) {
+                openUpgrade('quota');
+              } else if (isGatewayAuthError(e)) {
+                // Fire-and-forget: the /api/utilization round trip must never
+                // delay the pending result below.
+                disambiguateGatewayAuthError(openUpgrade);
+              }
+            } catch {
+              // Swallow everything: annotation is best-effort, money-safety
+              // (the pending return) always wins.
             }
           }
           // `id` is intentionally empty: ProofUnconfirmedError carries no transferId
