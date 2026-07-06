@@ -28,6 +28,7 @@ import {
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
 import { loadScopedKey, saveScopedKey } from './subscription/keyVault';
+import { provisionOrRecoverKey } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -234,12 +235,27 @@ export function SphereProvider({
         // wallet/network switch picks up ITS subscription key instead of the
         // previous wallet's (the boot cache is a single global slot — see
         // config/storageKeys.ts). Guarded so it only re-inits on a real
-        // difference, never in a loop.
+        // difference, never in a loop. Wallets that predate the subscription
+        // feature (or whose onboarding provisioning failed) have no key at
+        // all — recover/create their free key here, same idempotent
+        // get-or-create the onboarding runs; the env-key fallback keeps the
+        // wallet fully working if this fails (non-fatal until the Phase 5
+        // cutover).
         if (SUBSCRIPTION_ENABLED) {
-          void loadScopedKey(instance, network).then((scoped) => {
+          void loadScopedKey(instance, network).then(async (scoped) => {
             if (scoped && scoped !== getStoredSubscriptionKey()) {
               setStoredSubscriptionKey(scoped);
               void initialize(0, true); // rebuild oracle with this identity's key
+              return;
+            }
+            if (!scoped && !getStoredSubscriptionKey() && instance.identity?.chainPubkey) {
+              try {
+                const result = await provisionOrRecoverKey(instance);
+                await saveScopedKey(instance, network, result.apiKey); // also sets the boot cache
+                void initialize(0, true); // rebuild oracle with the fresh key
+              } catch (err) {
+                console.warn('subscription auto-provisioning failed; using fallback key', err);
+              }
             }
           });
         }
