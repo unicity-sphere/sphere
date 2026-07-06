@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { UpgradeContext } from './UpgradeContext';
+import { UpgradeContext, type UpgradeReason } from './UpgradeContext';
 import { UpgradeModal } from './UpgradeModal';
 
 export function UpgradeProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [reason, setReason] = useState<string | undefined>();
+  const [reason, setReason] = useState<UpgradeReason | undefined>();
 
-  const openUpgrade = useCallback((r?: string) => {
+  const openUpgrade = useCallback((r?: UpgradeReason) => {
     setReason(r);
     setIsOpen(true);
   }, []);

@@ -4,7 +4,7 @@ import { SPHERE_KEYS } from '../../queryKeys';
 import { getErrorCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
-import { useUpgrade } from '../../../components/upgrade';
+import { useUpgrade, type UpgradeReason } from '../../../components/upgrade';
 import { getUtilization } from '../../../services/subscriptionApi';
 import { getStoredSubscriptionKey } from '../../../config/storageKeys';
 import { showToast } from '../../../components/ui/toast-utils';
@@ -18,7 +18,7 @@ import type { TransferResult } from '@unicitylabs/sphere-sdk';
  * call. Never awaited by the caller — the synthetic pending result must
  * return immediately regardless of how long this takes or how it resolves.
  */
-function disambiguateGatewayAuthError(openUpgrade: (reason?: string) => void): void {
+function disambiguateGatewayAuthError(openUpgrade: (reason?: UpgradeReason) => void): void {
   const apiKey = getStoredSubscriptionKey();
   if (!apiKey) return;
 

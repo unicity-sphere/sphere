@@ -14,13 +14,42 @@ import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { useSphereContext } from '../../sdk/hooks';
+import type { UpgradeReason } from './UpgradeContext';
 
 type Step = 'plans' | 'email' | 'awaiting' | 'claim' | 'success' | 'error';
 
 interface UpgradeModalProps {
   isOpen: boolean;
-  reason?: string;
+  reason?: UpgradeReason;
   onClose: () => void;
+}
+
+/**
+ * Banner shown above the plans grid, keyed off why the upgrade modal was
+ * opened. Extracted from UpgradeModal's render body so it can be unit-tested
+ * without mounting the full modal (which pulls in usePlans/useUtilization/
+ * useCheckout/useSphereContext). 'settings' and undefined render nothing.
+ */
+export function UpgradeReasonBanner({ reason }: { reason?: UpgradeReason }) {
+  if (reason === 'quota') {
+    return (
+      <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+        <span>You've hit your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
+      </div>
+    );
+  }
+
+  if (reason === 'expired') {
+    return (
+      <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+        <span>Your plan has expired — renew to restore your limits.</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
@@ -155,12 +184,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   </p>
                 </div>
 
-                {reason === 'quota' && (
-                  <div className="mx-auto mb-6 flex max-w-xl items-start gap-2 rounded-2xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
-                    <span>You've hit your plan's limit. Upgrade for more, or wait for your quota to refill.</span>
-                  </div>
-                )}
+                <UpgradeReasonBanner reason={reason} />
 
                 {plans.isLoading && (
                   <div className="py-20 text-center text-neutral-400">

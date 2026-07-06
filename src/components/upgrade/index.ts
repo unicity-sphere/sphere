@@ -1,2 +1,2 @@
 export { UpgradeProvider } from './UpgradeProvider';
-export { useUpgrade } from './UpgradeContext';
+export { useUpgrade, type UpgradeReason } from './UpgradeContext';
