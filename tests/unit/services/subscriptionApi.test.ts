@@ -147,4 +147,13 @@ describe('subscriptionApi', () => {
     mockFetchSequence([{ ok: false, status: 500, json: {} }]);
     await expect(getUtilization('key_abc')).rejects.toThrow(/500/);
   });
+
+  it("surfaces the gateway's error message on non-ok responses", async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 503,
+      json: { error: "Store isn't configured yet — the operator still needs to add Paymento API credentials." },
+    });
+    await expect(createStoreCheckout(2, 'a@b.c')).rejects.toThrow(/Store isn't configured yet/);
+  });
 });

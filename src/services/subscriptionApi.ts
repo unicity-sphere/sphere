@@ -72,7 +72,12 @@ interface Challenge {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${SUBSCRIPTION_API_URL}${path}`, init);
-  if (!res.ok) throw new Error(`subscription ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    // The gateway sends {"error": "<human-readable message>"} — surface it.
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    const detail = typeof body?.error === 'string' && body.error !== '' ? body.error : null;
+    throw new Error(detail ?? `subscription ${path} failed: ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
