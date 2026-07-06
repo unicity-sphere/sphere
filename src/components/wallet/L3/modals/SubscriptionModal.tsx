@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { CreditCard, Sparkles, Zap, Timer, KeyRound, Eye, EyeOff, Copy } from 'lucide-react';
+import { CreditCard, Sparkles, Zap, Timer, KeyRound, Eye, EyeOff, Copy, Loader2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, EmptyState, AlertMessage } from '../../ui';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
 import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../../sdk/subscription/usage';
 import { getStoredSubscriptionKey } from '../../../../config/storageKeys';
+import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { provisionOrRecoverKey } from '../../../../services/subscriptionApi';
+import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -17,6 +21,28 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
   const data = util.data;
   const plan = data?.plan ?? null;
   const apiKey = getStoredSubscriptionKey();
+  const { sphere, applySubscriptionKey } = useSphereContext();
+  const queryClient = useQueryClient();
+  const [activating, setActivating] = useState(false);
+  const [activateError, setActivateError] = useState<string | null>(null);
+
+  // Wallets created before the subscription feature never ran the onboarding
+  // provisioning — the free key is an idempotent get-or-create by identity,
+  // so a single click recovers/creates it here.
+  const activateFreePlan = async () => {
+    if (!sphere) return;
+    setActivateError(null);
+    setActivating(true);
+    try {
+      const result = await provisionOrRecoverKey(sphere);
+      await applySubscriptionKey(result.apiKey);
+      await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
+    } catch (e) {
+      setActivateError(e instanceof Error ? e.message : 'Failed to activate the free plan');
+    } finally {
+      setActivating(false);
+    }
+  };
 
   return (
     <WalletScreen isOpen={isOpen} onClose={onClose}>
@@ -25,6 +51,27 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
       <div className="px-5 py-6 space-y-5 flex-1 overflow-y-auto">
         {util.isError && (
           <AlertMessage variant="error">Couldn't load your subscription. Try again later.</AlertMessage>
+        )}
+        {activateError && <AlertMessage variant="error">{activateError}</AlertMessage>}
+
+        {/* Pre-feature wallet (or failed onboarding provisioning): no key yet */}
+        {!apiKey && (
+          <div className="flex flex-col items-center gap-4 py-6">
+            <EmptyState
+              icon={Sparkles}
+              title="No plan yet"
+              description="Your wallet doesn't have a subscription key. Activate the free plan — it's tied to your wallet identity and takes one signature."
+            />
+            <Button variant="primary" icon={Sparkles} loading={activating} disabled={!sphere} onClick={activateFreePlan}>
+              Activate free plan
+            </Button>
+          </div>
+        )}
+
+        {apiKey && util.isLoading && (
+          <div className="py-10 text-center text-neutral-400">
+            <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+          </div>
         )}
 
         {data?.status === 'expired' && (
