@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { getErrorCode } from '../../errors';
+import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
+import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import type { TransferResult } from '@unicitylabs/sphere-sdk';
 
 export interface TransferParams {
@@ -26,6 +28,25 @@ export function useTransfer(): UseTransferReturn {
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
       if (!sphere) throw new Error('Wallet not initialized');
+
+      // Proactive quota gate (spec §2): a hard block must land BEFORE the
+      // first submit leaves — after that, #631/#633 keep-open semantics own
+      // the outcome. checkSendQuota() never throws by design; the try/catch
+      // here is a second, defensive layer so a gate malfunction can never
+      // break a send (fail-open at the call site too).
+      if (SUBSCRIPTION_ENABLED) {
+        try {
+          const gate = await checkSendQuota();
+          if (gate.verdict === 'block' && gate.info) {
+            throw new QuotaBlockedError(gate.info);
+          }
+          // 'warn' is UI-only (Task 6's SendModal banner) — no hook effect.
+        } catch (err) {
+          if (err instanceof QuotaBlockedError) throw err;
+          // Swallow anything else (defensive fail-open) and proceed to send.
+        }
+      }
+
       try {
         return await sphere.payments.send({
           coinId: params.coinId,
