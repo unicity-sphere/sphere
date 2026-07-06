@@ -115,6 +115,9 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
     setIsCheckingRecipient(true);
     setRecipientError(null);
+    // Re-entering confirm via details is a fresh attempt — a quota block from
+    // a previous send must not survive it (same lifecycle as recipientError).
+    setQuotaBlocked(null);
 
     try {
       if (recipientMode === 'direct') {
