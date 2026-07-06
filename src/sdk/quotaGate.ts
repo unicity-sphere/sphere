@@ -97,7 +97,11 @@ export async function checkSendQuota(opts?: { timeoutMs?: number }): Promise<Quo
     // key that was never meant to carry a plan (spec §2 note).
     if (info.status === 'inactive') return { verdict: 'allow', info };
 
-    if (info.status === 'expired') return { verdict: 'block', info };
+    // 'expired' is NOT a block: since gateway commit f7b9aa7 a lapsed paid key
+    // is lazily demoted to the free tier on its next use — the send this gate
+    // protects would SUCCEED (under free limits). 'expired' only survives in a
+    // ≤60s key-cache window, so blocking here would fail-closed on a send the
+    // gateway accepts. The numeric zero-quota checks below still apply.
 
     if (info.utilization.availablePerMinute === 0 || info.utilization.availablePerDay === 0) {
       return { verdict: 'block', info };

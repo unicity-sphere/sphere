@@ -89,8 +89,17 @@ describe('checkSendQuota', () => {
     expect(result).toEqual({ verdict: 'allow' });
   });
 
-  it('blocks with reason "expired" when status is expired', async () => {
+  it('does NOT block on transient "expired" status (gateway lazily demotes lapsed keys to free — the send would succeed)', async () => {
+    // Per gateway docs, a not-yet-demoted expired key reports consumed*=0 and
+    // max*=plan limits, so the numeric checks below see available quota.
     const info = utilization({ status: 'expired' });
+    vi.mocked(getUtilization).mockResolvedValue(info);
+    const result = await checkSendQuota();
+    expect(result).toEqual({ verdict: 'allow', info });
+  });
+
+  it('still blocks an expired-status snapshot when the quota numbers are exhausted', async () => {
+    const info = utilization({ status: 'expired', availablePerMinute: 0 });
     vi.mocked(getUtilization).mockResolvedValue(info);
     const result = await checkSendQuota();
     expect(result).toEqual({ verdict: 'block', info });
