@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { UpgradeContext } from './UpgradeContext';
+import { UpgradeContext, type UpgradeReason } from './UpgradeContext';
 import { UpgradeModal } from './UpgradeModal';
+import { PlanDowngradeWatcher } from './PlanDowngradeWatcher';
 
 export function UpgradeProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [reason, setReason] = useState<string | undefined>();
+  const [reason, setReason] = useState<UpgradeReason | undefined>();
 
-  const openUpgrade = useCallback((r?: string) => {
+  const openUpgrade = useCallback((r?: UpgradeReason) => {
     setReason(r);
     setIsOpen(true);
   }, []);
@@ -16,6 +17,7 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
   return (
     <UpgradeContext.Provider value={value}>
       {children}
+      <PlanDowngradeWatcher openUpgrade={openUpgrade} />
       <UpgradeModal isOpen={isOpen} reason={reason} onClose={() => setIsOpen(false)} />
     </UpgradeContext.Provider>
   );

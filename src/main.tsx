@@ -18,16 +18,22 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <SphereProvider network="testnet2">
         <ServicesProvider>
-          <ConnectProvider>
-            <UpgradeProvider>
+          {/* UpgradeProvider MUST wrap ConnectProvider: ConnectProvider renders
+              ConnectIntentHandler (and its modals, e.g. SendIntentModal →
+              useTransfer → useUpgrade) as a SIBLING of children, so anything
+              those modals consume has to be mounted above ConnectProvider.
+              UpgradeModal itself only needs SphereProvider + react-query,
+              which are both still ancestors here. */}
+          <UpgradeProvider>
+            <ConnectProvider>
               <ThemeInitializer>
                 <BrowserRouter basename={import.meta.env.BASE_URL}>
                   <App />
                 </BrowserRouter>
                 <ToastContainer />
               </ThemeInitializer>
-            </UpgradeProvider>
-          </ConnectProvider>
+            </ConnectProvider>
+          </UpgradeProvider>
         </ServicesProvider>
       </SphereProvider>
     </QueryClientProvider>

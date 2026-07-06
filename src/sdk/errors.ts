@@ -56,4 +56,55 @@ export function getErrorCode(err: unknown): SphereErrorCode | null {
   return isSphereError(err) ? err.code : null;
 }
 
+// --- Gateway (SGW) 429/401 classification ---------------------------------
+//
+// duck-type; JsonRpcNetworkError is NOT exported by sphere-sdk root or
+// subpaths (only deep-importable from @unicitylabs/state-transition-sdk/lib/...
+// — avoid that coupling per architecture rules). See spec §5 "Duck-typed
+// cause detection" risk: a state-transition-sdk bump could rename these
+// fields and silently break detection; the gatewayErrors.test.ts contract
+// canary pins this shape so such a break fails loudly in CI.
+function isJsonRpcNetworkErrorShape(
+  value: unknown
+): value is { name: 'JsonRpcNetworkError'; status: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { name?: unknown; status?: unknown };
+  return candidate.name === 'JsonRpcNetworkError' && typeof candidate.status === 'number';
+}
+
+/**
+ * Resolve the underlying gateway HTTP status (429/401/403/...) from either:
+ *  (a) a SphereError('CERTIFICATION_UNCONFIRMED') whose `cause` duck-types
+ *      JsonRpcNetworkError (the reactive path — the submit already left,
+ *      per #631/#633 this is annotated on top of the existing pending-success
+ *      conversion, never turned into a clean failure); or
+ *  (b) a raw error that itself duck-types JsonRpcNetworkError (the
+ *      pre-first-submit throw, before useTransfer's wrap applies — also
+ *      covers callers that bypass useTransfer entirely, e.g. SwapModal's
+ *      mint or ConnectIntentHandler's mint/receive, per spec §3.6).
+ * Returns null for anything else. Never matches on message text.
+ */
+export function getGatewayHttpStatus(err: unknown): number | null {
+  if (isSphereError(err) && err.code === 'CERTIFICATION_UNCONFIRMED') {
+    return isJsonRpcNetworkErrorShape(err.cause) ? err.cause.status : null;
+  }
+  return isJsonRpcNetworkErrorShape(err) ? err.status : null;
+}
+
+/** True when the gateway rejected the request for quota (SGW rate limit, HTTP 429). */
+export function isQuotaRateLimit(err: unknown): boolean {
+  return getGatewayHttpStatus(err) === 429;
+}
+
+/**
+ * True when the gateway rejected the request as unauthenticated/forbidden
+ * (HTTP 401 or 403). The proxy 401 is byte-identical for missing/invalid/
+ * revoked/expired subscription keys — callers must disambiguate further
+ * (see spec §1 "401 branch") via `/api/utilization`.
+ */
+export function isGatewayAuthError(err: unknown): boolean {
+  const status = getGatewayHttpStatus(err);
+  return status === 401 || status === 403;
+}
+
 export { isSphereError };
