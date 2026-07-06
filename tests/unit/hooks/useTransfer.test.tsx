@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { createElement, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SphereError } from '@unicitylabs/sphere-sdk';
@@ -26,8 +26,37 @@ vi.mock('../../../src/config/subscription', async (orig) => ({
   SUBSCRIPTION_ENABLED: true,
 }));
 
+// Task 4: reactive 429/401 annotation. Mock the upgrade barrel (simpler than
+// wrapping renderHook in a real UpgradeProvider) and the disambiguation
+// dependencies (getUtilization, getStoredSubscriptionKey, showToast).
+vi.mock('../../../src/components/upgrade', () => ({
+  useUpgrade: vi.fn(),
+}));
+vi.mock('../../../src/services/subscriptionApi', async (orig) => ({
+  ...(await orig<typeof import('../../../src/services/subscriptionApi')>()),
+  getUtilization: vi.fn(),
+}));
+vi.mock('../../../src/config/storageKeys', async (orig) => ({
+  ...(await orig<typeof import('../../../src/config/storageKeys')>()),
+  getStoredSubscriptionKey: vi.fn(),
+}));
+vi.mock('../../../src/components/ui/toast-utils', () => ({
+  showToast: vi.fn(),
+}));
+
 import { checkSendQuota, QuotaBlockedError } from '../../../src/sdk/quotaGate';
 import * as subscriptionConfig from '../../../src/config/subscription';
+import { useUpgrade } from '../../../src/components/upgrade';
+import { getUtilization } from '../../../src/services/subscriptionApi';
+import { getStoredSubscriptionKey } from '../../../src/config/storageKeys';
+import { showToast } from '../../../src/components/ui/toast-utils';
+
+// Fabricate the duck-typed transport error shape that JsonRpcNetworkError
+// (state-transition-sdk, never exported from sphere-sdk) satisfies today —
+// mirrors tests/unit/sdk/gatewayErrors.test.ts.
+function jsonRpcNetworkError(status: number, name = 'JsonRpcNetworkError') {
+  return { name, status, message: 'transport error' };
+}
 
 function utilization(overrides: { status?: UtilizationInfo['status']; availablePerMinute?: number } = {}): UtilizationInfo {
   return {
@@ -58,10 +87,18 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 const PARAMS = { coinId: 'c', amount: '100', recipient: '@bob' };
 
+let openUpgradeMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   fakeSphere = null;
   vi.mocked(checkSendQuota).mockReset().mockResolvedValue({ verdict: 'allow' });
   (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = true;
+
+  openUpgradeMock = vi.fn();
+  vi.mocked(useUpgrade).mockReset().mockReturnValue({ openUpgrade: openUpgradeMock });
+  vi.mocked(getUtilization).mockReset();
+  vi.mocked(getStoredSubscriptionKey).mockReset().mockReturnValue('sk_test');
+  vi.mocked(showToast).mockReset();
 });
 
 describe('useTransfer — #631/#633 possibly-certified send', () => {
@@ -186,5 +223,104 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     expect(res).toEqual(ok);
     expect(checkSendQuota).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
+  it('opens the upgrade modal with reason "quota" on a 429 cause (still delivery-pending)', async () => {
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(429)),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.deliveryPending).toBe(true);
+    expect(openUpgradeMock).toHaveBeenCalledWith('quota');
+  });
+
+  it('disambiguates a 401 cause via getUtilization: expired status → openUpgrade("expired")', async () => {
+    vi.mocked(getUtilization).mockResolvedValue(utilization({ status: 'expired' }));
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    // Synthetic pending result returns immediately — disambiguation is fire-and-forget.
+    expect(res?.deliveryPending).toBe(true);
+    await waitFor(() => expect(openUpgradeMock).toHaveBeenCalledWith('expired'));
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('disambiguates a 401 cause via getUtilization: rejection → warns + toasts, no upgrade modal', async () => {
+    vi.mocked(getUtilization).mockRejectedValue(new Error('unauthorized'));
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
+    );
+    fakeSphere = { payments: { send } };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.deliveryPending).toBe(true);
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringMatching(/subscription key was rejected/i),
+      'error',
+      6000,
+    );
+    expect(openUpgradeMock).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not open the upgrade modal for a plain CERTIFICATION_UNCONFIRMED (no cause)', async () => {
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed — the source spend may be on-chain', 'CERTIFICATION_UNCONFIRMED'),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.deliveryPending).toBe(true);
+    expect(openUpgradeMock).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+    expect(getUtilization).not.toHaveBeenCalled();
+  });
+
+  it('never annotates when SUBSCRIPTION_ENABLED is false, even on a 429 cause', async () => {
+    (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(429)),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.deliveryPending).toBe(true);
+    expect(openUpgradeMock).not.toHaveBeenCalled();
   });
 });

@@ -1,10 +1,49 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getErrorCode } from '../../errors';
+import { getErrorCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
+import { useUpgrade } from '../../../components/upgrade';
+import { getUtilization } from '../../../services/subscriptionApi';
+import { getStoredSubscriptionKey } from '../../../config/storageKeys';
+import { showToast } from '../../../components/ui/toast-utils';
 import type { TransferResult } from '@unicitylabs/sphere-sdk';
+
+/**
+ * Fire-and-forget disambiguation for a 401/403 submit rejection (spec §1
+ * "401 branch"). The proxy 401 is byte-identical for missing/invalid/revoked/
+ * expired keys, so the only way to tell "expired" (renew CTA) apart from
+ * "invalid/revoked" (re-provision signal) is a follow-up `/api/utilization`
+ * call. Never awaited by the caller — the synthetic pending result must
+ * return immediately regardless of how long this takes or how it resolves.
+ */
+function disambiguateGatewayAuthError(openUpgrade: (reason?: string) => void): void {
+  const apiKey = getStoredSubscriptionKey();
+  if (!apiKey) return;
+
+  const warnKeyRejected = (): void => {
+    console.warn('subscription key rejected by gateway; re-provisioning runs at next load');
+    showToast(
+      'Subscription key was rejected — open Settings → Subscription to re-activate',
+      'error',
+      6000,
+    );
+  };
+
+  getUtilization(apiKey)
+    .then((info) => {
+      if (info.status === 'expired') {
+        openUpgrade('expired');
+      } else {
+        // 401 with a non-expired status back from /api/utilization means the
+        // key itself is invalid/revoked (the proxy can't distinguish these
+        // cases up front) — same re-provision signal as an outright reject.
+        warnKeyRejected();
+      }
+    })
+    .catch(warnKeyRejected);
+}
 
 export interface TransferParams {
   coinId: string;
@@ -24,6 +63,11 @@ export interface UseTransferReturn {
 export function useTransfer(): UseTransferReturn {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
+  // Rules of hooks: must be called unconditionally at the top level. Safe
+  // everywhere useTransfer is used — UpgradeProvider is mounted above the
+  // whole app tree (main.tsx), so every consumer (SendModal, SendIntentModal,
+  // SwapModal) is already under it.
+  const { openUpgrade } = useUpgrade();
 
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
@@ -61,6 +105,19 @@ export function useTransfer(): UseTransferReturn {
         // Treat it as a delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a
         // fresh send() would consume a DIFFERENT source and double-pay the recipient.
         if (getErrorCode(e) === 'CERTIFICATION_UNCONFIRMED') {
+          // Reactive 429/401 annotation (spec §1). Purely additive — the
+          // synthetic pending result below is returned in ALL cases,
+          // regardless of the branch taken here; #631/#633 keep-open
+          // semantics are never altered by this block.
+          if (SUBSCRIPTION_ENABLED) {
+            if (isQuotaRateLimit(e)) {
+              openUpgrade('quota');
+            } else if (isGatewayAuthError(e)) {
+              // Fire-and-forget: the ~/api/utilization round trip must never
+              // delay the pending result below.
+              disambiguateGatewayAuthError(openUpgrade);
+            }
+          }
           // `id` is intentionally empty: ProofUnconfirmedError carries no transferId
           // (the still-open intent + resume own it), and no send UI reads result.id
           // on this path — it exists only to render the "pending" state.
