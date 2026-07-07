@@ -1,6 +1,6 @@
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import * as Sentry from '@sentry/react';
-import { getErrorMessage } from '../sdk/errors';
+import { getErrorCode, getErrorMessage } from '../sdk/errors';
 import { showToast } from '../components/ui/toast-utils';
 
 /**
@@ -16,9 +16,12 @@ export const queryClient = new QueryClient({
   // merging, so the Sentry capture must not live there
   mutationCache: new MutationCache({
     onError: (err) => {
-      // Mutations are user actions (sends, mints, registrations) whose
-      // failures are otherwise only visible as a toast
-      Sentry.captureException(err, { tags: { source: 'mutation' } });
+      // Mutations are the wallet operations (transfers, splits, burns,
+      // swaps, registrations) whose failures are otherwise only visible as
+      // a toast; the SphereErrorCode tag makes them filterable in Sentry
+      Sentry.captureException(err, {
+        tags: { source: 'mutation', sphereErrorCode: getErrorCode(err) ?? 'unknown' },
+      });
     },
   }),
   defaultOptions: {

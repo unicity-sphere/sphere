@@ -1,6 +1,5 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
-import * as Sentry from '@sentry/react';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { IntroPage } from './pages/IntroPage';
 import { HomePage } from './pages/HomePage';
@@ -33,10 +32,6 @@ const AboutPage = lazyWithRetry(() => import('./pages/AboutPage').then(m => ({ d
 const ExplorePage = lazyWithRetry(() => import('./pages/ExplorePage').then(m => ({ default: m.ExplorePage })));
 const ProjectPage = lazyWithRetry(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })));
 
-// Route-aware Routes: Sentry names events after the matched route pattern
-// (/agents/:agentId) instead of the concrete URL
-const SentryRoutes = Sentry.wrapReactRouterRouting(Routes);
-
 function LazyFallback() {
   return (
     <div className="flex items-center justify-center h-full">
@@ -49,7 +44,7 @@ export default function App() {
   useSphereEvents();
 
   return (
-    <SentryRoutes>
+    <Routes>
       <Route path="/" element={<IntroPage />} />
       <Route path="/connect" element={<ConnectPage />} />
       <Route element={<DashboardLayout />}>
@@ -63,6 +58,6 @@ export default function App() {
         <Route path="/explore" element={<Suspense fallback={<LazyFallback />}><ExplorePage /></Suspense>} />
         <Route path="/apps/:slug" element={<Suspense fallback={<LazyFallback />}><ProjectPage /></Suspense>} />
       </Route>
-    </SentryRoutes>
+    </Routes>
   );
 }
