@@ -50,7 +50,7 @@ export interface SphereContextValue {
   toggleIpfs: () => void;
 
   /** Persist a per-wallet subscription API key and re-init the SDK oracle with it. */
-  applySubscriptionKey: (apiKey: string) => Promise<void>;
+  applySubscriptionKey: (apiKey: string, opts?: { walletWide?: boolean }) => Promise<void>;
 
   /**
    * True when the asset path rides the wallet-api backend (S4 composition).

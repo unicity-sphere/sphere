@@ -62,6 +62,9 @@ export function PlanCapabilitiesScreen({ planName, created, onContinue, isBusy }
           <Button variant="primary" fullWidth loading={isBusy} onClick={onContinue}>
             Enter Wallet
           </Button>
+          <p className="mt-3 text-center text-xs text-neutral-500 dark:text-white/40">
+            Already have a key? Paste it later in Settings → Subscription.
+          </p>
         </div>
       </div>
     </motion.div>,

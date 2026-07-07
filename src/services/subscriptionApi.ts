@@ -4,6 +4,7 @@
  * the returned apiKey via the X-API-Key header. Contract: design spec §4–5.
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
+import { getPublicKey, signMessage } from '@unicitylabs/sphere-sdk';
 import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
 import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
@@ -95,15 +96,39 @@ function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, 
  * (created=false). The challenge template is validated before signing so the
  * wallet never signs unverified server-chosen text; it is still signed
  * VERBATIM (never re-serialized) once validated.
+ *
+ * scope 'wallet' (default): the identity is ALWAYS the wallet's index-0
+ * address key — stable across active-address switches, so one wallet maps to
+ * one gateway key and the same key is recovered on any device regardless of
+ * which address is selected.
+ * scope 'address': the ACTIVE address's own identity — gives that address its
+ * own separate free key/quota (the gateway get-or-creates per pubkey).
+ * (Keys are bearer tokens; the pubkey binding exists only for this free-tier
+ * get-or-create.)
  */
-export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionResult> {
+export async function provisionOrRecoverKey(
+  sphere: Sphere,
+  opts?: { scope?: 'wallet' | 'address' },
+): Promise<ProvisionResult> {
   if (SUBSCRIPTION_MOCK) return mock.mockProvision;
-  const pubkey = sphere.identity?.chainPubkey;
-  if (!pubkey) throw new Error('Wallet identity unavailable (no chainPubkey)');
+
+  let pubkey: string;
+  let sign: (challenge: string) => string;
+  if (opts?.scope === 'address') {
+    const active = sphere.identity?.chainPubkey;
+    if (!active) throw new Error('Wallet identity unavailable (no active address)');
+    pubkey = active;
+    sign = (c) => sphere.signMessage(c); // signs with the active identity's key
+  } else {
+    const { privateKey } = sphere.deriveAddress(0);
+    if (!privateKey) throw new Error('Wallet identity unavailable (no root key)');
+    pubkey = getPublicKey(privateKey);
+    sign = (c) => signMessage(privateKey, c);
+  }
 
   const { nonce, challenge } = await postJson<Challenge>('/auth/challenge', { pubkey });
   verifySgwChallenge(challenge, { pubkey, nonce }); // never sign unverified server text
-  const signature = sphere.signMessage(challenge);
+  const signature = sign(challenge);
   return postJson<ProvisionResult>('/auth/verify', { nonce, signature });
 }
 
