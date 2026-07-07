@@ -2,9 +2,14 @@
  * One-time prompt shown when the user switches to an address that has no
  * subscription key and no recorded preference (SphereProvider raises the
  * 'subscription-address-prompt' DOM event after resolving the switch — the
- * wallet key is already applied provisionally, so "Continue" just records
- * the inherit choice). Buying or entering a key stores it as THIS address's
- * own key.
+ * wallet key is applied provisionally meanwhile).
+ *
+ * Outcomes (each records a per-address preference so the prompt never repeats
+ * for this address):
+ * - keep the checkbox on  → inherit the wallet's primary key;
+ * - checkbox off / dismiss → this address gets its OWN free plan (separate
+ *   quota, provisioned against the active address identity);
+ * - enter a key / buy     → that key becomes this address's own key.
  */
 import { useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
@@ -12,7 +17,9 @@ import { BaseModal } from '../wallet/ui/BaseModal';
 import { Button } from '../wallet/ui';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useUtilization } from '../../sdk/hooks/subscription';
+import { provisionOrRecoverKey } from '../../services/subscriptionApi';
 import { setAddressPreference } from '../../sdk/subscription/keyVault';
+import { truncateAddress } from '../wallet/shared/utils/walletFileParser';
 import { useUpgrade } from '../upgrade';
 
 const KEY_RE = /^sk_[0-9a-f]{32}$/;
@@ -20,12 +27,13 @@ const KEY_RE = /^sk_[0-9a-f]{32}$/;
 export function AddressKeyPromptModal() {
   const { sphere, network, applySubscriptionKey } = useSphereContext();
   const { openUpgrade } = useUpgrade();
-  // The wallet key is already applied provisionally when this prompt opens,
-  // so the current utilization snapshot describes exactly the plan the user
-  // would inherit by keeping the checkbox on.
+  // The wallet key is applied provisionally when this prompt opens, so the
+  // current utilization snapshot describes exactly the plan the user would
+  // inherit by keeping the checkbox on.
   const util = useUtilization();
   const inheritedPlanName = util.data?.plan?.name ?? null;
   const nametag = sphere?.identity?.nametag ?? null;
+  const chainPubkey = sphere?.identity?.chainPubkey ?? null;
 
   const [isOpen, setIsOpen] = useState(false);
   const [useWalletKey, setUseWalletKey] = useState(true); // default: inherit the wallet's primary key
@@ -48,17 +56,33 @@ export function AddressKeyPromptModal() {
 
   const close = () => setIsOpen(false);
 
+  /**
+   * Give THIS address its own free plan (separate quota). Best-effort: if the
+   * gateway is unreachable, record the 'own' preference anyway so the prompt
+   * doesn't repeat — the address keeps using the wallet key until its own free
+   * key can be provisioned (fail-open).
+   */
+  const commitOwnFreePlan = async () => {
+    if (!sphere) return;
+    try {
+      const result = await provisionOrRecoverKey(sphere, { scope: 'address' });
+      await applySubscriptionKey(result.apiKey, { walletWide: false });
+    } catch {
+      await setAddressPreference(sphere, network, 'own').catch(() => {});
+    }
+  };
+
   const handleContinue = async () => {
     if (!sphere) return close();
     setBusy(true);
     setError(null);
     try {
       if (showKeyInput && keyInput) {
-        // Own key for this address ('own' preference recorded by the vault).
-        await applySubscriptionKey(keyInput.trim(), { walletWide: false });
+        await applySubscriptionKey(keyInput.trim(), { walletWide: false }); // own key for this address
       } else if (useWalletKey) {
-        // Wallet key is already applied provisionally — just remember the choice.
-        await setAddressPreference(sphere, network, 'inherit');
+        await setAddressPreference(sphere, network, 'inherit'); // wallet key already applied — record choice
+      } else {
+        await commitOwnFreePlan();
       }
       close();
     } catch (e) {
@@ -68,27 +92,38 @@ export function AddressKeyPromptModal() {
     }
   };
 
+  // Dismissing (X / backdrop) means "leave this address on its own free plan"
+  // — commit it so the prompt never repeats for this address.
+  const handleDismiss = () => {
+    void commitOwnFreePlan();
+    close();
+  };
+
   const handleBuy = () => {
     close(); // checkout adoption stores the bought key as this address's own key
     openUpgrade();
   };
 
+  const identifier = nametag
+    ? `@${nametag}`
+    : chainPubkey
+      ? `Unicity ID · ${truncateAddress(chainPubkey, 10, 6)}`
+      : null;
+
   const keyValid = KEY_RE.test(keyInput.trim());
-  const continueDisabled = busy || (showKeyInput ? !keyValid : !useWalletKey);
+  const continueDisabled = busy || (showKeyInput && !keyValid);
 
   return (
-    <BaseModal isOpen={isOpen} onClose={close} size="sm">
+    <BaseModal isOpen={isOpen} onClose={handleDismiss} size="sm">
       <div className="p-5">
         <div className="mb-1 flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-orange-500" />
           <h3 className="font-semibold">No subscription key for this address</h3>
         </div>
-        {nametag && (
-          <p className="mb-2 text-sm font-mono text-orange-500">@{nametag}</p>
-        )}
+        {identifier && <p className="mb-2 text-sm font-mono text-orange-500">{identifier}</p>}
         <p className="mb-4 text-sm text-neutral-500 dark:text-white/45">
-          Sends from this address need an aggregator key. Use your wallet's primary key, enter an
-          existing one, or buy a plan just for this address.
+          Sends from this address need an aggregator key. Use your wallet's primary key, keep a free
+          plan just for this address, enter an existing key, or buy a plan.
         </p>
 
         {!showKeyInput && (
@@ -118,7 +153,7 @@ export function AddressKeyPromptModal() {
         {error && <p className="mb-3 text-sm text-red-500">{error}</p>}
 
         <Button variant="primary" fullWidth loading={busy} disabled={continueDisabled} onClick={handleContinue}>
-          Continue
+          {showKeyInput || useWalletKey ? 'Continue' : 'Continue with a free plan for this address'}
         </Button>
 
         <div className="mt-3 flex items-center justify-center gap-4 text-sm">
