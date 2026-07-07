@@ -39,8 +39,6 @@ export function AddressKeyPromptModal() {
   // inherit by keeping the checkbox on.
   const util = useUtilization();
   const inheritedPlanName = util.data?.plan?.name ?? null;
-  const nametag = sphere?.identity?.nametag ?? null;
-  const chainPubkey = sphere?.identity?.chainPubkey ?? null;
 
   // Identity of the wallet's primary address (#1 / index 0) — the one whose
   // key is inherited. Its nametag comes from the tracked-address cache; when
@@ -123,19 +121,16 @@ export function AddressKeyPromptModal() {
     openUpgrade();
   };
 
-  const identifier = formatIdentity(nametag, chainPubkey);
-
   const keyValid = KEY_RE.test(keyInput.trim());
   const continueDisabled = busy || (showKeyInput && !keyValid);
 
   return (
     <BaseModal isOpen={isOpen} onClose={handleDismiss} size="sm">
       <div className="p-5">
-        <div className="mb-1 flex items-center gap-2">
+        <div className="mb-3 flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-orange-500" />
           <h3 className="font-semibold">No subscription key for this address</h3>
         </div>
-        {identifier && <p className="mb-2 text-sm font-mono text-orange-500">{identifier}</p>}
         <p className="mb-4 text-sm text-neutral-500 dark:text-white/45">
           Sends from this address need an aggregator key. Use your wallet's primary key, keep a free
           plan just for this address, enter an existing key, or buy a plan.
