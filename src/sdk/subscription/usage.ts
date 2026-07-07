@@ -4,6 +4,16 @@ export function usagePercent(used: number, limit: number): number {
   return Math.min(100, Math.round((used / limit) * 100));
 }
 
+/**
+ * A subscription snapshot is on a PAID plan iff it carries an expiry.
+ * Free (and gateway-demoted-from-expired) keys have `activeUntil === null`.
+ * Used to decide whether inheriting the wallet key onto a new address is a
+ * real choice worth prompting for (only paid plans are).
+ */
+export function isPaidPlan(activeUntil: string | null | undefined): boolean {
+  return activeUntil != null;
+}
+
 /** Human-readable expiry; '—' when there is no expiry. */
 export function formatExpiry(iso: string | null): string {
   if (!iso) return '—';

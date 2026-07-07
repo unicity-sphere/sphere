@@ -28,7 +28,8 @@ import {
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
 import { resolveActiveKey, saveWalletKey, saveAddressKey } from './subscription/keyVault';
-import { provisionOrRecoverKey } from '../services/subscriptionApi';
+import { isPaidPlan } from './subscription/usage';
+import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -257,8 +258,20 @@ export function SphereProvider({
                 console.warn('subscription auto-provisioning failed; using fallback key', err);
               }
             }
-            if (promptIfNeeded && resolved.needsPrompt) {
-              window.dispatchEvent(new Event('subscription-address-prompt'));
+            if (promptIfNeeded && resolved.needsPrompt && resolved.key) {
+              // Only prompt when the inherited wallet key is on a PAID plan —
+              // then sharing that quota vs. giving this address its own free
+              // plan is a real choice. On a free wallet key the two are
+              // equivalent, so silently inherit (no modal). Metering failure
+              // → don't nag.
+              try {
+                const util = await getUtilization(resolved.key);
+                if (isPaidPlan(util.activeUntil)) {
+                  window.dispatchEvent(new Event('subscription-address-prompt'));
+                }
+              } catch {
+                // ignore — a free/unknown plan never prompts
+              }
             }
           };
           void reconcileSubscriptionKey(false).catch(() => {});
