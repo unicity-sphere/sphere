@@ -11,6 +11,7 @@ import { KeyRound } from 'lucide-react';
 import { BaseModal } from '../wallet/ui/BaseModal';
 import { Button } from '../wallet/ui';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
+import { useUtilization } from '../../sdk/hooks/subscription';
 import { setAddressPreference } from '../../sdk/subscription/keyVault';
 import { useUpgrade } from '../upgrade';
 
@@ -19,6 +20,12 @@ const KEY_RE = /^sk_[0-9a-f]{32}$/;
 export function AddressKeyPromptModal() {
   const { sphere, network, applySubscriptionKey } = useSphereContext();
   const { openUpgrade } = useUpgrade();
+  // The wallet key is already applied provisionally when this prompt opens,
+  // so the current utilization snapshot describes exactly the plan the user
+  // would inherit by keeping the checkbox on.
+  const util = useUtilization();
+  const inheritedPlanName = util.data?.plan?.name ?? null;
+  const nametag = sphere?.identity?.nametag ?? null;
 
   const [isOpen, setIsOpen] = useState(false);
   const [useWalletKey, setUseWalletKey] = useState(true); // default: inherit the wallet's primary key
@@ -72,10 +79,13 @@ export function AddressKeyPromptModal() {
   return (
     <BaseModal isOpen={isOpen} onClose={close} size="sm">
       <div className="p-5">
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-1 flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-orange-500" />
           <h3 className="font-semibold">No subscription key for this address</h3>
         </div>
+        {nametag && (
+          <p className="mb-2 text-sm font-mono text-orange-500">@{nametag}</p>
+        )}
         <p className="mb-4 text-sm text-neutral-500 dark:text-white/45">
           Sends from this address need an aggregator key. Use your wallet's primary key, enter an
           existing one, or buy a plan just for this address.
@@ -89,7 +99,10 @@ export function AddressKeyPromptModal() {
               onChange={(e) => setUseWalletKey(e.target.checked)}
               className="mt-0.5 accent-orange-500"
             />
-            <span>Use my wallet's primary key (address #1)</span>
+            <span>
+              Use my wallet's primary key (address #1
+              {inheritedPlanName ? <> — <span className="capitalize">{inheritedPlanName}</span> plan</> : null})
+            </span>
           </label>
         )}
 
