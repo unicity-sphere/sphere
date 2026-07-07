@@ -55,7 +55,9 @@ export function SeedPhraseModal({ isOpen, onClose, seedPhrase }: SeedPhraseModal
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
+              {/* data-sentry-block: Session Replay must never serialize seed
+                  words, even if global masking is ever relaxed */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4" data-sentry-block>
                 {seedPhrase.map((word, index) => (
                   <motion.div
                     key={`seed-word-${index}`}

@@ -67,8 +67,9 @@ export function MnemonicBackupScreen({
         </span>
       </p>
 
-      {/* Mnemonic word grid */}
-      <div className="grid grid-cols-3 gap-2 mb-4">
+      {/* Mnemonic word grid. data-sentry-block: Session Replay must never
+          serialize seed words, even if global masking is ever relaxed */}
+      <div className="grid grid-cols-3 gap-2 mb-4" data-sentry-block>
         {words.map((word, index) => (
           <motion.div
             key={`mnemonic-word-${index}`}

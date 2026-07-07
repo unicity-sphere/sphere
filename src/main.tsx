@@ -1,5 +1,7 @@
+import './instrument' // must stay first: Sentry initializes before app modules load
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as Sentry from '@sentry/react'
 import '@unicitylabs/sphere-ui/styles'
 import './index.css'
 import App from './App.tsx'
@@ -11,8 +13,20 @@ import { SphereProvider } from './sdk/SphereProvider'
 import { ServicesProvider } from './contexts/ServicesProvider'
 import { ConnectProvider } from './components/connect'
 import { ToastContainer } from './components/ui/Toast'
+import { ErrorFallback } from './components/ui/ErrorFallback'
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById('root')!, {
+  // React 19 root hooks: report errors that crash above the ErrorBoundary
+  // (provider tree) and recoverable render errors. The console.error callback
+  // replaces React's default logging, which these hooks suppress — without it,
+  // dev builds (Sentry disabled) would swallow errors silently.
+  onUncaughtError: Sentry.reactErrorHandler((error, errorInfo) => {
+    console.error('Uncaught error in React root:', error, errorInfo.componentStack)
+  }),
+  onRecoverableError: Sentry.reactErrorHandler((error, errorInfo) => {
+    console.error('Recoverable React error:', error, errorInfo.componentStack)
+  }),
+}).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <SphereProvider network="testnet2">
@@ -20,7 +34,9 @@ createRoot(document.getElementById('root')!).render(
           <ConnectProvider>
             <ThemeInitializer>
               <BrowserRouter basename={import.meta.env.BASE_URL}>
-                <App />
+                <Sentry.ErrorBoundary fallback={<ErrorFallback />}>
+                  <App />
+                </Sentry.ErrorBoundary>
               </BrowserRouter>
               <ToastContainer />
             </ThemeInitializer>

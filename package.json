@@ -16,6 +16,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@sentry/react": "^10.64.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-table": "^8.21.3",
