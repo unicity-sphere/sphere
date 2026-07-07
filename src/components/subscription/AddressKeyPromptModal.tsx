@@ -11,7 +11,7 @@
  *   quota, provisioned against the active address identity);
  * - enter a key / buy     → that key becomes this address's own key.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { KeyRound } from 'lucide-react';
 import { BaseModal } from '../wallet/ui/BaseModal';
 import { Button } from '../wallet/ui';
@@ -24,6 +24,13 @@ import { useUpgrade } from '../upgrade';
 
 const KEY_RE = /^sk_[0-9a-f]{32}$/;
 
+/** Human identifier for an address: its nametag, else a short Unicity ID. */
+function formatIdentity(nametag?: string | null, chainPubkey?: string | null): string | null {
+  if (nametag) return `@${nametag}`;
+  if (chainPubkey) return `Unicity ID · ${truncateAddress(chainPubkey, 10, 6)}`;
+  return null;
+}
+
 export function AddressKeyPromptModal() {
   const { sphere, network, applySubscriptionKey } = useSphereContext();
   const { openUpgrade } = useUpgrade();
@@ -34,6 +41,18 @@ export function AddressKeyPromptModal() {
   const inheritedPlanName = util.data?.plan?.name ?? null;
   const nametag = sphere?.identity?.nametag ?? null;
   const chainPubkey = sphere?.identity?.chainPubkey ?? null;
+
+  // Identity of the wallet's primary address (#1 / index 0) — the one whose
+  // key is inherited. Its nametag comes from the tracked-address cache; when
+  // absent (or not yet cached) we fall back to its short Unicity ID.
+  const rootIdentity = useMemo(() => {
+    try {
+      const root = sphere?.getTrackedAddress(0);
+      return formatIdentity(root?.nametag, root?.chainPubkey);
+    } catch {
+      return null;
+    }
+  }, [sphere]);
 
   const [isOpen, setIsOpen] = useState(false);
   const [useWalletKey, setUseWalletKey] = useState(true); // default: inherit the wallet's primary key
@@ -104,11 +123,7 @@ export function AddressKeyPromptModal() {
     openUpgrade();
   };
 
-  const identifier = nametag
-    ? `@${nametag}`
-    : chainPubkey
-      ? `Unicity ID · ${truncateAddress(chainPubkey, 10, 6)}`
-      : null;
+  const identifier = formatIdentity(nametag, chainPubkey);
 
   const keyValid = KEY_RE.test(keyInput.trim());
   const continueDisabled = busy || (showKeyInput && !keyValid);
@@ -135,7 +150,7 @@ export function AddressKeyPromptModal() {
               className="mt-0.5 accent-orange-500"
             />
             <span>
-              Use my wallet's primary key (address #1
+              Use my wallet's primary key ({rootIdentity ?? 'address #1'}
               {inheritedPlanName ? <> — <span className="capitalize">{inheritedPlanName}</span> plan</> : null})
             </span>
           </label>
