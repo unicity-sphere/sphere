@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { usagePercent, formatExpiry, msUntil, formatCountdown } from '@/sdk/subscription/usage';
+import { usagePercent, formatExpiry, msUntil, formatCountdown, isPaidPlan } from '@/sdk/subscription/usage';
 
 describe('usagePercent', () => {
   it('computes a rounded percentage', () => {
@@ -48,5 +48,16 @@ describe('formatCountdown', () => {
   });
   it('shows seconds under a minute', () => {
     expect(formatCountdown(45_000)).toBe('45s');
+  });
+});
+
+describe('isPaidPlan', () => {
+  it('is true only when an expiry is present (paid plan)', () => {
+    expect(isPaidPlan('2026-08-01T00:00:00Z')).toBe(true);
+  });
+
+  it('is false for free/demoted keys (no expiry) and unknown values', () => {
+    expect(isPaidPlan(null)).toBe(false);
+    expect(isPaidPlan(undefined)).toBe(false);
   });
 });

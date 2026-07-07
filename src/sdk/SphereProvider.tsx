@@ -27,8 +27,9 @@ import {
 } from '../config/walletApi';
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
-import { resolveActiveKey, saveWalletKey, saveAddressKey } from './subscription/keyVault';
-import { provisionOrRecoverKey } from '../services/subscriptionApi';
+import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
+import { isPaidPlan } from './subscription/usage';
+import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -231,42 +232,77 @@ export function SphereProvider({
         sphereRef.current = instance;
         setSphere(instance);
 
-        // Subscription key resolution (wallet-level default, per-address
-        // opt-out — see sdk/subscription/keyVault.ts). Picks the key the
-        // ACTIVE address should use and reconciles the boot cache (a single
-        // global slot — see config/storageKeys.ts); guarded so it only
-        // re-inits on a real difference, never in a loop. Wallets with no key
-        // at all (pre-feature, or onboarding provisioning failed) get their
-        // free key here — idempotent get-or-create against the wallet's
-        // index-0 identity; the env-key fallback keeps the wallet fully
-        // working if this fails (non-fatal until the Phase 5 cutover).
-        // A first visit to a keyless non-root address raises the one-time
-        // "buy / enter / use wallet key" prompt via a DOM event.
+        // Subscription key resolution (INDIVIDUAL per address by default;
+        // inherit is opt-in — see sdk/subscription/keyVault.ts). Reconciles
+        // the boot cache (a single global slot — config/storageKeys.ts);
+        // guarded so it only re-inits on a real difference, never in a loop.
+        // - resolved 'own'/'wallet' with a key → use it;
+        // - index 0 with no key yet → provision the wallet (index-0) free key;
+        // - any other address with no key → give it its OWN free key, EXCEPT
+        //   when index 0 is on a PAID plan and no choice was made yet, where a
+        //   one-time prompt first offers to share that paid plan (inherit).
+        // The env-key fallback keeps the wallet working if provisioning fails.
         if (SUBSCRIPTION_ENABLED) {
-          const reconcileSubscriptionKey = async (promptIfNeeded: boolean) => {
-            const resolved = await resolveActiveKey(instance, network);
-            if (resolved.key && resolved.key !== getStoredSubscriptionKey()) {
-              setStoredSubscriptionKey(resolved.key);
-              void initialize(0, true); // rebuild oracle with the resolved key
-            } else if (!resolved.key && !getStoredSubscriptionKey()) {
-              try {
-                const result = await provisionOrRecoverKey(instance);
-                await saveWalletKey(instance, network, result.apiKey); // also sets the boot cache
-                void initialize(0, true); // rebuild oracle with the fresh key
-              } catch (err) {
-                console.warn('subscription auto-provisioning failed; using fallback key', err);
-              }
-            }
-            if (promptIfNeeded && resolved.needsPrompt) {
-              window.dispatchEvent(new Event('subscription-address-prompt'));
+          // `reinit` is only allowed on the initial load — NEVER on a live
+          // address switch: initialize(0, true) destroys+rebuilds the whole
+          // Sphere (transport + wallet-api realtime socket), which would flash
+          // "Reconnecting" on every switch. Keys are bearer tokens, so the
+          // active session sends fine on whatever key is loaded; the resolved
+          // per-address key is written to the vault + boot cache and takes
+          // effect on the next natural init (reload / network switch). Proper
+          // fix is a runtime oracle-key setter in the SDK (follow-up).
+          const applyResolved = async (key: string, reinit: boolean) => {
+            if (key !== getStoredSubscriptionKey()) {
+              setStoredSubscriptionKey(key);
+              if (reinit) void initialize(0, true);
             }
           };
-          void reconcileSubscriptionKey(false).catch(() => {});
-          // Live address switches don't re-run initialize(), so re-resolve on
-          // the SDK's identity event; the listener dies with the instance on
-          // the next re-init (instance.destroy()).
+          const provisionOwn = async (scope: 'wallet' | 'address', reinit: boolean) => {
+            try {
+              const result = await provisionOrRecoverKey(instance, { scope });
+              await (scope === 'wallet'
+                ? saveWalletKey(instance, network, result.apiKey)
+                : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
+              if (reinit) void initialize(0, true);
+            } catch (err) {
+              console.warn('subscription auto-provisioning failed; using fallback key', err);
+            }
+          };
+          const reconcileSubscriptionKey = async (initialLoad: boolean) => {
+            const resolved = await resolveActiveKey(instance, network);
+            if (resolved.key) {
+              await applyResolved(resolved.key, initialLoad);
+              return;
+            }
+            // needs-own: index 0 → wallet key; else this address's own key.
+            const isRoot = instance.identity?.chainPubkey === getPublicKey(instance.deriveAddress(0).privateKey);
+            if (isRoot) {
+              await provisionOwn('wallet', initialLoad);
+              return;
+            }
+            // Offer inheriting index 0's plan only when it's PAID and undecided
+            // (only on a live switch — never during the initial load).
+            if (!initialLoad && resolved.undecided) {
+              const walletKey = await loadWalletKey(instance, network);
+              if (walletKey) {
+                try {
+                  if (isPaidPlan((await getUtilization(walletKey)).activeUntil)) {
+                    window.dispatchEvent(new Event('subscription-address-prompt'));
+                    return; // wait for the user's choice
+                  }
+                } catch {
+                  // metering unavailable → fall through to an own free key
+                }
+              }
+            }
+            await provisionOwn('address', initialLoad);
+          };
+          void reconcileSubscriptionKey(true).catch(() => {});
+          // Re-resolve on a live address switch (initialLoad=false → NO
+          // re-init, so no transport/realtime reconnect). The listener dies
+          // with the instance on the next re-init (instance.destroy()).
           instance.on('identity:changed', () => {
-            void reconcileSubscriptionKey(true).catch(() => {});
+            void reconcileSubscriptionKey(false).catch(() => {});
           });
         }
         // Send welcome DMs after relay delivers historical messages (EOSE)
