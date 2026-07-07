@@ -2,17 +2,19 @@
  * Wallet-side bookkeeping of SGW subscription keys (gateway-side, keys are
  * bearer tokens — nothing is address-bound there; see docs/API.md).
  *
- * Model (wallet-level default, per-address opt-out):
- * - The WALLET key lives in a slot keyed by the index-0 root pubkey — stable
- *   across active-address switches. The free key is provisioned/recovered
- *   against index 0, and by default every address inherits this key.
- * - An address may hold its OWN key (entered or purchased while active on
- *   it) in a slot keyed by that address's pubkey, plus a persisted
- *   preference: 'own' | 'inherit'. No preference and no own key means the
- *   address was never asked — the UI shows a one-time prompt.
+ * Model (INDIVIDUAL per address by default; inherit is opt-in):
+ * - Each address gets its OWN key by default (its own free plan / quota),
+ *   stored in a slot keyed by that address's pubkey. Address index 0's own
+ *   key doubles as the "wallet key" (the one another address can inherit).
+ * - An address inherits the wallet (index-0) key ONLY when its persisted
+ *   preference is 'inherit' — the opt-in the user makes via the prompt's
+ *   checkbox, useful when index 0 holds a PAID plan to share.
+ * - No own key and no preference ⇒ this address still needs a key: the caller
+ *   provisions its own free key silently, EXCEPT when index 0 is on a paid
+ *   plan, where a one-time prompt first offers "share the paid plan (inherit)".
  * - The boot cache (localStorage, plaintext, sync) feeds
  *   getActiveOracleApiKey() at provider-build time with whatever key the
- *   resolver picked for the active address.
+ *   resolver/caller picked for the active address.
  *
  * All key values are encrypted at rest (XChaCha20-Poly1305; key derived
  * deterministically from the seed via the index-0 private key, so any
@@ -25,11 +27,17 @@ import { STORAGE_KEYS, setStoredSubscriptionKey } from '../../config/storageKeys
 export type AddressKeyPreference = 'own' | 'inherit';
 
 export interface ResolvedKey {
+  /** The resolved key, or null when the address still needs one provisioned. */
   key: string | null;
-  /** 'own' = the address's key; 'wallet' = inherited root key; 'none' = nothing stored. */
-  source: 'own' | 'wallet' | 'none';
-  /** True when this address never made a choice — the UI should prompt once. */
-  needsPrompt: boolean;
+  /**
+   * 'own'       — the active address's own key (or index-0's wallet key);
+   * 'wallet'    — inheriting the index-0 wallet key (preference 'inherit');
+   * 'needs-own' — no key yet; the caller must provision this address's own key
+   *               (or, if index 0 is paid and `undecided`, prompt first).
+   */
+  source: 'own' | 'wallet' | 'needs-own';
+  /** True only for 'needs-own' with NO recorded preference (paid case may prompt). */
+  undecided: boolean;
 }
 
 export function scopedSubscriptionSlot(network: string, pubkey: string): string {
@@ -111,32 +119,37 @@ export function loadWalletKey(sphere: Sphere, network: string): Promise<string |
 }
 
 /**
- * Picks the key the ACTIVE address should use:
- * - active address IS index 0 → the wallet key;
- * - address has its own key → it wins;
- * - preference 'inherit' (or 'own' with a lost slot) → the wallet key;
- * - no own key and no preference → wallet key provisionally + needsPrompt
- *   (the one-time "buy / enter / use wallet key" prompt).
+ * Picks the key the ACTIVE address should use (INDIVIDUAL by default):
+ * - active address IS index 0 → its own key IS the wallet key ('wallet');
+ * - address has its own key → it wins ('own');
+ * - preference 'inherit' → the wallet key ('wallet');
+ * - otherwise → 'needs-own' (the caller provisions this address's own key,
+ *   or prompts first when index 0 is paid and no choice was made yet).
  */
 export async function resolveActiveKey(sphere: Sphere, network: string): Promise<ResolvedKey> {
   try {
     const root = rootIdentity(sphere);
     const active = sphere.identity?.chainPubkey;
-    const walletKey = await readKeySlot(sphere, network, root.pubkey);
 
+    // Index 0: its own key is the wallet key. null ⇒ needs first-time provision.
     if (!active || active === root.pubkey) {
-      return { key: walletKey, source: walletKey ? 'wallet' : 'none', needsPrompt: false };
+      const walletKey = await readKeySlot(sphere, network, root.pubkey);
+      return { key: walletKey, source: walletKey ? 'wallet' : 'needs-own', undecided: false };
     }
 
     const own = await readKeySlot(sphere, network, active);
-    if (own) return { key: own, source: 'own', needsPrompt: false };
+    if (own) return { key: own, source: 'own', undecided: false };
 
     const pref = await getAddressPreference(sphere, network, active);
-    if (pref !== null) {
-      return { key: walletKey, source: walletKey ? 'wallet' : 'none', needsPrompt: false };
+    if (pref === 'inherit') {
+      const walletKey = await readKeySlot(sphere, network, root.pubkey);
+      return { key: walletKey, source: walletKey ? 'wallet' : 'needs-own', undecided: false };
     }
-    return { key: walletKey, source: walletKey ? 'wallet' : 'none', needsPrompt: true };
+
+    // Default: this address needs its OWN key. `undecided` iff no preference yet
+    // (so the paid-plan case can offer inherit before auto-provisioning).
+    return { key: null, source: 'needs-own', undecided: pref === null };
   } catch {
-    return { key: null, source: 'none', needsPrompt: false };
+    return { key: null, source: 'needs-own', undecided: false };
   }
 }
