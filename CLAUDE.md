@@ -177,6 +177,10 @@ Wallet encryption/storage is handled internally by the SDK.
 
 ```env
 VITE_WELCOME_AGENT_NAMETAG  # Welcome DM agent nametag (default: kbbot)
+VITE_SENTRY_DSN             # Sentry: unset = prod DSN baked into PROD builds (src/config/sentry.ts),
+                            # '' at build time = disabled (Pages previews do this), dev = off unless set.
+                            # Init lives in src/instrument.ts — MUST stay the first import in main.tsx.
+                            # environment tag is derived at runtime (hostname), NOT via runtime-config.sh.
 VITE_WELCOME_DELAY_MS       # Delay before sending welcome DM (default: 4000)
 SSL_CERT_PATH               # HTTPS cert path for dev server
 HMR_HOST                    # Remote HMR host

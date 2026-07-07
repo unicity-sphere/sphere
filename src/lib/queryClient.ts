@@ -1,5 +1,6 @@
-import { QueryClient } from '@tanstack/react-query';
-import { getErrorMessage } from '../sdk/errors';
+import { MutationCache, QueryClient } from '@tanstack/react-query';
+import * as Sentry from '@sentry/react';
+import { getErrorCode, getErrorMessage } from '../sdk/errors';
 import { showToast } from '../components/ui/toast-utils';
 
 /**
@@ -10,6 +11,19 @@ import { showToast } from '../components/ui/toast-utils';
  *   queryClient.invalidateQueries({ queryKey: ['some', 'key'] });
  */
 export const queryClient = new QueryClient({
+  // Cache-level onError fires for EVERY mutation failure — per-mutation
+  // onError options replace defaultOptions.mutations.onError rather than
+  // merging, so the Sentry capture must not live there
+  mutationCache: new MutationCache({
+    onError: (err) => {
+      // Mutations are the wallet operations (transfers, splits, burns,
+      // swaps, registrations) whose failures are otherwise only visible as
+      // a toast; the SphereErrorCode tag makes them filterable in Sentry
+      Sentry.captureException(err, {
+        tags: { source: 'mutation', sphereErrorCode: getErrorCode(err) ?? 'unknown' },
+      });
+    },
+  }),
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
@@ -17,7 +31,9 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       onError: (err) => {
-        showToast(getErrorMessage(err), 'error');
+        // report: false — the MutationCache above already captured the
+        // exception with its stack; don't double-report the toast text
+        showToast(getErrorMessage(err), 'error', undefined, { report: false });
       },
     },
   },
