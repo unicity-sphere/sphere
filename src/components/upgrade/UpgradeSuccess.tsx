@@ -3,7 +3,7 @@
  * a spring-popped check with a pulsing ring, a light confetti burst, the new
  * plan name, and the limits/features it unlocked.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Copy, Sparkles } from 'lucide-react';
 import { Button } from '../wallet/ui';
@@ -53,6 +53,13 @@ interface UpgradeSuccessProps {
 }
 
 export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
+  const [copied, setCopied] = useState(false);
+  const copyKey = () => {
+    if (!apiKey) return;
+    navigator.clipboard.writeText(apiKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   const features = plan ? planFeatures(plan) : [];
 
   return (
@@ -123,11 +130,11 @@ export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
             <span className="text-xs font-medium text-yellow-600 dark:text-yellow-400">Your new API key</span>
             <button
               type="button"
-              aria-label="Copy API key"
-              onClick={() => navigator.clipboard.writeText(apiKey)}
+              aria-label={copied ? 'Copied' : 'Copy API key'}
+              onClick={copyKey}
               className="rounded p-1 text-yellow-600 hover:bg-yellow-500/15 dark:text-yellow-400"
             >
-              <Copy className="h-3.5 w-3.5" />
+              {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
             </button>
           </div>
           <code className="block break-all font-mono text-xs">{apiKey}</code>

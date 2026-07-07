@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CreditCard, Sparkles, Zap, Timer, KeyRound, Eye, EyeOff, Copy, Loader2 } from 'lucide-react';
+import { CreditCard, Sparkles, Zap, Timer, KeyRound, Eye, EyeOff, Copy, Check, Loader2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, EmptyState, AlertMessage } from '../../ui';
@@ -184,7 +184,13 @@ function ResetRow({ resetAt, active, loading }: { resetAt: string | null; active
 
 function ApiKeyRow({ apiKey }: { apiKey: string }) {
   const [visible, setVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
   const masked = `${apiKey.slice(0, 5)}…${apiKey.slice(-4)}`;
+  const copy = () => {
+    navigator.clipboard.writeText(apiKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   return (
     <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-white/4">
       <div className="flex items-center justify-between text-sm">
@@ -197,9 +203,9 @@ function ApiKeyRow({ apiKey }: { apiKey: string }) {
             className="rounded p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white">
             {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
           </button>
-          <button type="button" aria-label="Copy key" onClick={() => navigator.clipboard.writeText(apiKey)}
+          <button type="button" aria-label={copied ? 'Copied' : 'Copy key'} onClick={copy}
             className="rounded p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white">
-            <Copy className="h-3.5 w-3.5" />
+            {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
           </button>
         </span>
       </div>
