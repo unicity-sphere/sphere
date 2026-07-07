@@ -7,6 +7,7 @@ import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
 import { SubscriptionModal } from './SubscriptionModal';
 import { useUpgrade } from '../../../upgrade';
+import { useUtilization } from '../../../../sdk/hooks/subscription';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -27,6 +28,13 @@ export function SettingsModal({
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
   const { openUpgrade } = useUpgrade();
+
+  // Show the active address's current plan in the row subtitle, e.g. "Free plan".
+  const util = useUtilization();
+  const planName = util.data?.plan?.name;
+  const subscriptionSubtitle = planName
+    ? `${planName.charAt(0).toUpperCase()}${planName.slice(1)} plan`
+    : 'Manage your plan';
 
   return (
     <>
@@ -65,7 +73,7 @@ export function SettingsModal({
             icon={CreditCard}
             color="orange"
             label="Subscription"
-            subtitle="Manage your plan"
+            subtitle={subscriptionSubtitle}
             onClick={() => setIsSubscriptionOpen(true)}
           />
 
