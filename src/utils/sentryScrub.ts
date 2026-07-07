@@ -44,16 +44,17 @@ export function scrubText(text: string): string {
 }
 
 /**
- * Keeps the path and query param names, redacts every query value — routes
- * carry identifying params (?nametag=, ?join=, ?url=, ?origin=).
+ * Keeps the path and param names, redacts every query AND fragment value —
+ * routes carry identifying params (?nametag=, ?join=, ?url=, ?origin=), and
+ * OAuth-style flows put tokens in the fragment (#access_token=...).
  */
 export function redactUrl(url: string): string {
-  const q = url.indexOf('?');
-  if (q === -1) return scrubText(url);
-  const query = url.slice(q + 1).replace(/=[^&]*/g, '=[Filtered]');
-  // scrub the whole reassembled string: param names and valueless query
-  // tokens can carry secrets too
-  return scrubText(url.slice(0, q) + '?' + query);
+  const cut = url.search(/[?#]/);
+  if (cut === -1) return scrubText(url);
+  const rest = url.slice(cut).replace(/=[^&#]*/g, '=[Filtered]');
+  // scrub the whole reassembled string: param names and valueless tokens
+  // can carry secrets too
+  return scrubText(url.slice(0, cut) + rest);
 }
 
 function deepScrub(value: unknown, depth = 0): unknown {

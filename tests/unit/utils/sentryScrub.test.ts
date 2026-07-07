@@ -95,6 +95,13 @@ describe('redactUrl', () => {
     expect(redactUrl(`/page?${'c'.repeat(64)}`)).toBe('/page?[hex]');
     expect(redactUrl('/cb?user@example.com')).toBe('/cb?[email]');
   });
+
+  it('redacts fragment values, with or without a query', () => {
+    expect(redactUrl('/cb#access_token=secret123&state=xyz')).toBe(
+      '/cb#access_token=[Filtered]&state=[Filtered]'
+    );
+    expect(redactUrl('/page?a=1#token=abc')).toBe('/page?a=[Filtered]#token=[Filtered]');
+  });
 });
 
 describe('scrubTransactionEvent', () => {

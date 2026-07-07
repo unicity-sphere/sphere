@@ -10,8 +10,9 @@ export function ErrorFallback() {
         Something went wrong
       </h1>
       <p className="text-sm text-neutral-500 dark:text-white/60 max-w-sm leading-relaxed">
-        The error has been reported and we&apos;re on it. Your wallet and funds
-        are not affected — reload the page to continue.
+        The error has been reported and we&apos;re on it. Reload the page to
+        continue — if you were in the middle of an operation, check your
+        transaction history after reloading.
       </p>
       <button
         onClick={() => window.location.reload()}
