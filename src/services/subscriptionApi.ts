@@ -4,6 +4,7 @@
  * the returned apiKey via the X-API-Key header. Contract: design spec §4–5.
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
+import { getPublicKey, signMessage } from '@unicitylabs/sphere-sdk';
 import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
 import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
@@ -95,15 +96,22 @@ function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, 
  * (created=false). The challenge template is validated before signing so the
  * wallet never signs unverified server-chosen text; it is still signed
  * VERBATIM (never re-serialized) once validated.
+ *
+ * The subscription identity is ALWAYS the wallet's index-0 address key —
+ * stable across active-address switches, so one wallet maps to one gateway
+ * key and the same key is recovered on any device regardless of which
+ * address is selected. (Keys are bearer tokens; the pubkey binding exists
+ * only for this free-tier get-or-create.)
  */
 export async function provisionOrRecoverKey(sphere: Sphere): Promise<ProvisionResult> {
   if (SUBSCRIPTION_MOCK) return mock.mockProvision;
-  const pubkey = sphere.identity?.chainPubkey;
-  if (!pubkey) throw new Error('Wallet identity unavailable (no chainPubkey)');
+  const { privateKey } = sphere.deriveAddress(0);
+  if (!privateKey) throw new Error('Wallet identity unavailable (no root key)');
+  const pubkey = getPublicKey(privateKey);
 
   const { nonce, challenge } = await postJson<Challenge>('/auth/challenge', { pubkey });
   verifySgwChallenge(challenge, { pubkey, nonce }); // never sign unverified server text
-  const signature = sphere.signMessage(challenge);
+  const signature = signMessage(privateKey, challenge);
   return postJson<ProvisionResult>('/auth/verify', { nonce, signature });
 }
 

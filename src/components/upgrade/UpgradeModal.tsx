@@ -14,6 +14,7 @@ import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { useSphereContext } from '../../sdk/hooks';
+import { getPublicKey } from '@unicitylabs/sphere-sdk';
 import type { UpgradeReason } from './UpgradeContext';
 
 type Step = 'plans' | 'email' | 'awaiting' | 'claim' | 'success' | 'error';
@@ -57,7 +58,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const util = useUtilization();
   const checkout = useCheckout();
   const queryClient = useQueryClient();
-  const { applySubscriptionKey } = useSphereContext();
+  const { sphere, applySubscriptionKey } = useSphereContext();
 
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +68,18 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [claimKey, setClaimKey] = useState('');
   const [claiming, setClaiming] = useState(false);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
+  const [walletWide, setWalletWide] = useState(false);
+
+  // Buying while on the root address is wallet-wide by definition; on any
+  // other address the email step offers a "make it wallet-wide" checkbox.
+  const onRootAddress = useMemo(() => {
+    if (!sphere) return true;
+    try {
+      return sphere.identity?.chainPubkey === getPublicKey(sphere.deriveAddress(0).privateKey);
+    } catch {
+      return true;
+    }
+  }, [sphere]);
 
   const currentPlanName = util.data?.plan?.name ?? null;
 
@@ -83,7 +96,10 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   };
 
   const adoptKey = async (key: string) => {
-    await applySubscriptionKey(key); // persists (cache + scoped vault) and re-inits the oracle
+    // persists (cache + scoped vault) and re-inits the oracle; on the root
+    // address (or when the checkout checkbox asked for it) the key becomes
+    // wallet-wide, otherwise it belongs to the active address only
+    await applySubscriptionKey(key, { walletWide: onRootAddress || walletWide });
     await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
     setNewApiKey(key);
     setStep('success');
@@ -145,6 +161,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setClaimKey('');
     setClaiming(false);
     setNewApiKey(null);
+    setWalletWide(false);
     onClose();
   };
 
@@ -219,6 +236,17 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   placeholder="you@example.com"
                   className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-orange-500 dark:border-white/10 dark:bg-white/5"
                 />
+                {!onRootAddress && (
+                  <label className="flex cursor-pointer items-start gap-2.5 text-sm text-neutral-600 dark:text-white/60">
+                    <input
+                      type="checkbox"
+                      checked={walletWide}
+                      onChange={(e) => setWalletWide(e.target.checked)}
+                      className="mt-0.5 accent-orange-500"
+                    />
+                    <span>Make this the wallet-wide key (all addresses)</span>
+                  </label>
+                )}
                 <Button
                   variant="primary"
                   fullWidth

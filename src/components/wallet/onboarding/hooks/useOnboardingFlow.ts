@@ -14,7 +14,7 @@ import type { NametagAvailability } from "../components/NametagScreen";
 import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
 import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
-import { saveScopedKey } from "../../../../sdk/subscription/keyVault";
+import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
 
 export type OnboardingStep =
   | "start"
@@ -622,7 +622,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         // used from the first init.)
         setStoredSubscriptionKey(result.apiKey);
         // Durable per-identity copy; non-fatal if it fails (cache still set).
-        await saveScopedKey(active, network, result.apiKey).catch(() => {});
+        await saveWalletKey(active, network, result.apiKey).catch(() => {});
         setPlanName(result.plan);
         setPlanCreated(result.created);
         setStep("planCapabilities");

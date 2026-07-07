@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError } from '@unicitylabs/sphere-sdk';
+import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
@@ -27,7 +27,7 @@ import {
 } from '../config/walletApi';
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
-import { loadScopedKey, saveScopedKey } from './subscription/keyVault';
+import { resolveActiveKey, saveWalletKey, saveAddressKey } from './subscription/keyVault';
 import { provisionOrRecoverKey } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
@@ -231,32 +231,42 @@ export function SphereProvider({
         sphereRef.current = instance;
         setSphere(instance);
 
-        // Reconcile the boot cache against this identity's scoped key so a
-        // wallet/network switch picks up ITS subscription key instead of the
-        // previous wallet's (the boot cache is a single global slot — see
-        // config/storageKeys.ts). Guarded so it only re-inits on a real
-        // difference, never in a loop. Wallets that predate the subscription
-        // feature (or whose onboarding provisioning failed) have no key at
-        // all — recover/create their free key here, same idempotent
-        // get-or-create the onboarding runs; the env-key fallback keeps the
-        // wallet fully working if this fails (non-fatal until the Phase 5
-        // cutover).
+        // Subscription key resolution (wallet-level default, per-address
+        // opt-out — see sdk/subscription/keyVault.ts). Picks the key the
+        // ACTIVE address should use and reconciles the boot cache (a single
+        // global slot — see config/storageKeys.ts); guarded so it only
+        // re-inits on a real difference, never in a loop. Wallets with no key
+        // at all (pre-feature, or onboarding provisioning failed) get their
+        // free key here — idempotent get-or-create against the wallet's
+        // index-0 identity; the env-key fallback keeps the wallet fully
+        // working if this fails (non-fatal until the Phase 5 cutover).
+        // A first visit to a keyless non-root address raises the one-time
+        // "buy / enter / use wallet key" prompt via a DOM event.
         if (SUBSCRIPTION_ENABLED) {
-          void loadScopedKey(instance, network).then(async (scoped) => {
-            if (scoped && scoped !== getStoredSubscriptionKey()) {
-              setStoredSubscriptionKey(scoped);
-              void initialize(0, true); // rebuild oracle with this identity's key
-              return;
-            }
-            if (!scoped && !getStoredSubscriptionKey() && instance.identity?.chainPubkey) {
+          const reconcileSubscriptionKey = async (promptIfNeeded: boolean) => {
+            const resolved = await resolveActiveKey(instance, network);
+            if (resolved.key && resolved.key !== getStoredSubscriptionKey()) {
+              setStoredSubscriptionKey(resolved.key);
+              void initialize(0, true); // rebuild oracle with the resolved key
+            } else if (!resolved.key && !getStoredSubscriptionKey()) {
               try {
                 const result = await provisionOrRecoverKey(instance);
-                await saveScopedKey(instance, network, result.apiKey); // also sets the boot cache
+                await saveWalletKey(instance, network, result.apiKey); // also sets the boot cache
                 void initialize(0, true); // rebuild oracle with the fresh key
               } catch (err) {
                 console.warn('subscription auto-provisioning failed; using fallback key', err);
               }
             }
+            if (promptIfNeeded && resolved.needsPrompt) {
+              window.dispatchEvent(new Event('subscription-address-prompt'));
+            }
+          };
+          void reconcileSubscriptionKey(false).catch(() => {});
+          // Live address switches don't re-run initialize(), so re-resolve on
+          // the SDK's identity event; the listener dies with the instance on
+          // the next re-init (instance.destroy()).
+          instance.on('identity:changed', () => {
+            void reconcileSubscriptionKey(true).catch(() => {});
           });
         }
         // Send welcome DMs after relay delivers historical messages (EOSE)
@@ -534,12 +544,22 @@ export function SphereProvider({
     initialize();
   }, [initialize]);
 
-  const applySubscriptionKey = useCallback(async (apiKey: string) => {
+  const applySubscriptionKey = useCallback(async (apiKey: string, opts?: { walletWide?: boolean }) => {
     setStoredSubscriptionKey(apiKey);
     const instance = sphereRef.current;
-    if (instance?.identity?.chainPubkey) {
-      // Best-effort: scoped entry is a durability upgrade, not a gate.
-      await saveScopedKey(instance, network, apiKey).catch(() => {});
+    if (instance) {
+      // Bookkeeping (best-effort — the vault entry is a durability upgrade,
+      // not a gate): while on the root address (or when explicitly asked) the
+      // key becomes WALLET-wide; on any other address it becomes that
+      // address's OWN key.
+      const rootPubkey = (() => {
+        try { return getPublicKey(instance.deriveAddress(0).privateKey); } catch { return null; }
+      })();
+      const walletWide = opts?.walletWide ?? (rootPubkey !== null && instance.identity?.chainPubkey === rootPubkey);
+      await (walletWide
+        ? saveWalletKey(instance, network, apiKey)
+        : saveAddressKey(instance, network, apiKey)
+      ).catch(() => {});
     }
     // Rebuild providers (oracle) with the new key and re-init the SDK.
     await initialize(0, true);
