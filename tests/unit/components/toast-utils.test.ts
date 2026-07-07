@@ -1,10 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   showToast,
   showTransferToast,
   showMintToast,
   type ShowToastDetail,
 } from '../../../src/components/ui/toast-utils';
+import * as Sentry from '@sentry/react';
+
+vi.mock('@sentry/react', () => ({
+  captureMessage: vi.fn(),
+  captureException: vi.fn(),
+}));
 
 /** Capture the next `show-toast` CustomEvent dispatched on window. */
 function captureToast(fire: () => void): ShowToastDetail {
@@ -26,6 +32,39 @@ describe('showToast', () => {
   it('dispatches a plain toast with message and type', () => {
     const detail = captureToast(() => showToast('hello', 'warning', 1234));
     expect(detail).toEqual({ message: 'hello', type: 'warning', duration: 1234 });
+  });
+});
+
+describe('showToast Sentry mirroring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('captures error toasts as Sentry messages', () => {
+    captureToast(() => showToast('Transfer failed: insufficient balance', 'error'));
+    expect(Sentry.captureMessage).toHaveBeenCalledWith('Transfer failed: insufficient balance', {
+      level: 'error',
+      tags: { source: 'toast' },
+    });
+  });
+
+  it('captures the original error when a cause is provided', () => {
+    const cause = new Error('boom');
+    captureToast(() => showToast('Something failed', 'error', undefined, { cause }));
+    expect(Sentry.captureException).toHaveBeenCalledWith(cause, { tags: { source: 'toast' } });
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not report when report: false (already captured upstream)', () => {
+    captureToast(() => showToast('Transfer failed', 'error', undefined, { report: false }));
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('does not report non-error toasts', () => {
+    captureToast(() => showToast('Copied!', 'success'));
+    captureToast(() => showToast('FYI', 'info'));
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
   });
 });
 

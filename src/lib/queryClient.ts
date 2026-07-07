@@ -28,7 +28,9 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       onError: (err) => {
-        showToast(getErrorMessage(err), 'error');
+        // report: false — the MutationCache above already captured the
+        // exception with its stack; don't double-report the toast text
+        showToast(getErrorMessage(err), 'error', undefined, { report: false });
       },
     },
   },
