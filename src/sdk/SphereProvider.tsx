@@ -243,37 +243,46 @@ export function SphereProvider({
         //   one-time prompt first offers to share that paid plan (inherit).
         // The env-key fallback keeps the wallet working if provisioning fails.
         if (SUBSCRIPTION_ENABLED) {
-          const applyResolved = async (key: string) => {
+          // `reinit` is only allowed on the initial load — NEVER on a live
+          // address switch: initialize(0, true) destroys+rebuilds the whole
+          // Sphere (transport + wallet-api realtime socket), which would flash
+          // "Reconnecting" on every switch. Keys are bearer tokens, so the
+          // active session sends fine on whatever key is loaded; the resolved
+          // per-address key is written to the vault + boot cache and takes
+          // effect on the next natural init (reload / network switch). Proper
+          // fix is a runtime oracle-key setter in the SDK (follow-up).
+          const applyResolved = async (key: string, reinit: boolean) => {
             if (key !== getStoredSubscriptionKey()) {
               setStoredSubscriptionKey(key);
-              void initialize(0, true); // rebuild oracle with the resolved key
+              if (reinit) void initialize(0, true);
             }
           };
-          const provisionOwn = async (scope: 'wallet' | 'address') => {
+          const provisionOwn = async (scope: 'wallet' | 'address', reinit: boolean) => {
             try {
               const result = await provisionOrRecoverKey(instance, { scope });
               await (scope === 'wallet'
                 ? saveWalletKey(instance, network, result.apiKey)
                 : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
-              void initialize(0, true);
+              if (reinit) void initialize(0, true);
             } catch (err) {
               console.warn('subscription auto-provisioning failed; using fallback key', err);
             }
           };
-          const reconcileSubscriptionKey = async (promptIfNeeded: boolean) => {
+          const reconcileSubscriptionKey = async (initialLoad: boolean) => {
             const resolved = await resolveActiveKey(instance, network);
             if (resolved.key) {
-              await applyResolved(resolved.key);
+              await applyResolved(resolved.key, initialLoad);
               return;
             }
             // needs-own: index 0 → wallet key; else this address's own key.
             const isRoot = instance.identity?.chainPubkey === getPublicKey(instance.deriveAddress(0).privateKey);
             if (isRoot) {
-              await provisionOwn('wallet');
+              await provisionOwn('wallet', initialLoad);
               return;
             }
-            // Offer inheriting index 0's plan only when it's PAID and undecided.
-            if (promptIfNeeded && resolved.undecided) {
+            // Offer inheriting index 0's plan only when it's PAID and undecided
+            // (only on a live switch — never during the initial load).
+            if (!initialLoad && resolved.undecided) {
               const walletKey = await loadWalletKey(instance, network);
               if (walletKey) {
                 try {
@@ -286,14 +295,14 @@ export function SphereProvider({
                 }
               }
             }
-            await provisionOwn('address');
+            await provisionOwn('address', initialLoad);
           };
-          void reconcileSubscriptionKey(false).catch(() => {});
-          // Live address switches don't re-run initialize(), so re-resolve on
-          // the SDK's identity event; the listener dies with the instance on
-          // the next re-init (instance.destroy()).
+          void reconcileSubscriptionKey(true).catch(() => {});
+          // Re-resolve on a live address switch (initialLoad=false → NO
+          // re-init, so no transport/realtime reconnect). The listener dies
+          // with the instance on the next re-init (instance.destroy()).
           instance.on('identity:changed', () => {
-            void reconcileSubscriptionKey(true).catch(() => {});
+            void reconcileSubscriptionKey(false).catch(() => {});
           });
         }
         // Send welcome DMs after relay delivers historical messages (EOSE)
