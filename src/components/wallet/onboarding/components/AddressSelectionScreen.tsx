@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { truncateAddress } from "../../shared/utils/walletFileParser";
 import { addrKey } from "./addrKey";
+import { stripDirectScheme } from "../../../../utils/identifiers";
 
 export interface DerivedAddressInfo {
   index: number;
@@ -160,7 +161,7 @@ export function AddressSelectionScreen({
                       #{addr.index}
                     </span>
                     <span className={`text-xs font-mono truncate ${isChange ? "text-neutral-500 dark:text-neutral-400" : "text-neutral-900 dark:text-white"}`}>
-                      {truncateAddress(addr.chainPubkey || addr.l3Address, 16, 8)}
+                      {truncateAddress(addr.chainPubkey || stripDirectScheme(addr.l3Address), 16, 8)}
                     </span>
                     {isChange && (
                       <span className="px-1 py-0.5 bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[8px] font-bold rounded shrink-0">

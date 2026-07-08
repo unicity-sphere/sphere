@@ -146,7 +146,7 @@ export function NewConversationModal({
               <div className="p-4 space-y-4">
                 <div>
                   <label className="block text-sm text-neutral-600 dark:text-white/45 mb-2">
-                    Enter unicity id or public key
+                    Enter Unicity ID or public key
                   </label>
                   <div className="relative">
                     <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-400" />
@@ -161,7 +161,7 @@ export function NewConversationModal({
                     />
                   </div>
                   <p className="text-xs text-neutral-500 dark:text-white/45 mt-2">
-                    You can enter a unicity id (without @) or a public key
+                    You can enter a Unicity ID (without @) or a public key
                   </p>
                 </div>
 

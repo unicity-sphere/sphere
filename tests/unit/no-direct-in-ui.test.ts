@@ -21,7 +21,7 @@ const CHANGED_UI_FILES = [
 // User-facing copy patterns — not code-level compatibility checks.
 const FORBIDDEN = [
   /direct address/i,   // labels, placeholders, helper text, tooltips
-  /'DIRECT:\/\/\.\.\.'/, // the old input placeholder literal
+  /DIRECT:\/\/\.\.\./, // the old input placeholder literal (any quoting)
   /L3 Address/,        // the old history DetailRow label
 ];
 

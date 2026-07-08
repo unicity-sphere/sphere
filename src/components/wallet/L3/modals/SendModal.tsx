@@ -431,7 +431,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Sent — delivery pending</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
+                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
                   </p>
                 </>
               ) : (
@@ -441,7 +441,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Success!</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
+                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
                   </p>
                 </>
               )}

@@ -31,7 +31,7 @@ function useCopyToClipboard() {
   return { copiedKey, copy };
 }
 
-/** Truncate middle of string: "DIRECT://abc...xyz" */
+/** Truncate middle of string: "abcdef...uvwxyz" */
 function truncateMiddle(str: string, startLen = 14, endLen = 6): string {
   if (str.length <= startLen + endLen + 3) return str;
   return `${str.slice(0, startLen)}...${str.slice(-endLen)}`;
