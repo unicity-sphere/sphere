@@ -19,6 +19,8 @@ import { addrKey } from "./addrKey";
 export interface DerivedAddressInfo {
   index: number;
   l3Address: string;
+  /** Compressed chain pubkey (02/03…) — preferred display identifier (#411). */
+  chainPubkey?: string;
   path: string;
   hasNametag: boolean;
   existingNametag?: string;
@@ -158,7 +160,7 @@ export function AddressSelectionScreen({
                       #{addr.index}
                     </span>
                     <span className={`text-xs font-mono truncate ${isChange ? "text-neutral-500 dark:text-neutral-400" : "text-neutral-900 dark:text-white"}`}>
-                      {truncateAddress(addr.l3Address, 16, 8)}
+                      {truncateAddress(addr.chainPubkey || addr.l3Address, 16, 8)}
                     </span>
                     {isChange && (
                       <span className="px-1 py-0.5 bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[8px] font-bold rounded shrink-0">
