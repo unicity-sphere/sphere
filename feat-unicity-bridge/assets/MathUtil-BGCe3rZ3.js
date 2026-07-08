@@ -1,0 +1,1 @@
+const g={interpolate(n,r,t){if(n.length!==2||r.length!==2)throw new Error("inputRange and outputRange must be an array of length 2");const e=n[0]||0,o=n[1]||0,a=r[0]||0,i=r[1]||0;return t<e?a:t>o?i:(i-a)/(o-e)*(t-e)+a}};export{g as M};
