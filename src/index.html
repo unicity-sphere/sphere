@@ -44,6 +44,11 @@
         document.documentElement.classList.add(theme);
       })();
     </script>
+    <!-- Runtime-swappable public config for build-once/promote-many Docker
+         images (window.__SPHERE_RUNTIME_CONFIG__). Classic script: executes
+         before the module bundle below. Rewritten at container start by
+         deploy/runtime-config.sh; dev/Pages ship the empty default. -->
+    <script src="/runtime-config.js"></script>
   </head>
   <body style="margin: 0;">
     <div id="root"></div>

@@ -205,6 +205,10 @@ image). Set these on the ECS task definition / `docker -e`:
 | `REQUIRE_WALLET_API`   | `VITE_REQUIRE_WALLET_API`  | #351 fail-closed custody flag (`''`/`false`/`0` = off) |
 | `DEV_PORTAL_URL`       | `VITE_DEV_PORTAL_URL`      | developer-portal link |
 | `AGGREGATOR_API_KEY`   | `VITE_AGGREGATOR_API_KEY`  | aggregator key (non-secret on testnet2; a real secret on mainnet) |
+| `SUBSCRIPTION_ENABLED` | `window.__SPHERE_RUNTIME_CONFIG__` (not a placeholder) | per-wallet SGW subscription keys (exactly `true` = on) |
+| `PAID_PLANS_ENABLED`   | `window.__SPHERE_RUNTIME_CONFIG__` (not a placeholder) | paid-plan purchases (exactly `true`; testnet leaves off) |
+| `SUBSCRIPTION_API_URL` | `window.__SPHERE_RUNTIME_CONFIG__` (not a placeholder) | SGW base as the browser sees it (default `/sgw`) |
+| `SGW_UPSTREAM`         | — (nginx, not JS)          | same-origin `/sgw` reverse-proxy target (SGW store endpoints send no CORS) |
 
 Notes:
 - **CDN cache:** Vite's content-hashed filenames are identical across env
@@ -212,6 +216,18 @@ Notes:
   after changing any value (same as `sphere-dev-portal`).
 - **Fail-closed (#351):** if `REQUIRE_WALLET_API` is truthy but `WALLET_API_URL`
   is empty, the entrypoint exits non-zero and the container won't serve.
+- **Fail-closed (subscriptions):** `SUBSCRIPTION_ENABLED=true` with a relative
+  `SUBSCRIPTION_API_URL` (the default) and no `SGW_UPSTREAM` also refuses to
+  start — there'd be no route from `/sgw` to an SGW.
+- **Two mechanisms, not one:** plain string values (URLs, keys) ride the sed
+  placeholders. Feature FLAGS cannot — Rollup statically evaluates branch
+  conditions against baked literals and prunes every `if (FLAG)` at build
+  time — so the subscription values are served via `/runtime-config.js`
+  (`window.__SPHERE_RUNTIME_CONFIG__`, written at container start, loaded
+  before the bundle). See the header comments in `src/config/subscription.ts`
+  and `src/config/walletApi.ts` before adding a new runtime-swappable value.
+- **`VITE_SUBSCRIPTION_MOCK`** is dev-only and deliberately NOT
+  runtime-swappable (prod builds tree-shake the mock).
 - **`BASE_PATH`** stays a build-time arg (`/` for both AWS envs) — it is *not*
   runtime-swappable. The GitHub Pages branch deploys are a separate non-Docker
   build (`deploy-pages-branch.yml`) and are unaffected by this mechanism.
