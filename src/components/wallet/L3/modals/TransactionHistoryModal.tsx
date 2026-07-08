@@ -5,6 +5,7 @@ import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
+import { truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 
 const registry = TokenRegistry.getInstance();
 
@@ -162,8 +163,12 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
             {formattedHistory.map((entry, index) => {
               const isExpanded = expandedId === entry.id;
               const peerLabel = entry.type === 'RECEIVED'
-                ? (entry.senderNametag ? `@${entry.senderNametag}` : entry.senderAddress ? truncateMiddle(entry.senderAddress) : entry.senderPubkey ? `${entry.senderPubkey.slice(0, 4)}...${entry.senderPubkey.slice(-4)}` : null)
-                : (entry.recipientNametag ? `@${entry.recipientNametag}` : entry.recipientAddress ? truncateMiddle(entry.recipientAddress) : null);
+                ? (entry.senderNametag ? `@${entry.senderNametag}`
+                  : entry.senderPubkey ? truncateId(entry.senderPubkey)
+                  : entry.senderAddress ? truncateId(stripDirectScheme(entry.senderAddress), 10, 4) : null)
+                : (entry.recipientNametag ? `@${entry.recipientNametag}`
+                  : entry.recipientPubkey ? truncateId(entry.recipientPubkey)
+                  : entry.recipientAddress ? truncateId(stripDirectScheme(entry.recipientAddress), 10, 4) : null);
 
               return (
                 <motion.div
@@ -251,9 +256,6 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                                 {entry.senderNametag && (
                                   <DetailRow label="Sender" value={`@${entry.senderNametag}`} copyKey={`${entry.id}-nametag`} copiedKey={copiedKey} onCopy={copy} />
                                 )}
-                                {entry.senderAddress && (
-                                  <DetailRow label="L3 Address" value={entry.senderAddress} copyKey={`${entry.id}-addr`} copiedKey={copiedKey} onCopy={copy} />
-                                )}
                                 {entry.senderPubkey && (
                                   <DetailRow label="Pubkey" value={entry.senderPubkey} copyKey={`${entry.id}-pubkey`} copiedKey={copiedKey} onCopy={copy} />
                                 )}
@@ -263,9 +265,6 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                               <>
                                 {entry.recipientNametag && (
                                   <DetailRow label="Recipient" value={`@${entry.recipientNametag}`} copyKey={`${entry.id}-nametag`} copiedKey={copiedKey} onCopy={copy} />
-                                )}
-                                {entry.recipientAddress && (
-                                  <DetailRow label="L3 Address" value={entry.recipientAddress} copyKey={`${entry.id}-addr`} copiedKey={copiedKey} onCopy={copy} />
                                 )}
                                 {entry.recipientPubkey && (
                                   <DetailRow label="Pubkey" value={entry.recipientPubkey} copyKey={`${entry.id}-pubkey`} copiedKey={copiedKey} onCopy={copy} />
