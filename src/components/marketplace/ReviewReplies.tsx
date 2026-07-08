@@ -4,6 +4,7 @@ import { Loader2, Send, Trash2, CornerDownRight, X } from 'lucide-react';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useRatingReplies } from '../../hooks/useMarketplace';
 import { postReply, deleteReply, getStoredJwt } from '../../services/userApi';
+import { stripDirectScheme } from '../../utils/identifiers';
 import type { RatingReplyEntry } from '../../services/marketplaceApi';
 
 interface ReviewRepliesProps {
@@ -59,13 +60,13 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
         <ul className="space-y-2">
           {data?.replies.map((reply) => {
             const mine = myAddress && reply.userAddress === myAddress;
-            const label = reply.userNametag ? `@${reply.userNametag}` : `${reply.userAddress.slice(0, 14)}…`;
+            const label = reply.userNametag ? `@${reply.userNametag}` : `${stripDirectScheme(reply.userAddress).slice(0, 12)}…`;
             return (
               <li key={reply._id} className="text-sm">
                 {reply.quoted && (
                   <blockquote className="mb-1 pl-2 border-l-2 border-neutral-300 dark:border-white/15 text-xs text-neutral-500 dark:text-white/45">
                     <span className="font-medium">
-                      {reply.quoted.userNametag ? `@${reply.quoted.userNametag}` : `${reply.quoted.userAddress.slice(0, 12)}…`}
+                      {reply.quoted.userNametag ? `@${reply.quoted.userNametag}` : `${stripDirectScheme(reply.quoted.userAddress).slice(0, 12)}…`}
                     </span>
                     {': '}
                     <span className="line-clamp-2">{reply.quoted.comment}</span>
@@ -122,7 +123,7 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
               <div className="flex-1 min-w-0 text-neutral-600 dark:text-white/55">
                 <span className="font-medium">
                   Replying to{' '}
-                  {quoteTarget.userNametag ? `@${quoteTarget.userNametag}` : `${quoteTarget.userAddress.slice(0, 12)}…`}
+                  {quoteTarget.userNametag ? `@${quoteTarget.userNametag}` : `${stripDirectScheme(quoteTarget.userAddress).slice(0, 12)}…`}
                 </span>
                 <div className="line-clamp-1">{quoteTarget.comment}</div>
               </div>
