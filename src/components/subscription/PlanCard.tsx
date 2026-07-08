@@ -3,7 +3,7 @@
  * price → CTA → derived feature checklist, with Popular/Current badges) while
  * reusing Sphere's existing styling tokens.
  */
-import { motion } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import type { PlanInfo } from '../../services/subscriptionApi';
@@ -17,24 +17,26 @@ interface PlanCardProps {
   onSelect?: (plan: PlanInfo) => void;
   loading?: boolean;
   disabled?: boolean;
+  /** Mount variants (supplied by PlansGrid for the staggered reveal). */
+  variants?: Variants;
 }
 
-export function PlanCard({ plan, current, popular, onSelect, loading, disabled }: PlanCardProps) {
+export function PlanCard({ plan, current, popular, onSelect, loading, disabled, variants }: PlanCardProps) {
   const price = formatPlanPrice(plan);
   const features = planFeatures(plan);
   const showCta = !!onSelect && !current;
-  const accent = current ? 'emerald' : popular ? 'orange' : 'neutral';
 
   return (
     <motion.div
-      whileHover={showCta ? { y: -3 } : undefined}
-      transition={{ duration: 0.15 }}
-      className={`relative flex flex-col rounded-2xl border p-6 ${
+      variants={variants}
+      whileHover={showCta ? { y: -6 } : undefined}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      className={`group relative flex w-full flex-col rounded-2xl border p-6 transition-shadow duration-300 sm:w-58 ${
         current
           ? 'border-emerald-500/30 bg-emerald-500/6'
           : popular
-            ? 'border-orange-500/40 bg-orange-500/6 shadow-[0_0_0_1px_rgba(249,115,22,0.15)]'
-            : 'border-neutral-200 bg-neutral-50 dark:border-white/8 dark:bg-white/4'
+            ? 'border-orange-500/40 bg-orange-500/6 shadow-[0_0_0_1px_rgba(249,115,22,0.15)] hover:shadow-[0_18px_40px_-16px_rgba(249,115,22,0.45)]'
+            : 'border-neutral-200 bg-neutral-50 hover:border-orange-500/30 hover:shadow-[0_18px_40px_-20px_rgba(0,0,0,0.5)] dark:border-white/8 dark:bg-white/4'
       }`}
     >
       {/* Badge (Current takes precedence over Popular) */}
@@ -51,11 +53,7 @@ export function PlanCard({ plan, current, popular, onSelect, loading, disabled }
       {/* Name */}
       <h3
         className={`text-lg font-semibold capitalize ${
-          accent === 'emerald'
-            ? 'text-emerald-500'
-            : accent === 'orange'
-              ? 'text-orange-500'
-              : 'text-neutral-900 dark:text-white'
+          current ? 'text-emerald-500' : popular ? 'text-orange-500' : 'text-neutral-900 dark:text-white'
         }`}
       >
         {plan.name}

@@ -4,12 +4,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import { PlansGrid } from '../subscription/PlansGrid';
+import { CurrentPlanShowcase } from '../subscription/CurrentPlanShowcase';
 import { UpgradeSuccess } from './UpgradeSuccess';
 import { usePlans, useUtilization, useCheckout } from '../../sdk/hooks/subscription';
 import { pollOrderStatus } from '../../sdk/subscription/pollOrder';
 import { getOrderStatus, type PlanInfo } from '../../services/subscriptionApi';
 import { syntheticCurrentPlan, formatPlanPrice } from '../subscription/planFeatures';
-import { SUBSCRIPTION_MOCK } from '../../config/subscription';
+import { SUBSCRIPTION_MOCK, PAID_PLANS_ENABLED } from '../../config/subscription';
 import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
@@ -84,13 +85,17 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const currentPlanName = util.data?.plan?.name ?? null;
 
   // plans step: grid gets [synthetic current card, ...store plans]
-  const gridPlans = useMemo(() => {
-    const current = util.data ? syntheticCurrentPlan(util.data) : null;
-    return current ? [current, ...(plans.data ?? [])] : (plans.data ?? []);
-  }, [plans.data, util.data]);
+  const freePlan = useMemo(() => (util.data ? syntheticCurrentPlan(util.data) : null), [util.data]);
+  const gridPlans = useMemo(
+    () => (freePlan ? [freePlan, ...(plans.data ?? [])] : (plans.data ?? [])),
+    [plans.data, freePlan],
+  );
 
   const handleSelect = (plan: PlanInfo) => {
     if (plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()) return;
+    // Paid plans aren't purchasable yet (testnet) — the card shows "Coming on
+    // Mainnet" and no CTA; this guards any other entry path.
+    if (!PAID_PLANS_ENABLED && plan.priceCents > 0) return;
     setSelectedPlan(plan);
     setStep('email');
   };
@@ -179,7 +184,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
           <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-orange-500" />
-              <span className="text-lg font-semibold">Choose your plan</span>
+              <span className="text-lg font-semibold">{PAID_PLANS_ENABLED ? 'Choose your plan' : 'Your plan'}</span>
             </div>
             <button
               type="button"
@@ -191,8 +196,27 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
             </button>
           </div>
 
-          <div className="mx-auto w-full max-w-5xl px-4 pb-20 sm:px-8">
-            {step === 'plans' && (
+          <motion.div
+            className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-8"
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {step === 'plans' && !PAID_PLANS_ENABLED && (
+              <>
+                <UpgradeReasonBanner reason={reason} />
+                {util.isLoading ? (
+                  <div className="py-20 text-center text-neutral-400">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+                  </div>
+                ) : (
+                  <CurrentPlanShowcase util={util.data ?? null} />
+                )}
+              </>
+            )}
+
+            {step === 'plans' && PAID_PLANS_ENABLED && (
               <>
                 <div className="mb-8 text-center">
                   <h2 className="text-2xl font-bold sm:text-3xl">Unlock more commitments</h2>
@@ -318,7 +342,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                 </div>
               </div>
             )}
-          </div>
+          </motion.div>
         </motion.div>
       )}
     </AnimatePresence>,
