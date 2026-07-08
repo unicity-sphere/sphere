@@ -6,6 +6,7 @@ import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk'
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button } from '../../ui';
 
@@ -33,12 +34,13 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
   // State
   const [step, setStep] = useState<Step>('asset');
-  const [recipientMode, setRecipientMode] = useState<'nametag' | 'direct'>('nametag');
+  const [recipientMode, setRecipientMode] = useState<'nametag' | 'pubkey'>('nametag');
   const [recipient, setRecipient] = useState('');
   const [isCheckingRecipient, setIsCheckingRecipient] = useState(false);
   const [recipientError, setRecipientError] = useState<string | null>(null);
 
-  const [resolvedAddress, setResolvedAddress] = useState<string | null>(null);
+  // Resolved recipient chain pubkey (nametag mode) — shown on the confirm step.
+  const [resolvedPubkey, setResolvedPubkey] = useState<string | null>(null);
 
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [amountInput, setAmountInput] = useState('');
@@ -65,7 +67,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setStep('asset');
     setRecipientMode('nametag');
     setRecipient('');
-    setResolvedAddress(null);
+    setResolvedPubkey(null);
     setSelectedAsset(null);
     setAmountInput('');
     setMemoInput('');
@@ -106,14 +108,15 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setRecipientError(null);
 
     try {
-      if (recipientMode === 'direct') {
-        const addr = recipient.trim();
-        if (!addr.startsWith('DIRECT://')) {
-          setRecipientError('Direct address must start with DIRECT://');
+      if (recipientMode === 'pubkey') {
+        const value = recipient.trim();
+        // Pasted DIRECT:// addresses stay accepted for compatibility — the SDK resolves them.
+        if (!isChainPubkey(value) && !value.startsWith('DIRECT://')) {
+          setRecipientError('Enter a valid public key (66 hex characters starting with 02 or 03)');
           return;
         }
-        setRecipient(addr);
-        setResolvedAddress(addr);
+        setRecipient(value);
+        setResolvedPubkey(null);
         setStep('confirm');
       } else {
         const cleanTag = recipient.replace('@', '').replace('@unicity', '').trim();
@@ -122,7 +125,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
           const peerInfo = await sphere.resolve(`@${cleanTag}`);
           if (peerInfo) {
             setRecipient(cleanTag);
-            setResolvedAddress(peerInfo.directAddress || null);
+            setResolvedPubkey(peerInfo.chainPubkey || null);
             setStep('confirm');
           } else {
             setRecipientError(`User @${cleanTag} not found`);
@@ -221,14 +224,14 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                       onChange={handleRecipientChange}
                       onKeyDown={(e) => e.key === 'Enter' && handleDetailsNext()}
                       className={`w-full bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/10 rounded-2xl py-4 pr-4 text-neutral-900 dark:text-white focus:border-orange-500 outline-none transition-colors ${recipientMode === 'nametag' ? 'pl-8' : 'pl-4 font-mono'}`}
-                      placeholder={recipientMode === 'nametag' ? "Recipient's Unicity ID" : 'DIRECT://...'}
+                      placeholder={recipientMode === 'nametag' ? "Recipient's Unicity ID" : 'Public key (02...)'}
                     />
                   </div>
                   <button
-                    onClick={() => { setRecipientMode(recipientMode === 'nametag' ? 'direct' : 'nametag'); setRecipient(''); setRecipientError(null); }}
+                    onClick={() => { setRecipientMode(recipientMode === 'nametag' ? 'pubkey' : 'nametag'); setRecipient(''); setRecipientError(null); }}
                     className="text-[11px] text-neutral-400 dark:text-neutral-500 hover:text-orange-500 dark:hover:text-orange-400 mt-1.5 ml-1 transition-colors"
                   >
-                    {recipientMode === 'nametag' ? 'Use direct address instead' : 'Use nametag instead'}
+                    {recipientMode === 'nametag' ? 'Use public key instead' : 'Use Unicity ID instead'}
                   </button>
                 </div>
 
@@ -323,19 +326,19 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                 <div className="flex flex-col items-center gap-1.5">
                   <div className="flex items-center gap-1.5">
                     <div className="flex items-center gap-2 text-sm bg-neutral-200 dark:bg-white/4 p-2 rounded-lg">
-                      {recipientMode === 'direct' ? (
+                      {recipientMode === 'pubkey' ? (
                         <Hash className="w-4 h-4 text-neutral-500 dark:text-white/45" />
                       ) : (
                         <User className="w-4 h-4 text-neutral-500 dark:text-white/45" />
                       )}
-                      <span className={`text-neutral-700 dark:text-white/65 ${recipientMode === 'direct' ? 'font-mono text-xs break-all' : ''}`}>
-                        {recipientMode === 'direct' ? recipient : `@${recipient}`}
+                      <span className={`text-neutral-700 dark:text-white/65 ${recipientMode === 'pubkey' ? 'font-mono text-xs break-all' : ''}`} title={recipient}>
+                        {recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}
                       </span>
                     </div>
                     <button
                       type="button"
                       onClick={() => copyToClipboard(
-                        recipientMode === 'direct' ? recipient : `@${recipient}`,
+                        recipientMode === 'pubkey' ? recipient : `@${recipient}`,
                         'recipient'
                       )}
                       className="p-1.5 hover:bg-neutral-200 dark:hover:bg-white/10 rounded-lg transition-colors"
@@ -347,19 +350,17 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                       }
                     </button>
                   </div>
-                  {recipientMode === 'nametag' && resolvedAddress && (
+                  {recipientMode === 'nametag' && resolvedPubkey && (
                     <div className="flex items-center gap-1">
                       <span
                         className="text-[10px] font-mono text-neutral-400/40 dark:text-neutral-600/50 truncate max-w-52"
-                        title={resolvedAddress}
+                        title={resolvedPubkey}
                       >
-                        {resolvedAddress.length > 30
-                          ? `${resolvedAddress.slice(0, 18)}...${resolvedAddress.slice(-8)}`
-                          : resolvedAddress}
+                        {truncateId(resolvedPubkey, 18, 8)}
                       </span>
                       <button
                         type="button"
-                        onClick={() => copyToClipboard(resolvedAddress, 'address')}
+                        onClick={() => copyToClipboard(resolvedPubkey, 'address')}
                         className="p-0.5 hover:bg-neutral-200 dark:hover:bg-white/10 rounded transition-colors"
                         title="Copy address"
                       >
@@ -430,7 +431,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Sent — delivery pending</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'direct' ? recipient : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
+                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
                   </p>
                 </>
               ) : (
@@ -440,7 +441,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Success!</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'direct' ? recipient : `@${recipient}`}</b>
+                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
                   </p>
                 </>
               )}
