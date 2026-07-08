@@ -15,12 +15,14 @@ ARG VITE_WALLET_API_URL=__RUNTIME_WALLET_API_URL__
 ARG VITE_REQUIRE_WALLET_API=__RUNTIME_REQUIRE_WALLET_API__
 ARG VITE_AGGREGATOR_API_KEY=__RUNTIME_AGGREGATOR_API_KEY__
 ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
-# Subscription vars (VITE_SUBSCRIPTION_*, VITE_PAID_PLANS_ENABLED) have NO
-# placeholders on purpose: feature flags can't ride the sed mechanism (Rollup
-# prunes every `if (FLAG)` against a baked literal at build time). They are
-# runtime-provided via window.__SPHERE_RUNTIME_CONFIG__ instead — the
+# The subscription flags (VITE_SUBSCRIPTION_ENABLED, VITE_PAID_PLANS_ENABLED)
+# have NO placeholders on purpose: feature flags can't ride the sed mechanism
+# (Rollup prunes every `if (FLAG)` against a baked literal at build time).
+# They are runtime-provided via window.__SPHERE_RUNTIME_CONFIG__ instead — the
 # runtime-config hook writes /runtime-config.js from the container env
-# (SUBSCRIPTION_ENABLED, PAID_PLANS_ENABLED, SUBSCRIPTION_API_URL).
+# (SUBSCRIPTION_ENABLED, PAID_PLANS_ENABLED). The SGW base URL needs no config
+# at all: it is derived from the SDK's per-network aggregator gateway
+# (src/config/subscription.ts).
 # BASE_PATH is a true build-time concern (Vite rewrites asset URLs + router
 # basename); both AWS envs serve at root, so it stays baked as `/`.
 ARG BASE_PATH=/
@@ -40,13 +42,10 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # fail-closed check in this script keeps a misconfigured task def from serving.
 COPY deploy/runtime-config.sh /docker-entrypoint.d/40-sphere-runtime-config.sh
 RUN chmod +x /docker-entrypoint.d/40-sphere-runtime-config.sh
-# The `include ...sphere-sgw-location*.conf` below is the same-origin /sgw
-# route to the subscription gateway, generated at container start from
-# $SGW_UPSTREAM by the runtime-config hook. Glob include: no file
-# (SGW_UPSTREAM unset) = no route, not a startup error. NOTE: this echo
-# collapses to a SINGLE line of nginx config (Dockerfile line continuations),
-# so never put an nginx `#` comment inside it — it would comment out the rest.
-RUN mkdir -p /etc/nginx/snippets && echo 'server { \
+# NOTE: this echo collapses to a SINGLE line of nginx config (Dockerfile line
+# continuations), so never put an nginx `#` comment inside it — it would
+# comment out the rest of the config.
+RUN echo 'server { \
     listen 80; \
     server_name _; \
     root /usr/share/nginx/html; \
@@ -60,7 +59,6 @@ RUN mkdir -p /etc/nginx/snippets && echo 'server { \
         expires 1y; \
         add_header Cache-Control "public, immutable"; \
     } \
-    include /etc/nginx/snippets/sphere-sgw-location*.conf; \
     location / { \
         try_files $uri $uri/ /index.html; \
         add_header Cache-Control "no-cache, no-store, must-revalidate"; \

@@ -84,7 +84,6 @@ jobs:
             -e AGGREGATOR_API_KEY=sk_smoke_test \
             -e SUBSCRIPTION_ENABLED=true \
             -e PAID_PLANS_ENABLED=false \
-            -e SGW_UPSTREAM=http://sgw-smoke.invalid:19999 \
             sphere-validate:${{ matrix.dockerfile }})
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
@@ -105,11 +104,12 @@ jobs:
           docker exec "$cid" sh -c "grep -rq 'quest-api.example.test' /usr/share/nginx/html" \
             || { echo "ERROR: injected SPHERE_API_URL not found in bundle"; exit 1; }
 
-          # Runtime config global: subscription values ride /runtime-config.js
-          # (window.__SPHERE_RUNTIME_CONFIG__), NOT the sed placeholders —
-          # Rollup would prune every `if (FLAG)` against a baked literal. The
-          # hook must have written the env values, index.html must load the
-          # script, and the bundle must actually read the global.
+          # Runtime config global: the subscription flags ride
+          # /runtime-config.js (window.__SPHERE_RUNTIME_CONFIG__), NOT the sed
+          # placeholders — Rollup would prune every `if (FLAG)` against a
+          # baked literal. The hook must have written the env values,
+          # index.html must load the script, and the bundle must actually
+          # read the global.
           docker exec "$cid" sh -c "cat /usr/share/nginx/html/runtime-config.js"
           docker exec "$cid" sh -c "grep -q '\"SUBSCRIPTION_ENABLED\": \"true\"' /usr/share/nginx/html/runtime-config.js" \
             || { echo "ERROR: SUBSCRIPTION_ENABLED not written to runtime-config.js"; exit 1; }
@@ -118,20 +118,11 @@ jobs:
           docker exec "$cid" sh -c "grep -rq '__SPHERE_RUNTIME_CONFIG__' /usr/share/nginx/html/assets" \
             || { echo "ERROR: bundle does not read __SPHERE_RUNTIME_CONFIG__"; exit 1; }
 
-          # /sgw reverse proxy: the runtime hook must have generated the
-          # location snippet from SGW_UPSTREAM, nginx must accept the combined
-          # config AND START despite the deliberately-unresolvable hostname
-          # (request-time DNS via variable proxy_pass — a literal hostname
-          # would be resolved once at startup and kill nginx with [emerg],
-          # crash-looping the whole app), and a request under /sgw/ must be
-          # PROXIED (502 from the dead upstream), not swallowed by the SPA
-          # fallback (which would 200 with index.html).
-          docker exec "$cid" sh -c "grep -q 'set \$sphere_sgw_upstream http://sgw-smoke.invalid:19999' /etc/nginx/snippets/sphere-sgw-location.conf" \
-            || { echo "ERROR: /sgw snippet missing or wrong upstream"; exit 1; }
+          # The SGW base URL is derived from the SDK's per-network config —
+          # the bundle must carry the gateway origin (no env var, no proxy).
+          docker exec "$cid" sh -c "grep -rq 'gateway.testnet2.unicity.network' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: SDK gateway origin not found in bundle"; exit 1; }
           docker exec "$cid" nginx -t
-          out=$(docker exec "$cid" sh -c "wget -q -S -O /dev/null http://127.0.0.1/sgw/ping 2>&1 || true")
-          echo "$out" | grep -q '502' \
-            || { echo "ERROR: /sgw/ not proxied (expected 502 from unresolvable upstream); got: $out"; exit 1; }
           echo "substitution smoke ok"
 
       # #351 fail-closed: declaring wallet-api custody (REQUIRE_WALLET_API) with
@@ -148,26 +139,6 @@ jobs:
           [ "$rc" -ne 0 ] || { echo "ERROR: expected non-zero exit (fail-closed)"; exit 1; }
           echo "$out" | grep -q '#351' || { echo "ERROR: missing #351 fail-closed message"; exit 1; }
           echo "fail-closed smoke ok"
-
-      # Subscriptions fail-closed: SUBSCRIPTION_ENABLED=true with the default
-      # (relative) SUBSCRIPTION_API_URL and no SGW_UPSTREAM must refuse to
-      # start — the app would have no route from /sgw to a gateway.
-      - name: Smoke — fail-closed on SUBSCRIPTION_ENABLED without SGW_UPSTREAM
-        if: matrix.dockerfile == 'Dockerfile'
-        run: |
-          set +e
-          out=$(docker run --rm \
-            -e SPHERE_API_URL=https://quest-api.example.test \
-            -e AGGREGATOR_API_KEY=sk_smoke_test \
-            -e SUBSCRIPTION_ENABLED=true \
-            sphere-validate:${{ matrix.dockerfile }} 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          [ "$rc" -ne 0 ] || { echo "ERROR: expected non-zero exit (fail-closed)"; exit 1; }
-          echo "$out" | grep -q 'SGW_UPSTREAM is empty' \
-            || { echo "ERROR: missing SGW_UPSTREAM fail-closed message"; exit 1; }
-          echo "subscription fail-closed smoke ok"
 
       # Smoke for the SSL image: entrypoint is tini → sphere-entrypoint.
       # We can't run the real entrypoint in CI (ssl-setup would need

@@ -1,32 +1,37 @@
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import { SPHERE_NETWORK } from './network';
+
 /**
- * Subscription gateway (SGW) config. Env-driven so each environment points at
- * its own SGW host. When SUBSCRIPTION_ENABLED is false the app keeps using the
- * static VITE_AGGREGATOR_API_KEY and no subscription calls are made.
+ * Subscription gateway (SGW) config. When SUBSCRIPTION_ENABLED is false the
+ * app keeps using the static VITE_AGGREGATOR_API_KEY and no subscription
+ * calls are made.
  *
- * Default is a relative path so the store endpoints (`/api/paymento/*`, which
- * send no CORS headers) ride the same-origin dev/preview proxy (see
- * vite.config.ts `/sgw` entry, target `SGW_PROXY_TARGET`). In the Docker
- * image the same relative path is served by an nginx reverse proxy generated
- * at container start from `SGW_UPSTREAM` (deploy/runtime-config.sh).
+ * The SGW *is* the aggregator gateway (it fronts the aggregator's write
+ * path), so its base URL is derived from the SDK's per-network config — no
+ * env var needed, and it follows the network automatically like every other
+ * backend URL. All SGW endpoints serve CORS for browser calls
+ * (unicitynetwork/aggregator-subscription#57), so the wallet talks to it
+ * directly. VITE_SUBSCRIPTION_API_URL remains as a dev override: the local
+ * SGW compose stack is reached via the same-origin `/sgw` vite proxy
+ * (SGW_PROXY_TARGET, see vite.config.ts).
  *
- * WHY window.__SPHERE_RUNTIME_CONFIG__ and not a `__RUNTIME_*__` sed
- * placeholder: the Docker image is built once and promoted across
- * environments, so these values must be swappable at container start. The
- * sed-placeholder mechanism cannot carry a FEATURE FLAG — Rollup statically
- * evaluates branch conditions during tree-shaking, following const bindings
- * across modules, so every `if (SUBSCRIPTION_ENABLED)` in the app gets pruned
- * against the baked literal (`'__RUNTIME_…__' === 'true'` → false) and the
- * feature is compile-time OFF no matter what the container substitutes (this
- * actually happened; see also the note in src/config/walletApi.ts). Reading
- * from a window global set before the bundle loads (public/runtime-config.js,
- * rewritten at container start by deploy/runtime-config.sh) keeps the value
- * genuinely unknown at build time, so no branch can fold. Dev and GitHub
- * Pages builds ship the default empty config and fall back to the VITE_* env
- * baked at build time.
+ * WHY the flags read window.__SPHERE_RUNTIME_CONFIG__ and not a
+ * `__RUNTIME_*__` sed placeholder: the Docker image is built once and
+ * promoted across environments, so the flags must be swappable at container
+ * start. The sed-placeholder mechanism cannot carry a FEATURE FLAG — Rollup
+ * statically evaluates branch conditions during tree-shaking, following
+ * const bindings across modules, so every `if (SUBSCRIPTION_ENABLED)` in the
+ * app gets pruned against the baked literal (`'__RUNTIME_…__' === 'true'` →
+ * false) and the feature is compile-time OFF no matter what the container
+ * substitutes (this actually happened; see also the note in
+ * src/config/walletApi.ts). Reading from a window global set before the
+ * bundle loads (public/runtime-config.js, rewritten at container start by
+ * deploy/runtime-config.sh) keeps the value genuinely unknown at build time,
+ * so no branch can fold. Dev and GitHub Pages builds ship the default empty
+ * config and fall back to the VITE_* env baked at build time.
  */
 
 interface SphereRuntimeConfig {
-  SUBSCRIPTION_API_URL?: string;
   SUBSCRIPTION_ENABLED?: string;
   PAID_PLANS_ENABLED?: string;
 }
@@ -51,12 +56,9 @@ function setting(
 }
 
 function resolveSubscriptionApiUrl(): string {
-  const value = setting(
-    'SUBSCRIPTION_API_URL',
-    import.meta.env.VITE_SUBSCRIPTION_API_URL as string | undefined,
-  );
-  if (value === undefined || value === '') return '/sgw';
-  return value;
+  const raw = import.meta.env.VITE_SUBSCRIPTION_API_URL as string | undefined;
+  if (raw !== undefined && raw !== '') return raw;
+  return NETWORKS[SPHERE_NETWORK].aggregatorUrl;
 }
 export const SUBSCRIPTION_API_URL = resolveSubscriptionApiUrl();
 
