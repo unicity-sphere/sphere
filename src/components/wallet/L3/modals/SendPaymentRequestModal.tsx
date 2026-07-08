@@ -379,7 +379,7 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
               </div>
               <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Request Sent!</h3>
               <p className="text-neutral-500 dark:text-white/45">
-                Payment request for <b>{amountInput} {selectedCoin?.symbol}</b> sent to <b>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
+                Payment request for <b>{amountInput} {selectedCoin?.symbol}</b> sent to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
               </p>
               <button onClick={handleSuccessClose} className="mt-8 px-8 py-2 bg-neutral-100 dark:bg-white/6 rounded-lg hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-900 dark:text-white transition-colors font-mono">
                 Close
