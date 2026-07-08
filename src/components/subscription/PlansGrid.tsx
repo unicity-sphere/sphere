@@ -1,10 +1,17 @@
 /**
- * Responsive grid of plan cards. Auto-fits columns to the available width
- * (1 column on a narrow wallet panel, several side-by-side in a full-screen
- * modal on desktop), regardless of how many plans the SGW returns.
+ * Plan cards laid out as a centered wrap: on a wide modal the plans sit in one
+ * row; when they wrap, the trailing row stays centered (no orphaned card
+ * hugging the left). Cards reveal in an orchestrated left-to-right stagger.
+ *
+ * While paid plans aren't purchasable (testnet, PAID_PLANS_ENABLED off), the
+ * concrete paid tiers are hidden behind a single "Paid plans — Coming on
+ * Mainnet" placeholder (tiers/prices aren't finalized yet).
  */
+import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { PlanCard } from './PlanCard';
-import { isPopularPlan } from './planFeatures';
+import { PaidPlansComingSoonCard } from './PaidPlansComingSoonCard';
+import { isPopularPlan, isFreePlan } from './planFeatures';
+import { PAID_PLANS_ENABLED } from '../../config/subscription';
 import type { PlanInfo } from '../../services/subscriptionApi';
 
 interface PlansGridProps {
@@ -20,9 +27,28 @@ interface PlansGridProps {
 }
 
 export function PlansGrid({ plans, currentPlanName, onSelect, loadingPlanId, disabled }: PlansGridProps) {
+  const reduce = useReducedMotion();
+
+  const container: Variants = {
+    hidden: {},
+    show: { transition: { staggerChildren: reduce ? 0 : 0.07, delayChildren: reduce ? 0 : 0.05 } },
+  };
+  const item: Variants = {
+    hidden: reduce ? { opacity: 0 } : { opacity: 0, y: 20, scale: 0.97 },
+    show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } },
+  };
+
+  const freePlans = plans.filter(isFreePlan);
+  const paidPlans = plans.filter((p) => !isFreePlan(p));
+
   return (
-    <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
-      {plans.map((plan) => (
+    <motion.div
+      variants={container}
+      initial="hidden"
+      animate="show"
+      className="flex flex-wrap justify-center gap-5"
+    >
+      {freePlans.map((plan) => (
         <PlanCard
           key={plan.planId}
           plan={plan}
@@ -31,8 +57,24 @@ export function PlansGrid({ plans, currentPlanName, onSelect, loadingPlanId, dis
           onSelect={onSelect}
           loading={loadingPlanId === plan.planId}
           disabled={disabled}
+          variants={item}
         />
       ))}
-    </div>
+
+      {PAID_PLANS_ENABLED
+        ? paidPlans.map((plan) => (
+            <PlanCard
+              key={plan.planId}
+              plan={plan}
+              current={plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()}
+              popular={isPopularPlan(plan)}
+              onSelect={onSelect}
+              loading={loadingPlanId === plan.planId}
+              disabled={disabled}
+              variants={item}
+            />
+          ))
+        : paidPlans.length > 0 && <PaidPlansComingSoonCard variants={item} />}
+    </motion.div>
   );
 }

@@ -95,7 +95,9 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
                 <span className="font-semibold font-mono capitalize">{plan.name} plan</span>
               </div>
               <div className="text-xs text-neutral-500 dark:text-white/45">
-                Renews / expires: {formatExpiry(data?.activeUntil ?? null)}
+                {data?.activeUntil
+                  ? `Renews / expires: ${formatExpiry(data.activeUntil)}`
+                  : 'Never expires — free plan'}
               </div>
             </div>
 
