@@ -15,12 +15,18 @@ interface SDKDirectMessage {
   recipientPubkey: string;
 }
 
+// One degraded-storage toast (and Sentry event) per provider per window —
+// the SDK emits storage:degraded per failed background save (sphere-sdk#642).
+const STORAGE_DEGRADED_TOAST_COOLDOWN_MS = 5 * 60 * 1000;
+
 export function useSphereEvents(): void {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
+  // Last storage:degraded toast per providerId — cooldown against toast storms
+  const degradedToastAtRef = useRef<Map<string, number>>(new Map());
 
   // When sphere instance changes (new wallet, delete, import) —
   // immediately sync identity cache so the UI never shows stale data
@@ -169,7 +175,20 @@ export function useSphereEvents(): void {
     // sphere-sdk#515 F2: a background custody save failed — the active
     // custody provider rejected a write. Surface it (never log-only); the
     // SEND pipeline already fails hard on its own writes.
+    // sphere-sdk#642: the SDK emits one event PER failed save — during a
+    // backend degradation that is one per incoming token (the 2026-07-07
+    // red-toast storm, Sentry SPHERE-2/-3). The condition is per-provider,
+    // self-healing, and not user-actionable per occurrence, so toast (and
+    // thereby report to Sentry) at most once per provider per cooldown;
+    // repeats within the window stay visible in the console.
     const handleStorageDegraded = (data: { providerId: string; error: string }) => {
+      const now = Date.now();
+      const last = degradedToastAtRef.current.get(data.providerId) ?? 0;
+      if (now - last < STORAGE_DEGRADED_TOAST_COOLDOWN_MS) {
+        console.warn(`storage:degraded (toast suppressed) ${data.providerId}: ${data.error}`);
+        return;
+      }
+      degradedToastAtRef.current.set(data.providerId, now);
       showToast(
         `Token storage degraded (${data.providerId}): a background save failed — ${data.error}`,
         'error',
