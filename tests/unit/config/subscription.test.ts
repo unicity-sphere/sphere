@@ -29,20 +29,17 @@ describe('runtime config global (window.__SPHERE_RUNTIME_CONFIG__)', () => {
     vi.resetModules();
   });
 
-  it('runtime values win over build-time env', async () => {
+  it('runtime flag values win over build-time env', async () => {
     vi.stubEnv('VITE_SUBSCRIPTION_ENABLED', 'false');
     vi.stubEnv('VITE_PAID_PLANS_ENABLED', 'false');
-    vi.stubEnv('VITE_SUBSCRIPTION_API_URL', '/env-sgw');
     (window as RuntimeWindow).__SPHERE_RUNTIME_CONFIG__ = {
       SUBSCRIPTION_ENABLED: 'true',
       PAID_PLANS_ENABLED: 'true',
-      SUBSCRIPTION_API_URL: '/runtime-sgw',
     };
     vi.resetModules();
     const cfg = await import('@/config/subscription');
     expect(cfg.SUBSCRIPTION_ENABLED).toBe(true);
     expect(cfg.PAID_PLANS_ENABLED).toBe(true);
-    expect(cfg.SUBSCRIPTION_API_URL).toBe('/runtime-sgw');
   });
 
   it('empty runtime values (unset container env) fall back to build-time env', async () => {
@@ -50,7 +47,6 @@ describe('runtime config global (window.__SPHERE_RUNTIME_CONFIG__)', () => {
     vi.stubEnv('VITE_PAID_PLANS_ENABLED', ''); // pin: ambient env must not leak in
     (window as RuntimeWindow).__SPHERE_RUNTIME_CONFIG__ = {
       SUBSCRIPTION_ENABLED: '',
-      SUBSCRIPTION_API_URL: '',
       PAID_PLANS_ENABLED: '',
     };
     vi.resetModules();
@@ -70,10 +66,18 @@ describe('runtime config global (window.__SPHERE_RUNTIME_CONFIG__)', () => {
     expect(cfg.PAID_PLANS_ENABLED).toBe(false);
   });
 
-  it('defaults SUBSCRIPTION_API_URL to /sgw when nothing is set anywhere', async () => {
+  it('SUBSCRIPTION_API_URL: VITE override wins, else derives from the SDK network table', async () => {
+    vi.stubEnv('VITE_SUBSCRIPTION_API_URL', '/sgw');
+    vi.resetModules();
+    let cfg = await import('@/config/subscription');
+    expect(cfg.SUBSCRIPTION_API_URL).toBe('/sgw');
+
     vi.stubEnv('VITE_SUBSCRIPTION_API_URL', '');
     vi.resetModules();
-    const cfg = await import('@/config/subscription');
-    expect(cfg.SUBSCRIPTION_API_URL).toBe('/sgw');
+    cfg = await import('@/config/subscription');
+    const { NETWORKS } = await import('@unicitylabs/sphere-sdk');
+    const { SPHERE_NETWORK } = await import('@/config/network');
+    expect(cfg.SUBSCRIPTION_API_URL).toBe(NETWORKS[SPHERE_NETWORK].aggregatorUrl);
+    expect(cfg.SUBSCRIPTION_API_URL).toMatch(/^https:\/\//);
   });
 });
