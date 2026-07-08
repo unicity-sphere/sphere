@@ -9,8 +9,10 @@ import { motion } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
 import { Button } from '../../ui';
 import { PlansGrid } from '../../../subscription/PlansGrid';
+import { CurrentPlanShowcase } from '../../../subscription/CurrentPlanShowcase';
 import { usePlans, useUtilization } from '../../../../sdk/hooks/subscription';
 import { syntheticCurrentPlan } from '../../../subscription/planFeatures';
+import { PAID_PLANS_ENABLED } from '../../../../config/subscription';
 
 interface PlanCapabilitiesScreenProps {
   /** Plan NAME provisioned during finalize (fallback header copy if utilization hasn't loaded yet). */
@@ -50,13 +52,17 @@ export function PlanCapabilitiesScreen({ planName, created, onContinue, isBusy }
             {created ? 'Your plan is ready' : 'Subscription restored'}
           </h2>
           <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
-            {currentName
-              ? `You're on the ${currentName} plan — here's everything you can upgrade to.`
-              : 'Your subscription is active.'}
+            {!currentName
+              ? 'Your subscription is active.'
+              : PAID_PLANS_ENABLED
+                ? `You're on the ${currentName} plan — here's everything you can upgrade to.`
+                : `You're all set on the ${currentName} plan.`}
           </p>
         </div>
 
-        {list.length > 0 && <PlansGrid plans={list} currentPlanName={currentName} />}
+        {PAID_PLANS_ENABLED
+          ? list.length > 0 && <PlansGrid plans={list} currentPlanName={currentName} />
+          : <CurrentPlanShowcase util={util.data ?? null} />}
 
         <div className="mx-auto mt-10 w-full max-w-xs">
           <Button variant="primary" fullWidth loading={isBusy} onClick={onContinue}>
