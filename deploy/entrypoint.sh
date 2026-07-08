@@ -140,6 +140,10 @@ server {
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header Cache-Control "public, immutable";
     }
+    # Same-origin /sgw route to the subscription gateway; the snippet is
+    # generated (or removed) from \$SGW_UPSTREAM by sphere-runtime-config,
+    # which runs below, before nginx starts. Glob include: no file = no route.
+    include /etc/nginx/snippets/sphere-sgw-location*.conf;
     location / {
         try_files \$uri \$uri/ /index.html;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -161,6 +165,14 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
+    # Same-origin /sgw route (see the SSL server block above for details).
+    include /etc/nginx/snippets/sphere-sgw-location*.conf;
+    # runtime-config.js carries per-environment flags rewritten at container
+    # start; heuristic caching would pin stale flag values across env flips
+    # (the other server blocks get this via their no-cache location /).
+    location = /runtime-config.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
     location / {
         try_files \$uri \$uri/ /index.html;
     }

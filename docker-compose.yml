@@ -15,3 +15,13 @@ services:
       REQUIRE_WALLET_API: "true"
       DEV_PORTAL_URL: https://developers.staging.unicity.network/
       AGGREGATOR_API_KEY: sk_ddc3cfcc001e4a28ac3fad7407f99590
+      # Subscriptions (SGW) ship dormant. To turn on: SUBSCRIPTION_ENABLED to
+      # exactly "true" AND SGW_UPSTREAM to the subscription-gateway origin
+      # (generates the same-origin /sgw nginx route the browser needs — the
+      # SGW store endpoints send no CORS). The container refuses to start on
+      # SUBSCRIPTION_ENABLED=true without a route to an SGW.
+      SUBSCRIPTION_ENABLED: "false"
+      PAID_PLANS_ENABLED: "false"
+      # The SGW fronts the aggregator, so its origin is the aggregator gateway:
+      # SGW_UPSTREAM: https://gateway.testnet2.unicity.network
+      # SUBSCRIPTION_API_URL: /sgw   # browser-side base; default /sgw
