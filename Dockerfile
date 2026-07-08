@@ -1,7 +1,8 @@
-FROM node:20-alpine@sha256:f598378b5240225e6beab68fa9f356db1fb8efe55173e6d4d8153113bb8f333c AS builder
+# syntax=docker/dockerfile:1.7
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --ignore-scripts
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false npm ci --ignore-scripts
 COPY . .
 # Build-once, promote-many: Vite inlines VITE_* into the static bundle at
 # `vite build`, so a runtime env cannot change an already-built bundle. To get
@@ -12,6 +13,7 @@ COPY . .
 # Override an ARG only to pin a literal at build time (e.g. a one-off image).
 ARG VITE_SPHERE_API_URL=__RUNTIME_SPHERE_API_URL__
 ARG VITE_WALLET_API_URL=__RUNTIME_WALLET_API_URL__
+ARG VITE_BRIDGE_RETURN_SERVICE_URL=__RUNTIME_BRIDGE_RETURN_SERVICE_URL__
 ARG VITE_REQUIRE_WALLET_API=__RUNTIME_REQUIRE_WALLET_API__
 ARG VITE_AGGREGATOR_API_KEY=__RUNTIME_AGGREGATOR_API_KEY__
 ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
@@ -20,6 +22,7 @@ ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
 ARG BASE_PATH=/
 ENV VITE_SPHERE_API_URL=$VITE_SPHERE_API_URL \
     VITE_WALLET_API_URL=$VITE_WALLET_API_URL \
+    VITE_BRIDGE_RETURN_SERVICE_URL=$VITE_BRIDGE_RETURN_SERVICE_URL \
     VITE_REQUIRE_WALLET_API=$VITE_REQUIRE_WALLET_API \
     VITE_AGGREGATOR_API_KEY=$VITE_AGGREGATOR_API_KEY \
     VITE_DEV_PORTAL_URL=$VITE_DEV_PORTAL_URL \

@@ -17,7 +17,7 @@ import {
   toHex,
   type BridgeBackReason,
   type LoadedBridge,
-} from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 
 import type { BridgeStore, PendingReturn } from './store';
 

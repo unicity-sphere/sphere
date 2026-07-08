@@ -22,7 +22,7 @@ import {
   type InjectedTronWeb,
   type TronSigner,
   type TronWalletConfig,
-} from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 
 import { getAppBridges } from './loadBridges';
 

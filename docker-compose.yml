@@ -12,6 +12,7 @@ services:
     environment:
       SPHERE_API_URL: https://quest-api.staging.unicity.network
       WALLET_API_URL: https://wallet-api.staging.unicity.network
+      BRIDGE_RETURN_SERVICE_URL: https://goggregator-test.unicity.network
       REQUIRE_WALLET_API: "true"
       DEV_PORTAL_URL: https://developers.staging.unicity.network/
       AGGREGATOR_API_KEY: sk_ddc3cfcc001e4a28ac3fad7407f99590

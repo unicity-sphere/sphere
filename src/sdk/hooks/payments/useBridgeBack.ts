@@ -7,7 +7,7 @@
  */
 import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fromHex, ReturnServiceClient, ReturnServiceError } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import { fromHex, ReturnServiceClient, ReturnServiceError } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';

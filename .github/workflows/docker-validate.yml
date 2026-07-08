@@ -44,6 +44,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Prepare npm auth for Docker build
+        run: |
+          printf '@unicitynetwork:registry=https://npm.pkg.github.com\n@unicity-sphere:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > .npmrc.docker
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+
       # load: true hands the built image to the runner's docker daemon so
       # the smoke step below can actually run it. Without this, a Dockerfile
       # that compiles but produces a broken image (bad entrypoint path,
@@ -59,6 +65,8 @@ jobs:
           tags: sphere-validate:${{ matrix.dockerfile }}
           cache-from: type=gha,scope=${{ matrix.dockerfile }}
           cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
+          secret-files: |
+            npmrc=.npmrc.docker
 
       # Smoke test: verify nginx's runtime config is parseable. Catches
       # heredoc-interpolation bugs in deploy/entrypoint.sh (Dockerfile.ssl)
@@ -79,6 +87,7 @@ jobs:
           cid=$(docker run -d \
             -e SPHERE_API_URL=https://quest-api.example.test \
             -e WALLET_API_URL=https://wallet-api.example.test \
+            -e BRIDGE_RETURN_SERVICE_URL=https://prover.example.test \
             -e REQUIRE_WALLET_API=true \
             -e DEV_PORTAL_URL=https://developers.example.test/ \
             -e AGGREGATOR_API_KEY=sk_smoke_test \
@@ -101,6 +110,8 @@ jobs:
           fi
           docker exec "$cid" sh -c "grep -rq 'quest-api.example.test' /usr/share/nginx/html" \
             || { echo "ERROR: injected SPHERE_API_URL not found in bundle"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'prover.example.test' /usr/share/nginx/html" \
+            || { echo "ERROR: injected BRIDGE_RETURN_SERVICE_URL not found in bundle"; exit 1; }
           echo "substitution smoke ok"
 
       # #351 fail-closed: declaring wallet-api custody (REQUIRE_WALLET_API) with

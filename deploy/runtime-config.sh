@@ -17,6 +17,7 @@
 # Runtime contract — set these on the ECS task definition / `docker -e`:
 #   SPHERE_API_URL       quest-api base (marketplace / user / maintenance)
 #   WALLET_API_URL       wallet-api backend base (S4 asset custody)
+#   BRIDGE_RETURN_SERVICE_URL bridge-return-service / prover base URL
 #   REQUIRE_WALLET_API   #351 fail-closed custody flag ('' / false / 0 = off)
 #   DEV_PORTAL_URL       developer-portal link target
 #   AGGREGATOR_API_KEY   aggregator API key (non-secret on testnet2)
@@ -55,13 +56,14 @@ add() { printf 's|%s|%s|g\n' "$1" "$(sed_escape "$2")" >> "$SED_SCRIPT"; }
 
 add __RUNTIME_SPHERE_API_URL__     "${SPHERE_API_URL-}"
 add __RUNTIME_WALLET_API_URL__     "${WALLET_API_URL-}"
+add __RUNTIME_BRIDGE_RETURN_SERVICE_URL__ "${BRIDGE_RETURN_SERVICE_URL-}"
 add __RUNTIME_REQUIRE_WALLET_API__ "${REQUIRE_WALLET_API-}"
 add __RUNTIME_DEV_PORTAL_URL__     "${DEV_PORTAL_URL-}"
 add __RUNTIME_AGGREGATOR_API_KEY__ "${AGGREGATOR_API_KEY-}"
 
 # Visibility: warn (don't fail) when a public var is unset — it substitutes to
 # an empty string, which is almost always an operator mistake worth seeing.
-for v in SPHERE_API_URL DEV_PORTAL_URL AGGREGATOR_API_KEY; do
+for v in SPHERE_API_URL BRIDGE_RETURN_SERVICE_URL DEV_PORTAL_URL AGGREGATOR_API_KEY; do
   eval "val=\${$v-}"
   [ -z "$val" ] && log "WARNING: \$$v is unset; substituting empty string"
 done

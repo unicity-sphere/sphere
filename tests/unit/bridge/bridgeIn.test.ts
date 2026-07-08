@@ -13,7 +13,7 @@ import {
   type BridgeSourceAdapter,
   type TronCall,
   type TronSigner,
-} from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import { LOCK_EVENT_TOPIC0, type TronTxInfo } from '@unicitylabs/bridge-plugin-tron-usdt';
 import type { Sphere } from '@unicitylabs/sphere-sdk';

@@ -1,14 +1,12 @@
+# syntax=docker/dockerfile:1.7
 # Stage 1: Build React app
-# Pin node:20-alpine by digest for reproducible builds. Update with:
-#   docker pull node:20-alpine
-#   docker inspect node:20-alpine --format '{{index .RepoDigests 0}}'
-FROM node:20-alpine@sha256:f598378b5240225e6beab68fa9f356db1fb8efe55173e6d4d8153113bb8f333c AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 # --ignore-scripts: refuse to run (possibly malicious) postinstall from deps.
 # sphere's direct deps don't need postinstall; if a future dep does, wire it
 # explicitly rather than relaxing this.
-RUN npm ci --ignore-scripts
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false npm ci --ignore-scripts
 COPY . .
 # Build-once, promote-many: bake sentinel placeholders (not real values) so the
 # image is environment-agnostic; deploy/entrypoint.sh rewrites them to the real
@@ -16,12 +14,14 @@ COPY . .
 # runtime env contract. Override an ARG only to pin a literal at build time.
 ARG VITE_SPHERE_API_URL=__RUNTIME_SPHERE_API_URL__
 ARG VITE_WALLET_API_URL=__RUNTIME_WALLET_API_URL__
+ARG VITE_BRIDGE_RETURN_SERVICE_URL=__RUNTIME_BRIDGE_RETURN_SERVICE_URL__
 ARG VITE_REQUIRE_WALLET_API=__RUNTIME_REQUIRE_WALLET_API__
 ARG VITE_AGGREGATOR_API_KEY=__RUNTIME_AGGREGATOR_API_KEY__
 ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
 ARG BASE_PATH=/
 ENV VITE_SPHERE_API_URL=$VITE_SPHERE_API_URL \
     VITE_WALLET_API_URL=$VITE_WALLET_API_URL \
+    VITE_BRIDGE_RETURN_SERVICE_URL=$VITE_BRIDGE_RETURN_SERVICE_URL \
     VITE_REQUIRE_WALLET_API=$VITE_REQUIRE_WALLET_API \
     VITE_AGGREGATOR_API_KEY=$VITE_AGGREGATOR_API_KEY \
     VITE_DEV_PORTAL_URL=$VITE_DEV_PORTAL_URL \

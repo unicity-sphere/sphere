@@ -6,7 +6,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { TronSigner } from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+import type { TronSigner } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';

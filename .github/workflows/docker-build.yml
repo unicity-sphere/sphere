@@ -34,6 +34,12 @@ jobs:
             type=sha
             type=raw,value=latest
 
+      - name: Prepare npm auth for Docker build
+        run: |
+          printf '@unicitynetwork:registry=https://npm.pkg.github.com\n@unicity-sphere:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > .npmrc.docker
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -43,6 +49,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          secret-files: |
+            npmrc=.npmrc.docker
           # No build-args: the image is environment-AGNOSTIC. The Dockerfile
           # bakes __RUNTIME_*__ placeholders (its ARG defaults); the real
           # per-env public config (SPHERE_API_URL, WALLET_API_URL, ...) is

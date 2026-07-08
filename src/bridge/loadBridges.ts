@@ -29,7 +29,7 @@ import {
   type LoadedBridge,
   type TronSigner,
   type TronWalletProvider,
-} from '@unicitylabs/bridge-plugin-tron-usdt/lib/wallet/index.js';
+} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 
 import type { BridgeInDeps, ReceiptReader } from './bridgeIn';
 import { appTronWalletConfig } from './walletconnect';
