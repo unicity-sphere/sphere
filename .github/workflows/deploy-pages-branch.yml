@@ -123,6 +123,11 @@ jobs:
           # is safe to hardcode here. Without it the deployed bundle gets
           # undefined and the aggregator rejects mints with "unauthorized".
           VITE_AGGREGATOR_API_KEY: sk_ddc3cfcc001e4a28ac3fad7407f99590
+          # Sentry stays OFF in branch previews: an empty DSN skips init
+          # (src/config/sentry.ts). Previews are PROD builds, so without this
+          # every branch push would report errors/replays against the shared
+          # free-tier quota (5k errors, 50 replays per month).
+          VITE_SENTRY_DSN: ''
 
       - name: Deploy branch to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
