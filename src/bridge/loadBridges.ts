@@ -5,7 +5,6 @@
  * for the UI. Decision #2: no chain-agnostic bridge logic lives here — every hash
  * / derivation stays in `@unicitylabs/bridge-plugin-tron-usdt`.
  */
-import { spherePaymentAmountExtractor } from '@unicitylabs/sphere-sdk/token-engine';
 import type { SphereInitOptions } from '@unicitylabs/sphere-sdk';
 
 // The SDK declares `SphereBridgeInfo` internally but does not export it; derive it
@@ -70,7 +69,7 @@ export function appBridgeManifests(): BridgeManifest[] {
  * identifiers) does not match the deployed vault — never silently mis-trust.
  */
 export function loadAppBridges(manifests: BridgeManifest[] = appBridgeManifests()): AppBridges {
-  const loaded = loadBridgesFacade(manifests, { extractAmount: spherePaymentAmountExtractor });
+  const loaded = loadBridgesFacade(manifests);
 
   const bridges: SphereBridgeInfo[] = loaded.map((l) => ({
     coinIdHex: l.plugin.coinIdHex,
@@ -109,7 +108,7 @@ export function getAppBridges(): AppBridges {
 export function createBridgeInDeps(bridge: LoadedBridge, signer?: TronSigner): BridgeInDeps {
   const wallet: TronSigner = signer ?? new TronLinkSigner(undefined, bridge.manifest.chainId);
   const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
-  const adapter = createTronSourceAdapter(bridge, wallet, rpc, { extractAmount: spherePaymentAmountExtractor });
+  const adapter = createTronSourceAdapter(bridge, wallet, rpc);
   return {
     wallet,
     receipts: receiptReaderFor(rpc),
@@ -122,7 +121,7 @@ export function createBridgeInDeps(bridge: LoadedBridge, signer?: TronSigner): B
 /** Recovery deps for `resumeBridgeMint` (decode + mint only — never signs). */
 export function createResumeDeps(bridge: LoadedBridge): { adapter: BridgeSourceAdapter; receipts: ReceiptReader } {
   const rpc = new TronHttpRpcClient({ baseUrl: bridge.manifest.rpcUrl, apiKey: bridge.manifest.apiKey });
-  const adapter = createTronSourceAdapter(bridge, RESUME_NOOP_WALLET, rpc, { extractAmount: spherePaymentAmountExtractor });
+  const adapter = createTronSourceAdapter(bridge, RESUME_NOOP_WALLET, rpc);
   return { adapter, receipts: receiptReaderFor(rpc) };
 }
 
