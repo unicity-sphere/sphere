@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useIdentity, useAssets, useTokens } from '../../../../sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { isSpendableToken, isWalletVisibleToken } from '../../../../sdk/tokenVisibility';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow } from '../../shared/components';
 import { SendModal } from '../modals/SendModal';
@@ -153,8 +154,8 @@ export function L3WalletView({
 
   const assets = sdkAssets;
 
-  const tokens = sdkTokens;
-  const sendableTokens = useMemo(() => tokens.filter(t => t.coinId !== 'NAMETAG'), [tokens]);
+  const tokens = useMemo(() => sdkTokens.filter(isWalletVisibleToken), [sdkTokens]);
+  const sendableTokens = useMemo(() => tokens.filter(t => t.coinId !== 'NAMETAG' && isSpendableToken(t)), [tokens]);
 
   const [activeTab, setActiveTab] = useState<Tab>('assets');
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);

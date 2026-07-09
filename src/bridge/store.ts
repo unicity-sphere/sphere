@@ -154,6 +154,12 @@ export class BridgeStore {
     write(this.addressKey, state);
   }
 
+  public removeReturn(id: string): void {
+    const state = read(this.addressKey);
+    state.returns = state.returns.filter((r) => r.id !== id);
+    write(this.addressKey, state);
+  }
+
   /** Export all recovery material (backup inclusion — ZK_BACK3 §13). */
   public exportAll(): BridgeState {
     return read(this.addressKey);

@@ -65,10 +65,12 @@ export function useBridgeBack() {
  */
 export function useBridgeClaims(pollMs = 8000) {
   const { sphere } = useSphereContext();
+  const queryClient = useQueryClient();
   const store = useMemo(() => bridgeStoreFor(sphere?.identity?.chainPubkey ?? 'anon'), [sphere]);
+  const queryKey = useMemo(() => ['bridge', 'claims', sphere?.identity?.chainPubkey] as const, [sphere?.identity?.chainPubkey]);
 
   const query = useQuery({
-    queryKey: ['bridge', 'claims', sphere?.identity?.chainPubkey],
+    queryKey,
     enabled: !!sphere,
     refetchInterval: pollMs,
     queryFn: async (): Promise<PendingReturn[]> => {
@@ -126,9 +128,18 @@ export function useBridgeClaims(pollMs = 8000) {
     [],
   );
 
+  const dismissReturn = useCallback(
+    (id: string) => {
+      store.removeReturn(id);
+      queryClient.setQueryData<PendingReturn[]>(queryKey, store.listReturns());
+    },
+    [queryClient, queryKey, store],
+  );
+
   return {
     claims: query.data ?? [],
     refetch: query.refetch,
     selfSettle,
+    dismissReturn,
   };
 }
