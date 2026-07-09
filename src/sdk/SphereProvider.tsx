@@ -29,6 +29,7 @@ import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
 import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
 import { isPaidPlan } from './subscription/usage';
+import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
@@ -192,6 +193,11 @@ export function SphereProvider({
   const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
+  // Readiness of the subscription key on the live oracle — gates the send path
+  // so a send can't race async provisioning and go out keyless (→ 401).
+  const [subscriptionKeyStatus, setSubscriptionKeyStatus] = useState<SubscriptionKeyStatus>(
+    SUBSCRIPTION_ENABLED ? 'provisioning' : 'not-required',
+  );
   const sphereRef = useRef<Sphere | null>(null);
 
   const initialize = useCallback(async (attempt = 0, skipLoading = false) => {
@@ -205,7 +211,11 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
-      const browserProviders = buildProviders(network, getActiveOracleApiKey());
+      // Snapshot the resolved oracle key: when subscriptions are on it is the
+      // stored per-wallet key (or undefined if not provisioned yet), and it
+      // decides whether the live oracle is 'ready' vs still 'provisioning'.
+      const oracleApiKey = getActiveOracleApiKey();
+      const browserProviders = buildProviders(network, oracleApiKey);
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
 
@@ -234,6 +244,15 @@ export function SphereProvider({
         sphereRef.current = instance;
         setSphere(instance);
 
+        // Readiness for the send gate: 'ready' iff this oracle was built WITH a
+        // subscription key. With no key yet we provision below and stay
+        // 'provisioning' until the keyed re-init lands (covers the re-init gap,
+        // not just "no key in storage"). Subs off → the env key is the oracle
+        // credential, so sends are always allowed ('not-required').
+        setSubscriptionKeyStatus(
+          !SUBSCRIPTION_ENABLED ? 'not-required' : oracleApiKey ? 'ready' : 'provisioning',
+        );
+
         // Subscription key resolution (INDIVIDUAL per address by default;
         // inherit is opt-in — see sdk/subscription/keyVault.ts). Reconciles
         // the boot cache (a single global slot — config/storageKeys.ts);
@@ -243,7 +262,10 @@ export function SphereProvider({
         // - any other address with no key → give it its OWN free key, EXCEPT
         //   when index 0 is on a PAID plan and no choice was made yet, where a
         //   one-time prompt first offers to share that paid plan (inherit).
-        // The env-key fallback keeps the wallet working if provisioning fails.
+        // NOTE: there is NO env-key fallback while subscriptions are on (#418
+        // removed it) — if provisioning fails on the initial load the oracle has
+        // no key, so the send gate blocks (status → 'failed') rather than let a
+        // send go out keyless (→ 401).
         if (SUBSCRIPTION_ENABLED) {
           // `reinit` is only allowed on the initial load — NEVER on a live
           // address switch: initialize(0, true) destroys+rebuilds the whole
@@ -267,7 +289,11 @@ export function SphereProvider({
                 : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
               if (reinit) void initialize(0, true);
             } catch (err) {
-              console.warn('subscription auto-provisioning failed; using fallback key', err);
+              // On the initial load (reinit) a failure means the oracle has no
+              // key at all — mark it so the send gate blocks. On a live switch a
+              // bearer key is already loaded, so leave the status untouched.
+              if (reinit) setSubscriptionKeyStatus('failed');
+              console.warn('subscription auto-provisioning failed; sends are gated until it recovers', err);
             }
           };
           const reconcileSubscriptionKey = async (initialLoad: boolean) => {
@@ -572,7 +598,15 @@ export function SphereProvider({
       sendWelcomeDM(importedSphere);
     }
     setWalletExists(true);
-  }, [providers]);
+    // The onboarding oracle was built KEYLESS — the per-wallet subscription key
+    // is provisioned only after the wallet/identity exists, so the created
+    // instance never carried it. Re-init once here (the "next initialize()" the
+    // onboarding flow always relied on) so the oracle picks up the stored key
+    // and the send gate resolves 'provisioning' → 'ready' (or retries + 'failed'
+    // if provisioning never succeeded). Without this the send gate would stay
+    // blocked until a manual reload. skipLoading: the wallet UI is already up.
+    if (SUBSCRIPTION_ENABLED) void initialize(0, true);
+  }, [providers, initialize]);
 
   const toggleIpfs = useCallback(() => {
     const next = !isIpfsEnabled();
@@ -623,6 +657,7 @@ export function SphereProvider({
     ipfsEnabled,
     toggleIpfs,
     applySubscriptionKey,
+    subscriptionKeyStatus,
     walletApiEnabled: isWalletApiEnabled(),
   };
 

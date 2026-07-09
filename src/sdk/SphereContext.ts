@@ -2,6 +2,7 @@ import { createContext } from 'react';
 import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import type { WalletApiProviderExtras } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 
 /**
  * The app's provider bundle: the browser base, plus — when the asset path
@@ -51,6 +52,14 @@ export interface SphereContextValue {
 
   /** Persist a per-wallet subscription API key and re-init the SDK oracle with it. */
   applySubscriptionKey: (apiKey: string, opts?: { walletWide?: boolean }) => Promise<void>;
+
+  /**
+   * Readiness of the subscription key on the LIVE oracle. When subscriptions
+   * are on, the send path must refuse until this is `'ready'` — otherwise a
+   * send races the async provisioning and goes out with no aggregator key
+   * (→ 401). `'not-required'` when subscriptions are disabled.
+   */
+  subscriptionKeyStatus: SubscriptionKeyStatus;
 
   /**
    * True when the asset path rides the wallet-api backend (S4 composition).

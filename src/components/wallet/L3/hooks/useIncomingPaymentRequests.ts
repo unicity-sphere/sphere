@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { isSubscriptionKeyReady, SubscriptionNotReadyError } from '../../../../sdk/subscription/keyStatus';
+import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 import type { IncomingPaymentRequest as SDKPaymentRequest } from '@unicitylabs/sphere-sdk';
 
 export const PaymentRequestStatus = {
@@ -69,7 +71,7 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  *   send is logged by the SDK, never reported as a payment failure.
  */
 export const useIncomingPaymentRequests = () => {
-    const { sphere } = useSphereContext();
+    const { sphere, subscriptionKeyStatus } = useSphereContext();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
     const refresh = useCallback(() => {
@@ -131,12 +133,19 @@ export const useIncomingPaymentRequests = () => {
 
     const pay = useCallback(async (request: IncomingPaymentRequest) => {
         if (!sphere) return;
+        // Paying a request routes through payments.send() (certification) — same
+        // keyless-send window as a normal send. Refuse until the subscription key
+        // is on the oracle, or this bypasses the gate and 401s. handleAction in
+        // PaymentRequestModal surfaces the thrown message per-request.
+        if (SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus)) {
+            throw new SubscriptionNotReadyError(subscriptionKeyStatus === 'failed' ? 'failed' : 'provisioning');
+        }
         try {
             await sphere.payments.payPaymentRequest(request.id);
         } finally {
             refresh();
         }
-    }, [sphere, refresh]);
+    }, [sphere, subscriptionKeyStatus, refresh]);
 
     const clearProcessed = useCallback(() => {
         if (!sphere) return;

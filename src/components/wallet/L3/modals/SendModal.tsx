@@ -8,6 +8,7 @@ import { getErrorMessage } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
 import { QuotaBlockedError, SEND_OPS_HEADROOM } from '../../../../sdk/quotaGate';
+import { isSubscriptionKeyReady } from '../../../../sdk/subscription/keyStatus';
 import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 import { useUpgrade } from '../../../upgrade';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -23,9 +24,13 @@ interface SendModalProps {
 export function SendModal({ isOpen, onClose }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
-  const { sphere } = useSphereContext();
+  const { sphere, subscriptionKeyStatus } = useSphereContext();
   const { openUpgrade } = useUpgrade();
   const utilization = useUtilization();
+
+  // Subscriptions on but the per-wallet key isn't on the oracle yet — a send
+  // now would go out keyless (→ 401). Disable Send until it's ready.
+  const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
   const assets = sdkAssets;
 
@@ -442,6 +447,14 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
               {recipientError && !quotaBlocked && <p className="text-red-500 text-sm mb-4 text-center">{recipientError}</p>}
 
+              {subsNotReady && !quotaBlocked && (
+                <p className="text-neutral-500 dark:text-white/45 text-xs mb-4 text-center">
+                  {subscriptionKeyStatus === 'failed'
+                    ? "Couldn't set up your subscription. Reload the app to retry."
+                    : 'Setting up your subscription — one moment…'}
+                </p>
+              )}
+
               <div className="flex gap-3">
                 <button
                   onClick={handleClose}
@@ -451,7 +464,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={isTransferring}
+                  disabled={isTransferring || subsNotReady}
                   className="flex-1 py-4 bg-orange-500 hover:bg-orange-600 dark:bg-brand-orange dark:hover:bg-brand-orange-dark text-white font-bold font-mono rounded-full transition-colors disabled:opacity-50"
                 >
                   Send

@@ -626,11 +626,12 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         // Persist ONLY — do NOT re-init here. Re-initializing now (like
         // applySubscriptionKey does) would flip walletExists to true and
         // unmount CreateWalletFlow before the capabilities screen renders.
-        // The stored key becomes the ACTIVE oracle key on the SDK's next
-        // initialize() (which the finalize flow triggers before any send). With
-        // subscriptions on the env key is NOT a fallback (oracleKey.ts ignores
-        // it), so the pre-reinit oracle simply carries no key — fine, because
-        // no L3 send happens on the onboarding screens.
+        // The stored key becomes the ACTIVE oracle key when finalizeWallet()
+        // re-inits on wallet entry (SphereProvider) — which happens before any
+        // send. With subscriptions on the env key is NOT a fallback
+        // (oracleKey.ts ignores it), so until that re-init the oracle carries no
+        // key; that's fine because the send gate blocks sends until it lands and
+        // no L3 send happens on the onboarding screens anyway.
         setStoredSubscriptionKey(result.apiKey);
         // Durable per-identity copy; non-fatal if it fails (cache still set).
         await saveWalletKey(active, network, result.apiKey).catch(() => {});
