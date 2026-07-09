@@ -5,7 +5,7 @@ describe('resolveOracleApiKey', () => {
   it('uses the per-wallet key when enabled and present', () => {
     expect(resolveOracleApiKey({ storedKey: 'key_sub', envKey: 'sk_env', subscriptionEnabled: true })).toBe('key_sub');
   });
-  it('IGNORES the env key when subscriptions are on, even with no stored key', () => {
+  it('ignores the env key when subscriptions are on, even with no stored key', () => {
     // The env key must be completely unused while subscriptions are enabled —
     // return undefined (provisioning sets the key before any send), never fall
     // back to VITE_AGGREGATOR_API_KEY.

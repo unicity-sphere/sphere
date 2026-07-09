@@ -89,7 +89,7 @@ done
 #                       is REQUIRED — without it the app has no key to sign L3
 #                       state transitions; fail closed rather than ship a wallet
 #                       that can't send.
-if [ "${SUBSCRIPTION_ENABLED-}" = true ]; then
+if [ "${SUBSCRIPTION_ENABLED-}" = "true" ]; then
   [ -n "${AGGREGATOR_API_KEY-}" ] && \
     log "NOTE: AGGREGATOR_API_KEY is set but ignored — SUBSCRIPTION_ENABLED=true uses per-wallet keys."
 elif [ -z "${AGGREGATOR_API_KEY-}" ]; then

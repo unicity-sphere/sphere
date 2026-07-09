@@ -147,10 +147,16 @@ jobs:
         if: matrix.dockerfile == 'Dockerfile'
         run: |
           # (a) subscriptions OFF + no AGGREGATOR_API_KEY → refuse to start.
+          # Same baseline as the other smokes (WALLET_API_URL + REQUIRE_WALLET_API=false,
+          # SUBSCRIPTION_ENABLED=false explicit) so the ONLY missing var is
+          # AGGREGATOR_API_KEY and the failure is unambiguously attributable to it.
           set +e
           out=$(docker run --rm \
             -e SPHERE_API_URL=https://quest-api.example.test \
+            -e WALLET_API_URL=https://wallet-api.example.test \
+            -e REQUIRE_WALLET_API=false \
             -e DEV_PORTAL_URL=https://developers.example.test/ \
+            -e SUBSCRIPTION_ENABLED=false \
             sphere-validate:${{ matrix.dockerfile }} 2>&1)
           rc=$?
           set -e
