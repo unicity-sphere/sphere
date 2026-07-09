@@ -22,7 +22,9 @@
 #   WALLET_API_URL         wallet-api backend base (S4 asset custody)
 #   REQUIRE_WALLET_API     #351 fail-closed custody flag ('' / false / 0 = off)
 #   DEV_PORTAL_URL         developer-portal link target
-#   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2)
+#   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2) —
+#                          REQUIRED only when SUBSCRIPTION_ENABLED != 'true';
+#                          IGNORED when subscriptions are on (per-wallet keys)
 #   SUBSCRIPTION_ENABLED   per-wallet SGW subscription keys — the app checks
 #                          for EXACTLY 'true'; anything else leaves it off
 #   PAID_PLANS_ENABLED     paid-plan purchases (EXACTLY 'true'; testnet: off)
@@ -79,6 +81,23 @@ for flag in SUBSCRIPTION_ENABLED PAID_PLANS_ENABLED; do
   esac
 done
 
+# ── AGGREGATOR_API_KEY requirement (conditional on subscriptions) ─────────────
+# The two oracle-key modes are mutually exclusive (src/sdk/oracleKey.ts):
+#   Subscriptions ON  → the per-wallet SGW key is the oracle credential and the
+#                       static AGGREGATOR_API_KEY is IGNORED (not required).
+#   Subscriptions OFF → AGGREGATOR_API_KEY is the ONLY oracle credential, so it
+#                       is REQUIRED — without it the app has no key to sign L3
+#                       state transitions; fail closed rather than ship a wallet
+#                       that can't send.
+if [ "${SUBSCRIPTION_ENABLED-}" = "true" ]; then
+  [ -n "${AGGREGATOR_API_KEY-}" ] && \
+    log "NOTE: AGGREGATOR_API_KEY is set but ignored — SUBSCRIPTION_ENABLED=true uses per-wallet keys."
+elif [ -z "${AGGREGATOR_API_KEY-}" ]; then
+  log "ERROR: AGGREGATOR_API_KEY is empty and SUBSCRIPTION_ENABLED is not 'true' —"
+  log "       refusing to start (the app would have no aggregator key to send with)."
+  exit 1
+fi
+
 # ── Build the substitution program ───────────────────────────────────────────
 # Escape the replacement for a sed `s|...|...|` command: backslash, the `|`
 # delimiter, and `&` (whole-match backreference) are the only specials.
@@ -130,7 +149,8 @@ log "wrote $WEBROOT/runtime-config.js"
 
 # Visibility: warn (don't fail) when a public var is unset — it substitutes to
 # an empty string, which is almost always an operator mistake worth seeing.
-for v in SPHERE_API_URL DEV_PORTAL_URL AGGREGATOR_API_KEY; do
+# (AGGREGATOR_API_KEY is handled by the conditional requirement above, not here.)
+for v in SPHERE_API_URL DEV_PORTAL_URL; do
   eval "val=\${$v-}"
   [ -z "$val" ] && log "WARNING: \$$v is unset; substituting empty string"
 done
