@@ -5,19 +5,40 @@
  */
 import type { OrderStatusInfo } from '../../services/subscriptionApi';
 
-export interface OrderPollResult { outcome: 'paid' | 'failed' | 'timeout'; apiKey?: string }
+export interface OrderPollResult { outcome: 'paid' | 'failed' | 'timeout' | 'cancelled'; apiKey?: string }
 
 export async function pollOrderStatus(
   fetchStatus: () => Promise<OrderStatusInfo>,
-  opts: { intervalMs?: number; timeoutMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+    /** Abort the poll (e.g. the upgrade modal closed). Resolves 'cancelled'. */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<OrderPollResult> {
   const intervalMs = opts.intervalMs ?? 3000;
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
   const now = opts.now ?? (() => Date.now());
-  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const signal = opts.signal;
+  // Default sleep resolves early on abort so a closed modal stops polling
+  // within the same tick instead of after a full interval. Check `aborted`
+  // synchronously first: if the signal is ALREADY aborted, the 'abort' event
+  // has fired and addEventListener would never call back (leaving the full
+  // timer to run).
+  const sleep =
+    opts.sleep ??
+    ((ms) =>
+      new Promise<void>((resolve) => {
+        if (signal?.aborted) { resolve(); return; }
+        const t = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+      }));
 
   const deadline = now() + timeoutMs;
   while (now() < deadline) {
+    if (signal?.aborted) return { outcome: 'cancelled' };
     try {
       const order = await fetchStatus();
       if (order.status === 'paid') return { outcome: 'paid', apiKey: order.apiKey };
@@ -27,5 +48,5 @@ export async function pollOrderStatus(
     }
     await sleep(intervalMs);
   }
-  return { outcome: 'timeout' };
+  return signal?.aborted ? { outcome: 'cancelled' } : { outcome: 'timeout' };
 }

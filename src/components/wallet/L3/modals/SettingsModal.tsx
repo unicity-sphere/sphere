@@ -8,6 +8,7 @@ import { ConnectedSitesModal } from './ConnectedSitesModal';
 import { SubscriptionModal } from './SubscriptionModal';
 import { useUpgrade } from '../../../upgrade';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
+import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -69,13 +70,15 @@ export function SettingsModal({
             onClick={() => setIsConnectedSitesOpen(true)}
           />
 
-          <MenuButton
-            icon={CreditCard}
-            color="orange"
-            label="Subscription"
-            subtitle={subscriptionSubtitle}
-            onClick={() => setIsSubscriptionOpen(true)}
-          />
+          {SUBSCRIPTION_ENABLED && (
+            <MenuButton
+              icon={CreditCard}
+              color="orange"
+              label="Subscription"
+              subtitle={subscriptionSubtitle}
+              onClick={() => setIsSubscriptionOpen(true)}
+            />
+          )}
 
           <MenuButton
             icon={Download}

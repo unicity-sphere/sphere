@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { SphereError } from '@unicitylabs/sphere-sdk';
+// The REAL transport error the classifier duck-types. Never re-exported from
+// sphere-sdk, so the canary below deep-imports it from state-transition-sdk
+// (a transitive dep). If a bump moves/renames it, this import fails loudly —
+// which is exactly the drift signal the canary exists to raise.
+import { JsonRpcNetworkError } from '@unicitylabs/state-transition-sdk/lib/api/json-rpc/JsonRpcNetworkError.js';
 import { getGatewayHttpStatus, isQuotaRateLimit, isGatewayAuthError } from '@/sdk/errors';
 
 // Fabricate the duck-typed transport error shape that JsonRpcNetworkError
-// (state-transition-sdk, never exported from sphere-sdk) satisfies today.
+// satisfies today (used for the behavioural cases; the CONTRACT CANARY below
+// pins the REAL class so a shape drift can't slip past these fakes).
 function jsonRpcNetworkError(status: number, name = 'JsonRpcNetworkError') {
   return { name, status, message: 'transport error' };
 }
@@ -81,12 +87,18 @@ describe('getGatewayHttpStatus', () => {
   // state-transition-sdk upgrade renames `name`/`status` on its transport
   // error, this is the test that should go red first, before it's discovered
   // in production as a gate that silently stops firing.
-  it('CONTRACT CANARY: duck-shape is exactly {name: string, status: number}', () => {
-    const shape = jsonRpcNetworkError(429);
-    expect(shape).toHaveProperty('name', 'JsonRpcNetworkError');
-    expect(shape).toHaveProperty('status', 429);
-    expect(typeof shape.status).toBe('number');
-    expect(getGatewayHttpStatus(shape)).toBe(429);
+  it('CONTRACT CANARY: the REAL state-transition-sdk JsonRpcNetworkError still classifies', () => {
+    // Construct the actual SDK error, not our fabricated duck — this is what
+    // makes it a canary. If a bump renames `name`/`status` (or the class),
+    // these assertions (or the import) go red before it silently stops the
+    // gate from firing in production.
+    const real = new JsonRpcNetworkError(429, 'transport error');
+    expect(real.name).toBe('JsonRpcNetworkError');
+    expect(typeof (real as { status?: unknown }).status).toBe('number');
+    expect(getGatewayHttpStatus(real)).toBe(429);
+    expect(
+      isQuotaRateLimit(new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', real)),
+    ).toBe(true);
   });
 });
 

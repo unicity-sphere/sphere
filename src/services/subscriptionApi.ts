@@ -6,6 +6,7 @@
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import { getPublicKey, signMessage } from '@unicitylabs/sphere-sdk';
 import { SUBSCRIPTION_API_URL, SUBSCRIPTION_MOCK } from '../config/subscription';
+import { SPHERE_NETWORK } from '../config/network';
 import { verifySgwChallenge } from './sgwChallenge';
 import * as mock from './subscriptionApi.mock';
 
@@ -127,7 +128,9 @@ export async function provisionOrRecoverKey(
   }
 
   const { nonce, challenge } = await postJson<Challenge>('/auth/challenge', { pubkey });
-  verifySgwChallenge(challenge, { pubkey, nonce }); // never sign unverified server text
+  // never sign unverified server text; pin our network so a relayed challenge
+  // from another network's SGW can't be signed here (see verifySgwChallenge).
+  verifySgwChallenge(challenge, { network: SPHERE_NETWORK, pubkey, nonce });
   const signature = sign(challenge);
   return postJson<ProvisionResult>('/auth/verify', { nonce, signature });
 }

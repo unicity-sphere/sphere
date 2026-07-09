@@ -16,6 +16,9 @@ import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
 import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
 import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
 
+/** Cap onboarding's subscription provisioning; on expiry we use the env key. */
+const PROVISION_TIMEOUT_MS = 8000;
+
 export type OnboardingStep =
   | "start"
   | "restoreMethod"
@@ -611,7 +614,15 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     const active = importedSphereRef.current ?? sphere;
     if (SUBSCRIPTION_ENABLED && active) {
       try {
-        const result = await provisionOrRecoverKey(active);
+        // Bound provisioning: a slow/blackholed SGW must not hang wallet
+        // creation. On timeout we fall through to the env-key fallback exactly
+        // like a provisioning error would.
+        const result = await Promise.race([
+          provisionOrRecoverKey(active),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('subscription provisioning timed out')), PROVISION_TIMEOUT_MS),
+          ),
+        ]);
         // Persist ONLY — do NOT re-init here. Re-initializing now (like
         // applySubscriptionKey does) would flip walletExists to true and
         // unmount CreateWalletFlow before the capabilities screen renders.
