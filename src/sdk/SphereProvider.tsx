@@ -45,7 +45,6 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
-  getStoredSubscriptionKey,
   setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
@@ -199,6 +198,153 @@ export function SphereProvider({
     SUBSCRIPTION_ENABLED ? 'provisioning' : 'not-required',
   );
   const sphereRef = useRef<Sphere | null>(null);
+  // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
+  // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
+  //   load or a live address switch) may apply its key + flip status; stale
+  //   overlapping reconciles abort at their generation check (no last-writer-wins
+  //   drift when the user switches addresses quickly).
+  // - appliedOracleKeyRef: the key the LIVE token engine actually carries. The
+  //   send gate flips 'ready' off THIS — never the boot-cache slot, which is
+  //   written ahead of the async engine rebuild — so 'ready' can't race an
+  //   in-flight re-key and open a keyless-send window.
+  const subKeyGenRef = useRef(0);
+  const appliedOracleKeyRef = useRef<string | null>(null);
+  // Serialize live oracle re-keys so overlapping engine rebuilds from rapid
+  // address switches COMMIT in order — the live engine ends on the latest
+  // requested key, matching appliedOracleKeyRef (no wrong-key drift). A key whose
+  // generation was already superseded is skipped. This chain holds ONLY the fast,
+  // local setOracleApiKey rebuild; the (possibly hanging) network provisioning
+  // stays outside it, so an SGW stall can never block re-keying.
+  const applyChainRef = useRef<Promise<void>>(Promise.resolve());
+  const applyOracleKey = useCallback(
+    (instance: Sphere, key: string, gen: number): Promise<void> => {
+      const next = applyChainRef.current
+        .then(async () => {
+          if (gen !== subKeyGenRef.current) return; // superseded before we ran
+          if (key === appliedOracleKeyRef.current) return; // engine already carries it
+          await instance.setOracleApiKey(key);
+          if (gen !== subKeyGenRef.current) return; // superseded during the rebuild
+          appliedOracleKeyRef.current = key;
+        })
+        .catch(() => {});
+      applyChainRef.current = next;
+      return next;
+    },
+    [],
+  );
+
+  // Wire the per-wallet subscription (oracle) key onto a LIVE Sphere instance
+  // WITHOUT a full re-init: resolve/provision the key, apply it to the live
+  // oracle via setOracleApiKey, drive the send-gate status, and attach the
+  // identity:changed listener that re-keys on a live address switch. Shared by
+  // initialize() (existing wallet) AND finalizeWallet() (freshly onboarded
+  // wallet) so BOTH get per-address reconcile + provisioning retry + terminal
+  // status — not just a one-shot re-key. `builtWithKey` is the key the instance's
+  // oracle was constructed with (undefined for the keyless onboarding oracle);
+  // it seeds appliedOracleKeyRef so an unchanged key skips a needless rebuild.
+  const setupSubscriptionKey = useCallback(
+    (instance: Sphere, builtWithKey: string | undefined) => {
+      if (!SUBSCRIPTION_ENABLED) return;
+      appliedOracleKeyRef.current = builtWithKey ?? null;
+
+      // Apply a resolved key to the live oracle (via the serialized apply chain),
+      // then mark the gate ready — but only while this reconcile is still the
+      // latest (gen guard) and only once the engine actually carries THIS key
+      // (appliedOracleKeyRef), never off the boot-cache slot alone.
+      const applyResolved = async (key: string, gen: number) => {
+        if (gen !== subKeyGenRef.current) return;
+        setStoredSubscriptionKey(key);
+        await applyOracleKey(instance, key, gen);
+        if (gen !== subKeyGenRef.current) return;
+        if (appliedOracleKeyRef.current === key) {
+          setSubscriptionKeyStatus('ready');
+        } else if (appliedOracleKeyRef.current === null) {
+          // The engine rebuild did not land and the oracle is still keyless →
+          // block the send gate (terminal 'failed') rather than leave it stuck
+          // 'provisioning'. A non-null ref means a valid bearer key is loaded, so
+          // leave the status untouched.
+          setSubscriptionKeyStatus('failed');
+        }
+      };
+
+      const provisionOwn = async (scope: 'wallet' | 'address', gen: number) => {
+        try {
+          const result = await provisionOrRecoverKey(instance, { scope });
+          if (gen !== subKeyGenRef.current) return;
+          await (scope === 'wallet'
+            ? saveWalletKey(instance, network, result.apiKey)
+            : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
+          await applyOracleKey(instance, result.apiKey, gen);
+          if (gen !== subKeyGenRef.current) return;
+          if (appliedOracleKeyRef.current === result.apiKey) {
+            setSubscriptionKeyStatus('ready');
+          } else if (appliedOracleKeyRef.current === null) {
+            // Applying the key to the engine did not land and it is still keyless →
+            // block the send gate (terminal 'failed') rather than leave it stuck.
+            setSubscriptionKeyStatus('failed');
+          }
+        } catch (err) {
+          if (gen !== subKeyGenRef.current) return;
+          // Provisioning failed. Block the send gate ('failed') while the oracle is
+          // still keyless (initial load, OR a live switch that superseded an initial
+          // reconcile which never keyed the engine). A non-null ref means a valid
+          // bearer key is already loaded, so leave the status untouched (still 'ready').
+          if (appliedOracleKeyRef.current === null) setSubscriptionKeyStatus('failed');
+          console.warn('subscription auto-provisioning failed; sends are gated until it recovers', err);
+        }
+      };
+
+      // Reconciles the boot cache (a single global slot — config/storageKeys.ts)
+      // against the active address's resolved key:
+      // - resolved 'own'/'wallet' with a key → use it;
+      // - index 0 with no key yet → provision the wallet (index-0) free key;
+      // - any other address with no key → give it its OWN free key, EXCEPT when
+      //   index 0 is on a PAID plan and undecided, where a one-time prompt first
+      //   offers to share that paid plan (inherit).
+      const reconcileSubscriptionKey = async (initialLoad: boolean) => {
+        const gen = ++subKeyGenRef.current;
+        const resolved = await resolveActiveKey(instance, network);
+        if (gen !== subKeyGenRef.current) return;
+        if (resolved.key) {
+          await applyResolved(resolved.key, gen);
+          return;
+        }
+        // needs-own: index 0 → wallet key; else this address's own key.
+        const isRoot = instance.identity?.chainPubkey === getPublicKey(instance.deriveAddress(0).privateKey);
+        if (isRoot) {
+          await provisionOwn('wallet', gen);
+          return;
+        }
+        // Offer inheriting index 0's plan only when it's PAID and undecided
+        // (only on a live switch — never during the initial load).
+        if (!initialLoad && resolved.undecided) {
+          const walletKey = await loadWalletKey(instance, network);
+          if (gen !== subKeyGenRef.current) return;
+          if (walletKey) {
+            try {
+              if (isPaidPlan((await getUtilization(walletKey)).activeUntil)) {
+                if (gen !== subKeyGenRef.current) return;
+                window.dispatchEvent(new Event('subscription-address-prompt'));
+                return; // wait for the user's choice
+              }
+            } catch {
+              // metering unavailable → fall through to an own free key
+            }
+          }
+        }
+        await provisionOwn('address', gen);
+      };
+
+      void reconcileSubscriptionKey(true).catch(() => {});
+      // Re-resolve on a live address switch — the per-address key applies
+      // immediately via setOracleApiKey (no re-init, no reconnect). The listener
+      // dies with the instance on the next full re-init (instance.destroy()).
+      instance.on('identity:changed', () => {
+        void reconcileSubscriptionKey(false).catch(() => {});
+      });
+    },
+    [network, applyOracleKey],
+  );
 
   const initialize = useCallback(async (attempt = 0, skipLoading = false) => {
     try {
@@ -246,93 +392,19 @@ export function SphereProvider({
 
         // Readiness for the send gate: 'ready' iff this oracle was built WITH a
         // subscription key. With no key yet we provision below and stay
-        // 'provisioning' until the keyed re-init lands (covers the re-init gap,
-        // not just "no key in storage"). Subs off → the env key is the oracle
-        // credential, so sends are always allowed ('not-required').
+        // 'provisioning' until setupSubscriptionKey applies one (covers the whole
+        // provisioning gap, not just "no key in storage"). Subs off → the env key
+        // is the oracle credential, so sends are always allowed ('not-required').
         setSubscriptionKeyStatus(
           !SUBSCRIPTION_ENABLED ? 'not-required' : oracleApiKey ? 'ready' : 'provisioning',
         );
 
-        // Subscription key resolution (INDIVIDUAL per address by default;
-        // inherit is opt-in — see sdk/subscription/keyVault.ts). Reconciles
-        // the boot cache (a single global slot — config/storageKeys.ts);
-        // guarded so it only re-inits on a real difference, never in a loop.
-        // - resolved 'own'/'wallet' with a key → use it;
-        // - index 0 with no key yet → provision the wallet (index-0) free key;
-        // - any other address with no key → give it its OWN free key, EXCEPT
-        //   when index 0 is on a PAID plan and no choice was made yet, where a
-        //   one-time prompt first offers to share that paid plan (inherit).
-        // NOTE: there is NO env-key fallback while subscriptions are on (#418
-        // removed it) — if provisioning fails on the initial load the oracle has
-        // no key, so the send gate blocks (status → 'failed') rather than let a
-        // send go out keyless (→ 401).
-        if (SUBSCRIPTION_ENABLED) {
-          // `reinit` is only allowed on the initial load — NEVER on a live
-          // address switch: initialize(0, true) destroys+rebuilds the whole
-          // Sphere (transport + wallet-api realtime socket), which would flash
-          // "Reconnecting" on every switch. Keys are bearer tokens, so the
-          // active session sends fine on whatever key is loaded; the resolved
-          // per-address key is written to the vault + boot cache and takes
-          // effect on the next natural init (reload / network switch). Proper
-          // fix is a runtime oracle-key setter in the SDK (follow-up).
-          const applyResolved = async (key: string, reinit: boolean) => {
-            if (key !== getStoredSubscriptionKey()) {
-              setStoredSubscriptionKey(key);
-              if (reinit) void initialize(0, true);
-            }
-          };
-          const provisionOwn = async (scope: 'wallet' | 'address', reinit: boolean) => {
-            try {
-              const result = await provisionOrRecoverKey(instance, { scope });
-              await (scope === 'wallet'
-                ? saveWalletKey(instance, network, result.apiKey)
-                : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
-              if (reinit) void initialize(0, true);
-            } catch (err) {
-              // On the initial load (reinit) a failure means the oracle has no
-              // key at all — mark it so the send gate blocks. On a live switch a
-              // bearer key is already loaded, so leave the status untouched.
-              if (reinit) setSubscriptionKeyStatus('failed');
-              console.warn('subscription auto-provisioning failed; sends are gated until it recovers', err);
-            }
-          };
-          const reconcileSubscriptionKey = async (initialLoad: boolean) => {
-            const resolved = await resolveActiveKey(instance, network);
-            if (resolved.key) {
-              await applyResolved(resolved.key, initialLoad);
-              return;
-            }
-            // needs-own: index 0 → wallet key; else this address's own key.
-            const isRoot = instance.identity?.chainPubkey === getPublicKey(instance.deriveAddress(0).privateKey);
-            if (isRoot) {
-              await provisionOwn('wallet', initialLoad);
-              return;
-            }
-            // Offer inheriting index 0's plan only when it's PAID and undecided
-            // (only on a live switch — never during the initial load).
-            if (!initialLoad && resolved.undecided) {
-              const walletKey = await loadWalletKey(instance, network);
-              if (walletKey) {
-                try {
-                  if (isPaidPlan((await getUtilization(walletKey)).activeUntil)) {
-                    window.dispatchEvent(new Event('subscription-address-prompt'));
-                    return; // wait for the user's choice
-                  }
-                } catch {
-                  // metering unavailable → fall through to an own free key
-                }
-              }
-            }
-            await provisionOwn('address', initialLoad);
-          };
-          void reconcileSubscriptionKey(true).catch(() => {});
-          // Re-resolve on a live address switch (initialLoad=false → NO
-          // re-init, so no transport/realtime reconnect). The listener dies
-          // with the instance on the next re-init (instance.destroy()).
-          instance.on('identity:changed', () => {
-            void reconcileSubscriptionKey(false).catch(() => {});
-          });
-        }
+        // Wire the per-wallet subscription key onto this live instance: resolve /
+        // provision it, apply via setOracleApiKey (no re-init), drive the send-gate
+        // status, and attach the identity:changed re-key listener. Shared with
+        // finalizeWallet so onboarded wallets get the same reconcile + provisioning
+        // retry. Full algorithm in setupSubscriptionKey (defined above).
+        setupSubscriptionKey(instance, oracleApiKey);
         // Send welcome DMs after relay delivers historical messages (EOSE)
         {
           let welcomed = false;
@@ -381,7 +453,7 @@ export function SphereProvider({
       setInitProgress(null);
       setIsLoading(false);
     }
-  }, [network]);
+  }, [network, setupSubscriptionKey]);
 
   useEffect(() => {
     initialize();
@@ -598,15 +670,15 @@ export function SphereProvider({
       sendWelcomeDM(importedSphere);
     }
     setWalletExists(true);
-    // The onboarding oracle was built KEYLESS — the per-wallet subscription key
-    // is provisioned only after the wallet/identity exists, so the created
-    // instance never carried it. Re-init once here (the "next initialize()" the
-    // onboarding flow always relied on) so the oracle picks up the stored key
-    // and the send gate resolves 'provisioning' → 'ready' (or retries + 'failed'
-    // if provisioning never succeeded). Without this the send gate would stay
-    // blocked until a manual reload. skipLoading: the wallet UI is already up.
-    if (SUBSCRIPTION_ENABLED) void initialize(0, true);
-  }, [providers, initialize]);
+    // The onboarding oracle was built KEYLESS. Wire the subscription key onto this
+    // live instance exactly like initialize() does for an existing wallet: resolve
+    // / provision it + apply via setOracleApiKey (no full re-init), attach the
+    // identity:changed re-key listener, and drive the send gate to a terminal
+    // 'ready'/'failed'. (A bare setOracleApiKey here would skip the per-address
+    // re-key listener AND the provisioning retry — see #420 review.)
+    const inst = importedSphere ?? sphereRef.current;
+    if (inst) setupSubscriptionKey(inst, undefined);
+  }, [providers, setupSubscriptionKey]);
 
   const toggleIpfs = useCallback(() => {
     const next = !isIpfsEnabled();
@@ -620,6 +692,9 @@ export function SphereProvider({
     setStoredSubscriptionKey(apiKey);
     const instance = sphereRef.current;
     if (instance) {
+      // Supersede any in-flight reconcile (bump the generation) so a stale
+      // reconcile can't clobber this explicit, user-chosen key.
+      const gen = ++subKeyGenRef.current;
       // Bookkeeping (best-effort — the vault entry is a durability upgrade,
       // not a gate): while on the root address (or when explicitly asked) the
       // key becomes WALLET-wide; on any other address it becomes that
@@ -632,10 +707,14 @@ export function SphereProvider({
         ? saveWalletKey(instance, network, apiKey)
         : saveAddressKey(instance, network, apiKey)
       ).catch(() => {});
+      // Apply the new key to the LIVE oracle (serialized apply chain — no full
+      // re-init, rebuilds only the token engine). Flip 'ready' only once the
+      // engine actually carries it.
+      await applyOracleKey(instance, apiKey, gen);
+      if (gen !== subKeyGenRef.current) return; // a newer reconcile/apply superseded us
+      if (appliedOracleKeyRef.current === apiKey) setSubscriptionKeyStatus('ready');
     }
-    // Rebuild providers (oracle) with the new key and re-init the SDK.
-    await initialize(0, true);
-  }, [initialize, network]);
+  }, [network, applyOracleKey]);
 
   const value: SphereContextValue = {
     sphere,
