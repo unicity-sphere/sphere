@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError } from '@unicitylabs/sphere-sdk';
+import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
@@ -25,6 +25,11 @@ import {
   getWalletApiBaseUrl,
   isWalletApiEnabled,
 } from '../config/walletApi';
+import { getActiveOracleApiKey } from './oracleKey';
+import { SUBSCRIPTION_ENABLED } from '../config/subscription';
+import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
+import { isPaidPlan } from './subscription/usage';
+import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -39,6 +44,8 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
+  getStoredSubscriptionKey,
+  setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
 import { migrateApprovedSessions } from '../utils/connected-sites';
@@ -118,12 +125,14 @@ function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
  * error is caught by initialize() and surfaced as a visible init error
  * instead of silently composing the legacy local-custody bundle.
  */
-function buildProviders(network: NetworkType): SphereAppProviders {
+function buildProviders(network: NetworkType, apiKey?: string): SphereAppProviders {
   const base = createBrowserProviders({
     network,
     // v2 token engine: aggregator URL + trust base come from the network
-    // preset; only the apiKey is injected (non-secret on testnet2).
-    oracle: { apiKey: import.meta.env.VITE_AGGREGATOR_API_KEY },
+    // preset; the apiKey is the resolved per-wallet subscription key when
+    // provided, else the static env key (non-secret on testnet2, migration
+    // fallback).
+    oracle: { apiKey: apiKey ?? import.meta.env.VITE_AGGREGATOR_API_KEY },
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
     market: true,
@@ -194,7 +203,7 @@ export function SphereProvider({
       if (!skipLoading) setIsLoading(true);
       setError(null);
 
-      const browserProviders = buildProviders(network);
+      const browserProviders = buildProviders(network, getActiveOracleApiKey());
       // Debug logging is off by default; enable at runtime via: logger.configure({ debug: true })
       setProviders(browserProviders);
 
@@ -222,6 +231,80 @@ export function SphereProvider({
         setInitProgress(null);
         sphereRef.current = instance;
         setSphere(instance);
+
+        // Subscription key resolution (INDIVIDUAL per address by default;
+        // inherit is opt-in — see sdk/subscription/keyVault.ts). Reconciles
+        // the boot cache (a single global slot — config/storageKeys.ts);
+        // guarded so it only re-inits on a real difference, never in a loop.
+        // - resolved 'own'/'wallet' with a key → use it;
+        // - index 0 with no key yet → provision the wallet (index-0) free key;
+        // - any other address with no key → give it its OWN free key, EXCEPT
+        //   when index 0 is on a PAID plan and no choice was made yet, where a
+        //   one-time prompt first offers to share that paid plan (inherit).
+        // The env-key fallback keeps the wallet working if provisioning fails.
+        if (SUBSCRIPTION_ENABLED) {
+          // `reinit` is only allowed on the initial load — NEVER on a live
+          // address switch: initialize(0, true) destroys+rebuilds the whole
+          // Sphere (transport + wallet-api realtime socket), which would flash
+          // "Reconnecting" on every switch. Keys are bearer tokens, so the
+          // active session sends fine on whatever key is loaded; the resolved
+          // per-address key is written to the vault + boot cache and takes
+          // effect on the next natural init (reload / network switch). Proper
+          // fix is a runtime oracle-key setter in the SDK (follow-up).
+          const applyResolved = async (key: string, reinit: boolean) => {
+            if (key !== getStoredSubscriptionKey()) {
+              setStoredSubscriptionKey(key);
+              if (reinit) void initialize(0, true);
+            }
+          };
+          const provisionOwn = async (scope: 'wallet' | 'address', reinit: boolean) => {
+            try {
+              const result = await provisionOrRecoverKey(instance, { scope });
+              await (scope === 'wallet'
+                ? saveWalletKey(instance, network, result.apiKey)
+                : saveAddressKey(instance, network, result.apiKey)); // both set the boot cache
+              if (reinit) void initialize(0, true);
+            } catch (err) {
+              console.warn('subscription auto-provisioning failed; using fallback key', err);
+            }
+          };
+          const reconcileSubscriptionKey = async (initialLoad: boolean) => {
+            const resolved = await resolveActiveKey(instance, network);
+            if (resolved.key) {
+              await applyResolved(resolved.key, initialLoad);
+              return;
+            }
+            // needs-own: index 0 → wallet key; else this address's own key.
+            const isRoot = instance.identity?.chainPubkey === getPublicKey(instance.deriveAddress(0).privateKey);
+            if (isRoot) {
+              await provisionOwn('wallet', initialLoad);
+              return;
+            }
+            // Offer inheriting index 0's plan only when it's PAID and undecided
+            // (only on a live switch — never during the initial load).
+            if (!initialLoad && resolved.undecided) {
+              const walletKey = await loadWalletKey(instance, network);
+              if (walletKey) {
+                try {
+                  if (isPaidPlan((await getUtilization(walletKey)).activeUntil)) {
+                    window.dispatchEvent(new Event('subscription-address-prompt'));
+                    return; // wait for the user's choice
+                  }
+                } catch {
+                  // metering unavailable → fall through to an own free key
+                }
+              }
+            }
+            await provisionOwn('address', initialLoad);
+          };
+          void reconcileSubscriptionKey(true).catch(() => {});
+          // Re-resolve on a live address switch (initialLoad=false → NO
+          // re-init, so no transport/realtime reconnect). The listener dies
+          // with the instance on the next re-init (instance.destroy()).
+          instance.on('identity:changed', () => {
+            void reconcileSubscriptionKey(false).catch(() => {});
+          });
+        }
         // Send welcome DMs after relay delivers historical messages (EOSE)
         {
           let welcomed = false;
@@ -497,9 +580,31 @@ export function SphereProvider({
     initialize();
   }, [initialize]);
 
+  const applySubscriptionKey = useCallback(async (apiKey: string, opts?: { walletWide?: boolean }) => {
+    setStoredSubscriptionKey(apiKey);
+    const instance = sphereRef.current;
+    if (instance) {
+      // Bookkeeping (best-effort — the vault entry is a durability upgrade,
+      // not a gate): while on the root address (or when explicitly asked) the
+      // key becomes WALLET-wide; on any other address it becomes that
+      // address's OWN key.
+      const rootPubkey = (() => {
+        try { return getPublicKey(instance.deriveAddress(0).privateKey); } catch { return null; }
+      })();
+      const walletWide = opts?.walletWide ?? (rootPubkey !== null && instance.identity?.chainPubkey === rootPubkey);
+      await (walletWide
+        ? saveWalletKey(instance, network, apiKey)
+        : saveAddressKey(instance, network, apiKey)
+      ).catch(() => {});
+    }
+    // Rebuild providers (oracle) with the new key and re-init the SDK.
+    await initialize(0, true);
+  }, [initialize, network]);
+
   const value: SphereContextValue = {
     sphere,
     providers,
+    network,
     isLoading,
     isInitialized: !!sphere,
     walletExists,
@@ -515,6 +620,7 @@ export function SphereProvider({
     reinitialize: initialize,
     ipfsEnabled,
     toggleIpfs,
+    applySubscriptionKey,
     walletApiEnabled: isWalletApiEnabled(),
   };
 

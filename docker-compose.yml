@@ -15,3 +15,9 @@ services:
       REQUIRE_WALLET_API: "true"
       DEV_PORTAL_URL: https://developers.staging.unicity.network/
       AGGREGATOR_API_KEY: sk_ddc3cfcc001e4a28ac3fad7407f99590
+      # Subscriptions (SGW) ship dormant; set exactly "true" to turn on.
+      # The SGW base URL needs no config — the app derives it from the SDK's
+      # per-network aggregator gateway and calls it directly (CORS-enabled;
+      # unicitynetwork/aggregator-subscription#57).
+      SUBSCRIPTION_ENABLED: "false"
+      PAID_PLANS_ENABLED: "false"

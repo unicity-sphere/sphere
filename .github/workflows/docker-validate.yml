@@ -82,6 +82,8 @@ jobs:
             -e REQUIRE_WALLET_API=true \
             -e DEV_PORTAL_URL=https://developers.example.test/ \
             -e AGGREGATOR_API_KEY=sk_smoke_test \
+            -e SUBSCRIPTION_ENABLED=true \
+            -e PAID_PLANS_ENABLED=false \
             sphere-validate:${{ matrix.dockerfile }})
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
@@ -101,6 +103,26 @@ jobs:
           fi
           docker exec "$cid" sh -c "grep -rq 'quest-api.example.test' /usr/share/nginx/html" \
             || { echo "ERROR: injected SPHERE_API_URL not found in bundle"; exit 1; }
+
+          # Runtime config global: the subscription flags ride
+          # /runtime-config.js (window.__SPHERE_RUNTIME_CONFIG__), NOT the sed
+          # placeholders — Rollup would prune every `if (FLAG)` against a
+          # baked literal. The hook must have written the env values,
+          # index.html must load the script, and the bundle must actually
+          # read the global.
+          docker exec "$cid" sh -c "cat /usr/share/nginx/html/runtime-config.js"
+          docker exec "$cid" sh -c "grep -q '\"SUBSCRIPTION_ENABLED\": \"true\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: SUBSCRIPTION_ENABLED not written to runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -q 'runtime-config.js' /usr/share/nginx/html/index.html" \
+            || { echo "ERROR: index.html does not load runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq '__SPHERE_RUNTIME_CONFIG__' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read __SPHERE_RUNTIME_CONFIG__"; exit 1; }
+
+          # The SGW base URL is derived from the SDK's per-network config —
+          # the bundle must carry the gateway origin (no env var, no proxy).
+          docker exec "$cid" sh -c "grep -rq 'gateway.testnet2.unicity.network' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: SDK gateway origin not found in bundle"; exit 1; }
+          docker exec "$cid" nginx -t
           echo "substitution smoke ok"
 
       # #351 fail-closed: declaring wallet-api custody (REQUIRE_WALLET_API) with

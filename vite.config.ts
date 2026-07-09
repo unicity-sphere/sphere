@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
   // the SPA HTML fallback — a proxied URL without a "." (e.g.
   // /coingecko/simple/price?ids=bitcoin) would otherwise be rewritten to
   // index.html and never reach the proxy (the SDK then gets HTML, not JSON).
-  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko', '/wallet-api', '/local-agg'];
+  const proxyPaths = ['/rpc', '/dev-rpc', '/coingecko', '/wallet-api', '/local-agg', '/sgw'];
 
   // wallet-api backend + LOCAL dev-stack aggregator (docker-compose.dev.yml
   // in the wallet-api repo). Neither serves CORS headers, so the browser app
@@ -43,6 +43,18 @@ export default defineConfig(({ mode }) => {
       target: env.AGGREGATOR_PROXY_TARGET || 'http://127.0.0.1:3001',
       changeOrigin: true,
       rewrite: (p: string) => p.replace(/^\/local-agg/, ''),
+    },
+  };
+
+  // Subscription gateway (SGW): /api/paymento/* (the Paymento store endpoints)
+  // sends no CORS headers, so the wallet reaches it through this same-origin
+  // proxy in dev/preview (set VITE_SUBSCRIPTION_API_URL=/sgw, the default).
+  // Target is the aggregator-subscription repo's local docker-compose stack.
+  const sgwProxy = {
+    '/sgw': {
+      target: env.SGW_PROXY_TARGET || 'http://127.0.0.1:8080',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/sgw/, ''),
     },
   };
 
@@ -127,12 +139,13 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/coingecko/, ''),
         },
         ...localStackProxy,
+        ...sgwProxy,
       }
     },
     // `vite preview` (used by the Playwright smoke) needs the same
     // same-origin route to the local stack as the dev server.
     preview: {
-      proxy: { ...localStackProxy },
+      proxy: { ...localStackProxy, ...sgwProxy },
     },
     // Ensure polyfill shims resolve correctly for symlinked file: dependencies
     resolve: {

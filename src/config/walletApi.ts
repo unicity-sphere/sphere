@@ -10,6 +10,27 @@
  * origin, which is how the dev/preview proxy in vite.config.ts is reached —
  * the backend serves no CORS headers, so cross-origin browser calls need the
  * local proxy (production deployments must solve this at the edge).
+ *
+ * Docker runtime substitution — READ BEFORE EDITING: the Docker image bakes
+ * `__RUNTIME_*__` placeholder strings for these env vars and sed-rewrites
+ * them at container start (deploy/runtime-config.sh). Know what survives into
+ * that bundle: Rollup statically evaluates BRANCH conditions against the
+ * baked literals (following const bindings, across modules) and prunes them —
+ * in Docker images the `if (!raw)` branch of getWalletApiBaseUrl(), with the
+ * whole #351 throw and the legacy `return null` fallback, is compile-time
+ * eliminated, and isWalletApiRequired() is tree-shaken with it. The #351 half
+ * is guarded at runtime by the fail-closed check in deploy/runtime-config.sh
+ * (container refuses to start); the legacy half has NO runtime equivalent —
+ * an empty WALLET_API_URL makes the compiled getWalletApiBaseUrl() return the
+ * app's own origin instead of null, so legacy local-custody composition is
+ * unreachable in Docker images and deployments must always set
+ * WALLET_API_URL (runtime-config.sh warns). Expression-position string
+ * comparisons (isWalletApiEnabled's `raw !== ''`) DO survive and stay
+ * runtime-decided — that is what keeps enable/disable working at runtime.
+ * A value that must gate `if` branches at runtime cannot use the placeholder
+ * mechanism at all: use window.__SPHERE_RUNTIME_CONFIG__ instead (see
+ * src/config/subscription.ts). Non-Docker builds (dev, GitHub Pages) bake
+ * real values, so all of this folds correctly per environment there.
  */
 
 /** Engine override for the LOCAL compose stack (smoke tests / local dev). */
@@ -46,6 +67,9 @@ export function isWalletApiRequired(): boolean {
  */
 export function getWalletApiBaseUrl(): string | null {
   const raw = import.meta.env.VITE_WALLET_API_URL as string | undefined;
+  // NOTE: in Docker images this branch is compile-time-eliminated against the
+  // baked placeholder (see file header); deploy/runtime-config.sh enforces
+  // #351 there. This code path is live in dev / GitHub Pages builds.
   if (!raw) {
     if (isWalletApiRequired()) {
       throw new Error(
@@ -67,13 +91,10 @@ export function getWalletApiBaseUrl(): string | null {
  * SphereProvider catches it and surfaces a visible initialization error.
  */
 export function isWalletApiEnabled(): boolean {
-  // Bind to a variable and reference it more than once: a single inline
-  // `!!import.meta.env.VITE_WALLET_API_URL` lets esbuild constant-fold the
-  // build-time value to `true` and strip the literal — which deletes the
-  // __RUNTIME_WALLET_API_URL__ placeholder the Docker image relies on
-  // (deploy/runtime-config.sh substitutes it at container start). Keeping
-  // `raw` as a multiply-referenced variable preserves the literal, exactly
-  // like isWalletApiRequired() above.
+  // The `!!raw` term folds to `true` against the baked placeholder; the
+  // `raw !== ''` term is what survives into the Docker bundle and keeps this
+  // a runtime decision after substitution (see file header). Don't reduce
+  // this to a bare truthiness test.
   const raw = import.meta.env.VITE_WALLET_API_URL as string | undefined;
   return !!raw && raw !== '';
 }

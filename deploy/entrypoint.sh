@@ -161,6 +161,12 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
+    # runtime-config.js carries per-environment flags rewritten at container
+    # start; heuristic caching would pin stale flag values across env flips
+    # (the other server blocks get this via their no-cache location /).
+    location = /runtime-config.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
     location / {
         try_files \$uri \$uri/ /index.html;
     }

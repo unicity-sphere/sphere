@@ -12,6 +12,8 @@ import { ThemeInitializer } from './components/theme'
 import { SphereProvider } from './sdk/SphereProvider'
 import { ServicesProvider } from './contexts/ServicesProvider'
 import { ConnectProvider } from './components/connect'
+import { UpgradeProvider } from './components/upgrade'
+import { SPHERE_NETWORK } from './config/network'
 import { ToastContainer } from './components/ui/Toast'
 import { ErrorFallback } from './components/ui/ErrorFallback'
 
@@ -29,18 +31,26 @@ createRoot(document.getElementById('root')!, {
 }).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <SphereProvider network="testnet2">
+      <SphereProvider network={SPHERE_NETWORK}>
         <ServicesProvider>
-          <ConnectProvider>
-            <ThemeInitializer>
-              <BrowserRouter basename={import.meta.env.BASE_URL}>
-                <Sentry.ErrorBoundary fallback={<ErrorFallback />}>
-                  <App />
-                </Sentry.ErrorBoundary>
-              </BrowserRouter>
-              <ToastContainer />
-            </ThemeInitializer>
-          </ConnectProvider>
+          {/* UpgradeProvider MUST wrap ConnectProvider: ConnectProvider renders
+              ConnectIntentHandler (and its modals, e.g. SendIntentModal →
+              useTransfer → useUpgrade) as a SIBLING of children, so anything
+              those modals consume has to be mounted above ConnectProvider.
+              UpgradeModal itself only needs SphereProvider + react-query,
+              which are both still ancestors here. */}
+          <UpgradeProvider>
+            <ConnectProvider>
+              <ThemeInitializer>
+                <BrowserRouter basename={import.meta.env.BASE_URL}>
+                  <Sentry.ErrorBoundary fallback={<ErrorFallback />}>
+                    <App />
+                  </Sentry.ErrorBoundary>
+                </BrowserRouter>
+                <ToastContainer />
+              </ThemeInitializer>
+            </ConnectProvider>
+          </UpgradeProvider>
         </ServicesProvider>
       </SphereProvider>
     </QueryClientProvider>

@@ -52,6 +52,12 @@ export const SPHERE_KEYS = {
     prices: ['sphere', 'market', 'prices'] as const,
     registry: ['sphere', 'market', 'registry'] as const,
   },
+
+  subscription: {
+    all: ['sphere', 'subscription'] as const,
+    utilization: (apiKey: string) => ['sphere', 'subscription', 'utilization', apiKey] as const,
+    plans: ['sphere', 'subscription', 'plans'] as const,
+  },
 } as const;
 
 export type SphereQueryKey = typeof SPHERE_KEYS;

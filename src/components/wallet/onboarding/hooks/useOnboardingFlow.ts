@@ -11,6 +11,13 @@ import { SPHERE_KEYS } from "../../../../sdk/queryKeys";
 import { addrKey } from "../components/addrKey";
 import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
+import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
+import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
+import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
+import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
+
+/** Cap onboarding's subscription provisioning; on expiry we use the env key. */
+const PROVISION_TIMEOUT_MS = 8000;
 
 export type OnboardingStep =
   | "start"
@@ -21,7 +28,8 @@ export type OnboardingStep =
   | "addressSelection"
   | "nametag"
   | "processing"
-  | "mnemonicBackup";
+  | "mnemonicBackup"
+  | "planCapabilities";
 
 export interface UseOnboardingFlowReturn {
   // Step management
@@ -56,6 +64,11 @@ export interface UseOnboardingFlowReturn {
   handleCompleteOnboarding: () => Promise<void>;
   handleMnemonicBackupComplete: () => void;
   handleDownloadBackup: () => Promise<void>;
+
+  // Subscription plan-capabilities state (post-finalize provisioning)
+  planName: string | null;
+  planCreated: boolean;
+  handlePlanCapabilitiesContinue: () => void;
 
   // Address selection state (multi-select)
   derivedAddresses: DerivedAddressInfo[];
@@ -92,7 +105,7 @@ export interface UseOnboardingFlowReturn {
 
 export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const queryClient = useQueryClient();
-  const { sphere, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
+  const { sphere, network, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
 
   // Step management — start at "nametag" only if wallet is fully finalized but missing nametag
   // (e.g. page refresh after wallet creation without nametag).
@@ -140,6 +153,10 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   const [processingTitle, setProcessingTitle] = useState("Setting up Profile...");
   const [processingCompleteTitle, setProcessingCompleteTitle] = useState("Profile Ready!");
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
+
+  // Subscription plan-capabilities state (post-finalize provisioning)
+  const [planName, setPlanName] = useState<string | null>(null);
+  const [planCreated, setPlanCreated] = useState(false);
 
   // Debounced nametag availability check with retry on transport failure
   useEffect(() => {
@@ -581,7 +598,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
   }, [createWallet, sphere]);
 
   // Finalize wallet and switch to wallet UI
-  const doFinalizeWallet = useCallback(() => {
+  const finishFinalize = useCallback(() => {
     finalizeWallet(importedSphereRef.current ?? undefined);
     importedSphereRef.current = null;
     isCreateFlowRef.current = false;
@@ -591,6 +608,44 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     setStep("start");
   }, [queryClient, finalizeWallet]);
 
+  // Provision/recover the subscription key, then show capabilities. On any
+  // failure (or flag off) fall through to finalize with the env-key fallback.
+  const doFinalizeWallet = useCallback(async () => {
+    const active = importedSphereRef.current ?? sphere;
+    if (SUBSCRIPTION_ENABLED && active) {
+      try {
+        // Bound provisioning: a slow/blackholed SGW must not hang wallet
+        // creation. On timeout we fall through to the env-key fallback exactly
+        // like a provisioning error would.
+        const result = await Promise.race([
+          provisionOrRecoverKey(active),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('subscription provisioning timed out')), PROVISION_TIMEOUT_MS),
+          ),
+        ]);
+        // Persist ONLY — do NOT re-init here. Re-initializing now (like
+        // applySubscriptionKey does) would flip walletExists to true and
+        // unmount CreateWalletFlow before the capabilities screen renders.
+        // The stored key becomes the ACTIVE oracle key on the SDK's next
+        // initialize() (page reload / re-init); until then the env
+        // VITE_AGGREGATOR_API_KEY remains the Phase-1 fallback. (Phase 5
+        // will move provisioning ahead of the nametag mint so the key is
+        // used from the first init.)
+        setStoredSubscriptionKey(result.apiKey);
+        // Durable per-identity copy; non-fatal if it fails (cache still set).
+        await saveWalletKey(active, network, result.apiKey).catch(() => {});
+        setPlanName(result.plan);
+        setPlanCreated(result.created);
+        setStep("planCapabilities");
+        return;
+      } catch (err) {
+        // Non-fatal: keep onboarding working on the env-key fallback.
+        console.warn('subscription provisioning failed; using fallback key', err);
+      }
+    }
+    finishFinalize();
+  }, [sphere, network, finishFinalize]);
+
   // Auto-transition when processing completes
   useEffect(() => {
     if (isProcessingComplete && step === "processing") {
@@ -598,7 +653,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         if (isCreateFlowRef.current && generatedMnemonic) {
           setStep("mnemonicBackup");
         } else {
-          doFinalizeWallet();
+          void doFinalizeWallet();
         }
       }, 800);
       return () => clearTimeout(timer);
@@ -607,13 +662,18 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
 
   // Legacy handler kept for interface compatibility (no longer shows "Let's Go")
   const handleCompleteOnboarding = useCallback(async () => {
-    doFinalizeWallet();
+    void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
   // Action: Confirm mnemonic backup (called after user saves recovery phrase)
   const handleMnemonicBackupComplete = useCallback(() => {
-    doFinalizeWallet();
+    void doFinalizeWallet();
   }, [doFinalizeWallet]);
+
+  // Action: Continue from the plan-capabilities screen into the wallet
+  const handlePlanCapabilitiesContinue = useCallback(() => {
+    finishFinalize();
+  }, [finishFinalize]);
 
   // Action: Download wallet backup file
   const handleDownloadBackup = useCallback(async () => {
@@ -797,6 +857,11 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     handleCompleteOnboarding,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+
+    // Subscription plan-capabilities state (post-finalize provisioning)
+    planName,
+    planCreated,
+    handlePlanCapabilitiesContinue,
 
     // Address selection state (multi-select)
     derivedAddresses,

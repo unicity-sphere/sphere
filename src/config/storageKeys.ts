@@ -38,6 +38,10 @@ export const STORAGE_KEYS = {
   // wallet-api device label — one session row per (owner, device) on the
   // backend; the SDK stores the refresh token under it (ARCHITECTURE §4).
   WALLET_API_DEVICE_ID: 'sphere_wallet_api_device_id',
+
+  // Per-wallet aggregator subscription API key (cached; also recoverable
+  // from identity via the SGW /auth flow). Cleared on wallet deletion.
+  SUBSCRIPTION_API_KEY: 'sphere_subscription_api_key',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
@@ -75,4 +79,12 @@ export function getOrCreateWalletApiDeviceId(): string {
   const deviceId = `sphere-web-${crypto.randomUUID()}`;
   localStorage.setItem(STORAGE_KEYS.WALLET_API_DEVICE_ID, deviceId);
   return deviceId;
+}
+
+export function getStoredSubscriptionKey(): string | null {
+  return localStorage.getItem(STORAGE_KEYS.SUBSCRIPTION_API_KEY);
+}
+
+export function setStoredSubscriptionKey(key: string): void {
+  localStorage.setItem(STORAGE_KEYS.SUBSCRIPTION_API_KEY, key);
 }
