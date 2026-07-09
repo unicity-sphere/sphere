@@ -32,8 +32,12 @@ export async function pollOrderStatus(
     ((ms) =>
       new Promise<void>((resolve) => {
         if (signal?.aborted) { resolve(); return; }
-        const t = setTimeout(resolve, ms);
-        signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+        // Remove the listener on the normal-timer path too: with only
+        // `{ once: true }` it lingers on the signal every interval it does NOT
+        // fire, accumulating ~one per poll over the multi-minute window.
+        const onAbort = () => { clearTimeout(t); resolve(); };
+        const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
       }));
 
   const deadline = now() + timeoutMs;
