@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
+import { useSubscriptionKeyGuard } from '../subscription';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { TokenRegistry, parseTokenAmount } from '@unicitylabs/sphere-sdk';
 
@@ -42,11 +43,15 @@ const AMOUNTS: Record<string, number> = {
  */
 export function useTopUp(): UseTopUpReturn {
   const { sphere } = useSphereContext();
+  const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: async (): Promise<TopUpResult[]> => {
       if (!sphere) throw new Error('Wallet not initialized');
+      // Self-mint is a certification_request — gate it on the subscription key
+      // like a send, so it can't go out keyless in the provisioning window.
+      requireSubscriptionKey();
 
       const fungible = TokenRegistry.getInstance().getFungibleTokens();
       if (fungible.length === 0) {

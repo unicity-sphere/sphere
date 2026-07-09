@@ -4,6 +4,8 @@ import {
   useIncomingPaymentRequests,
   PaymentRequestStatus,
 } from "../../../src/components/wallet/L3/hooks/useIncomingPaymentRequests";
+import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from "../../../src/sdk/subscription/keyStatus";
+import * as subscriptionConfig from "../../../src/config/subscription";
 
 // ============================================================================
 // Fake sphere: implements exactly the PaymentsModule surface the hook is
@@ -95,13 +97,22 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
 }
 
 let fakeSphere: ReturnType<typeof makeFakeSphere> | null = null;
+let subscriptionKeyStatus: SubscriptionKeyStatus = "ready";
 
 vi.mock("../../../src/sdk/hooks/core/useSphere", () => ({
-  useSphereContext: () => ({ sphere: fakeSphere }),
+  useSphereContext: () => ({ sphere: fakeSphere, subscriptionKeyStatus }),
+}));
+// SUBSCRIPTION_ENABLED defaults false here (gate inert for the existing tests);
+// the readiness-gate tests flip it on. Rest of the module stays real.
+vi.mock("../../../src/config/subscription", async (orig) => ({
+  ...(await orig<typeof import("../../../src/config/subscription")>()),
+  SUBSCRIPTION_ENABLED: false,
 }));
 
 beforeEach(() => {
   fakeSphere = null;
+  subscriptionKeyStatus = "ready";
+  (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
 });
 
 describe("useIncomingPaymentRequests", () => {
@@ -204,6 +215,33 @@ describe("useIncomingPaymentRequests", () => {
     ).rejects.toThrow(/INSUFFICIENT_FUNDS/);
 
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
+  });
+
+  it("refuses to pay while the subscription key is not ready (same keyless-send guard as a normal send)", async () => {
+    (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = true;
+    subscriptionKeyStatus = "provisioning";
+    fakeSphere = makeFakeSphere([makeRequest("a")]);
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+
+    await expect(
+      act(() => result.current.pay(result.current.requests[0])),
+    ).rejects.toBeInstanceOf(SubscriptionNotReadyError);
+
+    // The keyless send never left, and the request stays actionable.
+    expect(fakeSphere.payments.payPaymentRequest).not.toHaveBeenCalled();
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
+  });
+
+  it("pays once the subscription key is ready (gate is transparent)", async () => {
+    (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = true;
+    subscriptionKeyStatus = "ready";
+    fakeSphere = makeFakeSphere([makeRequest("a")]);
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+
+    await act(() => result.current.pay(result.current.requests[0]));
+
+    expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledWith("a");
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID);
   });
 
   it("clearProcessed delegates to the module and keeps pending requests", async () => {

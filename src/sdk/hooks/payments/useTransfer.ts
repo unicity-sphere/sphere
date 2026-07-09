@@ -3,6 +3,7 @@ import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { getErrorCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
+import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import { useUpgrade, type UpgradeReason } from '../../../components/upgrade';
 import { getUtilization } from '../../../services/subscriptionApi';
@@ -62,6 +63,7 @@ export interface UseTransferReturn {
 
 export function useTransfer(): UseTransferReturn {
   const { sphere } = useSphereContext();
+  const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
   const queryClient = useQueryClient();
   // Rules of hooks: must be called unconditionally at the top level. This
   // requires UpgradeProvider to stay mounted ABOVE ConnectProvider in
@@ -75,6 +77,12 @@ export function useTransfer(): UseTransferReturn {
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
       if (!sphere) throw new Error('Wallet not initialized');
+
+      // Subscription-key readiness gate: refuse the send until the live oracle
+      // holds the per-wallet key, else it hits the aggregator unauthenticated
+      // (→ 401, false "delivery pending"). Fires BEFORE checkSendQuota (which
+      // needs a key to meter anyway). Shared with pay/mint via the guard hook.
+      requireSubscriptionKey();
 
       // Proactive quota gate (spec §2): a hard block must land BEFORE the
       // first submit leaves — after that, #631/#633 keep-open semantics own

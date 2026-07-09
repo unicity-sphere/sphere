@@ -5,13 +5,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SphereError } from '@unicitylabs/sphere-sdk';
 import type { UtilizationInfo } from '../../../src/services/subscriptionApi';
 import { useTransfer } from '../../../src/sdk/hooks/payments/useTransfer';
+import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from '../../../src/sdk/subscription/keyStatus';
 
-// The hook reads the wallet from useSphereContext — swap in a fake with just
-// payments.send. The SDK throws a ProofUnconfirmedError (extends SphereError,
-// code CERTIFICATION_UNCONFIRMED) for a possibly-certified send (#631/#633).
+// The hook reads the wallet + subscription-key readiness from useSphereContext —
+// swap in a fake with just payments.send. The SDK throws a ProofUnconfirmedError
+// (extends SphereError, code CERTIFICATION_UNCONFIRMED) for a possibly-certified
+// send (#631/#633). `subscriptionKeyStatus` defaults to 'ready' so the readiness
+// gate is transparent to the quota/send tests; the gate tests flip it.
 let fakeSphere: { payments: { send: ReturnType<typeof vi.fn> } } | null = null;
+let subscriptionKeyStatus: SubscriptionKeyStatus = 'ready';
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
-  useSphereContext: () => ({ sphere: fakeSphere }),
+  useSphereContext: () => ({ sphere: fakeSphere, subscriptionKeyStatus }),
 }));
 
 // Task 3: proactive quota gate. Mock checkSendQuota (keep the real
@@ -91,6 +95,7 @@ let openUpgradeMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fakeSphere = null;
+  subscriptionKeyStatus = 'ready';
   vi.mocked(checkSendQuota).mockReset().mockResolvedValue({ verdict: 'allow' });
   (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = true;
 
@@ -144,6 +149,67 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
       res = await result.current.transfer(PARAMS);
     });
     expect(res).toEqual(ok);
+  });
+});
+
+describe('useTransfer — subscription-key readiness gate (keyless-send window)', () => {
+  it('refuses the send while the key is still provisioning (never reaches quota/send → no keyless 401)', async () => {
+    subscriptionKeyStatus = 'provisioning';
+    const send = vi.fn();
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await expect(
+      act(async () => {
+        await result.current.transfer(PARAMS);
+      }),
+    ).rejects.toBeInstanceOf(SubscriptionNotReadyError);
+
+    // The send never left, and the gate fired BEFORE the quota check.
+    expect(send).not.toHaveBeenCalled();
+    expect(checkSendQuota).not.toHaveBeenCalled();
+  });
+
+  it('refuses with a reload hint when provisioning has failed', async () => {
+    subscriptionKeyStatus = 'failed';
+    const send = vi.fn();
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let caught: unknown;
+    await act(async () => {
+      caught = await result.current.transfer(PARAMS).catch((e) => e);
+    });
+    expect(caught).toBeInstanceOf(SubscriptionNotReadyError);
+    expect((caught as SubscriptionNotReadyError).status).toBe('failed');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('allows the send once the key is ready', async () => {
+    subscriptionKeyStatus = 'ready';
+    const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
+    const send = vi.fn().mockResolvedValue(ok);
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await result.current.transfer(PARAMS);
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not gate when SUBSCRIPTION_ENABLED is false (env-key mode), even if status is not ready', async () => {
+    (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
+    subscriptionKeyStatus = 'provisioning';
+    const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
+    const send = vi.fn().mockResolvedValue(ok);
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await result.current.transfer(PARAMS);
+    });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 
