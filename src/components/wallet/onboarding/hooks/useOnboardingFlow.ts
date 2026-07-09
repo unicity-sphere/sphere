@@ -627,10 +627,10 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         // applySubscriptionKey does) would flip walletExists to true and
         // unmount CreateWalletFlow before the capabilities screen renders.
         // The stored key becomes the ACTIVE oracle key on the SDK's next
-        // initialize() (page reload / re-init); until then the env
-        // VITE_AGGREGATOR_API_KEY remains the Phase-1 fallback. (Phase 5
-        // will move provisioning ahead of the nametag mint so the key is
-        // used from the first init.)
+        // initialize() (which the finalize flow triggers before any send). With
+        // subscriptions on the env key is NOT a fallback (oracleKey.ts ignores
+        // it), so the pre-reinit oracle simply carries no key — fine, because
+        // no L3 send happens on the onboarding screens.
         setStoredSubscriptionKey(result.apiKey);
         // Durable per-identity copy; non-fatal if it fails (cache still set).
         await saveWalletKey(active, network, result.apiKey).catch(() => {});

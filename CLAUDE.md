@@ -204,7 +204,7 @@ image). Set these on the ECS task definition / `docker -e`:
 | `WALLET_API_URL`       | `VITE_WALLET_API_URL`      | wallet-api backend (S4 asset custody) |
 | `REQUIRE_WALLET_API`   | `VITE_REQUIRE_WALLET_API`  | #351 fail-closed custody flag (`''`/`false`/`0` = off) |
 | `DEV_PORTAL_URL`       | `VITE_DEV_PORTAL_URL`      | developer-portal link |
-| `AGGREGATOR_API_KEY`   | `VITE_AGGREGATOR_API_KEY`  | aggregator key (non-secret on testnet2; a real secret on mainnet) |
+| `AGGREGATOR_API_KEY`   | `VITE_AGGREGATOR_API_KEY`  | aggregator key (non-secret on testnet2; a real secret on mainnet). **Required only when `SUBSCRIPTION_ENABLED` != `true`; ignored when subscriptions are on** (per-wallet SGW keys replace it) |
 | `SUBSCRIPTION_ENABLED` | `window.__SPHERE_RUNTIME_CONFIG__` (not a placeholder) | per-wallet SGW subscription keys (exactly `true` = on) |
 | `PAID_PLANS_ENABLED`   | `window.__SPHERE_RUNTIME_CONFIG__` (not a placeholder) | paid-plan purchases (exactly `true`; testnet leaves off) |
 

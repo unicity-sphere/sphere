@@ -129,10 +129,12 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
   const base = createBrowserProviders({
     network,
     // v2 token engine: aggregator URL + trust base come from the network
-    // preset; the apiKey is the resolved per-wallet subscription key when
-    // provided, else the static env key (non-secret on testnet2, migration
-    // fallback).
-    oracle: { apiKey: apiKey ?? import.meta.env.VITE_AGGREGATOR_API_KEY },
+    // preset; `apiKey` is already fully resolved by getActiveOracleApiKey()
+    // (per-wallet subscription key when subscriptions are on, else the static
+    // env key when off). Do NOT add an `?? env` fallback here — that would
+    // resurrect VITE_AGGREGATOR_API_KEY while subscriptions are enabled, which
+    // must ignore it entirely (see src/sdk/oracleKey.ts).
+    oracle: { apiKey },
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
     market: true,

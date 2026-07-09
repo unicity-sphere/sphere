@@ -76,12 +76,13 @@ jobs:
       - name: Smoke — runtime config substitution
         if: matrix.dockerfile == 'Dockerfile'
         run: |
+          # Note: NO AGGREGATOR_API_KEY here — SUBSCRIPTION_ENABLED=true must
+          # start without it (per-wallet keys replace it, and it is ignored).
           cid=$(docker run -d \
             -e SPHERE_API_URL=https://quest-api.example.test \
             -e WALLET_API_URL=https://wallet-api.example.test \
             -e REQUIRE_WALLET_API=true \
             -e DEV_PORTAL_URL=https://developers.example.test/ \
-            -e AGGREGATOR_API_KEY=sk_smoke_test \
             -e SUBSCRIPTION_ENABLED=true \
             -e PAID_PLANS_ENABLED=false \
             sphere-validate:${{ matrix.dockerfile }})
@@ -139,6 +140,41 @@ jobs:
           [ "$rc" -ne 0 ] || { echo "ERROR: expected non-zero exit (fail-closed)"; exit 1; }
           echo "$out" | grep -q '#351' || { echo "ERROR: missing #351 fail-closed message"; exit 1; }
           echo "fail-closed smoke ok"
+
+      # AGGREGATOR_API_KEY is REQUIRED when subscriptions are off (it's then the
+      # only oracle credential) and IGNORED when they're on. Verify both.
+      - name: Smoke — AGGREGATOR_API_KEY required iff subscriptions off
+        if: matrix.dockerfile == 'Dockerfile'
+        run: |
+          # (a) subscriptions OFF + no AGGREGATOR_API_KEY → refuse to start.
+          set +e
+          out=$(docker run --rm \
+            -e SPHERE_API_URL=https://quest-api.example.test \
+            -e DEV_PORTAL_URL=https://developers.example.test/ \
+            sphere-validate:${{ matrix.dockerfile }} 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -ne 0 ] || { echo "ERROR: expected non-zero exit (AGGREGATOR_API_KEY required when subs off)"; exit 1; }
+          echo "$out" | grep -q 'AGGREGATOR_API_KEY is empty' \
+            || { echo "ERROR: missing AGGREGATOR_API_KEY fail-closed message"; exit 1; }
+
+          # (b) subscriptions ON + no AGGREGATOR_API_KEY → starts fine (ignored).
+          cid=$(docker run -d \
+            -e SPHERE_API_URL=https://quest-api.example.test \
+            -e WALLET_API_URL=https://wallet-api.example.test \
+            -e REQUIRE_WALLET_API=true \
+            -e DEV_PORTAL_URL=https://developers.example.test/ \
+            -e SUBSCRIPTION_ENABLED=true \
+            sphere-validate:${{ matrix.dockerfile }})
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 20); do
+            docker logs "$cid" 2>&1 | grep -q "applied runtime config" && break
+            sleep 0.5
+          done
+          [ "$(docker inspect -f '{{.State.Running}}' "$cid")" = "true" ] \
+            || { echo "ERROR: container should start with subs on and no AGGREGATOR_API_KEY"; docker logs "$cid" 2>&1 | tail; exit 1; }
+          echo "aggregator-key conditional smoke ok"
 
       # Smoke for the SSL image: entrypoint is tini → sphere-entrypoint.
       # We can't run the real entrypoint in CI (ssl-setup would need
