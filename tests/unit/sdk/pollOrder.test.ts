@@ -47,6 +47,27 @@ it('resolves cancelled when aborted mid-poll', async () => {
   expect(res.outcome).toBe('cancelled');
 });
 
+it('does not leak abort listeners across intervals (default sleep cleans up on the timer path)', async () => {
+  const ac = new AbortController();
+  let added = 0, removed = 0;
+  const origAdd = ac.signal.addEventListener.bind(ac.signal);
+  const origRemove = ac.signal.removeEventListener.bind(ac.signal);
+  ac.signal.addEventListener = ((type: string, ...rest: unknown[]) => {
+    if (type === 'abort') added++;
+    return (origAdd as (...a: unknown[]) => void)(type, ...rest);
+  }) as typeof ac.signal.addEventListener;
+  ac.signal.removeEventListener = ((type: string, ...rest: unknown[]) => {
+    if (type === 'abort') removed++;
+    return (origRemove as (...a: unknown[]) => void)(type, ...rest);
+  }) as typeof ac.signal.removeEventListener;
+  // Several pending polls on real (tiny) timers, never aborted → each interval's
+  // listener must be removed when its timer fires.
+  const res = await pollOrderStatus(async () => base, { intervalMs: 2, timeoutMs: 12, signal: ac.signal });
+  expect(res.outcome).toBe('timeout');
+  expect(added).toBeGreaterThan(1); // multiple intervals actually elapsed
+  expect(removed).toBe(added);      // every listener cleaned up
+});
+
 it('the default (real-timer) sleep unblocks immediately on abort', async () => {
   // No custom `sleep` — exercises pollOrder's abortable setTimeout branch. A
   // 60s interval would hang the test if abort did not clear/resolve the timer.
