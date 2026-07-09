@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
@@ -71,6 +71,12 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [walletWide, setWalletWide] = useState(false);
 
+  // Cancels the in-flight checkout poll when the modal closes (or a newer
+  // checkout starts). Without this the poll outlives the modal and can
+  // "ghost-adopt" a key onto whatever address is active minutes later.
+  const checkoutAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => checkoutAbortRef.current?.abort(), []);
+
   // Buying while on the root address is wallet-wide by definition; on any
   // other address the email step offers a "make it wallet-wide" checkbox.
   const onRootAddress = useMemo(() => {
@@ -130,15 +136,29 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const startCheckout = async () => {
     if (!selectedPlan) return;
     setError(null);
+    // Supersede any prior in-flight poll, then track this one so close/unmount
+    // can abort it.
+    checkoutAbortRef.current?.abort();
+    const abort = new AbortController();
+    checkoutAbortRef.current = abort;
     try {
       const { orderId, redirectUrl } = await checkout.mutateAsync({ planId: selectedPlan.planId, email });
+      // Closed (or superseded) during order creation — don't pop a payment tab
+      // or strand the modal on 'awaiting' after the user cancelled.
+      if (abort.signal.aborted) return;
       setPaymentUrl(redirectUrl);
       window.open(redirectUrl, '_blank', 'noopener,noreferrer');
       setStep('awaiting');
 
       const result = SUBSCRIPTION_MOCK
         ? { outcome: 'paid' as const, apiKey: 'sk_mock_upgraded' } // demoable without a backend
-        : await pollOrderStatus(() => getOrderStatus(orderId));
+        : await pollOrderStatus(() => getOrderStatus(orderId), { signal: abort.signal });
+
+      // Modal closed (or a newer checkout took over) while polling — do NOT
+      // adopt a key or touch step/error state on a torn-down flow.
+      if (abort.signal.aborted) return;
+
+      if (result.outcome === 'cancelled') return;
 
       if (result.outcome === 'paid' && result.apiKey) {
         await adoptKey(result.apiKey);
@@ -152,12 +172,15 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
         setError('Payment not detected yet. If you paid, open the payment return page — your API key is shown there once — then paste it via "I have a key".');
       }
     } catch (e) {
+      if (abort.signal.aborted) return; // torn down mid-checkout — stay silent
       setStep('error');
       setError(e instanceof Error ? e.message : 'Checkout failed');
     }
   };
 
   const handleClose = () => {
+    checkoutAbortRef.current?.abort(); // stop any in-flight checkout poll
+    checkoutAbortRef.current = null;
     setStep('plans');
     setError(null);
     setPaymentUrl(null);

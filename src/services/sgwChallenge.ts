@@ -19,7 +19,7 @@ export class SgwChallengeError extends Error {
 
 export function verifySgwChallenge(
   challenge: string,
-  expect: { pubkey: string; nonce: string; nowMs?: number },
+  expect: { network: string; pubkey: string; nonce: string; nowMs?: number },
 ): void {
   if (!challenge.startsWith(SGW_CHALLENGE_PREFIX)) throw new SgwChallengeError('unexpected prefix');
 
@@ -40,6 +40,13 @@ export function verifySgwChallenge(
   }
 
   const p = payload as Record<(typeof FIELDS)[number], string>;
+  // Anti-cross-network relay: a challenge issued by ANOTHER network's SGW must
+  // not be signable here. Key derivation + the signMessage scheme are
+  // network-independent, so without this the wallet's index-0 signature over a
+  // (say) mainnet challenge is redeemable at the mainnet SGW — a confused
+  // deputy that harvests the victim's key on a network they never authenticated
+  // to. The SDK's own verifyChallengeTemplate enforces the same equality.
+  if (p.network.toLowerCase() !== expect.network.toLowerCase()) throw new SgwChallengeError('network mismatch');
   if (p.pubkey.toLowerCase() !== expect.pubkey.toLowerCase()) throw new SgwChallengeError('pubkey mismatch');
   if (p.nonce !== expect.nonce) throw new SgwChallengeError('nonce mismatch');
 

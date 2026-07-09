@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getPublicKey, recoverPubkeyFromSignature } from '@unicitylabs/sphere-sdk';
+
+// Pin the real network path: these tests exercise the actual challenge/verify
+// crypto, so SUBSCRIPTION_MOCK must be false regardless of ambient
+// VITE_SUBSCRIPTION_MOCK (a dev shell with it =true otherwise fails all 9).
+vi.mock('@/config/subscription', async (orig) => ({
+  ...(await orig<typeof import('@/config/subscription')>()),
+  SUBSCRIPTION_MOCK: false,
+}));
 import {
   provisionOrRecoverKey,
   getUtilization,
