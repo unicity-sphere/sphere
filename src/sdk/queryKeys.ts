@@ -52,6 +52,13 @@ export const SPHERE_KEYS = {
     prices: ['sphere', 'market', 'prices'] as const,
     registry: ['sphere', 'market', 'registry'] as const,
   },
+
+  bridge: {
+    // Shared by useBridgeBack (writes) and useBridgeClaims (polls) so a
+    // completed burn can push straight into the claims cache instead of
+    // waiting out the poll interval.
+    claims: (chainPubkey?: string) => ['bridge', 'claims', chainPubkey] as const,
+  },
 } as const;
 
 export type SphereQueryKey = typeof SPHERE_KEYS;

@@ -46,6 +46,15 @@ export function useBridgeBack() {
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.tokens.all });
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.balance.all });
+      // The burn (and its `queued`/POSTed return row) already landed in the
+      // store synchronously inside runBridgeBack — push it into the claims
+      // cache now instead of leaving the burned token invisible everywhere
+      // until useBridgeClaims's next poll tick (up to `pollMs` later).
+      const claimsKey = SPHERE_KEYS.bridge.claims(sphere?.identity?.chainPubkey);
+      queryClient.setQueryData<PendingReturn[]>(claimsKey, store.listReturns());
+      // refetchQueries (not invalidateQueries): guarantees an immediate poll
+      // tick instead of only marking the cache stale for the next observer.
+      queryClient.refetchQueries({ queryKey: claimsKey });
     },
   });
 
@@ -67,7 +76,10 @@ export function useBridgeClaims(pollMs = 8000) {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const store = useMemo(() => bridgeStoreFor(sphere?.identity?.chainPubkey ?? 'anon'), [sphere]);
-  const queryKey = useMemo(() => ['bridge', 'claims', sphere?.identity?.chainPubkey] as const, [sphere?.identity?.chainPubkey]);
+  const queryKey = useMemo(
+    () => SPHERE_KEYS.bridge.claims(sphere?.identity?.chainPubkey),
+    [sphere?.identity?.chainPubkey],
+  );
 
   const query = useQuery({
     queryKey,

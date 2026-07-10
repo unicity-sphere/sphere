@@ -45,9 +45,11 @@ export default defineConfig(({ mode }) => {
       rewrite: (p: string) => p.replace(/^\/local-agg/, ''),
     },
     // bridge-return-service (prover/crates/service) — runs on the remote prover
-    // box, tunneled to this port via `ssh -L 8787:127.0.0.1:8787`. No CORS
-    // headers on the service, so the browser reaches it through this
-    // same-origin proxy (set VITE_BRIDGE_RETURN_SERVICE_URL=/bridge-return).
+    // box (bound to 127.0.0.1:3000 there — /etc/bridge-return-service.env),
+    // tunneled to this local port via `ssh -L 8787:127.0.0.1:3000
+    // prover@5.189.185.10`. No CORS headers on the service, so the browser
+    // reaches it through this same-origin proxy (set
+    // VITE_BRIDGE_RETURN_SERVICE_URL=/bridge-return).
     '/bridge-return': {
       target: env.BRIDGE_RETURN_PROXY_TARGET || 'http://127.0.0.1:8787',
       changeOrigin: true,

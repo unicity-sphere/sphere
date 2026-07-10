@@ -58,6 +58,18 @@ export interface PendingReturn {
   status: 'queued' | 'proving' | 'proven' | 'submitted' | 'settled' | 'failed' | 'stale';
 }
 
+const TERMINAL_RETURN_STATUSES: ReadonlySet<PendingReturn['status']> = new Set(['settled', 'failed', 'stale']);
+
+/**
+ * A return is only safe to discard once it can no longer resume — the record
+ * carries the recovery-critical burned blob (ZK_BACK3 §13), so deleting a
+ * `queued`/`proving`/`proven`/`submitted` return loses the only way to
+ * resubmit or self-settle it.
+ */
+export function isTerminalReturn(ret: Pick<PendingReturn, 'status'>): boolean {
+  return TERMINAL_RETURN_STATUSES.has(ret.status);
+}
+
 interface BridgeState {
   locks: PendingLock[];
   returns: PendingReturn[];
@@ -154,8 +166,15 @@ export class BridgeStore {
     write(this.addressKey, state);
   }
 
+  /**
+   * Drop a return row. Refuses non-terminal returns ({@link isTerminalReturn})
+   * — they're the only copy of the burned blob, so dismissing one in flight
+   * would make an otherwise-recoverable return unrecoverable.
+   */
   public removeReturn(id: string): void {
     const state = read(this.addressKey);
+    const ret = state.returns.find((r) => r.id === id);
+    if (!ret || !isTerminalReturn(ret)) return;
     state.returns = state.returns.filter((r) => r.id !== id);
     write(this.addressKey, state);
   }
