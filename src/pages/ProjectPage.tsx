@@ -1,9 +1,10 @@
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronLeft, ChevronRight, Star } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronDown, ChevronLeft, ChevronRight, Star } from 'lucide-react';
 import { ProjectLogo } from '@unicitylabs/sphere-ui';
 import { useProject, useProjectQuests, useProjectMetrics } from '../hooks/useMarketplace';
+import { groupQuestsByTrack } from '../utils/groupQuestsByTrack';
 import { QuestPreviewCard } from '../components/marketplace/QuestPreviewCard';
 import { ProjectReviewsSection } from '../components/marketplace/ProjectReviewsSection';
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
@@ -223,6 +224,20 @@ export function ProjectPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const { data: quests } = useProjectQuests(slug ?? '');
   const { data: metrics } = useProjectMetrics(project?._id);
+  // Quests are heavy content — collapsed by default, and collapsed per track.
+  const [questsOpen, setQuestsOpen] = useState(false);
+  const [openTracks, setOpenTracks] = useState<Set<string>>(new Set());
+  const questGroups = groupQuestsByTrack(quests ?? []);
+  const onlyGeneralGroup = questGroups.length === 1 && questGroups[0].key === 'general';
+
+  const toggleTrack = (key: string) => {
+    setOpenTracks((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   // All media items (screenshots + videos) in one list. The API returns
   // `caption: string | null`; coerce nulls to undefined so MediaItem (which
@@ -413,18 +428,65 @@ export function ProjectPage() {
         </div>
       </section>
 
-      {/* Quests */}
+      {/* Quests — collapsed by default; expanded view groups quests by track,
+          each track collapsed as well. Only active tracks reach this list
+          (the API filters out quests of DRAFT/ENDED tracks). */}
       {quests && quests.length > 0 && (
         <section className="px-4 sm:px-6 pb-8">
           <div className="max-w-5xl mx-auto">
-            <h2 className="text-lg font-semibold mb-4">
-              Quests <span className="text-neutral-400 dark:text-white/35 font-normal">({quests.length})</span>
-            </h2>
-            <div className="grid sm:grid-cols-2 gap-3">
-              {quests.map((quest) => (
-                <QuestPreviewCard key={quest._id} quest={quest} accentColor={project.accentColor} />
-              ))}
-            </div>
+            <button
+              type="button"
+              onClick={() => setQuestsOpen((o) => !o)}
+              aria-expanded={questsOpen}
+              className="w-full flex items-center justify-between mb-4 cursor-pointer group"
+            >
+              <h2 className="text-lg font-semibold">
+                Quests <span className="text-neutral-400 dark:text-white/35 font-normal">({quests.length})</span>
+              </h2>
+              <ChevronDown
+                className={`w-5 h-5 text-neutral-400 dark:text-white/35 group-hover:text-neutral-600 dark:group-hover:text-white/60 transition-transform duration-200 ${questsOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {questsOpen && (onlyGeneralGroup ? (
+              <div className="grid sm:grid-cols-2 gap-3">
+                {quests.map((quest) => (
+                  <QuestPreviewCard key={quest._id} quest={quest} accentColor={project.accentColor} />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {questGroups.map((group) => {
+                  const open = openTracks.has(group.key);
+                  return (
+                    <div
+                      key={group.key}
+                      className="no-text-shadow bg-neutral-50 dark:bg-white/4 dark:backdrop-blur-2xl rounded-2xl border border-neutral-200 dark:border-white/8 overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleTrack(group.key)}
+                        aria-expanded={open}
+                        className="w-full flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-neutral-100 dark:hover:bg-white/4 transition-colors"
+                      >
+                        <span className="text-sm font-semibold">{group.title}</span>
+                        <span className="flex items-center gap-2 text-xs text-neutral-400 dark:text-white/35">
+                          {group.quests.length} {group.quests.length === 1 ? 'quest' : 'quests'}
+                          <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+                        </span>
+                      </button>
+                      {open && (
+                        <div className="grid sm:grid-cols-2 gap-3 px-4 pb-4">
+                          {group.quests.map((quest) => (
+                            <QuestPreviewCard key={quest._id} quest={quest} accentColor={project.accentColor} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </section>
       )}
