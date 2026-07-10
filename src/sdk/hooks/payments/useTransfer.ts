@@ -110,6 +110,15 @@ export function useTransfer(): UseTransferReturn {
           memo: params.memo,
         });
       } catch (e) {
+        // #665: a POST-COMMIT mirror-sync failure rejects with SEND_SYNC_PENDING —
+        // the spend already committed on-chain, the SDK keeps the intent OPEN, and
+        // resume converges the server mirror (idempotent apply). Present it as a
+        // pending SUCCESS, never a re-sendable failure (re-sending would double-pay),
+        // exactly like CERTIFICATION_UNCONFIRMED below. String-compare: the code
+        // ships in a newer sphere-sdk than the app's current SphereErrorCode type.
+        if ((getErrorCode(e) as string | null) === 'SEND_SYNC_PENDING') {
+          return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
+        }
         // #631/#633: a POSSIBLY-CERTIFIED send rejects with ProofUnconfirmedError
         // (code CERTIFICATION_UNCONFIRMED) — the spend may already be final on-chain and
         // the SDK keeps the intent OPEN, so resume completes it under the same transferId.
