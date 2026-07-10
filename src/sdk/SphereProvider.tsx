@@ -158,6 +158,13 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     baseUrl: walletApiBaseUrl,
     network,
     deviceId: getOrCreateWalletApiDeviceId(),
+    // Robustness for slow/unstable connections: the SDK default request
+    // timeout is 30s, which prematurely aborts a slow-but-completing send
+    // write (POST /v1/inventory/apply) and hard-fails the send. Give slow
+    // links room to finish; and harden the read/sync + 429 retry path
+    // (writes stay single-attempt in the SDK for double-apply safety).
+    requestTimeoutMs: 45000,
+    retry: { maxAttempts: 5, capMs: 15000 },
   });
 }
 
