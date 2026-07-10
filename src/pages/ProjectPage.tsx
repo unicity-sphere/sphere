@@ -282,9 +282,11 @@ export function ProjectPage() {
 
         {/* Logo — outside overflow-hidden container.
             Uses ProjectLogo for consistency with marketplace cards / desktop dock:
-            real uploaded logo fills the tile (no blik visible); a missing logo
-            falls back to a 2-letter monogram with the gradient blik visible. */}
-        <div className="absolute -bottom-6 left-6 sm:left-8 z-10 rounded-2xl border-4 border-white dark:border-[#060606] shadow-xl overflow-hidden">
+            real uploaded logo renders un-cropped on the accent tile; a missing
+            logo falls back to a 2-letter monogram with gloss.
+            No frame around the tile — mirrors the border-4 removal on the
+            dev-portal/backoffice overview pages. */}
+        <div className="absolute -bottom-6 left-6 sm:left-8 z-10">
           <ProjectLogo
             name={project.name}
             logoUrl={project.logoUrl}
@@ -302,11 +304,9 @@ export function ProjectPage() {
             <h1 className="text-2xl sm:text-3xl font-bold">{project.name}</h1>
             <p className="text-neutral-500 dark:text-white/55 mt-1">{project.tagline}</p>
             <div className="flex items-center gap-2 mt-3">
-              <span className="inline-flex px-2.5 py-0.5 rounded-lg text-xs font-semibold uppercase tracking-wider" style={{
-                backgroundColor: `${project.accentColor}15`,
-                color: project.accentColor,
-                border: `1px solid ${project.accentColor}30`,
-              }}>
+              {/* Neutral chip on purpose — accent-tinted text turns unreadable
+                  with dark/low-contrast project accent colors. */}
+              <span className="inline-flex px-2.5 py-0.5 rounded-lg text-xs font-semibold uppercase tracking-wider bg-neutral-100 dark:bg-white/6 text-neutral-600 dark:text-white/60 border border-neutral-200 dark:border-white/10">
                 {categoryLabels[project.category] ?? project.category}
               </span>
               {project.tags.slice(0, 3).map((tag) => (
