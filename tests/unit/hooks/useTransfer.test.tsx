@@ -127,10 +127,9 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
   });
 
   it('converts a SEND_SYNC_PENDING reject into a pending SUCCESS (post-commit mirror-sync — no re-send) (#665)', async () => {
-    // The code ships in a newer sphere-sdk than the app's type — build it via override.
-    const syncPending = new SphereError('Your payment was sent. Your wallet is syncing.', 'STORAGE_ERROR');
-    (syncPending as unknown as { code: string }).code = 'SEND_SYNC_PENDING';
-    const send = vi.fn().mockRejectedValue(syncPending);
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('Your payment was sent. Your wallet is syncing.', 'SEND_SYNC_PENDING'),
+    );
     fakeSphere = { payments: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
