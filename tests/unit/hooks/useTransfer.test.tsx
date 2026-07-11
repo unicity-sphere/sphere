@@ -126,6 +126,24 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('converts a SEND_SYNC_PENDING reject into a pending SUCCESS (post-commit mirror-sync — no re-send) (#665)', async () => {
+    const send = vi.fn().mockRejectedValue(
+      new SphereError('Your payment was sent. Your wallet is syncing.', 'SEND_SYNC_PENDING'),
+    );
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    // Resolved (NOT rejected) as pending success — the money is on-chain, resume converges.
+    expect(res?.deliveryPending).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
     fakeSphere = { payments: { send } };
