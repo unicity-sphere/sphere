@@ -104,6 +104,32 @@ export function scrubTransactionEvent<E extends TransactionEvent>(event: E): E {
   return event;
 }
 
+// EIP-1193 ProviderRpcError codes (userRejected, unauthorized,
+// unsupportedMethod, disconnected, chainDisconnected). Positive 4xxx codes are
+// wallet-provider-specific — our own JSON-RPC surfaces (aggregator, wallet-api)
+// use -32xxx — so a rejection carrying one cannot have come from our code.
+const EIP1193_CODES = new Set([4001, 4100, 4200, 4900, 4901]);
+const EXTENSION_URL_RE = /\b(?:chrome|moz|safari-web)-extension:\/\//;
+
+/**
+ * Unhandled promise rejections thrown by injected wallet-extension provider
+ * scripts (EIP-1193). This app never calls `window.ethereum` — these originate
+ * wholly inside extensions whose inpage scripts run in our page context. They
+ * reject with PLAIN OBJECTS, so Sentry builds a synthetic event with no stack
+ * frames and `denyUrls` (which matches frame URLs) never sees the extension
+ * origin — it survives only as a string inside `extra.__serialized__.stack`.
+ * SPHERE-9 / SPHERE-A: ~1.4k events (~27% of monthly quota) in 5 days.
+ */
+export function isInjectedProviderNoise(event: ErrorEvent): boolean {
+  const mechanism = event.exception?.values?.[0]?.mechanism?.type ?? '';
+  if (!mechanism.includes('onunhandledrejection')) return false;
+  const serialized = (event.extra as Record<string, unknown> | undefined)?.['__serialized__'];
+  if (typeof serialized !== 'object' || serialized === null) return false;
+  const { code, stack } = serialized as { code?: unknown; stack?: unknown };
+  if (typeof code === 'number' && EIP1193_CODES.has(code)) return true;
+  return typeof stack === 'string' && EXTENSION_URL_RE.test(stack);
+}
+
 export function scrubEvent<E extends ErrorEvent>(event: E): E {
   if (event.message) event.message = scrubText(event.message);
   for (const exception of event.exception?.values ?? []) {

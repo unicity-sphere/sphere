@@ -4,6 +4,7 @@ import {
   scrubBreadcrumb,
   scrubEvent,
   scrubTransactionEvent,
+  isInjectedProviderNoise,
 } from '@/utils/sentryScrub';
 import type { Breadcrumb, ErrorEvent } from '@sentry/react';
 
@@ -186,5 +187,53 @@ describe('scrubEvent', () => {
     expect(scrubbed.breadcrumbs).toHaveLength(1);
     // sensitive key names in extra are filtered wholesale
     expect(scrubbed.extra?.seed).toBe('[Filtered]');
+  });
+});
+
+describe('isInjectedProviderNoise', () => {
+  const rejection = (serialized: unknown, mechanism = 'auto.browser.global_handlers.onunhandledrejection'): ErrorEvent =>
+    ({
+      exception: { values: [{ type: 'UnhandledRejection', mechanism: { type: mechanism } }] },
+      extra: { __serialized__: serialized },
+    }) as unknown as ErrorEvent;
+
+  it('drops an EIP-1193 disconnect rejection without a stack (SPHERE-A shape)', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({ code: 4900, message: 'The provider is disconnected from all chains.' })
+      )
+    ).toBe(true);
+  });
+
+  it('drops an object rejection whose stack string points into an extension (SPHERE-9 shape)', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({
+          code: 4900,
+          message: 'The provider is disconnected from all chains.',
+          stack: 'Error: ...\n    at s (chrome-extension://acmacodkjbdgmoleebolmdjonilkdbch/background.js:4:1)',
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('keeps our JSON-RPC-style rejections (negative codes)', () => {
+    expect(isInjectedProviderNoise(rejection({ code: -32000, message: 'aggregator busy' }))).toBe(false);
+  });
+
+  it('keeps object rejections with non-EIP-1193 codes and app-origin stacks', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({ code: 500, message: 'x', stack: 'Error at https://sphere.unicity.network/assets/index.js:1:1' })
+      )
+    ).toBe(false);
+  });
+
+  it('ignores events from other mechanisms even with a 4900 code', () => {
+    expect(isInjectedProviderNoise(rejection({ code: 4900, message: 'x' }, 'generic'))).toBe(false);
+  });
+
+  it('ignores events without a serialized rejection object', () => {
+    expect(isInjectedProviderNoise({ exception: { values: [] } } as unknown as ErrorEvent)).toBe(false);
   });
 });
