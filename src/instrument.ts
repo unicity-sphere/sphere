@@ -10,7 +10,7 @@
  */
 import * as Sentry from '@sentry/react';
 import { SENTRY_DSN, detectEnvironment } from './config/sentry';
-import { scrubBreadcrumb, scrubEvent, scrubTransactionEvent } from './utils/sentryScrub';
+import { isInjectedProviderNoise, scrubBreadcrumb, scrubEvent, scrubTransactionEvent } from './utils/sentryScrub';
 
 if (SENTRY_DSN) {
   Sentry.init({
@@ -35,7 +35,9 @@ if (SENTRY_DSN) {
       genAI: { inputs: false, outputs: false },
       stackFrameVariables: false,
     },
-    beforeSend: scrubEvent,
+    // denyUrls can't catch extension-origin PLAIN-OBJECT rejections (no stack
+    // frames on the synthetic event) — isInjectedProviderNoise drops those.
+    beforeSend: (event) => (isInjectedProviderNoise(event) ? null : scrubEvent(event)),
     beforeBreadcrumb: scrubBreadcrumb,
     // No tracesSampleRate is set, so no transactions are ever sent — this
     // guard exists so that if tracing is enabled later, fetch/XHR span
