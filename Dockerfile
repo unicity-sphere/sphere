@@ -26,11 +26,16 @@ ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
 # BASE_PATH is a true build-time concern (Vite rewrites asset URLs + router
 # basename); both AWS envs serve at root, so it stays baked as `/`.
 ARG BASE_PATH=/
+# Sentry release tag. Baked (not a placeholder) because it is env-AGNOSTIC:
+# the same sha ships to staging and prod, so it never breaks build-once,
+# promote-many. Empty (release unset) in docker-validate and local builds.
+ARG VITE_BUILD_SHA=
 ENV VITE_SPHERE_API_URL=$VITE_SPHERE_API_URL \
     VITE_WALLET_API_URL=$VITE_WALLET_API_URL \
     VITE_REQUIRE_WALLET_API=$VITE_REQUIRE_WALLET_API \
     VITE_AGGREGATOR_API_KEY=$VITE_AGGREGATOR_API_KEY \
     VITE_DEV_PORTAL_URL=$VITE_DEV_PORTAL_URL \
+    VITE_BUILD_SHA=$VITE_BUILD_SHA \
     BASE_PATH=$BASE_PATH
 RUN npm run build
 
