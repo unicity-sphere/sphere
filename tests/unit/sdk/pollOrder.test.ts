@@ -60,12 +60,17 @@ it('does not leak abort listeners across intervals (default sleep cleans up on t
     if (type === 'abort') removed++;
     return (origRemove as (...a: unknown[]) => void)(type, ...rest);
   }) as typeof ac.signal.removeEventListener;
-  // Several pending polls on real (tiny) timers, never aborted → each interval's
-  // listener must be removed when its timer fires.
-  const res = await pollOrderStatus(async () => base, { intervalMs: 2, timeoutMs: 12, signal: ac.signal });
+  // Several pending polls, never aborted → each interval's listener must be
+  // removed when its timer fires. Keep the DEFAULT sleep (the real-timer path
+  // under test) but fake `now` so the iteration count is deterministic: with
+  // real elapsed time a loaded CI runner can stretch one 2ms sleep past the
+  // whole deadline and leave only a single interval (flaked with added === 1).
+  // now steps +10/call: deadline at 45, checks at 20/30/40 → exactly 3 sleeps.
+  const now = (() => { let t = 0; return () => (t += 10); })();
+  const res = await pollOrderStatus(async () => base, { intervalMs: 1, timeoutMs: 35, now, signal: ac.signal });
   expect(res.outcome).toBe('timeout');
-  expect(added).toBeGreaterThan(1); // multiple intervals actually elapsed
-  expect(removed).toBe(added);      // every listener cleaned up
+  expect(added).toBe(3);       // multiple intervals elapsed, deterministically
+  expect(removed).toBe(added); // every listener cleaned up
 });
 
 it('the default (real-timer) sleep unblocks immediately on abort', async () => {
