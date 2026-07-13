@@ -6,6 +6,7 @@ import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
+import { truncateId } from '../../../../utils/identifiers';
 
 /** Truncate long nametags: show first 6 chars + ... + last 3 chars */
 function truncateNametag(nametag: string, maxLength: number = 20): string {
@@ -227,12 +228,6 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     return addr.chainPubkey;
   }, []);
 
-  /** Truncate address for display */
-  const truncateAddr = useCallback((addr: string): string => {
-    if (addr.length <= 20) return addr;
-    return `${addr.slice(0, 12)}...${addr.slice(-6)}`;
-  }, []);
-
   // =========================================================================
   // Nametag Modal (shared between compact and full modes)
   // =========================================================================
@@ -351,7 +346,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
             </span>
           ) : chainPubkey ? (
             <span className="text-[10px] sm:text-xs font-mono text-neutral-400">
-              {chainPubkey.slice(0, 8)}...{chainPubkey.slice(-4)}
+              {truncateId(chainPubkey)}
             </span>
           ) : null}
         </div>
@@ -373,7 +368,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
               <span className="font-medium" title={`@${displayNametag}`}>@{truncateNametag(displayNametag)}</span>
             ) : chainPubkey ? (
               <span className="font-mono">
-                {chainPubkey.slice(0, 8)}...{chainPubkey.slice(-4)}
+                {truncateId(chainPubkey)}
               </span>
             ) : (
               <span className="font-mono text-neutral-400">...</span>
@@ -469,7 +464,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
                             </span>
                           )}
                           <span className="text-xs font-mono text-neutral-500 dark:text-neutral-400 truncate block">
-                            {truncateAddr(getDisplayAddr(addr))}
+                            {truncateId(getDisplayAddr(addr))}
                           </span>
                         </div>
                       </button>
@@ -496,7 +491,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
           <span className="text-sm font-medium text-blue-600 dark:text-blue-400">@{displayNametag}</span>
         ) : chainPubkey ? (
           <span className="text-sm font-mono text-neutral-700 dark:text-neutral-300">
-            {chainPubkey.slice(0, 8)}...{chainPubkey.slice(-6)}
+            {truncateId(chainPubkey)}
           </span>
         ) : (
           <span className="text-sm font-mono text-neutral-400">...</span>
@@ -560,12 +555,12 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
                               @{addrNametag}
                             </span>
                             <span className="text-xs font-mono text-neutral-400">
-                              {getDisplayAddr(addr).slice(0, 10)}...
+                              {truncateId(getDisplayAddr(addr))}
                             </span>
                           </div>
                         ) : (
                           <span className="text-sm font-mono text-neutral-700 dark:text-neutral-300 truncate">
-                            {truncateAddr(getDisplayAddr(addr))}
+                            {truncateId(getDisplayAddr(addr))}
                           </span>
                         )}
                       </div>

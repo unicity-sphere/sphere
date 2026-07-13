@@ -165,10 +165,10 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
               const peerLabel = entry.type === 'RECEIVED'
                 ? (entry.senderNametag ? `@${entry.senderNametag}`
                   : entry.senderPubkey ? truncateId(entry.senderPubkey)
-                  : entry.senderAddress ? truncateId(stripDirectScheme(entry.senderAddress), 10, 4) : null)
+                  : entry.senderAddress ? truncateId(stripDirectScheme(entry.senderAddress)) : null)
                 : (entry.recipientNametag ? `@${entry.recipientNametag}`
                   : entry.recipientPubkey ? truncateId(entry.recipientPubkey)
-                  : entry.recipientAddress ? truncateId(stripDirectScheme(entry.recipientAddress), 10, 4) : null);
+                  : entry.recipientAddress ? truncateId(stripDirectScheme(entry.recipientAddress)) : null);
 
               return (
                 <motion.div

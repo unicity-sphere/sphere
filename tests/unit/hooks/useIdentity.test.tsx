@@ -37,8 +37,8 @@ describe('useIdentity — pubkey-first display (#411)', () => {
     fakeSphere = { identity: { chainPubkey: PUBKEY, directAddress: DIRECT } };
     const { result } = renderHook(() => useIdentity(), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.identity).not.toBeNull());
-    expect(result.current.displayName).toBe(`${PUBKEY.slice(0, 8)}...${PUBKEY.slice(-4)}`);
-    expect(result.current.shortAddress).toBe(`${PUBKEY.slice(0, 8)}...${PUBKEY.slice(-4)}`);
+    expect(result.current.displayName).toBe(`${PUBKEY.slice(0, 6)}...${PUBKEY.slice(-4)}`);
+    expect(result.current.shortAddress).toBe(`${PUBKEY.slice(0, 6)}...${PUBKEY.slice(-4)}`);
     expect(result.current.displayName).not.toContain('DIRECT');
     // directAddress itself stays exposed for internal (non-display) consumers
     expect(result.current.directAddress).toBe(DIRECT);

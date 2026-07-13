@@ -22,8 +22,8 @@ describe('isChainPubkey', () => {
 });
 
 describe('truncateId', () => {
-  it('middle-truncates long values with defaults 8/4', () => {
-    expect(truncateId(PUBKEY_02)).toBe(`${PUBKEY_02.slice(0, 8)}...${PUBKEY_02.slice(-4)}`);
+  it('middle-truncates long values with MetaMask-style defaults 6/4', () => {
+    expect(truncateId(PUBKEY_02)).toBe(`${PUBKEY_02.slice(0, 6)}...${PUBKEY_02.slice(-4)}`);
   });
   it('returns short values unchanged', () => {
     expect(truncateId('02abcd')).toBe('02abcd');

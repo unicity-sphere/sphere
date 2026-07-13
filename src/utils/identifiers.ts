@@ -9,8 +9,8 @@ export function isChainPubkey(value: string): boolean {
   return /^0[23][0-9a-fA-F]{64}$/.test(value.trim());
 }
 
-/** Middle-truncate a long identifier for display: "02ab12cd...9f01". */
-export function truncateId(value: string, startLen = 8, endLen = 4): string {
+/** Middle-truncate an identifier MetaMask-style: "02ab12...9f01" (6 leading + 4 trailing). */
+export function truncateId(value: string, startLen = 6, endLen = 4): string {
   if (value.length <= startLen + endLen + 3) return value;
   return `${value.slice(0, startLen)}...${value.slice(-endLen)}`;
 }

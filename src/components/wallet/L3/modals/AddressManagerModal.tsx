@@ -4,6 +4,7 @@ import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader } from '../../ui';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
+import { truncateId } from '../../../../utils/identifiers';
 
 interface AddressManagerModalProps {
   isOpen: boolean;
@@ -61,11 +62,6 @@ export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProp
     }
   }, [sphere, addresses, isDeriving, refreshAddresses]);
 
-  const truncateAddr = (addr: string): string => {
-    if (addr.length <= 20) return addr;
-    return `${addr.slice(0, 10)}...${addr.slice(-6)}`;
-  };
-
   return (
     <WalletScreen isOpen={isOpen} onClose={onClose}>
       <ModalHeader variant="screen" title="Address Manager" icon={MapPin} iconVariant="neutral" onClose={onClose} />
@@ -109,7 +105,7 @@ export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProp
                       </span>
                     )}
                     <span className="text-[11px] font-mono text-neutral-500 dark:text-white/45 block truncate">
-                      {truncateAddr(addr.chainPubkey)}
+                      {truncateId(addr.chainPubkey)}
                     </span>
                   </div>
 

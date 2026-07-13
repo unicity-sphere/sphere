@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
+import { truncateId } from '../../../../utils/identifiers';
 
 interface PaymentRequestsModalProps {
   isOpen: boolean;
@@ -168,7 +169,7 @@ function RequestCard({ req, error, onPay, onReject, isProcessing, isGlobalDisabl
             <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider mb-1.5">From</span>
             <div className="flex items-center gap-2">
               <span className="text-neutral-900 dark:text-white font-bold text-base">
-                {req.recipientNametag ? `@${req.recipientNametag}` : `${req.senderPubkey.slice(0, 12)}...`}
+                {req.recipientNametag ? `@${req.recipientNametag}` : truncateId(req.senderPubkey)}
               </span>
             </div>
           </div>

@@ -332,7 +332,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                         <User className="w-4 h-4 text-neutral-500 dark:text-white/45" />
                       )}
                       <span className={`text-neutral-700 dark:text-white/65 ${recipientMode === 'pubkey' ? 'font-mono text-xs break-all' : ''}`} title={recipient}>
-                        {recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}
+                        {recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}
                       </span>
                     </div>
                     <button
@@ -356,7 +356,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                         className="text-[10px] font-mono text-neutral-400/40 dark:text-neutral-600/50 truncate max-w-52"
                         title={resolvedPubkey}
                       >
-                        {truncateId(resolvedPubkey, 18, 8)}
+                        {truncateId(resolvedPubkey)}
                       </span>
                       <button
                         type="button"
@@ -431,7 +431,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Sent — delivery pending</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
+                    Your <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> is finalized on-chain. They'll receive it once their inbox is reachable — nothing more to do.
                   </p>
                 </>
               ) : (
@@ -441,7 +441,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Success!</h3>
                   <p className="text-neutral-500 dark:text-white/45">
-                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient), 12, 6) : `@${recipient}`}</b>
+                    Successfully sent <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b>
                   </p>
                 </>
               )}
