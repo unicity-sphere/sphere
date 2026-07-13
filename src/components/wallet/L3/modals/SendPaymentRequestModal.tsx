@@ -4,6 +4,7 @@ import { ArrowRight, Loader2, User, CheckCircle, Hash, Receipt } from 'lucide-re
 import { TokenRegistry, parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
+import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button } from '../../ui';
 
@@ -26,7 +27,7 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
   const { sphere } = useSphereContext();
 
   const [step, setStep] = useState<Step>('coin');
-  const [recipientMode, setRecipientMode] = useState<'nametag' | 'direct'>('nametag');
+  const [recipientMode, setRecipientMode] = useState<'nametag' | 'pubkey'>('nametag');
   const [recipient, setRecipient] = useState('');
   const [isCheckingRecipient, setIsCheckingRecipient] = useState(false);
   const [recipientError, setRecipientError] = useState<string | null>(null);
@@ -112,13 +113,14 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
     setRecipientError(null);
 
     try {
-      if (recipientMode === 'direct') {
-        const addr = recipient.trim();
-        if (!addr.startsWith('DIRECT://')) {
-          setRecipientError('Direct address must start with DIRECT://');
+      if (recipientMode === 'pubkey') {
+        const value = recipient.trim();
+        // Pasted DIRECT:// addresses stay accepted for compatibility — the SDK resolves them.
+        if (!isChainPubkey(value) && !value.startsWith('DIRECT://')) {
+          setRecipientError('Enter a valid public key (66 hex characters starting with 02 or 03)');
           return;
         }
-        setRecipient(addr);
+        setRecipient(value);
         setStep('confirm');
       } else {
         const cleanTag = recipient.replace('@', '').replace('@unicity', '').trim();
@@ -237,14 +239,14 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
                     onChange={handleRecipientChange}
                     onKeyDown={(e) => e.key === 'Enter' && handleDetailsNext()}
                     className={`w-full bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/10 rounded-2xl py-4 pr-4 text-neutral-900 dark:text-white focus:border-orange-500 outline-none transition-colors ${recipientMode === 'nametag' ? 'pl-8' : 'pl-4 font-mono'}`}
-                    placeholder={recipientMode === 'nametag' ? "Who should pay you?" : 'DIRECT://...'}
+                    placeholder={recipientMode === 'nametag' ? "Who should pay you?" : 'Public key (02...)'}
                   />
                 </div>
                 <button
-                  onClick={() => { setRecipientMode(recipientMode === 'nametag' ? 'direct' : 'nametag'); setRecipient(''); setRecipientError(null); }}
+                  onClick={() => { setRecipientMode(recipientMode === 'nametag' ? 'pubkey' : 'nametag'); setRecipient(''); setRecipientError(null); }}
                   className="text-[11px] text-neutral-400 dark:text-neutral-500 hover:text-orange-500 dark:hover:text-orange-400 mt-1.5 ml-1 transition-colors"
                 >
-                  {recipientMode === 'nametag' ? 'Use direct address instead' : 'Use nametag instead'}
+                  {recipientMode === 'nametag' ? 'Use public key instead' : 'Use Unicity ID instead'}
                 </button>
               </div>
 
@@ -313,13 +315,13 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
                 </div>
                 <div className="text-sm text-neutral-500 dark:text-white/45 mb-1">from</div>
                 <div className="flex items-center justify-center gap-2 text-sm bg-neutral-200 dark:bg-white/4 p-2 rounded-lg mx-auto max-w-max">
-                  {recipientMode === 'direct' ? (
+                  {recipientMode === 'pubkey' ? (
                     <Hash className="w-4 h-4 text-neutral-500 dark:text-white/45" />
                   ) : (
                     <User className="w-4 h-4 text-neutral-500 dark:text-white/45" />
                   )}
-                  <span className={`text-neutral-700 dark:text-white/65 ${recipientMode === 'direct' ? 'font-mono text-xs break-all' : ''}`}>
-                    {recipientMode === 'direct' ? recipient : `@${recipient}`}
+                  <span className={`text-neutral-700 dark:text-white/65 ${recipientMode === 'pubkey' ? 'font-mono text-xs break-all' : ''}`} title={recipient}>
+                    {recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}
                   </span>
                 </div>
                 {messageInput && (
@@ -377,7 +379,7 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
               </div>
               <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Request Sent!</h3>
               <p className="text-neutral-500 dark:text-white/45">
-                Payment request for <b>{amountInput} {selectedCoin?.symbol}</b> sent to <b>{recipientMode === 'direct' ? recipient : `@${recipient}`}</b>
+                Payment request for <b>{amountInput} {selectedCoin?.symbol}</b> sent to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b>
               </p>
               <button onClick={handleSuccessClose} className="mt-8 px-8 py-2 bg-neutral-100 dark:bg-white/6 rounded-lg hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-900 dark:text-white transition-colors font-mono">
                 Close

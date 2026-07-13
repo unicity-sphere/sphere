@@ -12,6 +12,7 @@ import {
   unvoteRating,
   type HelpfulVote,
 } from '../../services/userApi';
+import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import { RecommendBadge } from './RecommendBadge';
 import { ReviewReplies } from './ReviewReplies';
 
@@ -247,7 +248,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           <ul className="space-y-3">
             {ratings.ratings.map((r) => {
               const isOwn = myAddress === r.userAddress;
-              const label = r.userNametag ? `@${r.userNametag}` : `${r.userAddress.slice(0, 16)}…`;
+              const label = r.userNametag ? `@${r.userNametag}` : truncateId(stripDirectScheme(r.userAddress));
               const expanded = expandedReplies.has(r._id);
               return (
                 <li key={r._id} className="no-text-shadow rounded-xl border border-neutral-200 dark:border-white/8 p-4 bg-white dark:bg-white/4 dark:backdrop-blur-2xl">

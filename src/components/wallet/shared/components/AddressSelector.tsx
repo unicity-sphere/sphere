@@ -6,6 +6,7 @@ import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
+import { truncateId } from '../../../../utils/identifiers';
 
 /** Truncate long nametags: show first 6 chars + ... + last 3 chars */
 function truncateNametag(nametag: string, maxLength: number = 20): string {
@@ -31,7 +32,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
   const nametagInputRef = useRef<HTMLInputElement>(null);
 
   const { sphere, resolveNametag, isDiscoveringAddresses } = useSphereContext();
-  const { nametag, directAddress } = useIdentity();
+  const { nametag, chainPubkey } = useIdentity();
   const queryClient = useQueryClient();
 
   const currentAddressIndex = sphere?.getCurrentAddressIndex() ?? 0;
@@ -111,16 +112,16 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     }
   }, [nametag]);
 
-  const handleCopyDirectAddress = useCallback(async () => {
-    if (!directAddress) return;
+  const handleCopyPubkey = useCallback(async () => {
+    if (!chainPubkey) return;
     try {
-      await navigator.clipboard.writeText(directAddress);
+      await navigator.clipboard.writeText(chainPubkey);
       setCopied('address');
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('Failed to copy direct address:', err);
+      console.error('Failed to copy public key:', err);
     }
-  }, [directAddress]);
+  }, [chainPubkey]);
 
   const handleSelectAddress = useCallback(async (index: number) => {
     if (!sphere || isSwitching || index === currentAddressIndex) {
@@ -222,15 +223,9 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     return [...addresses].sort((a, b) => a.index - b.index);
   }, [addresses]);
 
-  /** Get display address (L3 direct address, falling back to the chain pubkey) */
+  /** Get display identifier (chain pubkey; DIRECT is shown only in My Public Keys). */
   const getDisplayAddr = useCallback((addr: TrackedAddress): string => {
-    return addr.directAddress || addr.chainPubkey;
-  }, []);
-
-  /** Truncate address for display */
-  const truncateAddr = useCallback((addr: string): string => {
-    if (addr.length <= 20) return addr;
-    return `${addr.slice(0, 12)}...${addr.slice(-6)}`;
+    return addr.chainPubkey;
   }, []);
 
   // =========================================================================
@@ -342,16 +337,16 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
 
   // No sphere — show minimal nametag if available
   if (!sphere) {
-    if ((displayNametag || directAddress) && compact) {
+    if ((displayNametag || chainPubkey) && compact) {
       return (
         <div className="flex items-center gap-1.5">
           {displayNametag ? (
             <span className="text-[10px] sm:text-xs text-neutral-500 font-medium" title={`@${displayNametag}`}>
               @{truncateNametag(displayNametag)}
             </span>
-          ) : directAddress ? (
+          ) : chainPubkey ? (
             <span className="text-[10px] sm:text-xs font-mono text-neutral-400">
-              {directAddress.slice(0, 8)}...{directAddress.slice(-4)}
+              {truncateId(chainPubkey)}
             </span>
           ) : null}
         </div>
@@ -371,9 +366,9 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
           >
             {displayNametag ? (
               <span className="font-medium" title={`@${displayNametag}`}>@{truncateNametag(displayNametag)}</span>
-            ) : directAddress ? (
+            ) : chainPubkey ? (
               <span className="font-mono">
-                {directAddress.slice(0, 8)}...{directAddress.slice(-4)}
+                {truncateId(chainPubkey)}
               </span>
             ) : (
               <span className="font-mono text-neutral-400">...</span>
@@ -395,13 +390,13 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
                 <Copy className="w-3 h-3 text-neutral-500" />
               )}
             </motion.button>
-          ) : directAddress ? (
+          ) : chainPubkey ? (
             <motion.button
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
-              onClick={handleCopyDirectAddress}
+              onClick={handleCopyPubkey}
               className="p-1 hover:bg-neutral-100 dark:hover:bg-neutral-800/80 rounded transition-colors"
-              title={`Copy direct address: ${directAddress}`}
+              title="Copy public key"
             >
               {copied === 'address' ? (
                 <Check className="w-3 h-3 text-emerald-500" />
@@ -469,7 +464,7 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
                             </span>
                           )}
                           <span className="text-xs font-mono text-neutral-500 dark:text-neutral-400 truncate block">
-                            {truncateAddr(getDisplayAddr(addr))}
+                            {truncateId(getDisplayAddr(addr))}
                           </span>
                         </div>
                       </button>
@@ -494,9 +489,9 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
       >
         {displayNametag ? (
           <span className="text-sm font-medium text-blue-600 dark:text-blue-400">@{displayNametag}</span>
-        ) : directAddress ? (
+        ) : chainPubkey ? (
           <span className="text-sm font-mono text-neutral-700 dark:text-neutral-300">
-            {directAddress.slice(0, 8)}...{directAddress.slice(-6)}
+            {truncateId(chainPubkey)}
           </span>
         ) : (
           <span className="text-sm font-mono text-neutral-400">...</span>
@@ -560,12 +555,12 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
                               @{addrNametag}
                             </span>
                             <span className="text-xs font-mono text-neutral-400">
-                              {getDisplayAddr(addr).slice(0, 10)}...
+                              {truncateId(getDisplayAddr(addr))}
                             </span>
                           </div>
                         ) : (
                           <span className="text-sm font-mono text-neutral-700 dark:text-neutral-300 truncate">
-                            {truncateAddr(getDisplayAddr(addr))}
+                            {truncateId(getDisplayAddr(addr))}
                           </span>
                         )}
                       </div>

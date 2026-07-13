@@ -284,6 +284,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
       const addresses: DerivedAddressInfo[] = allAddresses.map(a => ({
         index: a.index,
         l3Address: a.directAddress,
+        chainPubkey: a.chainPubkey,
         path: `m/44'/60'/0'/0/${a.index}`,
         hasNametag: !!a.nametag,
         existingNametag: a.nametag,
@@ -474,6 +475,7 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         const addresses: DerivedAddressInfo[] = allAddresses.map(a => ({
           index: a.index,
           l3Address: a.directAddress,
+          chainPubkey: a.chainPubkey,
           path: `m/44'/60'/0'/0/${a.index}`,
           hasNametag: !!a.nametag,
           existingNametag: a.nametag,
