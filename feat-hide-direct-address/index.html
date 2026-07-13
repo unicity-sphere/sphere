@@ -44,8 +44,13 @@
         document.documentElement.classList.add(theme);
       })();
     </script>
-    <script type="module" crossorigin src="/sphere/feat-hide-direct-address/assets/index-BZpeZtF1.js"></script>
-    <link rel="stylesheet" crossorigin href="/sphere/feat-hide-direct-address/assets/index-B-6eggvt.css">
+    <!-- Runtime-swappable public config for build-once/promote-many Docker
+         images (window.__SPHERE_RUNTIME_CONFIG__). Classic script: executes
+         before the module bundle below. Rewritten at container start by
+         deploy/runtime-config.sh; dev/Pages ship the empty default. -->
+    <script src="/sphere/feat-hide-direct-address/runtime-config.js"></script>
+    <script type="module" crossorigin src="/sphere/feat-hide-direct-address/assets/index-D_ah-uNs.js"></script>
+    <link rel="stylesheet" crossorigin href="/sphere/feat-hide-direct-address/assets/index-Bnn_BIr_.css">
   </head>
   <body style="margin: 0;">
     <div id="root"></div>
