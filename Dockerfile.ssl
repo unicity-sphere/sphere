@@ -23,11 +23,14 @@ ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
 # via window.__SPHERE_RUNTIME_CONFIG__ (/runtime-config.js, written at container
 # start by sphere-runtime-config). See the note in the main Dockerfile.
 ARG BASE_PATH=/
+# Sentry release tag — env-agnostic (same sha every env); see main Dockerfile.
+ARG VITE_BUILD_SHA=
 ENV VITE_SPHERE_API_URL=$VITE_SPHERE_API_URL \
     VITE_WALLET_API_URL=$VITE_WALLET_API_URL \
     VITE_REQUIRE_WALLET_API=$VITE_REQUIRE_WALLET_API \
     VITE_AGGREGATOR_API_KEY=$VITE_AGGREGATOR_API_KEY \
     VITE_DEV_PORTAL_URL=$VITE_DEV_PORTAL_URL \
+    VITE_BUILD_SHA=$VITE_BUILD_SHA \
     BASE_PATH=$BASE_PATH
 RUN npm run build
 

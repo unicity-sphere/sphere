@@ -35,12 +35,27 @@ const NAMETAG_RE = /@[a-z0-9_-]{2,64}(?![a-z0-9_/-])/gi;
 // Key names whose values must never ride along in extra/contexts/tags
 const SENSITIVE_KEY_RE = /mnemonic|seed|phrase|private|secret|password|passphrase|entropy|token|key/i;
 
+// Grouping normalization: SDK messages interpolate per-occurrence identifiers,
+// so Sentry fingerprints diverge and the SAME defect mints a new issue per
+// occurrence (SPHERE-25 split off SPHERE-R over an intent UUID; SPHERE-1Z off
+// SPHERE-Y over an agent name). Normalizing here is also privacy-positive.
+// Deliberately NOT normalized: HTTP status codes in messages — they carry the
+// only diagnostic signal those events have.
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const SINCE_CURSOR_RE = /([?&]since=)\d+/g;
+const QUOTED_RECIPIENT_RE = /(transport pubkey for )"[^"]{1,64}"/g;
+const RECIPIENT_IDENTITY_RE = /(Recipient )\S{1,64}( has no published identity)/g;
+
 export function scrubText(text: string): string {
   return text
     .replace(EMAIL_RE, '[email]')
     .replace(LONG_HEX_RE, '[hex]')
     .replace(MNEMONIC_RE, '[possible mnemonic]')
-    .replace(NAMETAG_RE, '@[nametag]');
+    .replace(NAMETAG_RE, '@[nametag]')
+    .replace(UUID_RE, ':id')
+    .replace(SINCE_CURSOR_RE, '$1:n')
+    .replace(QUOTED_RECIPIENT_RE, '$1"[nametag]"')
+    .replace(RECIPIENT_IDENTITY_RE, '$1[nametag]$2');
 }
 
 /**
@@ -108,26 +123,57 @@ export function scrubTransactionEvent<E extends TransactionEvent>(event: E): E {
 // unsupportedMethod, disconnected, chainDisconnected). Positive 4xxx codes are
 // wallet-provider-specific — our own JSON-RPC surfaces (aggregator, wallet-api)
 // use -32xxx — so a rejection carrying one cannot have come from our code.
+// LATENT COLLISION (documented, currently safe): sphere-sdk's Connect protocol
+// reuses 4001/4100/4200 in its own ERROR_CODES — but ConnectClient/ConnectHost
+// always reject ConnectError, a real Error, which never produces the
+// `__serialized__` plain-object shape this filter requires. If a connect
+// surface ever rejects a bare `{code: 4001, ...}` object, this filter would
+// eat it — the regression test pins the Error-instance path staying captured.
 const EIP1193_CODES = new Set([4001, 4100, 4200, 4900, 4901]);
 const EXTENSION_URL_RE = /\b(?:chrome|moz|safari-web)-extension:\/\//;
+// chrome.tabs.* error strings relayed by extension background scripts — these
+// cannot originate from web-page code (SPHERE-H).
+const CHROME_TABS_MSG_RE = /^No tab with id: -?\d+\.?$/;
 
 /**
  * Unhandled promise rejections thrown by injected wallet-extension provider
- * scripts (EIP-1193). This app never calls `window.ethereum` — these originate
- * wholly inside extensions whose inpage scripts run in our page context. They
- * reject with PLAIN OBJECTS, so Sentry builds a synthetic event with no stack
- * frames and `denyUrls` (which matches frame URLs) never sees the extension
- * origin — it survives only as a string inside `extra.__serialized__.stack`.
- * SPHERE-9 / SPHERE-A: ~1.4k events (~27% of monthly quota) in 5 days.
+ * scripts. This app never calls `window.ethereum` — these originate wholly
+ * inside extensions whose inpage scripts run in our page context. They reject
+ * with PLAIN OBJECTS, so Sentry builds a synthetic event with no stack frames
+ * and `denyUrls` (which matches frame URLs) never sees the extension origin.
+ * Shapes seen in production, ~49% of all events (SPHERE-9/A/D/H/E):
+ *   {code: 4900, message, stack?}                       — EIP-1193 provider
+ *   {code: -32603, message, data: {originalError}}      — @metamask/rpc-errors
+ *   {message: 'No tab with id: N.'}                     — chrome.tabs relay
+ *   {}                                                  — keyless, stripped
+ *                                                          crossing the
+ *                                                          content-script
+ *                                                          boundary
+ * Every app/SDK error surface rejects real Error subclasses (SphereError,
+ * ConnectError, WalletApiError, JsonRpcNetworkError), which Sentry captures
+ * with a real exception and NO `__serialized__` extra — so matching on the
+ * serialized plain object is collision-free by construction.
  */
 export function isInjectedProviderNoise(event: ErrorEvent): boolean {
   const mechanism = event.exception?.values?.[0]?.mechanism?.type ?? '';
   if (!mechanism.includes('onunhandledrejection')) return false;
   const serialized = (event.extra as Record<string, unknown> | undefined)?.['__serialized__'];
   if (typeof serialized !== 'object' || serialized === null) return false;
-  const { code, stack } = serialized as { code?: unknown; stack?: unknown };
+  const { code, stack, message, data } = serialized as {
+    code?: unknown; stack?: unknown; message?: unknown; data?: unknown;
+  };
   if (typeof code === 'number' && EIP1193_CODES.has(code)) return true;
-  return typeof stack === 'string' && EXTENSION_URL_RE.test(stack);
+  if (typeof stack === 'string' && EXTENSION_URL_RE.test(stack)) return true;
+  // @metamask/rpc-errors serializeError: our surfaces never wrap a rejection
+  // in {code: -32603, data: {originalError}} (SPHERE-D, 353 events).
+  if (code === -32603 && typeof data === 'object' && data !== null && 'originalError' in data) {
+    return true;
+  }
+  if (typeof message === 'string' && (CHROME_TABS_MSG_RE.test(message) || message === 'Cannot verify request origin')) {
+    return true;
+  }
+  // A keyless object carries zero diagnostic value by construction (SPHERE-E).
+  return Object.keys(serialized).length === 0;
 }
 
 export function scrubEvent<E extends ErrorEvent>(event: E): E {
