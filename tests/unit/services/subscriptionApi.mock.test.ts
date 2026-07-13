@@ -11,6 +11,8 @@ import {
   getStorePlans,
   createStoreCheckout,
   getOrderStatus,
+  ackOrderKeyDelivery,
+  getKeyInfo,
 } from '@/services/subscriptionApi';
 
 describe('subscriptionApi mock mode', () => {
@@ -69,7 +71,7 @@ describe('subscriptionApi mock mode', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('returns a canned order status without calling fetch', async () => {
+  it('returns a canned order status without calling fetch (new ack contract — no keyShownOnce)', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -77,6 +79,27 @@ describe('subscriptionApi mock mode', () => {
 
     expect(status.status).toBe('paid');
     expect(status.fulfilled).toBe(true);
+    expect(status).not.toHaveProperty('keyShownOnce');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('acks key delivery without calling fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(ackOrderKeyDelivery('ssc-mock')).resolves.toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns canned key info without calling fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const info = await getKeyInfo('sk_mock_free');
+
+    expect(info).not.toBeNull();
+    expect(info?.maskedKey).toMatch(/^sk_\.\.\./);
+    expect(['active', 'expired', 'inactive']).toContain(info?.subscriptionState);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

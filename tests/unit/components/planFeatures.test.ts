@@ -3,6 +3,7 @@ import {
   formatPlanPrice,
   isFreePlan,
   isPopularPlan,
+  isPlanSelectable,
   planFeatures,
   syntheticCurrentPlan,
 } from '@/components/subscription/planFeatures';
@@ -49,6 +50,33 @@ describe('planFeatures', () => {
 
   it('marks the free plan with a no-payment bullet', () => {
     expect(planFeatures({ ...basic, priceCents: 0 })[2]).toBe('Free — no payment required');
+  });
+});
+
+describe('isPlanSelectable', () => {
+  const active = { currentPlanName: 'basic', subscriptionStatus: 'active' as const, paidPlansEnabled: true };
+
+  it('allows buying a different paid plan', () => {
+    expect(isPlanSelectable({ ...basic, name: 'premium' }, active)).toBe(true);
+  });
+
+  it('blocks re-buying the ACTIVE current plan (nothing to gain — no time carry-over)', () => {
+    expect(isPlanSelectable(basic, active)).toBe(false);
+    expect(isPlanSelectable({ ...basic, name: 'Basic' }, active)).toBe(false); // case-insensitive
+  });
+
+  it('allows renewing the current plan once it is no longer active', () => {
+    expect(isPlanSelectable(basic, { ...active, subscriptionStatus: 'expired' })).toBe(true);
+    expect(isPlanSelectable(basic, { ...active, subscriptionStatus: 'inactive' })).toBe(true);
+    expect(isPlanSelectable(basic, { ...active, subscriptionStatus: null })).toBe(true);
+  });
+
+  it('never selects the synthetic/free card (it is not a store product)', () => {
+    expect(isPlanSelectable({ ...basic, priceCents: 0 }, { ...active, subscriptionStatus: 'expired' })).toBe(false);
+  });
+
+  it('blocks paid plans while purchases are disabled', () => {
+    expect(isPlanSelectable({ ...basic, name: 'premium' }, { ...active, paidPlansEnabled: false })).toBe(false);
   });
 });
 

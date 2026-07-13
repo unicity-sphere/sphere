@@ -33,6 +33,28 @@ export function planFeatures(plan: PlanInfo): string[] {
 }
 
 /**
+ * Whether a plan card is a valid purchase target right now. The synthetic
+ * current card (priceCents 0) is informational only. Re-buying the current
+ * plan is blocked while it's ACTIVE — the gateway resets the window to
+ * now+30d with no time carry-over, so an early re-buy only loses time — but
+ * allowed once the subscription lapses ('expired'/'inactive'/unknown): that
+ * is the renew path (same key, fresh 30 days).
+ */
+export function isPlanSelectable(
+  plan: PlanInfo,
+  opts: {
+    currentPlanName: string | null;
+    subscriptionStatus: 'active' | 'expired' | 'inactive' | null;
+    paidPlansEnabled: boolean;
+  },
+): boolean {
+  if (plan.priceCents <= 0) return false;
+  if (!opts.paidPlansEnabled) return false;
+  const isCurrent = plan.name.toLowerCase() === (opts.currentPlanName ?? '').toLowerCase();
+  return !(isCurrent && opts.subscriptionStatus === 'active');
+}
+
+/**
  * The store list excludes the free plan, so the user's current (free) plan card
  * is synthesized from utilization data. planId -1 is never a store id.
  */

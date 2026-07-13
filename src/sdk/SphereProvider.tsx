@@ -28,6 +28,7 @@ import {
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
 import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
+import { validatePastedKey } from './subscription/keyCheck';
 import { isPaidPlan } from './subscription/usage';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
@@ -258,13 +259,26 @@ export function SphereProvider({
       // then mark the gate ready — but only while this reconcile is still the
       // latest (gen guard) and only once the engine actually carries THIS key
       // (appliedOracleKeyRef), never off the boot-cache slot alone.
-      const applyResolved = async (key: string, gen: number) => {
+      const applyResolved = async (key: string, gen: number, source: 'wallet' | 'own') => {
         if (gen !== subKeyGenRef.current) return;
         setStoredSubscriptionKey(key);
         await applyOracleKey(instance, key, gen);
         if (gen !== subKeyGenRef.current) return;
         if (appliedOracleKeyRef.current === key) {
           setSubscriptionKeyStatus('ready');
+          // Background sanity check of the resolved key against the gateway —
+          // without it a revoked/foreign vault key surfaces only as 401s at
+          // send time. Only a DEFINITIVE unknown/revoked verdict acts
+          // (validatePastedKey fails open on lookup errors / pre-key-info
+          // gateways); recovery re-provisions the identity's free key for the
+          // same scope, and a revoked identity key (which the gateway refuses
+          // to re-mint) lands on the existing terminal 'failed' + Settings
+          // recovery UX.
+          void validatePastedKey(key).then((verdict) => {
+            if (verdict.valid || gen !== subKeyGenRef.current) return;
+            console.warn('stored subscription key is unknown/revoked on the gateway — re-provisioning');
+            void provisionOwn(source === 'wallet' ? 'wallet' : 'address', gen);
+          });
         } else if (appliedOracleKeyRef.current === null) {
           // The engine rebuild did not land and the oracle is still keyless →
           // block the send gate (terminal 'failed') rather than leave it stuck
@@ -313,7 +327,7 @@ export function SphereProvider({
         const resolved = await resolveActiveKey(instance, network);
         if (gen !== subKeyGenRef.current) return;
         if (resolved.key) {
-          await applyResolved(resolved.key, gen);
+          await applyResolved(resolved.key, gen, resolved.source === 'wallet' ? 'wallet' : 'own');
           return;
         }
         // needs-own: index 0 → wallet key; else this address's own key.

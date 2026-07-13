@@ -53,8 +53,25 @@ export interface OrderStatusInfo {
   statusName: string;
   fulfilled: boolean;
   confirming: boolean;
-  apiKey?: string; // revealed exactly once, when fulfilled
-  keyShownOnce?: boolean;
+  /**
+   * Fresh key of a non-upgrade order. Current gateways deliver it on EVERY
+   * poll until receipt is confirmed via order-key-ack; pre-ack gateways
+   * revealed it exactly once (first poll after fulfilment consumed it).
+   */
+  apiKey?: string;
+  /** True when this order upgrades an existing key in place (absent on pre-ack gateways). */
+  upgrade?: boolean;
+  /** Masked upgraded key, e.g. "sk_...abcd" — upgrade orders only. */
+  maskedKey?: string;
+  /** Purchased plan name — fulfilled upgrade orders only. */
+  planName?: string;
+}
+
+export interface KeyInfo {
+  maskedKey: string;
+  planName: string | null;
+  subscriptionState: 'active' | 'expired' | 'inactive';
+  activeUntil: string | null;
 }
 
 interface StorePlanWire {
@@ -148,14 +165,69 @@ export async function getStorePlans(): Promise<PlanInfo[]> {
   return data.availablePlans.map(({ id, ...rest }) => ({ planId: id, ...rest }));
 }
 
-/** Starts a Paymento checkout session for the given plan; redirect the user to `redirectUrl`. */
-export function createStoreCheckout(planId: number, email: string): Promise<CheckoutResult> {
+/**
+ * Starts a Paymento checkout session for the given plan; redirect the user to
+ * `redirectUrl`. Passing `upgradeApiKey` asks the gateway to upgrade that
+ * existing key IN PLACE (same key string, purchased plan, fresh 30-day window)
+ * instead of minting a new one; the gateway rejects unknown/revoked keys with
+ * a 400 up front. Pre-upgrade gateways ignore the extra field and mint a new
+ * key — callers detect which happened via order-status's `upgrade` flag.
+ */
+export function createStoreCheckout(planId: number, email: string, upgradeApiKey?: string): Promise<CheckoutResult> {
   if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockCheckout);
-  return postJson<CheckoutResult>('/api/paymento/checkout', { planId, email });
+  const apiKey = upgradeApiKey?.trim();
+  return postJson<CheckoutResult>('/api/paymento/checkout', apiKey ? { planId, email, apiKey } : { planId, email });
 }
 
-/** Polls the fulfillment status of a checkout order; apiKey is surfaced exactly once, when fulfilled. */
+/** Polls the fulfillment status of a checkout order (see OrderStatusInfo for key-delivery semantics). */
 export function getOrderStatus(orderId: string): Promise<OrderStatusInfo> {
   if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockOrderStatus);
   return request<OrderStatusInfo>(`/api/paymento/order-status?orderId=${encodeURIComponent(orderId)}`);
+}
+
+/**
+ * Confirms the freshly issued key was received and durably stored, ending its
+ * delivery in order-status responses — call ONLY after the key is persisted,
+ * since a premature ack makes a lost key unrecoverable. Never throws: true
+ * when acknowledged, false on a definitive refusal (404 = unknown order or a
+ * pre-ack gateway without the route; 409 = upgrade/unfulfilled order) or after
+ * the retry budget for transient failures is exhausted.
+ */
+export async function ackOrderKeyDelivery(
+  orderId: string,
+  opts: { attempts?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<boolean> {
+  if (SUBSCRIPTION_MOCK) return true;
+  const attempts = opts.attempts ?? 3;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(
+        `${SUBSCRIPTION_API_URL}/api/paymento/order-key-ack?orderId=${encodeURIComponent(orderId)}`,
+        { method: 'POST' },
+      );
+      if (res.ok) return true;
+      if (res.status === 404 || res.status === 409) return false; // definitive — retrying can't change it
+    } catch {
+      // transient (network) — retry below
+    }
+    if (attempt < attempts) await sleep(1000 * attempt);
+  }
+  return false;
+}
+
+/**
+ * Read-only lookup of a key — the key itself is the credential. Returns null
+ * ONLY on the gateway's definitive "Unknown API key." 404 (unknown or revoked
+ * key); any other failure throws, including the route-missing 404 of pre-ack
+ * gateways ("Not found") — a missing endpoint must never read as a dead key.
+ */
+export async function getKeyInfo(apiKey: string): Promise<KeyInfo | null> {
+  if (SUBSCRIPTION_MOCK) return mock.mockKeyInfo;
+  const res = await fetch(`${SUBSCRIPTION_API_URL}/api/paymento/key-info`, { headers: { 'x-api-key': apiKey } });
+  if (res.ok) return res.json() as Promise<KeyInfo>;
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  const detail = typeof body?.error === 'string' && body.error !== '' ? body.error : null;
+  if (res.status === 404 && detail === 'Unknown API key.') return null;
+  throw new Error(detail ?? `subscription /api/paymento/key-info failed: ${res.status}`);
 }

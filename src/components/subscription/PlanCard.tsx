@@ -15,16 +15,23 @@ interface PlanCardProps {
   popular: boolean;
   /** When provided (and the card is not the current plan) the card shows a CTA. */
   onSelect?: (plan: PlanInfo) => void;
+  /**
+   * Lapsed subscription: the CURRENT plan's store card becomes purchasable
+   * again ("Renew" — same key, fresh 30 days). Never applies to the synthetic
+   * free-priced current card, which is not a store product.
+   */
+  renewable?: boolean;
   loading?: boolean;
   disabled?: boolean;
   /** Mount variants (supplied by PlansGrid for the staggered reveal). */
   variants?: Variants;
 }
 
-export function PlanCard({ plan, current, popular, onSelect, loading, disabled, variants }: PlanCardProps) {
+export function PlanCard({ plan, current, popular, onSelect, renewable, loading, disabled, variants }: PlanCardProps) {
   const price = formatPlanPrice(plan);
   const features = planFeatures(plan);
-  const showCta = !!onSelect && !current;
+  const renewCta = current && !!renewable && plan.priceCents > 0;
+  const showCta = !!onSelect && (!current || renewCta);
 
   return (
     <motion.div
@@ -69,20 +76,20 @@ export function PlanCard({ plan, current, popular, onSelect, loading, disabled, 
 
       {/* CTA */}
       <div className="mt-5 min-h-10">
-        {current ? (
-          <div className="w-full rounded-xl border border-emerald-500/30 py-2 text-center text-sm font-medium text-emerald-500">
-            Your current plan
-          </div>
-        ) : showCta ? (
+        {showCta ? (
           <Button
-            variant={popular ? 'primary' : 'secondary'}
+            variant={renewCta || popular ? 'primary' : 'secondary'}
             fullWidth
             loading={loading}
             disabled={disabled}
             onClick={() => onSelect?.(plan)}
           >
-            {price === 'Free' ? 'Get started' : 'Choose plan'}
+            {renewCta ? 'Renew plan' : price === 'Free' ? 'Get started' : 'Choose plan'}
           </Button>
+        ) : current ? (
+          <div className="w-full rounded-xl border border-emerald-500/30 py-2 text-center text-sm font-medium text-emerald-500">
+            Your current plan
+          </div>
         ) : null}
       </div>
 

@@ -1,11 +1,22 @@
 /**
- * Polls a Paymento order until it settles. On 'paid' the response may carry the
- * one-time revealed apiKey — absent when the gateway return page consumed the
- * reveal first (the UI then falls back to a paste-key claim step).
+ * Polls a Paymento order until it settles. On 'paid':
+ * - `upgrade` true means the buyer's existing key was upgraded IN PLACE — no
+ *   key is ever delivered (only `maskedKey`/`planName`);
+ * - otherwise `apiKey` carries the freshly issued key, which current gateways
+ *   keep delivering until the caller acks receipt (ackOrderKeyDelivery). It is
+ *   absent only on a pre-ack gateway whose one-time reveal was consumed by the
+ *   payment return page (the UI then falls back to a paste-key claim step).
  */
 import type { OrderStatusInfo } from '../../services/subscriptionApi';
 
-export interface OrderPollResult { outcome: 'paid' | 'failed' | 'timeout' | 'cancelled'; apiKey?: string }
+export interface OrderPollResult {
+  outcome: 'paid' | 'failed' | 'timeout' | 'cancelled';
+  apiKey?: string;
+  /** Set on 'paid' only: whether the order upgraded an existing key in place. */
+  upgrade?: boolean;
+  maskedKey?: string;
+  planName?: string;
+}
 
 export async function pollOrderStatus(
   fetchStatus: () => Promise<OrderStatusInfo>,
@@ -45,7 +56,15 @@ export async function pollOrderStatus(
     if (signal?.aborted) return { outcome: 'cancelled' };
     try {
       const order = await fetchStatus();
-      if (order.status === 'paid') return { outcome: 'paid', apiKey: order.apiKey };
+      if (order.status === 'paid') {
+        return {
+          outcome: 'paid',
+          apiKey: order.apiKey,
+          upgrade: order.upgrade === true,
+          maskedKey: order.maskedKey,
+          planName: order.planName,
+        };
+      }
       if (order.status === 'failed') return { outcome: 'failed' };
     } catch {
       // transient — keep polling

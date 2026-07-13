@@ -8,6 +8,7 @@ import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../.
 import { getStoredSubscriptionKey } from '../../../../config/storageKeys';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { provisionOrRecoverKey } from '../../../../services/subscriptionApi';
+import { validatePastedKey } from '../../../../sdk/subscription/keyCheck';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 
 interface SubscriptionModalProps {
@@ -212,7 +213,8 @@ function ApiKeyRow({ apiKey }: { apiKey: string }) {
         </span>
       </div>
       <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-white/40">
-        Purchased keys aren't tied to your wallet identity — keep a copy. Restore recovers only the free key.
+        Your wallet's own key — including any plan bought for it — is recovered when you restore the
+        wallet. Keys pasted from elsewhere aren't; keep a copy of those.
       </p>
     </div>
   );
@@ -238,7 +240,15 @@ function EnterKeyRow() {
     setBusy(true);
     setError(null);
     try {
-      await applySubscriptionKey(value.trim());
+      const key = value.trim();
+      // Definitive unknown/revoked keys reject inline; a failed lookup fails
+      // open (the gateway still gates real usage).
+      const verdict = await validatePastedKey(key);
+      if (!verdict.valid) {
+        setError(verdict.message ?? 'This key is not valid.');
+        return;
+      }
+      await applySubscriptionKey(key);
       await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
       setOpen(false);
       setValue('');
