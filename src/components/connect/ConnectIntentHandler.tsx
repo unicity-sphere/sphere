@@ -9,6 +9,7 @@ import { useConnectContext } from './ConnectContext';
 import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
+import { useSubscriptionKeyGuard } from '../../sdk/hooks/subscription';
 
 /** Intents this wallet actually implements. Anything else is rejected cleanly. */
 const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'receive']);
@@ -69,6 +70,7 @@ function validateIntent(action: string, params: Record<string, unknown>): Intent
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent } = useConnectContext();
   const { sphere } = useSphereContext();
+  const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
   const [dmError, setDmError] = useState<string | null>(null);
   const [autoApproveDM, setAutoApproveDM] = useState(false);
@@ -308,6 +310,12 @@ export function ConnectIntentHandler() {
       }
       if (amountBig <= 0n) {
         rejectIntent(ERROR_CODES.INVALID_PARAMS, 'amount must be greater than zero');
+        return;
+      }
+      // Mint is a certification_request — refuse until the subscription key is on
+      // the oracle (else it 401s in the provisioning window). Reject gracefully.
+      if (!subscriptionKeyReady) {
+        rejectIntent(ERROR_CODES.INTERNAL_ERROR, 'Subscription is still being set up — try again in a moment');
         return;
       }
 

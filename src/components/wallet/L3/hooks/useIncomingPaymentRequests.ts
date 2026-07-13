@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
 import type { IncomingPaymentRequest as SDKPaymentRequest } from '@unicitylabs/sphere-sdk';
 
 export const PaymentRequestStatus = {
@@ -70,6 +71,7 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  */
 export const useIncomingPaymentRequests = () => {
     const { sphere } = useSphereContext();
+    const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
     const refresh = useCallback(() => {
@@ -131,12 +133,16 @@ export const useIncomingPaymentRequests = () => {
 
     const pay = useCallback(async (request: IncomingPaymentRequest) => {
         if (!sphere) return;
+        // Paying a request routes through payments.send() (certification) — same
+        // keyless-send window as a normal send, so it uses the shared readiness
+        // guard. handleAction in PaymentRequestModal surfaces the thrown message.
+        requireSubscriptionKey();
         try {
             await sphere.payments.payPaymentRequest(request.id);
         } finally {
             refresh();
         }
-    }, [sphere, refresh]);
+    }, [sphere, requireSubscriptionKey, refresh]);
 
     const clearProcessed = useCallback(() => {
         if (!sphere) return;

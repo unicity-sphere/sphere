@@ -1,10 +1,14 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
+import { SubscriptionModal } from './SubscriptionModal';
+import { useUpgrade } from '../../../upgrade';
+import { useUtilization } from '../../../../sdk/hooks/subscription';
+import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -23,6 +27,15 @@ export function SettingsModal({
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
+  const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
+  const { openUpgrade } = useUpgrade();
+
+  // Show the active address's current plan in the row subtitle, e.g. "Free plan".
+  const util = useUtilization();
+  const planName = util.data?.plan?.name;
+  const subscriptionSubtitle = planName
+    ? `${planName.charAt(0).toUpperCase()}${planName.slice(1)} plan`
+    : 'Manage your plan';
 
   return (
     <>
@@ -56,6 +69,16 @@ export function SettingsModal({
             label="Connected Sites"
             onClick={() => setIsConnectedSitesOpen(true)}
           />
+
+          {SUBSCRIPTION_ENABLED && (
+            <MenuButton
+              icon={CreditCard}
+              color="orange"
+              label="Subscription"
+              subtitle={subscriptionSubtitle}
+              onClick={() => setIsSubscriptionOpen(true)}
+            />
+          )}
 
           <MenuButton
             icon={Download}
@@ -95,6 +118,12 @@ export function SettingsModal({
       <ConnectedSitesModal
         isOpen={isConnectedSitesOpen}
         onClose={() => setIsConnectedSitesOpen(false)}
+      />
+
+      <SubscriptionModal
+        isOpen={isSubscriptionOpen}
+        onClose={() => setIsSubscriptionOpen(false)}
+        onUpgrade={() => { setIsSubscriptionOpen(false); openUpgrade('settings'); }}
       />
     </>
   );

@@ -3,6 +3,8 @@ import {
   STORAGE_KEYS,
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
+  getStoredSubscriptionKey,
+  setStoredSubscriptionKey,
 } from "../../../src/config/storageKeys";
 
 // ==========================================
@@ -171,5 +173,52 @@ describe("getOrCreateWalletApiDeviceId", () => {
     const second = getOrCreateWalletApiDeviceId();
     expect(second).toMatch(/^sphere-web-/);
     expect(second).not.toBe(first);
+  });
+});
+
+// ==========================================
+// Test: getStoredSubscriptionKey / setStoredSubscriptionKey (boot cache)
+// ==========================================
+
+describe("subscription API key boot cache", () => {
+  let localStorageMock: { [key: string]: string };
+
+  beforeEach(() => {
+    localStorageMock = {};
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn((key: string) => localStorageMock[key] ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStorageMock[key] = value;
+      }),
+      removeItem: vi.fn((key: string) => {
+        delete localStorageMock[key];
+      }),
+      key: vi.fn((index: number) => Object.keys(localStorageMock)[index] || null),
+      get length() {
+        return Object.keys(localStorageMock).length;
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null when no key has been stored", () => {
+    expect(getStoredSubscriptionKey()).toBeNull();
+  });
+
+  it("round-trips a key under the sphere_ prefixed slot", () => {
+    setStoredSubscriptionKey("sk_secret");
+
+    expect(localStorageMock[STORAGE_KEYS.SUBSCRIPTION_API_KEY]).toBe("sk_secret");
+    expect(getStoredSubscriptionKey()).toBe("sk_secret");
+  });
+
+  it("overwrites the previous key on a subsequent set (single global slot)", () => {
+    setStoredSubscriptionKey("sk_first");
+    setStoredSubscriptionKey("sk_second");
+
+    expect(getStoredSubscriptionKey()).toBe("sk_second");
   });
 });

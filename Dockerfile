@@ -15,14 +15,27 @@ ARG VITE_WALLET_API_URL=__RUNTIME_WALLET_API_URL__
 ARG VITE_REQUIRE_WALLET_API=__RUNTIME_REQUIRE_WALLET_API__
 ARG VITE_AGGREGATOR_API_KEY=__RUNTIME_AGGREGATOR_API_KEY__
 ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
+# The subscription flags (VITE_SUBSCRIPTION_ENABLED, VITE_PAID_PLANS_ENABLED)
+# have NO placeholders on purpose: feature flags can't ride the sed mechanism
+# (Rollup prunes every `if (FLAG)` against a baked literal at build time).
+# They are runtime-provided via window.__SPHERE_RUNTIME_CONFIG__ instead — the
+# runtime-config hook writes /runtime-config.js from the container env
+# (SUBSCRIPTION_ENABLED, PAID_PLANS_ENABLED). The SGW base URL needs no config
+# at all: it is derived from the SDK's per-network aggregator gateway
+# (src/config/subscription.ts).
 # BASE_PATH is a true build-time concern (Vite rewrites asset URLs + router
 # basename); both AWS envs serve at root, so it stays baked as `/`.
 ARG BASE_PATH=/
+# Sentry release tag. Baked (not a placeholder) because it is env-AGNOSTIC:
+# the same sha ships to staging and prod, so it never breaks build-once,
+# promote-many. Empty (release unset) in docker-validate and local builds.
+ARG VITE_BUILD_SHA=
 ENV VITE_SPHERE_API_URL=$VITE_SPHERE_API_URL \
     VITE_WALLET_API_URL=$VITE_WALLET_API_URL \
     VITE_REQUIRE_WALLET_API=$VITE_REQUIRE_WALLET_API \
     VITE_AGGREGATOR_API_KEY=$VITE_AGGREGATOR_API_KEY \
     VITE_DEV_PORTAL_URL=$VITE_DEV_PORTAL_URL \
+    VITE_BUILD_SHA=$VITE_BUILD_SHA \
     BASE_PATH=$BASE_PATH
 RUN npm run build
 
@@ -34,6 +47,9 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # fail-closed check in this script keeps a misconfigured task def from serving.
 COPY deploy/runtime-config.sh /docker-entrypoint.d/40-sphere-runtime-config.sh
 RUN chmod +x /docker-entrypoint.d/40-sphere-runtime-config.sh
+# NOTE: this echo collapses to a SINGLE line of nginx config (Dockerfile line
+# continuations), so never put an nginx `#` comment inside it — it would
+# comment out the rest of the config.
 RUN echo 'server { \
     listen 80; \
     server_name _; \

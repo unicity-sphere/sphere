@@ -46,6 +46,8 @@ export interface ProjectQuest {
   imageUrl: string | null;
   tags: string[];
   questType: string;
+  /** Active track this quest belongs to; null for trackless quests. */
+  track?: { slug: string; title: string; sortOrder: number } | null;
 }
 
 export interface ProjectAchievement {

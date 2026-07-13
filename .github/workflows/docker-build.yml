@@ -43,12 +43,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # No build-args: the image is environment-AGNOSTIC. The Dockerfile
-          # bakes __RUNTIME_*__ placeholders (its ARG defaults); the real
-          # per-env public config (SPHERE_API_URL, WALLET_API_URL, ...) is
-          # injected at container start by deploy/runtime-config.sh from the
-          # ECS task definition's env vars. This is what lets the SAME image
-          # auto-deploy to staging and be promoted, unchanged, to prod.
+          # The ONLY build-arg is the git sha for the Sentry release tag —
+          # env-AGNOSTIC (identical for staging and prod), so it preserves
+          # build-once, promote-many. Everything per-environment stays out:
+          # the Dockerfile bakes __RUNTIME_*__ placeholders (its ARG
+          # defaults); the real per-env public config (SPHERE_API_URL,
+          # WALLET_API_URL, ...) is injected at container start by
+          # deploy/runtime-config.sh from the ECS task definition's env vars.
+          # This is what lets the SAME image auto-deploy to staging and be
+          # promoted, unchanged, to prod.
+          build-args: |
+            VITE_BUILD_SHA=${{ github.sha }}
 
       # Auto-deploy the just-published image to AWS staging. Fires a
       # repository_dispatch into sphere-infra, whose deploy-sphere-site-staging

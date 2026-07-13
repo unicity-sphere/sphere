@@ -1,14 +1,19 @@
 import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock } from 'lucide-react';
+import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles } from 'lucide-react';
 import type { Asset } from '@unicitylabs/sphere-sdk';
 import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
+import { useUtilization } from '../../../../sdk/hooks/subscription';
+import { QuotaBlockedError, SEND_OPS_HEADROOM } from '../../../../sdk/quotaGate';
+import { isSubscriptionKeyReady } from '../../../../sdk/subscription/keyStatus';
+import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
+import { useUpgrade } from '../../../upgrade';
 import { WalletScreen } from '../../ui/WalletScreen';
-import { ModalHeader, Button } from '../../ui';
+import { ModalHeader, Button, AlertMessage } from '../../ui';
 
 type Step = 'asset' | 'details' | 'confirm' | 'processing' | 'success';
 
@@ -20,7 +25,13 @@ interface SendModalProps {
 export function SendModal({ isOpen, onClose }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
-  const { sphere } = useSphereContext();
+  const { sphere, subscriptionKeyStatus } = useSphereContext();
+  const { openUpgrade } = useUpgrade();
+  const utilization = useUtilization();
+
+  // Subscriptions on but the per-wallet key isn't on the oracle yet — a send
+  // now would go out keyless (→ 401). Disable Send until it's ready.
+  const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
   const assets = sdkAssets;
 
@@ -38,6 +49,10 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   const [recipient, setRecipient] = useState('');
   const [isCheckingRecipient, setIsCheckingRecipient] = useState(false);
   const [recipientError, setRecipientError] = useState<string | null>(null);
+  // Set instead of recipientError when handleSend's transfer rejects with
+  // QuotaBlockedError (Task 2) — renders a dedicated warning + Upgrade CTA
+  // in the confirm step rather than the generic error paragraph.
+  const [quotaBlocked, setQuotaBlocked] = useState<'expired' | 'exhausted' | null>(null);
 
   // Resolved recipient chain pubkey (nametag mode) — shown on the confirm step.
   const [resolvedPubkey, setResolvedPubkey] = useState<string | null>(null);
@@ -72,6 +87,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setAmountInput('');
     setMemoInput('');
     setRecipientError(null);
+    setQuotaBlocked(null);
     setDeliveryPending(false);
   };
 
@@ -106,6 +122,9 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
     setIsCheckingRecipient(true);
     setRecipientError(null);
+    // Re-entering confirm via details is a fresh attempt — a quota block from
+    // a previous send must not survive it (same lifecycle as recipientError).
+    setQuotaBlocked(null);
 
     try {
       if (recipientMode === 'pubkey') {
@@ -148,6 +167,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
     setStep('processing');
     setRecipientError(null);
+    setQuotaBlocked(null);
 
     try {
       const amount = parseTokenAmount(amountInput, selectedAsset.decimals).toString();
@@ -161,7 +181,11 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
       setDeliveryPending(result.deliveryPending ?? false);
       setStep('success');
     } catch (e: unknown) {
-      setRecipientError(getErrorMessage(e));
+      if (e instanceof QuotaBlockedError) {
+        setQuotaBlocked(e.reason);
+      } else {
+        setRecipientError(getErrorMessage(e));
+      }
       setStep('confirm');
     }
   };
@@ -390,9 +414,47 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                     </div>
                   </div>
                 </div>
+
+                {/* Passive low-quota heads-up (spec §2 'warn' verdict) — informational only, never blocks the send */}
+                {SUBSCRIPTION_ENABLED && typeof utilization.data?.utilization.availablePerMinute === 'number' && utilization.data.utilization.availablePerMinute < SEND_OPS_HEADROOM && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-start gap-3">
+                    <Clock className="w-5 h-5 text-amber-500 dark:text-amber-400 mt-0.5" />
+                    <div className="text-xs text-neutral-500 dark:text-white/45">
+                      Only {utilization.data.utilization.availablePerMinute} commitments left this minute — large sends may be throttled.
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {recipientError && <p className="text-red-500 text-sm mb-4 text-center">{recipientError}</p>}
+              {quotaBlocked && (
+                <div className="mb-4">
+                  <AlertMessage variant="warning">
+                    {quotaBlocked === 'expired'
+                      ? "Your plan has expired — renew to keep sending."
+                      : "Your plan's limit is used up — upgrade or wait for the quota to refill."}
+                  </AlertMessage>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={Sparkles}
+                    fullWidth
+                    className="mt-2"
+                    onClick={() => openUpgrade(quotaBlocked === 'expired' ? 'expired' : 'quota')}
+                  >
+                    Upgrade
+                  </Button>
+                </div>
+              )}
+
+              {recipientError && !quotaBlocked && <p className="text-red-500 text-sm mb-4 text-center">{recipientError}</p>}
+
+              {subsNotReady && !quotaBlocked && (
+                <p className="text-neutral-500 dark:text-white/45 text-xs mb-4 text-center">
+                  {subscriptionKeyStatus === 'failed'
+                    ? "Couldn't set up your subscription. Reload the app to retry."
+                    : 'Setting up your subscription — one moment…'}
+                </p>
+              )}
 
               <div className="flex gap-3">
                 <button
@@ -403,7 +465,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={isTransferring}
+                  disabled={isTransferring || subsNotReady}
                   className="flex-1 py-4 bg-orange-500 hover:bg-orange-600 dark:bg-brand-orange dark:hover:bg-brand-orange-dark text-white font-bold font-mono rounded-full transition-colors disabled:opacity-50"
                 >
                   Send

@@ -4,6 +4,7 @@ import {
   scrubBreadcrumb,
   scrubEvent,
   scrubTransactionEvent,
+  isInjectedProviderNoise,
 } from '@/utils/sentryScrub';
 import type { Breadcrumb, ErrorEvent } from '@sentry/react';
 
@@ -186,5 +187,127 @@ describe('scrubEvent', () => {
     expect(scrubbed.breadcrumbs).toHaveLength(1);
     // sensitive key names in extra are filtered wholesale
     expect(scrubbed.extra?.seed).toBe('[Filtered]');
+  });
+});
+
+describe('isInjectedProviderNoise', () => {
+  const rejection = (serialized: unknown, mechanism = 'auto.browser.global_handlers.onunhandledrejection'): ErrorEvent =>
+    ({
+      exception: { values: [{ type: 'UnhandledRejection', mechanism: { type: mechanism } }] },
+      extra: { __serialized__: serialized },
+    }) as unknown as ErrorEvent;
+
+  it('drops an EIP-1193 disconnect rejection without a stack (SPHERE-A shape)', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({ code: 4900, message: 'The provider is disconnected from all chains.' })
+      )
+    ).toBe(true);
+  });
+
+  it('drops an object rejection whose stack string points into an extension (SPHERE-9 shape)', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({
+          code: 4900,
+          message: 'The provider is disconnected from all chains.',
+          stack: 'Error: ...\n    at s (chrome-extension://acmacodkjbdgmoleebolmdjonilkdbch/background.js:4:1)',
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('keeps our JSON-RPC-style rejections (negative codes)', () => {
+    expect(isInjectedProviderNoise(rejection({ code: -32000, message: 'aggregator busy' }))).toBe(false);
+  });
+
+  it('keeps object rejections with non-EIP-1193 codes and app-origin stacks', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection({ code: 500, message: 'x', stack: 'Error at https://sphere.unicity.network/assets/index.js:1:1' })
+      )
+    ).toBe(false);
+  });
+
+  it('ignores events from other mechanisms even with a 4900 code', () => {
+    expect(isInjectedProviderNoise(rejection({ code: 4900, message: 'x' }, 'generic'))).toBe(false);
+  });
+
+  it('ignores events without a serialized rejection object', () => {
+    expect(isInjectedProviderNoise({ exception: { values: [] } } as unknown as ErrorEvent)).toBe(false);
+  });
+});
+
+describe('isInjectedProviderNoise v2 (SPHERE-D/H/E shapes)', () => {
+  const rejection2 = (serialized: unknown): ErrorEvent =>
+    ({
+      exception: { values: [{ type: 'UnhandledRejection', mechanism: { type: 'auto.browser.global_handlers.onunhandledrejection' } }] },
+      extra: { __serialized__: serialized },
+    }) as unknown as ErrorEvent;
+
+  it('drops the @metamask/rpc-errors serializeError shape (SPHERE-D)', () => {
+    expect(
+      isInjectedProviderNoise(
+        rejection2({ code: -32603, message: 'Internal JSON-RPC error.', data: { originalError: '[Object]' } })
+      )
+    ).toBe(true);
+  });
+
+  it('keeps -32603 WITHOUT data.originalError — our JSON-RPC surfaces can produce plain -32xxx', () => {
+    expect(isInjectedProviderNoise(rejection2({ code: -32603, message: 'Internal JSON-RPC error.' }))).toBe(false);
+    expect(isInjectedProviderNoise(rejection2({ code: -32603, message: 'x', data: { cause: 'y' } }))).toBe(false);
+  });
+
+  it('drops chrome.tabs relay strings (SPHERE-H)', () => {
+    expect(isInjectedProviderNoise(rejection2({ message: 'No tab with id: 1926953339.' }))).toBe(true);
+    expect(isInjectedProviderNoise(rejection2({ message: 'No tab with id: -1' }))).toBe(true);
+    expect(isInjectedProviderNoise(rejection2({ message: 'Cannot verify request origin' }))).toBe(true);
+  });
+
+  it('keeps ordinary message-bearing object rejections', () => {
+    expect(isInjectedProviderNoise(rejection2({ message: 'No tab with id: abc' }))).toBe(false);
+    expect(isInjectedProviderNoise(rejection2({ message: 'something else entirely' }))).toBe(false);
+  });
+
+  it('drops keyless objects (SPHERE-E) — zero diagnostic value by construction', () => {
+    expect(isInjectedProviderNoise(rejection2({}))).toBe(true);
+  });
+
+  it('regression guard: an Error-instance rejection (no __serialized__) with a connect ERROR_CODE is never dropped', () => {
+    // sphere-sdk connect reuses 4001/4100/4200 — safe only because ConnectError
+    // is a real Error, which Sentry captures WITHOUT extra.__serialized__.
+    const event = {
+      exception: { values: [{ type: 'ConnectError', value: 'not connected', mechanism: { type: 'auto.browser.global_handlers.onunhandledrejection' } }] },
+      extra: {},
+    } as unknown as ErrorEvent;
+    expect(isInjectedProviderNoise(event)).toBe(false);
+  });
+});
+
+describe('scrubText grouping normalization', () => {
+  it('normalizes UUIDs so per-occurrence ids stop splitting Sentry issues (SPHERE-R vs 25)', () => {
+    expect(scrubText('PUT /v1/intents/c3cef661-2d0c-4d04-8295-492f0343496b: VALIDATION_FAILED')).toBe(
+      'PUT /v1/intents/:id: VALIDATION_FAILED'
+    );
+  });
+
+  it('normalizes since-cursors', () => {
+    expect(scrubText('GET /v1/history?since=1752349000123 failed')).toBe('GET /v1/history?since=:n failed');
+  });
+
+  it('normalizes quoted transport-pubkey recipients (SPHERE-Y vs 1Z)', () => {
+    expect(scrubText('Cannot resolve transport pubkey for "sphere-swap". No binding event found.')).toBe(
+      'Cannot resolve transport pubkey for "[nametag]". No binding event found.'
+    );
+  });
+
+  it('normalizes recipient-identity messages', () => {
+    expect(scrubText('Recipient vlad has no published identity (chain pubkey)')).toBe(
+      'Recipient [nametag] has no published identity (chain pubkey)'
+    );
+  });
+
+  it('leaves HTTP status codes intact — the only diagnostic signal those messages carry', () => {
+    expect(scrubText('blob upload failed with status 503')).toBe('blob upload failed with status 503');
   });
 });
