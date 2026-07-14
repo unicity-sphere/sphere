@@ -166,8 +166,11 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
 
   if (compact) {
     return (
-      <div className="relative">
+      <>
+        {/* Slide-in screen: rendered outside the relative wrapper so it fills
+            the wallet panel (nearest positioned ancestor), like Register ID. */}
         {newAddressModal}
+      <div className="relative">
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => setShowDropdown(prev => !prev)}
@@ -285,13 +288,15 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
           )}
         </AnimatePresence>
       </div>
+      </>
     );
   }
 
   // Full mode
   return (
-    <div className="relative">
+    <>
       {newAddressModal}
+    <div className="relative">
       <button
         onClick={() => setShowDropdown(prev => !prev)}
         className="flex items-center gap-2 px-3 py-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-700/50 transition-colors"
@@ -382,5 +387,6 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }

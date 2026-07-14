@@ -3,16 +3,13 @@
  * address (#413). Shared by AddressSelector ("New") and AddressManagerModal
  * ("Derive New Address").
  *
- * Visually mirrors the onboarding NametagScreen / RegisterNametagModal
- * (@unicity-suffixed input, availability-colored border, gradient Register,
- * "Skip for now"), hosted in the wallet's standard dialog chrome.
- *
- * Rendered through a portal: both hosts sit inside transformed/stacked
- * containers where the dialog's `fixed` overlay would clip or mis-position.
+ * A slide-in screen INSIDE the wallet panel — the same presentation as the
+ * onboarding NametagScreen / RegisterNametagModal (@unicity-suffixed input,
+ * availability-colored border, gradient Register, "Skip for now"). Hosts must
+ * render it where the wallet panel shell is the nearest positioned ancestor.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, ArrowRight, MapPin } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, ArrowRight } from 'lucide-react';
 import { isValidNametag } from '@unicitylabs/sphere-sdk';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader } from '../../ui';
@@ -149,12 +146,11 @@ export function NewAddressModal({ isOpen, onClose }: NewAddressModalProps) {
           ? 'border-amber-400 dark:border-amber-500/50 focus:border-amber-500'
           : 'border-neutral-200 dark:border-white/8 focus:border-orange-500';
 
-  const modal = (
-    <WalletScreen isOpen={isOpen} onClose={handleRequestClose} asModal>
+  return (
+    <WalletScreen isOpen={isOpen} onClose={handleRequestClose}>
       <ModalHeader
+        variant="screen"
         title="New Address"
-        icon={MapPin}
-        iconVariant="neutral"
         onClose={handleRequestClose}
         closeDisabled={!canClose}
       />
@@ -329,6 +325,4 @@ export function NewAddressModal({ isOpen, onClose }: NewAddressModalProps) {
       </div>
     </WalletScreen>
   );
-
-  return createPortal(modal, document.body);
 }

@@ -108,18 +108,16 @@ describe('NewAddressModal — nametag prompt', () => {
     expect(flow.skip).toHaveBeenCalledTimes(1);
   });
 
-  it('cannot be closed while registering — backdrop, X and Escape are all inert', () => {
+  it('cannot be closed while registering — back button and Escape are inert', () => {
     flow.state = makeState({ step: 'registering' });
     const onClose = vi.fn();
     render(<NewAddressModal isOpen onClose={onClose} />);
 
     expect(screen.getByText(/don't close this window/i)).toBeDefined();
 
-    const backdrop = document.querySelector('.fixed.inset-0') as HTMLElement;
-    fireEvent.click(backdrop);
-    const xButton = document.querySelector('button:disabled') as HTMLButtonElement;
-    expect(xButton).not.toBeNull();
-    fireEvent.click(xButton);
+    const backButton = document.querySelector('button:disabled') as HTMLButtonElement;
+    expect(backButton).not.toBeNull();
+    fireEvent.click(backButton);
     fireEvent.keyDown(window, { key: 'Escape' });
 
     expect(onClose).not.toHaveBeenCalled();
