@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Send } from 'lucide-react';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
+import type { TransferResult } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer } from '../../sdk';
 import { getErrorMessage } from '../../sdk/errors';
 import { QuotaBlockedError } from '../../sdk/quotaGate';
 import { useUpgrade } from '../upgrade';
+import { showToast } from '../ui/toast-utils';
 import { IntentConfirmModal } from './IntentConfirmModal';
 
 interface SendIntentModalProps {
@@ -15,8 +17,8 @@ interface SendIntentModalProps {
   /** Token coinId (lowercase even-length hex). */
   coinId: string;
   memo?: string;
-  /** Called after the transfer succeeds (resolves the intent). */
-  onResolve: () => void;
+  /** Called after the transfer succeeds (resolves the intent with the result). */
+  onResolve: (result: TransferResult) => void;
   /** Called when the transfer fails (rejects the intent with the message). */
   onReject: (message: string) => void;
   /** Called when the user cancels (rejects the intent). */
@@ -57,8 +59,19 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
     setBusy(true);
     try {
       const recipient = to.startsWith('DIRECT://') ? to : to.replace(/^@/, '');
-      await transfer({ coinId, amount, recipient, ...(memo ? { memo } : {}) });
-      onResolve();
+      const result = await transfer({ coinId, amount, recipient, ...(memo ? { memo } : {}) });
+      // #433: a deliveryPending result means the spend certified on-chain but the
+      // recipient-side delivery is journaled for retry (§3.1). The dApp learns it
+      // via the intent result; this modal unmounts on resolve, so the wallet-side
+      // signal has to be a toast (SendModal's equivalent is its pending screen).
+      if (result.deliveryPending) {
+        showToast(
+          'Sent — delivery to the recipient is pending and will retry automatically.',
+          'info',
+          8000,
+        );
+      }
+      onResolve(result);
     } catch (err) {
       // Proactive quota block (useTransfer's mutationFn, Task 3) does NOT open
       // the Upgrade modal itself — that only happens on the reactive

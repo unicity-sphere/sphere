@@ -1373,8 +1373,18 @@ const { client, connection, disconnect } = await autoConnect({
 const identity = await client.query('sphere_getIdentity');
 const balance = await client.query('sphere_getBalance');
 
-// Send tokens (requires user confirmation in wallet)
-await client.intent('send', { to: '@alice', amount: '100' });
+// Send tokens (requires user confirmation in wallet).
+// amount is in BASE UNITS (smallest indivisible unit) and coinId is
+// required — the wallet rejects the intent with INVALID_PARAMS otherwise.
+const result = await client.intent('send', {
+  to: '@alice',                    // Unicity ID or DIRECT:// address
+  amount: '1000000000000000000',   // base units, positive integer string
+  coinId: '<lowercase hex coin id>', // e.g. from sphere_getAssets
+});
+// result: { success: true, transferId?: string, status: string,
+//           deliveryPending: boolean }
+// deliveryPending=true means the spend is FINAL on-chain but the recipient's
+// delivery is queued and retries automatically — never re-send it.
 
 // Handle wallet logout — user signed out or switched wallets
 client.on(WALLET_EVENTS.LOCKED, () => {
