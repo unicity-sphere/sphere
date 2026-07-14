@@ -20,13 +20,15 @@ interface PlansGridProps {
   currentPlanName: string | null;
   /** Provide to make cards selectable (upgrade flow). Omit for an info-only grid. */
   onSelect?: (plan: PlanInfo) => void;
+  /** Lapsed subscription: the current plan's store card offers a "Renew" CTA. */
+  renewableCurrent?: boolean;
   /** planId currently being processed (shows a spinner on that card's CTA). */
   loadingPlanId?: number | null;
   /** Disable all CTAs (e.g. while another checkout is pending). */
   disabled?: boolean;
 }
 
-export function PlansGrid({ plans, currentPlanName, onSelect, loadingPlanId, disabled }: PlansGridProps) {
+export function PlansGrid({ plans, currentPlanName, onSelect, renewableCurrent, loadingPlanId, disabled }: PlansGridProps) {
   const reduce = useReducedMotion();
 
   const container: Variants = {
@@ -69,6 +71,7 @@ export function PlansGrid({ plans, currentPlanName, onSelect, loadingPlanId, dis
               current={plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()}
               popular={isPopularPlan(plan)}
               onSelect={onSelect}
+              renewable={renewableCurrent}
               loading={loadingPlanId === plan.planId}
               disabled={disabled}
               variants={item}

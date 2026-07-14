@@ -10,12 +10,22 @@ it('resolves paid with the revealed key', async () => {
   // enumerable props) so intervalMs/timeoutMs/sleep fall back to prod defaults
   // and the test silently runs on a real 3s timer.
   const res = await pollOrderStatus(async () => seq.shift() ?? seq[0], instant());
-  expect(res).toEqual({ outcome: 'paid', apiKey: 'sk_new' });
+  expect(res).toEqual({ outcome: 'paid', apiKey: 'sk_new', upgrade: false });
 });
 
-it('resolves paid without a key when the reveal was consumed elsewhere', async () => {
+it('resolves paid without a key when the reveal was consumed elsewhere (pre-ack gateway)', async () => {
   const res = await pollOrderStatus(async () => ({ ...base, status: 'paid', fulfilled: true }), instant());
-  expect(res).toEqual({ outcome: 'paid', apiKey: undefined });
+  expect(res.outcome).toBe('paid');
+  expect(res.apiKey).toBeUndefined();
+  expect(res.upgrade).toBe(false);
+});
+
+it('passes through the in-place upgrade fields on paid', async () => {
+  const res = await pollOrderStatus(
+    async () => ({ ...base, status: 'paid', fulfilled: true, upgrade: true, maskedKey: 'sk_...abcd', planName: 'premium' }),
+    instant(),
+  );
+  expect(res).toEqual({ outcome: 'paid', apiKey: undefined, upgrade: true, maskedKey: 'sk_...abcd', planName: 'premium' });
 });
 
 it('resolves failed on a failed order', async () => {

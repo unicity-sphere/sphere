@@ -47,12 +47,17 @@ function Confetti() {
 
 interface UpgradeSuccessProps {
   plan: PlanInfo | null;
-  /** One-time-revealed key from a fresh checkout (or pasted via the claim step) — renders the copy-me key box when set. */
+  /** Freshly issued key from a new-key checkout (or pasted via the claim step) — renders the copy-me key box when set. */
   apiKey?: string | null;
+  /**
+   * In-place upgrade: the existing key (masked, e.g. "sk_...abcd") that now
+   * carries the new plan — renders the "same key" note instead of a key box.
+   */
+  upgradedMaskedKey?: string | null;
   onDone: () => void;
 }
 
-export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
+export function UpgradeSuccess({ plan, apiKey, upgradedMaskedKey, onDone }: UpgradeSuccessProps) {
   const [copied, setCopied] = useState(false);
   const copyKey = () => {
     if (!apiKey) return;
@@ -105,6 +110,12 @@ export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
             {plan.requestsPerDay.toLocaleString()} commitments/day · up to {plan.requestsPerMinute.toLocaleString()}/minute
           </p>
         )}
+        {upgradedMaskedKey && (
+          <p className="text-sm text-neutral-500 dark:text-white/50">
+            Your key <code className="font-mono">{upgradedMaskedKey}</code> stays the same — the new limits
+            apply within a minute.
+          </p>
+        )}
       </motion.div>
 
       {/* What it unlocked */}
@@ -140,7 +151,8 @@ export function UpgradeSuccess({ plan, apiKey, onDone }: UpgradeSuccessProps) {
           <code className="block break-all font-mono text-xs">{apiKey}</code>
           <p className="mt-2 text-[11px] leading-snug text-yellow-700/80 dark:text-yellow-300/70">
             Save this key — it's tied to this purchase, not your wallet identity. Restoring the wallet
-            recovers only the free key; paste this one again in Settings if you switch devices.
+            recovers only your wallet's own identity-bound key, not this one; paste this key again in
+            Settings if you switch devices.
           </p>
         </div>
       )}

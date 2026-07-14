@@ -7,9 +7,14 @@ import { PlansGrid } from '../subscription/PlansGrid';
 import { CurrentPlanShowcase } from '../subscription/CurrentPlanShowcase';
 import { UpgradeSuccess } from './UpgradeSuccess';
 import { usePlans, useUtilization, useCheckout } from '../../sdk/hooks/subscription';
-import { pollOrderStatus } from '../../sdk/subscription/pollOrder';
-import { getOrderStatus, type PlanInfo } from '../../services/subscriptionApi';
-import { syntheticCurrentPlan, formatPlanPrice } from '../subscription/planFeatures';
+import { pollOrderStatus, type OrderPollResult } from '../../sdk/subscription/pollOrder';
+import { resolveCheckoutOutcome } from '../../sdk/subscription/checkoutOutcome';
+import { validatePastedKey } from '../../sdk/subscription/keyCheck';
+import { loadWalletKey } from '../../sdk/subscription/keyVault';
+import { rememberPlan } from '../../sdk/subscription/planMemory';
+import { getOrderStatus, ackOrderKeyDelivery, type PlanInfo } from '../../services/subscriptionApi';
+import { syntheticCurrentPlan, formatPlanPrice, isPlanSelectable } from '../subscription/planFeatures';
+import { getStoredSubscriptionKey } from '../../config/storageKeys';
 import { SUBSCRIPTION_MOCK, PAID_PLANS_ENABLED } from '../../config/subscription';
 import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';
@@ -17,6 +22,12 @@ import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { useSphereContext } from '../../sdk/hooks';
 import { getPublicKey } from '@unicitylabs/sphere-sdk';
 import type { UpgradeReason } from './UpgradeContext';
+
+/** Local mirror of the gateway's mask ("sk_...abcd") for keys we hold in full. */
+function maskKey(key: string): string {
+  if (key.length < 12) return '...';
+  return `${key.startsWith('sk_') ? 'sk_' : ''}...${key.slice(-4)}`;
+}
 
 type Step = 'plans' | 'email' | 'awaiting' | 'claim' | 'success' | 'error';
 
@@ -59,7 +70,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const util = useUtilization();
   const checkout = useCheckout();
   const queryClient = useQueryClient();
-  const { sphere, applySubscriptionKey } = useSphereContext();
+  const { sphere, applySubscriptionKey, network } = useSphereContext();
 
   const [step, setStep] = useState<Step>('plans');
   const [error, setError] = useState<string | null>(null);
@@ -67,9 +78,16 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   const [selectedPlan, setSelectedPlan] = useState<PlanInfo | null>(null);
   const [email, setEmail] = useState('');
   const [claimKey, setClaimKey] = useState('');
+  const [claimError, setClaimError] = useState<string | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [walletWide, setWalletWide] = useState(false);
+  /** Key sent to checkout for an in-place upgrade (null = fresh-key purchase). */
+  const [upgradeTargetKey, setUpgradeTargetKey] = useState<string | null>(null);
+  /** Success came from an in-place upgrade — render the "same key" variant. */
+  const [upgradedMaskedKey, setUpgradedMaskedKey] = useState<string | null>(null);
+  /** Checkout failed while carrying an upgrade key — offer buying a new key instead. */
+  const [upgradeRejected, setUpgradeRejected] = useState(false);
 
   // Cancels the in-flight checkout poll when the modal closes (or a newer
   // checkout starts). Without this the poll outlives the modal and can
@@ -97,11 +115,12 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     [plans.data, freePlan],
   );
 
+  const subscriptionStatus = util.data?.status ?? null;
+  // A lapsed plan's own store card becomes the renew path (same key, fresh 30 days).
+  const renewableCurrent = subscriptionStatus !== null && subscriptionStatus !== 'active';
+
   const handleSelect = (plan: PlanInfo) => {
-    if (plan.name.toLowerCase() === (currentPlanName ?? '').toLowerCase()) return;
-    // Paid plans aren't purchasable yet (testnet) — the card shows "Coming on
-    // Mainnet" and no CTA; this guards any other entry path.
-    if (!PAID_PLANS_ENABLED && plan.priceCents > 0) return;
+    if (!isPlanSelectable(plan, { currentPlanName, subscriptionStatus, paidPlansEnabled: PAID_PLANS_ENABLED })) return;
     setSelectedPlan(plan);
     setStep('email');
   };
@@ -117,13 +136,21 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     showToast(`Upgraded to ${selectedPlan?.name ?? 'new plan'}`, 'success', 4000);
   };
 
-  // Claim-step activation: adoptKey can reject (e.g. storage blocked while
-  // persisting the key) — surface it on the error step instead of leaving the
-  // user stuck. claimKey is kept so "I have a key" lets them retry.
+  // Claim-step activation: the pasted key is first sanity-checked against the
+  // gateway (definitive unknown/revoked rejects inline; a failed lookup fails
+  // open). adoptKey can still reject (e.g. storage blocked while persisting) —
+  // surface that on the error step. claimKey is kept so "I have a key" lets
+  // them retry.
   const activateClaimKey = async () => {
     setClaiming(true);
     setError(null);
+    setClaimError(null);
     try {
+      const verdict = await validatePastedKey(claimKey);
+      if (!verdict.valid) {
+        setClaimError(verdict.message ?? 'This key is not valid.');
+        return;
+      }
       await adoptKey(claimKey);
     } catch (e) {
       setStep('error');
@@ -133,16 +160,43 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     }
   };
 
-  const startCheckout = async () => {
+  /**
+   * The key this purchase should upgrade in place: the wallet key when the
+   * purchase is wallet-wide (root address or the checkbox), otherwise whatever
+   * key the active address currently uses. Null (no key yet, or the user chose
+   * "buy a new key instead") turns the checkout into a fresh-key purchase.
+   */
+  const resolveUpgradeKey = async (): Promise<string | null> => {
+    try {
+      if ((onRootAddress || walletWide) && sphere) {
+        return (await loadWalletKey(sphere, network)) ?? getStoredSubscriptionKey();
+      }
+    } catch {
+      // fall through to the boot cache
+    }
+    return getStoredSubscriptionKey();
+  };
+
+  const startCheckout = async (opts?: { forceNewKey?: boolean }) => {
     if (!selectedPlan) return;
     setError(null);
+    setUpgradeRejected(false);
     // Supersede any prior in-flight poll, then track this one so close/unmount
     // can abort it.
     checkoutAbortRef.current?.abort();
     const abort = new AbortController();
     checkoutAbortRef.current = abort;
+    // Always ask for an in-place upgrade of the existing key (same key, new
+    // plan, fresh 30 days). Pre-upgrade gateways ignore the field and mint a
+    // new key — the order's `upgrade` flag tells us which flow ran.
+    const upgradeApiKey = opts?.forceNewKey ? null : await resolveUpgradeKey();
+    setUpgradeTargetKey(upgradeApiKey);
     try {
-      const { orderId, redirectUrl } = await checkout.mutateAsync({ planId: selectedPlan.planId, email });
+      const { orderId, redirectUrl } = await checkout.mutateAsync({
+        planId: selectedPlan.planId,
+        email,
+        upgradeApiKey: upgradeApiKey ?? undefined,
+      });
       // Closed (or superseded) during order creation — don't pop a payment tab
       // or strand the modal on 'awaiting' after the user cancelled.
       if (abort.signal.aborted) return;
@@ -150,31 +204,59 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
       window.open(redirectUrl, '_blank', 'noopener,noreferrer');
       setStep('awaiting');
 
-      const result = SUBSCRIPTION_MOCK
-        ? { outcome: 'paid' as const, apiKey: 'sk_mock_upgraded' } // demoable without a backend
+      const result: OrderPollResult = SUBSCRIPTION_MOCK
+        ? upgradeApiKey // demoable without a backend — mirror the live gateway's two shapes
+          ? { outcome: 'paid', upgrade: true, maskedKey: maskKey(upgradeApiKey), planName: selectedPlan.name }
+          : { outcome: 'paid', upgrade: false, apiKey: 'sk_mock_upgraded' }
         : await pollOrderStatus(() => getOrderStatus(orderId), { signal: abort.signal });
 
       // Modal closed (or a newer checkout took over) while polling — do NOT
       // adopt a key or touch step/error state on a torn-down flow.
       if (abort.signal.aborted) return;
 
-      if (result.outcome === 'cancelled') return;
-
-      if (result.outcome === 'paid' && result.apiKey) {
-        await adoptKey(result.apiKey);
-      } else if (result.outcome === 'paid') {
-        setStep('claim'); // reveal consumed by the gateway return page — let the user paste it
-      } else if (result.outcome === 'failed') {
-        setStep('error');
-        setError('The payment was not completed. No charge was made — you can try again.');
-      } else {
-        setStep('error');
-        setError('Payment not detected yet. If you paid, open the payment return page — your API key is shown there once — then paste it via "I have a key".');
+      const action = resolveCheckoutOutcome(result);
+      switch (action.kind) {
+        case 'cancelled':
+          return;
+        case 'upgraded': {
+          // Same key, new plan — nothing to adopt or re-init; just refresh the
+          // subscription read models and remember the plan for the
+          // downgrade watcher.
+          await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
+          const planName = action.planName ?? selectedPlan.name;
+          if (upgradeApiKey) rememberPlan(upgradeApiKey, planName);
+          setUpgradedMaskedKey(action.maskedKey ?? (upgradeApiKey ? maskKey(upgradeApiKey) : null));
+          setStep('success');
+          showToast(`Upgraded to ${planName}`, 'success', 4000);
+          return;
+        }
+        case 'adopt':
+          await adoptKey(action.apiKey);
+          // Stop the gateway's key delivery only AFTER the key is persisted;
+          // fire-and-forget — an unsent ack just leaves the key deliverable.
+          void ackOrderKeyDelivery(orderId);
+          return;
+        case 'claim':
+          setStep('claim');
+          return;
+        case 'failed':
+          setStep('error');
+          setError('The payment was not completed. No charge was made — you can try again.');
+          return;
+        case 'timeout':
+          setStep('error');
+          setError(
+            'Payment not detected yet. It may still be confirming — keep the payment tab open and reopen this dialog in a minute.',
+          );
+          return;
       }
     } catch (e) {
       if (abort.signal.aborted) return; // torn down mid-checkout — stay silent
       setStep('error');
       setError(e instanceof Error ? e.message : 'Checkout failed');
+      // The gateway validates the upgrade key up front (unknown/revoked → 400):
+      // give the user a way to buy a fresh key instead of the upgrade.
+      setUpgradeRejected(!!upgradeApiKey);
     }
   };
 
@@ -187,9 +269,13 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setSelectedPlan(null);
     setEmail('');
     setClaimKey('');
+    setClaimError(null);
     setClaiming(false);
     setNewApiKey(null);
     setWalletWide(false);
+    setUpgradeTargetKey(null);
+    setUpgradedMaskedKey(null);
+    setUpgradeRejected(false);
     onClose();
   };
 
@@ -261,7 +347,12 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   </div>
                 )}
                 {!plans.isLoading && !plans.isError && (
-                  <PlansGrid plans={gridPlans} currentPlanName={currentPlanName} onSelect={handleSelect} />
+                  <PlansGrid
+                    plans={gridPlans}
+                    currentPlanName={currentPlanName}
+                    renewableCurrent={renewableCurrent}
+                    onSelect={handleSelect}
+                  />
                 )}
               </>
             )}
@@ -276,6 +367,12 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                     Paymento will send the payment link and receipt to this email.
                   </p>
                 </div>
+                {subscriptionStatus === 'active' && util.data?.activeUntil && (
+                  <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-neutral-600 dark:text-white/60">
+                    Your current plan is replaced as soon as the payment confirms — remaining time doesn't
+                    carry over. The new plan runs 30 days from payment.
+                  </p>
+                )}
                 <input
                   type="email"
                   value={email}
@@ -299,7 +396,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                   fullWidth
                   disabled={!/\S+@\S+\.\S+/.test(email)}
                   loading={checkout.isPending}
-                  onClick={startCheckout}
+                  onClick={() => void startCheckout()}
                 >
                   Continue to payment
                 </Button>
@@ -316,7 +413,11 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
             {step === 'awaiting' && (
               <div className="flex flex-col items-center gap-3 py-24 text-center">
                 <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
-                <p className="text-sm">Complete the payment in the new tab — we'll pick up your new API key automatically.</p>
+                <p className="text-sm">
+                  {upgradeTargetKey
+                    ? `Complete the payment in the new tab — your key ${maskKey(upgradeTargetKey)} moves to the new plan automatically.`
+                    : "Complete the payment in the new tab — we'll pick up your new API key automatically."}
+                </p>
                 {paymentUrl && (
                   <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-orange-500 underline">
                     Payment page didn't open? Open it here
@@ -333,10 +434,14 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                 </p>
                 <input
                   value={claimKey}
-                  onChange={(e) => setClaimKey(e.target.value.trim())}
+                  onChange={(e) => {
+                    setClaimKey(e.target.value.trim());
+                    setClaimError(null);
+                  }}
                   placeholder="sk_…"
                   className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-mono text-sm outline-none focus:border-orange-500 dark:border-white/10 dark:bg-white/5"
                 />
+                {claimError && <p className="text-sm text-red-500">{claimError}</p>}
                 <Button
                   variant="primary"
                   fullWidth
@@ -349,16 +454,23 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
               </div>
             )}
 
-            {step === 'success' && <UpgradeSuccess plan={selectedPlan} apiKey={newApiKey} onDone={handleClose} />}
+            {step === 'success' && (
+              <UpgradeSuccess plan={selectedPlan} apiKey={newApiKey} upgradedMaskedKey={upgradedMaskedKey} onDone={handleClose} />
+            )}
 
             {step === 'error' && (
               <div className="flex flex-col items-center gap-4 py-24 text-center">
                 <AlertTriangle className="h-8 w-8 text-yellow-500" />
                 <p className="max-w-md text-sm">{error}</p>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap justify-center gap-3">
                   <Button variant="secondary" onClick={() => setStep('plans')}>
                     Back to plans
                   </Button>
+                  {upgradeRejected && (
+                    <Button variant="secondary" onClick={() => void startCheckout({ forceNewKey: true })}>
+                      Buy a new key instead
+                    </Button>
+                  )}
                   <Button variant="secondary" onClick={() => setStep('claim')}>
                     I have a key
                   </Button>

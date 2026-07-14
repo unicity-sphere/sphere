@@ -3,7 +3,7 @@
  * subscription UI (Phases 2–4) be built and visually verified without a
  * live backend. Shapes must match the real client's types exactly.
  */
-import type { PlanInfo, UtilizationInfo, ProvisionResult, CheckoutResult, OrderStatusInfo } from './subscriptionApi';
+import type { PlanInfo, UtilizationInfo, ProvisionResult, CheckoutResult, OrderStatusInfo, KeyInfo } from './subscriptionApi';
 
 // Per-minute values are the seeded gateway plans (V25 = old rps × 60; V23 cents).
 export const mockPlans: PlanInfo[] = [
@@ -36,12 +36,32 @@ export const mockCheckout: CheckoutResult = {
   redirectUrl: 'https://pay.example.test/gateway?token=mock',
 };
 
+// A fulfilled NEW-key order: the key stays deliverable on every poll until acked.
 export const mockOrderStatus: OrderStatusInfo = {
   orderId: 'ssc-mock',
   status: 'paid',
   statusName: 'Confirmed',
   fulfilled: true,
   confirming: false,
+  upgrade: false,
   apiKey: 'sk_mock_upgraded',
-  keyShownOnce: true,
+};
+
+// A fulfilled IN-PLACE upgrade order: no key is ever delivered, only its mask.
+export const mockOrderStatusUpgrade: OrderStatusInfo = {
+  orderId: 'ssc-mock-upgrade',
+  status: 'paid',
+  statusName: 'Approve',
+  fulfilled: true,
+  confirming: false,
+  upgrade: true,
+  maskedKey: 'sk_...free',
+  planName: 'premium',
+};
+
+export const mockKeyInfo: KeyInfo = {
+  maskedKey: 'sk_...free',
+  planName: 'free',
+  subscriptionState: 'active',
+  activeUntil: null, // free keys never expire
 };

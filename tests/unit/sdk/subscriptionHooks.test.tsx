@@ -75,10 +75,17 @@ describe('subscription hooks', () => {
     expect(result.current.data?.utilization.consumedPerDay).toBe(10);
   });
 
-  it('useCheckout posts {planId, email}', async () => {
+  it('useCheckout posts {planId, email} without an upgrade key', async () => {
     const { result } = renderHook(() => useCheckout(), { wrapper });
     result.current.mutate({ planId: 3, email: 'a@b.com' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(createStoreCheckout).toHaveBeenCalledWith(3, 'a@b.com');
+    expect(createStoreCheckout).toHaveBeenCalledWith(3, 'a@b.com', undefined);
+  });
+
+  it('useCheckout forwards the upgrade key for in-place upgrades', async () => {
+    const { result } = renderHook(() => useCheckout(), { wrapper });
+    result.current.mutate({ planId: 3, email: 'a@b.com', upgradeApiKey: 'sk_current' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(createStoreCheckout).toHaveBeenCalledWith(3, 'a@b.com', 'sk_current');
   });
 });

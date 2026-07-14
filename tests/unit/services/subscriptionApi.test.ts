@@ -14,6 +14,8 @@ import {
   getStorePlans,
   createStoreCheckout,
   getOrderStatus,
+  ackOrderKeyDelivery,
+  getKeyInfo,
 } from '@/services/subscriptionApi';
 
 // The subscription identity is the wallet's INDEX-0 keypair (stable across
@@ -165,13 +167,106 @@ describe('subscriptionApi', () => {
     expect(res.orderId).toBe('ssc-1');
   });
 
-  it('getOrderStatus passes orderId and surfaces the one-time apiKey', async () => {
+  it('createStoreCheckout includes the upgrade apiKey in the body when provided', async () => {
+    const fetchSpy = mockFetchOnce({ json: { orderId: 'ssc-2', redirectUrl: 'https://app.paymento.io/gateway?token=u' } });
+    await createStoreCheckout(3, 'a@b.c', 'sk_' + 'e'.repeat(32));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/paymento/checkout'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ planId: 3, email: 'a@b.c', apiKey: 'sk_' + 'e'.repeat(32) }),
+      }),
+    );
+  });
+
+  it('createStoreCheckout omits the apiKey field for blank upgrade keys', async () => {
+    const fetchSpy = mockFetchOnce({ json: { orderId: 'ssc-3', redirectUrl: 'https://x' } });
+    await createStoreCheckout(2, 'a@b.c', '  ');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ body: JSON.stringify({ planId: 2, email: 'a@b.c' }) }),
+    );
+  });
+
+  it('getOrderStatus passes through the ack-contract fields (apiKey on every poll, upgrade/maskedKey/planName)', async () => {
     mockFetchOnce({
-      json: { orderId: 'ssc-1', status: 'paid', statusName: 'Confirmed', fulfilled: true, confirming: false, apiKey: 'sk_new', keyShownOnce: true },
+      json: {
+        orderId: 'ssc-1', status: 'paid', statusName: 'Approve', fulfilled: true, confirming: false,
+        upgrade: true, maskedKey: 'sk_...abcd', planName: 'premium',
+      },
     });
     const res = await getOrderStatus('ssc-1');
     expect(res.status).toBe('paid');
-    expect(res.apiKey).toBe('sk_new');
+    expect(res.upgrade).toBe(true);
+    expect(res.maskedKey).toBe('sk_...abcd');
+    expect(res.planName).toBe('premium');
+    expect(res.apiKey).toBeUndefined();
+  });
+
+  describe('ackOrderKeyDelivery', () => {
+    it('POSTs to order-key-ack and resolves true on 200', async () => {
+      const fetchSpy = mockFetchOnce({ json: { acknowledged: true } });
+      await expect(ackOrderKeyDelivery('ssc-1')).resolves.toBe(true);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/paymento/order-key-ack?orderId=ssc-1'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('resolves false without retrying on 409 (upgrade order) and 404 (old gateway / unknown order)', async () => {
+      const on409 = mockFetchOnce({ ok: false, status: 409, json: { error: 'Upgrade orders have no key to acknowledge.' } });
+      await expect(ackOrderKeyDelivery('ssc-upg')).resolves.toBe(false);
+      expect(on409).toHaveBeenCalledTimes(1);
+
+      const on404 = mockFetchOnce({ ok: false, status: 404, json: { error: 'Not found' } });
+      await expect(ackOrderKeyDelivery('ssc-x')).resolves.toBe(false);
+      expect(on404).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries transient failures and never throws', async () => {
+      const fn = vi.fn()
+        .mockRejectedValueOnce(new Error('net'))
+        .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ acknowledged: true }) });
+      vi.stubGlobal('fetch', fn);
+      await expect(ackOrderKeyDelivery('ssc-1', { sleep: async () => {} })).resolves.toBe(true);
+      expect(fn).toHaveBeenCalledTimes(3);
+    });
+
+    it('gives up after the attempt budget on persistent failures', async () => {
+      const fn = vi.fn().mockRejectedValue(new Error('net'));
+      vi.stubGlobal('fetch', fn);
+      await expect(ackOrderKeyDelivery('ssc-1', { attempts: 2, sleep: async () => {} })).resolves.toBe(false);
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('getKeyInfo', () => {
+    it('GETs key-info with the key as X-API-Key credential and returns the info', async () => {
+      const body = { maskedKey: 'sk_...abcd', planName: 'basic', subscriptionState: 'active', activeUntil: '2026-08-12T00:00:00Z' };
+      const fetchSpy = mockFetchOnce({ json: body });
+      const res = await getKeyInfo('sk_' + 'a'.repeat(32));
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/paymento/key-info'),
+        expect.objectContaining({ headers: { 'x-api-key': 'sk_' + 'a'.repeat(32) } }),
+      );
+      expect(res).toEqual(body);
+    });
+
+    it('returns null on the definitive unknown/revoked 404', async () => {
+      mockFetchOnce({ ok: false, status: 404, json: { error: 'Unknown API key.' } });
+      await expect(getKeyInfo('sk_dead')).resolves.toBeNull();
+    });
+
+    it("throws on an old gateway's route-missing 404 (must not read as a dead key)", async () => {
+      mockFetchOnce({ ok: false, status: 404, json: { error: 'Not found' } });
+      await expect(getKeyInfo('sk_abc')).rejects.toThrow(/Not found/);
+    });
+
+    it('throws on server errors', async () => {
+      mockFetchOnce({ ok: false, status: 503, json: { error: 'nope' } });
+      await expect(getKeyInfo('sk_abc')).rejects.toThrow();
+    });
   });
 
   it('throws on non-ok responses', async () => {
