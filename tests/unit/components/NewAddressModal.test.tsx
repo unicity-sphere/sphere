@@ -61,7 +61,7 @@ describe('NewAddressModal — nametag prompt', () => {
 
   it('disables Register and shows the SDK format hint for an invalid ID', () => {
     renderModal();
-    fireEvent.change(screen.getByPlaceholderText('nametag'), { target: { value: 'ab' } });
+    fireEvent.change(screen.getByPlaceholderText('id'), { target: { value: 'ab' } });
 
     expect(screen.getByText(/use a-z, 0-9/i)).toBeDefined();
     const register = screen.getByRole('button', { name: 'Register' }) as HTMLButtonElement;
@@ -71,7 +71,7 @@ describe('NewAddressModal — nametag prompt', () => {
   it('treats an unverifiable availability as "cannot verify", not as free', async () => {
     flow.checkAvailability = vi.fn(async () => 'unknown' as const);
     renderModal();
-    fireEvent.change(screen.getByPlaceholderText('nametag'), {
+    fireEvent.change(screen.getByPlaceholderText('id'), {
       target: { value: 'validname' },
     });
 
@@ -90,7 +90,7 @@ describe('NewAddressModal — nametag prompt', () => {
   it('blocks Register when the ID is taken', async () => {
     flow.checkAvailability = vi.fn(async () => 'taken' as const);
     renderModal();
-    fireEvent.change(screen.getByPlaceholderText('nametag'), {
+    fireEvent.change(screen.getByPlaceholderText('id'), {
       target: { value: 'takenname' },
     });
 
@@ -104,7 +104,7 @@ describe('NewAddressModal — nametag prompt', () => {
 
   it('Skip hands off to the flow', () => {
     renderModal();
-    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
     expect(flow.skip).toHaveBeenCalledTimes(1);
   });
 

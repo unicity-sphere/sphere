@@ -3,14 +3,19 @@
  * address (#413). Shared by AddressSelector ("New") and AddressManagerModal
  * ("Derive New Address").
  *
+ * Visually mirrors the onboarding NametagScreen / RegisterNametagModal
+ * (@unicity-suffixed input, availability-colored border, gradient Register,
+ * "Skip for now"), hosted in the wallet's standard dialog chrome.
+ *
  * Rendered through a portal: both hosts sit inside transformed/stacked
- * containers where a plain `fixed` overlay would clip or mis-position.
+ * containers where the dialog's `fixed` overlay would clip or mis-position.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Loader2, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertCircle, AlertTriangle, ArrowRight, MapPin } from 'lucide-react';
 import { isValidNametag } from '@unicitylabs/sphere-sdk';
+import { WalletScreen } from '../../ui/WalletScreen';
+import { ModalHeader } from '../../ui';
 import { truncateId } from '../../../../utils/identifiers';
 import {
   useNewAddressFlow,
@@ -50,10 +55,10 @@ export function NewAddressModal({ isOpen, onClose }: NewAddressModalProps) {
     }
   }, [isOpen, start, reset]);
 
-  // Focus the input when the prompt appears.
+  // Focus the input when the prompt appears (after the dialog spring-in).
   useEffect(() => {
     if (state.step === 'nametag_input') {
-      const timer = setTimeout(() => inputRef.current?.focus(), 100);
+      const timer = setTimeout(() => inputRef.current?.focus(), 400);
       return () => clearTimeout(timer);
     }
   }, [state.step]);
@@ -133,205 +138,196 @@ export function NewAddressModal({ isOpen, onClose }: NewAddressModalProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleRequestClose]);
 
-  const showFormatHint = cleanTag.length > 0 && !isValid && !state.registerError;
+  const showFormatHint = cleanTag.length > 0 && !isValid;
+
+  const inputBorderClass =
+    availability === 'taken'
+      ? 'border-red-400 dark:border-red-500/50 focus:border-red-500'
+      : availability === 'available'
+        ? 'border-emerald-400 dark:border-emerald-500/50 focus:border-emerald-500'
+        : availability === 'unknown'
+          ? 'border-amber-400 dark:border-amber-500/50 focus:border-amber-500'
+          : 'border-neutral-200 dark:border-white/8 focus:border-orange-500';
 
   const modal = (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-100 bg-black/40"
-            onClick={handleRequestClose}
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-100 flex items-center justify-center p-4 pointer-events-none"
-          >
-            <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl border border-neutral-200 dark:border-neutral-700 w-full max-w-sm p-5 pointer-events-auto">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-                  New Address
-                </h3>
-                <button
-                  onClick={handleRequestClose}
-                  disabled={!canClose}
-                  className="p-1 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors disabled:opacity-30"
-                >
-                  <X className="w-4 h-4 text-neutral-500" />
-                </button>
+    <WalletScreen isOpen={isOpen} onClose={handleRequestClose} asModal>
+      <ModalHeader
+        title="New Address"
+        icon={MapPin}
+        iconVariant="neutral"
+        onClose={handleRequestClose}
+        closeDisabled={!canClose}
+      />
+
+      <div className="px-6 py-8 space-y-4 flex-1">
+        {state.step === 'deriving' && (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <Loader2 className="w-7 h-7 text-orange-500 animate-spin" />
+            <p className="text-sm text-neutral-500 dark:text-white/45">
+              Generating new address...
+            </p>
+            {state.slow && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+                Network is slow — still working...
+              </p>
+            )}
+          </div>
+        )}
+
+        {state.step === 'nametag_input' && (
+          <>
+            {state.newAddress && (
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-neutral-100 dark:bg-white/4 border border-neutral-200 dark:border-white/8 rounded-xl">
+                <span className="text-xs font-medium text-neutral-500 dark:text-white/45 shrink-0">
+                  Address #{state.newAddress.index}
+                </span>
+                <span className="text-xs font-mono text-neutral-400 dark:text-white/35 truncate">
+                  {truncateId(state.newAddress.chainPubkey)}
+                </span>
+              </div>
+            )}
+
+            <p className="text-sm text-neutral-500 dark:text-white/45">
+              Choose a unique <span className="font-semibold">Unicity ID</span> for this
+              address to receive tokens easily, or skip for now.
+            </p>
+
+            <div className="space-y-4">
+              <div className="relative group">
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 z-10">
+                  {availability === 'checking' && (
+                    <Loader2 className="w-3.5 h-3.5 text-neutral-400 animate-spin" />
+                  )}
+                  {availability === 'available' && (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                  )}
+                  {availability === 'taken' && (
+                    <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                  )}
+                  {availability === 'unknown' && (
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                  )}
+                  <span className="text-neutral-400 dark:text-neutral-500 group-focus-within:text-orange-500 dark:group-focus-within:text-orange-400 transition-colors text-sm font-medium">
+                    @unicity
+                  </span>
+                </div>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={handleChange}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRegister();
+                  }}
+                  placeholder="id"
+                  maxLength={32}
+                  className={`w-full bg-neutral-100 dark:bg-white/4 border-2 rounded-xl py-3 pl-4 pr-28 text-sm text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:bg-white dark:focus:bg-white/6 transition-all ${inputBorderClass}`}
+                />
               </div>
 
-              {state.step === 'deriving' && (
-                <div className="flex flex-col items-center gap-3 py-6">
-                  <Loader2 className="w-6 h-6 text-orange-500 animate-spin" />
-                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                    Generating new address...
+              {/* Availability / validation status — fixed height to prevent layout shift */}
+              <div className="h-8 -mt-2">
+                {showFormatHint && (
+                  <p className="text-neutral-400 dark:text-white/35 text-xs">
+                    {NAMETAG_FORMAT_HINT}
                   </p>
-                  {state.slow && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
-                      Network is slow — still working...
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {(state.step === 'nametag_input' || state.step === 'registering') && (
-                <>
-                  {state.newAddress && (
-                    <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 rounded-xl">
-                      <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 shrink-0">
-                        Address #{state.newAddress.index}
-                      </span>
-                      <span className="text-xs font-mono text-neutral-400 truncate">
-                        {truncateId(state.newAddress.chainPubkey)}
-                      </span>
-                    </div>
-                  )}
-
-                  <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">
-                    Choose a Unicity ID for this address, or skip for now.
+                )}
+                {!showFormatHint && availability === 'taken' && (
+                  <p className="text-red-500 dark:text-red-400 text-xs">
+                    @{cleanTag} is already taken
                   </p>
-
-                  {state.step === 'registering' ? (
-                    <div className="flex flex-col items-center gap-3 py-4">
-                      <Loader2 className="w-6 h-6 text-orange-500 animate-spin" />
-                      <p className="text-sm text-neutral-600 dark:text-neutral-300">
-                        Registering @{cleanTag}...
-                      </p>
-                      <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                        Don't close this window
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Nametag input */}
-                      <div className="relative mb-3">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-400">
-                          @
-                        </span>
-                        <input
-                          ref={inputRef}
-                          type="text"
-                          value={input}
-                          onChange={handleChange}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') handleRegister();
-                          }}
-                          placeholder="nametag"
-                          maxLength={32}
-                          className="w-full pl-7 pr-8 py-2.5 text-sm bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 transition-colors"
-                        />
-                        {/* Availability indicator */}
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2">
-                          {availability === 'checking' && (
-                            <Loader2 className="w-4 h-4 text-neutral-400 animate-spin" />
-                          )}
-                          {availability === 'available' && (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                          )}
-                          {availability === 'taken' && (
-                            <AlertCircle className="w-4 h-4 text-red-500" />
-                          )}
-                          {availability === 'unknown' && (
-                            <AlertTriangle className="w-4 h-4 text-amber-500" />
-                          )}
-                        </span>
-                      </div>
-
-                      {/* Availability / validation / error — fixed height, no layout shift */}
-                      <div className="min-h-8 mb-2">
-                        {state.registerError && (
-                          <p className="text-xs text-red-500">{state.registerError}</p>
-                        )}
-                        {!state.registerError && showFormatHint && (
-                          <p className="text-xs text-neutral-400">{NAMETAG_FORMAT_HINT}</p>
-                        )}
-                        {!state.registerError && availability === 'taken' && (
-                          <p className="text-xs text-red-500">@{cleanTag} is already taken</p>
-                        )}
-                        {!state.registerError && availability === 'available' && (
-                          <p className="text-xs text-emerald-500">@{cleanTag} is available</p>
-                        )}
-                        {!state.registerError && availability === 'unknown' && (
-                          <p className="text-xs text-amber-600 dark:text-amber-400">
-                            Can't verify availability right now — registration will fail if the
-                            ID is taken.
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Buttons */}
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleSkip}
-                          className="flex-1 px-3 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-xl transition-colors"
-                        >
-                          Skip
-                        </button>
-                        <button
-                          onClick={handleRegister}
-                          disabled={!canRegister}
-                          className="flex-1 px-3 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition-colors disabled:opacity-50"
-                        >
-                          Register
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {state.step === 'complete' && state.outcome !== 'skipped' && (
-                <div className="flex flex-col items-center gap-3 py-6">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500" />
-                  <p className="text-sm text-neutral-700 dark:text-neutral-200 text-center">
-                    {state.outcome === 'recovered' ? (
-                      <>
-                        <span className="font-medium">@{state.completedNametag}</span> was
-                        recovered for this address
-                      </>
-                    ) : (
-                      <>
-                        <span className="font-medium">@{state.completedNametag}</span> is ready
-                      </>
-                    )}
+                )}
+                {!showFormatHint && availability === 'available' && (
+                  <p className="text-emerald-500 dark:text-emerald-400 text-xs">
+                    @{cleanTag} is available
                   </p>
-                </div>
-              )}
+                )}
+                {!showFormatHint && availability === 'unknown' && (
+                  <p className="text-amber-600 dark:text-amber-400 text-xs">
+                    Can't verify availability right now — registration will fail if the ID
+                    is taken.
+                  </p>
+                )}
+              </div>
 
-              {state.step === 'error' && (
-                <div className="flex flex-col items-center gap-3 py-4">
-                  <AlertCircle className="w-8 h-8 text-red-500" />
-                  <p className="text-sm text-red-500 text-center">{state.error}</p>
-                  <div className="flex gap-2 w-full mt-2">
-                    <button
-                      onClick={onClose}
-                      className="flex-1 px-3 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-xl transition-colors"
-                    >
-                      Close
-                    </button>
-                    <button
-                      onClick={() => start()}
-                      className="flex-1 px-3 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition-colors"
-                    >
-                      Try Again
-                    </button>
-                  </div>
-                </div>
+              <button
+                onClick={handleRegister}
+                disabled={!canRegister}
+                className="w-full py-3 px-4 rounded-xl bg-linear-to-r from-orange-500 to-orange-600 text-white text-sm font-bold shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:from-orange-400 hover:to-orange-500 transition-all"
+              >
+                Register
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={handleSkip}
+                className="w-full py-2 text-sm font-medium text-neutral-500 dark:text-white/45 hover:text-neutral-700 dark:hover:text-white/65 transition-colors"
+              >
+                Skip for now
+              </button>
+
+              {state.registerError && (
+                <p className="text-red-500 dark:text-red-400 text-xs bg-red-500/10 border border-red-500/20 p-2 rounded-lg">
+                  {state.registerError}
+                </p>
               )}
             </div>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+          </>
+        )}
+
+        {state.step === 'registering' && (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <Loader2 className="w-7 h-7 text-orange-500 animate-spin" />
+            <p className="text-sm text-neutral-700 dark:text-white/85">
+              Registering @{cleanTag}...
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              Don't close this window
+            </p>
+          </div>
+        )}
+
+        {state.step === 'complete' && state.outcome !== 'skipped' && (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <CheckCircle2 className="w-9 h-9 text-emerald-500" />
+            <p className="text-sm text-neutral-700 dark:text-white/85 text-center">
+              {state.outcome === 'recovered' ? (
+                <>
+                  <span className="font-semibold">@{state.completedNametag}</span> was
+                  recovered for this address
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold">@{state.completedNametag}</span> is ready
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
+        {state.step === 'error' && (
+          <div className="flex flex-col items-center gap-3 py-6">
+            <AlertCircle className="w-9 h-9 text-red-500" />
+            <p className="text-sm text-red-500 dark:text-red-400 text-center">{state.error}</p>
+            <div className="flex gap-2 w-full mt-2">
+              <button
+                onClick={onClose}
+                className="flex-1 px-3 py-3 text-sm font-medium text-neutral-600 dark:text-white/65 bg-neutral-100 dark:bg-white/6 hover:bg-neutral-200 dark:hover:bg-white/10 rounded-xl transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => start()}
+                className="flex-1 px-3 py-3 rounded-xl bg-linear-to-r from-orange-500 to-orange-600 text-white text-sm font-bold hover:from-orange-400 hover:to-orange-500 transition-all"
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </WalletScreen>
   );
 
   return createPortal(modal, document.body);
