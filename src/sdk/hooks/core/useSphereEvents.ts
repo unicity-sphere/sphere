@@ -25,6 +25,9 @@ export function useSphereEvents(): void {
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
+  // One deferred-delivery toast per transfer — the SDK re-emits delivery:deferred
+  // on every replay pass that hits the recipient's full mailbox again.
+  const deferredToastIdsRef = useRef<Set<string>>(new Set());
   // Last storage:degraded toast per providerId — cooldown against toast storms
   const degradedToastAtRef = useRef<Map<string, number>>(new Map());
 
@@ -105,9 +108,10 @@ export function useSphereEvents(): void {
 
     const handleIdentityChange = () => {
       // New identity = new transfer stream (wallet-api sessions are
-      // per-identity): clear the toast dedup set so the new address's
+      // per-identity): clear the toast dedup sets so the new address's
       // transfers are never swallowed by ids seen under the old one.
       seenTransferIdsRef.current.clear();
+      deferredToastIdsRef.current.clear();
       refreshIdentityCache();
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.all });
@@ -210,6 +214,38 @@ export function useSphereEvents(): void {
       );
     };
 
+    // sphere-sdk#517 item 1 (#434): a journaled post-commit delivery exhausted its
+    // bounded replay budget and is marked POISON — kept journaled, NEVER auto-retried
+    // again. The spend is final on-chain and the recipient has NOT received it, so
+    // without a loud signal the transfer is stranded silently until support steps in.
+    const handleDeliveryUndeliverable = (data: {
+      transferId: string;
+      recipientPubkey: string;
+      attempts: number;
+      error: string;
+    }) => {
+      showToast(
+        `A sent transfer could not be delivered after ${data.attempts} attempts — the funds are ` +
+          `committed to the recipient but undelivered. Contact support with reference ` +
+          `${data.transferId.slice(0, 8)}.`,
+        'error',
+        15000,
+      );
+    };
+
+    // §3.1 / sphere-sdk#621 (#434): recipient's mailbox is full (429) — the delivery
+    // stays journaled and retries after the deferral window. Not a failure; toast once
+    // per transfer so periodic replay passes don't re-announce the same deferral.
+    const handleDeliveryDeferred = (data: { transferId: string }) => {
+      if (deferredToastIdsRef.current.has(data.transferId)) return;
+      deferredToastIdsRef.current.add(data.transferId);
+      showToast(
+        "Recipient can't receive yet (inbox full) — delivery will retry automatically.",
+        'info',
+        8000,
+      );
+    };
+
     sphere.on('transfer:incoming', handleIncomingTransfer);
     sphere.on('transfer:confirmed', handleTransferConfirmed);
     // sphere-sdk 0.10.6 (#621/#622): a send whose recipient delivery is deferred (full mailbox / 429,
@@ -229,6 +265,8 @@ export function useSphereEvents(): void {
     sphere.on('payment_request:incoming', handlePaymentRequestIncoming);
     sphere.on('storage:degraded', handleStorageDegraded);
     sphere.on('split:checkpoint-stuck', handleSplitCheckpointStuck);
+    sphere.on('delivery:undeliverable', handleDeliveryUndeliverable);
+    sphere.on('delivery:deferred', handleDeliveryDeferred);
 
     return () => {
       if (invalidateTimerRef.current) {
@@ -250,6 +288,8 @@ export function useSphereEvents(): void {
       sphere.off('payment_request:incoming', handlePaymentRequestIncoming);
       sphere.off('storage:degraded', handleStorageDegraded);
       sphere.off('split:checkpoint-stuck', handleSplitCheckpointStuck);
+      sphere.off('delivery:undeliverable', handleDeliveryUndeliverable);
+      sphere.off('delivery:deferred', handleDeliveryDeferred);
     };
   }, [sphere, queryClient]);
 }
