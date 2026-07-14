@@ -18,9 +18,17 @@ function truncateNametag(nametag: string, maxLength: number = 20): string {
 interface AddressSelectorProps {
   /** Compact mode - just show nametag with small dropdown trigger */
   compact?: boolean;
+  /**
+   * #413: preferred hosting for the derive-address flow. When provided, the
+   * "New" button delegates to the host (WalletPanel renders NewAddressModal
+   * at panel level so the slide-in screen paints above the wallet content).
+   * Without it the selector renders the flow itself, anchored to the nearest
+   * positioned ancestor.
+   */
+  onNewAddress?: () => void;
 }
 
-export function AddressSelector({ compact = true }: AddressSelectorProps) {
+export function AddressSelector({ compact = true, onNewAddress }: AddressSelectorProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [copied, setCopied] = useState<'nametag' | 'address' | false>(false);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -122,8 +130,12 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
   const handleNewClick = useCallback(() => {
     if (!sphere || isSwitching) return;
     setShowDropdown(false);
-    setShowNewAddressModal(true);
-  }, [sphere, isSwitching]);
+    if (onNewAddress) {
+      onNewAddress();
+    } else {
+      setShowNewAddressModal(true);
+    }
+  }, [sphere, isSwitching, onNewAddress]);
 
   const handleNewAddressModalClose = useCallback(() => {
     setShowNewAddressModal(false);
@@ -139,8 +151,8 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     return addr.chainPubkey;
   }, []);
 
-  // New-address flow (#413) — shared between compact and full modes
-  const newAddressModal = (
+  // New-address flow (#413) — fallback hosting when the parent doesn't take it
+  const newAddressModal = onNewAddress ? null : (
     <NewAddressModal isOpen={showNewAddressModal} onClose={handleNewAddressModalClose} />
   );
 

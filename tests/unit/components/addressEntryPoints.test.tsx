@@ -62,6 +62,18 @@ describe('AddressSelector — "New" opens the Unicity ID flow', () => {
     // No direct derivation from the selector anymore.
     expect(fakeSphere.switchToAddress).toBeUndefined();
   });
+
+  it('delegates to the panel host when onNewAddress is provided', () => {
+    const onNewAddress = vi.fn();
+    render(<AddressSelector compact onNewAddress={onNewAddress} />, { wrapper: Wrapper });
+
+    fireEvent.click(screen.getByText(`${PUBKEY.slice(0, 6)}...${PUBKEY.slice(-4)}`));
+    fireEvent.click(screen.getByRole('button', { name: /new/i }));
+
+    expect(onNewAddress).toHaveBeenCalledTimes(1);
+    // The selector must not double-host the flow in this mode.
+    expect(screen.queryByTestId('new-address-modal')).toBeNull();
+  });
 });
 
 describe('AddressManagerModal — "Derive New Address" opens the Unicity ID flow', () => {

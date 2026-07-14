@@ -6,6 +6,7 @@ import { useIdentity, useWalletStatus, useSphereContext } from '../../sdk';
 import { useIncomingPaymentRequests } from './L3/hooks/useIncomingPaymentRequests';
 import { useUIState } from '../../hooks/useUIState';
 import { RegisterNametagModal } from './shared/components/RegisterNametagModal';
+import { NewAddressModal } from './shared/modals/NewAddressModal';
 import { AddressSelector } from './shared/components';
 import { CreateWalletFlow } from './onboarding/CreateWalletFlow';
 
@@ -17,6 +18,9 @@ export function WalletPanel() {
   const [isRequestsOpen, setIsRequestsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNametagModalOpen, setIsNametagModalOpen] = useState(false);
+  // #413: derive-address flow — hosted at panel level (like RegisterNametagModal)
+  // so the slide-in screen paints above the wallet content in DOM order.
+  const [isNewAddressOpen, setIsNewAddressOpen] = useState(false);
   const { isLoading: isWalletLoading, walletExists, error: walletError } = useWalletStatus();
   const { identity, nametag, isLoading: isLoadingIdentity } = useIdentity();
   const { initProgress } = useSphereContext();
@@ -196,7 +200,7 @@ export function WalletPanel() {
                   </motion.button>
                 )}
               </div>
-              <AddressSelector compact />
+              <AddressSelector compact onNewAddress={() => setIsNewAddressOpen(true)} />
             </div>
           </div>
 
@@ -261,6 +265,12 @@ export function WalletPanel() {
       <RegisterNametagModal
         isOpen={isNametagModalOpen}
         onClose={() => setIsNametagModalOpen(false)}
+      />
+
+      {/* New Address flow (#413) */}
+      <NewAddressModal
+        isOpen={isNewAddressOpen}
+        onClose={() => setIsNewAddressOpen(false)}
       />
     </div>
   );
