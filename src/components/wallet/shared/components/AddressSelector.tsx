@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { ChevronDown, Plus, Loader2, Check, Copy, X, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { ChevronDown, Plus, Loader2, Check, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useIdentity } from '../../../../sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
@@ -7,6 +7,7 @@ import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
 import { truncateId } from '../../../../utils/identifiers';
+import { NewAddressModal } from '../modals/NewAddressModal';
 
 /** Truncate long nametags: show first 6 chars + ... + last 3 chars */
 function truncateNametag(nametag: string, maxLength: number = 20): string {
@@ -17,21 +18,25 @@ function truncateNametag(nametag: string, maxLength: number = 20): string {
 interface AddressSelectorProps {
   /** Compact mode - just show nametag with small dropdown trigger */
   compact?: boolean;
+  /**
+   * #413: preferred hosting for the derive-address flow. When provided, the
+   * "New" button delegates to the host (WalletPanel renders NewAddressModal
+   * at panel level so the slide-in screen paints above the wallet content).
+   * Without it the selector renders the flow itself, anchored to the nearest
+   * positioned ancestor.
+   */
+  onNewAddress?: () => void;
 }
 
-export function AddressSelector({ compact = true }: AddressSelectorProps) {
+export function AddressSelector({ compact = true, onNewAddress }: AddressSelectorProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [copied, setCopied] = useState<'nametag' | 'address' | false>(false);
   const [isSwitching, setIsSwitching] = useState(false);
 
-  // Nametag modal state
-  const [showNametagModal, setShowNametagModal] = useState(false);
-  const [newNametag, setNewNametag] = useState('');
-  const [nametagError, setNametagError] = useState<string | null>(null);
-  const [nametagAvailability, setNametagAvailability] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
-  const nametagInputRef = useRef<HTMLInputElement>(null);
+  // #413: derivation + Unicity ID prompt live in the shared NewAddressModal
+  const [showNewAddressModal, setShowNewAddressModal] = useState(false);
 
-  const { sphere, resolveNametag, isDiscoveringAddresses } = useSphereContext();
+  const { sphere, isDiscoveringAddresses } = useSphereContext();
   const { nametag, chainPubkey } = useIdentity();
   const queryClient = useQueryClient();
 
@@ -54,34 +59,6 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     const unsub2 = sphere.on('address:unhidden', refresh);
     return () => { unsub1(); unsub2(); };
   }, [sphere, currentAddressIndex, nametag, isDiscoveringAddresses]);
-
-  // Focus nametag input when modal opens
-  useEffect(() => {
-    if (showNametagModal) {
-      setTimeout(() => nametagInputRef.current?.focus(), 100);
-    }
-  }, [showNametagModal]);
-
-  // Debounced nametag availability check
-  useEffect(() => {
-    const cleanTag = newNametag.trim().replace(/^@/, '');
-    if (!cleanTag || cleanTag.length < 2) {
-      setNametagAvailability('idle');
-      return;
-    }
-
-    setNametagAvailability('checking');
-    const timer = setTimeout(async () => {
-      try {
-        const existing = await resolveNametag(cleanTag);
-        setNametagAvailability(existing ? 'taken' : 'available');
-      } catch {
-        setNametagAvailability('idle');
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [newNametag, resolveNametag]);
 
   const displayNametag = nametag;
 
@@ -148,76 +125,22 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     }
   }, [sphere, isSwitching, currentAddressIndex, refreshAfterSwitch]);
 
-  // Step 1: Create new address, then check if nametag already exists (local + network)
-  const handleNewClick = useCallback(async () => {
+  // #413: open the shared derive-address flow — it derives, prompts for a
+  // Unicity ID (with an explicit Skip) and handles nametag recovery itself.
+  const handleNewClick = useCallback(() => {
     if (!sphere || isSwitching) return;
-
-    // Keep dropdown open to show "Switching..." indicator
-    setIsSwitching(true);
-
-    try {
-      const nextIndex = addresses.length > 0
-        ? Math.max(...addresses.map(a => a.index)) + 1
-        : 1;
-
-      // Create and switch to the new address
-      // Timeout guards against SDK hanging on Nostr publish when relay is not connected
-      try {
-        await Promise.race([
-          sphere.switchToAddress(nextIndex),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-        ]);
-      } catch (e) {
-        if (!(e instanceof Error && e.message === 'timeout')) throw e;
-      }
-      refreshAfterSwitch();
-      setShowDropdown(false);
-      // Nametag recovery happens async in the SDK background.
-      // If recovered, 'nametag:recovered' event updates UI via useSphereEvents.
-      // If not, user can click "Register ID" in the header.
-    } catch (e) {
-      console.error('[AddressSelector] Failed to create new address:', e);
-      setShowDropdown(false);
-    } finally {
-      setIsSwitching(false);
+    setShowDropdown(false);
+    if (onNewAddress) {
+      onNewAddress();
+    } else {
+      setShowNewAddressModal(true);
     }
-  }, [sphere, isSwitching, addresses, refreshAfterSwitch]);
+  }, [sphere, isSwitching, onNewAddress]);
 
-  // Step 2a: Register nametag on the current address (already created in handleNewClick)
-  const handleCreateWithNametag = useCallback(async () => {
-    if (!sphere || isSwitching) return;
-    const cleanTag = newNametag.trim().replace(/^@/, '');
-    if (!cleanTag) return;
-
-    setIsSwitching(true);
-    setNametagError(null);
-
-    try {
-      // Check availability via Nostr transport
-      const existing = await resolveNametag(cleanTag);
-      if (existing) {
-        setNametagError(`@${cleanTag} is already taken`);
-        setIsSwitching(false);
-        return;
-      }
-
-      // Register nametag on the current address
-      await sphere.registerNametag(cleanTag);
-      setShowNametagModal(false);
-      refreshAfterSwitch();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to register nametag';
-      console.error('[AddressSelector] Failed to register nametag:', e);
-      setNametagError(msg);
-    } finally {
-      setIsSwitching(false);
-    }
-  }, [sphere, isSwitching, newNametag, resolveNametag, refreshAfterSwitch]);
-
-  // Step 2b: Skip nametag (address already created in handleNewClick)
-  const handleCreateWithoutNametag = useCallback(() => {
-    setShowNametagModal(false);
-  }, []);
+  const handleNewAddressModalClose = useCallback(() => {
+    setShowNewAddressModal(false);
+    refreshAfterSwitch();
+  }, [refreshAfterSwitch]);
 
   const sortedAddresses = useMemo(() => {
     return [...addresses].sort((a, b) => a.index - b.index);
@@ -228,111 +151,9 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
     return addr.chainPubkey;
   }, []);
 
-  // =========================================================================
-  // Nametag Modal (shared between compact and full modes)
-  // =========================================================================
-  const nametagModal = (
-    <AnimatePresence>
-      {showNametagModal && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/40"
-            onClick={() => !isSwitching && setShowNametagModal(false)}
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          >
-            <div className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl border border-neutral-200 dark:border-neutral-700 w-full max-w-sm p-5">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-                  New Address
-                </h3>
-                <button
-                  onClick={() => !isSwitching && setShowNametagModal(false)}
-                  className="p-1 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-                >
-                  <X className="w-4 h-4 text-neutral-500" />
-                </button>
-              </div>
-
-              {/* Description */}
-              <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">
-                Choose a Unicity ID for this address, or skip for now.
-              </p>
-
-              {/* Nametag input */}
-              <div className="relative mb-3">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-400">@</span>
-                <input
-                  ref={nametagInputRef}
-                  type="text"
-                  value={newNametag}
-                  onChange={e => {
-                    setNewNametag(e.target.value.toLowerCase());
-                    setNametagError(null);
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && newNametag.trim() && nametagAvailability === 'available') handleCreateWithNametag();
-                  }}
-                  placeholder="nametag"
-                  disabled={isSwitching}
-                  className="w-full pl-7 pr-8 py-2.5 text-sm bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 disabled:opacity-50 transition-colors"
-                />
-                {/* Availability indicator */}
-                <span className="absolute right-3 top-1/2 -translate-y-1/2">
-                  {nametagAvailability === 'checking' && <Loader2 className="w-4 h-4 text-neutral-400 animate-spin" />}
-                  {nametagAvailability === 'available' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                  {nametagAvailability === 'taken' && <AlertCircle className="w-4 h-4 text-red-500" />}
-                </span>
-              </div>
-
-              {/* Availability / Error — fixed height to prevent layout shift */}
-              <div className="h-4 mb-2">
-                {nametagAvailability === 'taken' && !nametagError && (
-                  <p className="text-xs text-red-500">@{newNametag.trim().replace(/^@/, '')} is already taken</p>
-                )}
-                {nametagError && (
-                  <p className="text-xs text-red-500">{nametagError}</p>
-                )}
-                {nametagAvailability === 'available' && (
-                  <p className="text-xs text-emerald-500">@{newNametag.trim().replace(/^@/, '')} is available</p>
-                )}
-              </div>
-
-              {/* Buttons */}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCreateWithoutNametag}
-                  disabled={isSwitching}
-                  className="flex-1 px-3 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-xl transition-colors disabled:opacity-50"
-                >
-                  {isSwitching && !newNametag.trim() ? (
-                    <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                  ) : 'Skip'}
-                </button>
-                <button
-                  onClick={handleCreateWithNametag}
-                  disabled={isSwitching || !newNametag.trim() || nametagAvailability === 'taken' || nametagAvailability === 'checking'}
-                  className="flex-1 px-3 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition-colors disabled:opacity-50"
-                >
-                  {isSwitching && newNametag.trim() ? (
-                    <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                  ) : 'Create'}
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+  // New-address flow (#413) — fallback hosting when the parent doesn't take it
+  const newAddressModal = onNewAddress ? null : (
+    <NewAddressModal isOpen={showNewAddressModal} onClose={handleNewAddressModalClose} />
   );
 
   // No sphere — show minimal nametag if available
@@ -357,8 +178,11 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
 
   if (compact) {
     return (
+      <>
+        {/* Slide-in screen: rendered outside the relative wrapper so it fills
+            the wallet panel (nearest positioned ancestor), like Register ID. */}
+        {newAddressModal}
       <div className="relative">
-        {nametagModal}
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => setShowDropdown(prev => !prev)}
@@ -476,13 +300,15 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
           )}
         </AnimatePresence>
       </div>
+      </>
     );
   }
 
   // Full mode
   return (
+    <>
+      {newAddressModal}
     <div className="relative">
-      {nametagModal}
       <button
         onClick={() => setShowDropdown(prev => !prev)}
         className="flex items-center gap-2 px-3 py-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-700/50 transition-colors"
@@ -573,5 +399,6 @@ export function AddressSelector({ compact = true }: AddressSelectorProps) {
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }
