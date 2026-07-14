@@ -3,10 +3,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Files converted to pubkey-first display by #411. LookupModal (My Public Keys),
-// DocsPage and DevelopersPage are intentionally NOT listed — DIRECT lives there.
+// Files converted to pubkey-first display by #411 (+ the #413 derive-address
+// flow). LookupModal (My Public Keys), DocsPage and DevelopersPage are
+// intentionally NOT listed — DIRECT lives there.
 const CHANGED_UI_FILES = [
   'src/components/wallet/shared/components/AddressSelector.tsx',
+  'src/components/wallet/shared/modals/NewAddressModal.tsx',
+  'src/components/wallet/shared/hooks/useNewAddressFlow.ts',
   'src/components/wallet/L3/modals/AddressManagerModal.tsx',
   'src/components/wallet/L3/modals/SendModal.tsx',
   'src/components/wallet/L3/modals/SendPaymentRequestModal.tsx',

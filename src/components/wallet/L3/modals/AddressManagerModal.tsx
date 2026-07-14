@@ -5,6 +5,7 @@ import { ModalHeader } from '../../ui';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
 import { truncateId } from '../../../../utils/identifiers';
+import { NewAddressModal } from '../../shared/modals/NewAddressModal';
 
 interface AddressManagerModalProps {
   isOpen: boolean;
@@ -15,7 +16,8 @@ export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProp
   const { sphere } = useSphereContext();
   const [addresses, setAddresses] = useState<TrackedAddress[]>([]);
   const [togglingIndex, setTogglingIndex] = useState<number | null>(null);
-  const [isDeriving, setIsDeriving] = useState(false);
+  // #413: derivation + Unicity ID prompt live in the shared NewAddressModal
+  const [showNewAddress, setShowNewAddress] = useState(false);
 
   const currentIndex = sphere?.getCurrentAddressIndex() ?? 0;
 
@@ -46,21 +48,17 @@ export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProp
     }
   }, [sphere, refreshAddresses]);
 
-  const handleDeriveNew = useCallback(async () => {
-    if (!sphere || isDeriving) return;
-    setIsDeriving(true);
-    try {
-      const nextIndex = addresses.length > 0
-        ? Math.max(...addresses.map(a => a.index)) + 1
-        : 1;
-      await sphere.switchToAddress(nextIndex);
-      refreshAddresses();
-    } catch (e) {
-      console.error('[AddressManager] Failed to derive new address:', e);
-    } finally {
-      setIsDeriving(false);
-    }
-  }, [sphere, addresses, isDeriving, refreshAddresses]);
+  // #413: open the shared derive-address flow — it derives, prompts for a
+  // Unicity ID (with an explicit Skip) and handles nametag recovery itself.
+  const handleDeriveNew = useCallback(() => {
+    if (!sphere) return;
+    setShowNewAddress(true);
+  }, [sphere]);
+
+  const handleNewAddressClose = useCallback(() => {
+    setShowNewAddress(false);
+    refreshAddresses();
+  }, [refreshAddresses]);
 
   return (
     <WalletScreen isOpen={isOpen} onClose={onClose}>
@@ -151,17 +149,14 @@ export function AddressManagerModal({ isOpen, onClose }: AddressManagerModalProp
         {/* Derive new address button */}
         <button
           onClick={handleDeriveNew}
-          disabled={isDeriving}
           className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium text-orange-600 dark:text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 rounded-xl transition-colors disabled:opacity-50"
         >
-          {isDeriving ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Plus className="w-4 h-4" />
-          )}
+          <Plus className="w-4 h-4" />
           Derive New Address
         </button>
       </div>
+
+      <NewAddressModal isOpen={showNewAddress} onClose={handleNewAddressClose} />
     </WalletScreen>
   );
 }
