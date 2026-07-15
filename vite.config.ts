@@ -166,8 +166,6 @@ export default defineConfig(({ mode }) => {
     // Pre-bundle heavy CJS dependencies to speed up dev server cold start
     optimizeDeps: {
       include: [
-        'elliptic',
-        'crypto-js',
         'framer-motion',
         'react',
         'react-dom',

@@ -241,7 +241,7 @@ Notes:
   - `/dev-rpc` → `https://dev-aggregator.dyndns.org` (dev aggregator)
   - `/coingecko` → `https://api.coingecko.com/api/v3` (price data)
 - **Base path:** configurable via `BASE_PATH` env var
-- **Node polyfills:** Buffer, process globals for `elliptic` and `crypto-js`
+- **Node polyfills:** Buffer, process globals for the `@unicitylabs/sphere-sdk` browser bundle (its dist imports the bare `buffer` module)
 - **GitHub Pages SPA:** CI copies `index.html` → `404.html` for client-side routing
 
 ## Testing
@@ -261,10 +261,8 @@ Tests are in `tests/` and run with Vitest:
 
 ## Developer Notes
 
-### Crypto Libraries
-Node polyfills (`vite-plugin-node-polyfills`) are needed for `elliptic` and `crypto-js`, used in `BridgeModal.tsx` for L1 bridge signing.
+### Node Polyfills
+Node polyfills (`vite-plugin-node-polyfills`) are needed for `@unicitylabs/sphere-sdk`: its browser/core dist bundles import the bare `buffer` module (`import { Buffer } from "buffer"`) and reference `process`, which the plugin resolves and shims.
 
 ### Key External Dependencies
 - `@unicitylabs/sphere-sdk` — Core SDK: L1/L3 operations, Nostr messaging, IPFS sync, market feed
-- `elliptic` — secp256k1 cryptography for L1 bridge signing
-- `crypto-js` — AES encryption for bridge operations
