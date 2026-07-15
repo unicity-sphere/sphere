@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
+import { isPendingCommitCode } from '../../../../sdk/errors';
 import type { IncomingPaymentRequest as SDKPaymentRequest } from '@unicitylabs/sphere-sdk';
 
 export const PaymentRequestStatus = {
@@ -65,18 +66,50 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  *   respond happens BEFORE the local flip, and a server rejection (403
  *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
  *   surface it, the local status stays pending.
- * - `pay` — `payments.payPaymentRequest`: sends the transfer, then links the
- *   transferId in the 'paid' respond. A failed respond after a successful
- *   send is logged by the SDK, never reported as a payment failure.
+ * - `pay` — `payments.payPaymentRequest`: sends the transfer (through the same
+ *   payments.send() as a normal send), then links the transferId in the 'paid'
+ *   respond. A failed respond after a successful send is logged by the SDK,
+ *   never reported as a payment failure. A possibly-committed keep-open reject
+ *   (PENDING_COMMIT_CODES — SEND_SYNC_PENDING / CERTIFICATION_UNCONFIRMED / the
+ *   E.4 split-checkpoint trio) is presented as a pending SUCCESS, never a
+ *   re-payable failure (see `pay` below for the double-pay reasoning).
  */
 export const useIncomingPaymentRequests = () => {
     const { sphere } = useSphereContext();
     const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
+    // #441: request ids whose pay() hit a possibly-committed keep-open code. The
+    // spend is (or may be) on-chain and resume completes the ORIGINAL payment
+    // under the same transferId, but the SDK's payPaymentRequest REVERTS the
+    // request to 'pending' before re-throwing (PaymentsModule catch), so a bare
+    // refresh() would re-list it as payable → one-click double-pay. We pin a
+    // local override here (applied in refresh) so the request leaves the payable
+    // (PENDING) state until the SDK's own list resolves it (paid/expired). A ref,
+    // not state: refresh() reads it synchronously and it must survive re-renders
+    // without itself triggering one.
+    const settlingIdsRef = useRef<Set<string>>(new Set());
+
     const refresh = useCallback(() => {
         if (!sphere) return;
-        setRequests(sphere.payments.getPaymentRequests().map(bridgeRequest));
+        setRequests(
+            sphere.payments.getPaymentRequests().map((r) => {
+                const bridged = bridgeRequest(r);
+                if (settlingIdsRef.current.has(bridged.id)) {
+                    // Keep a pending-commit'd request OUT of the payable state even
+                    // though the SDK reverted it to 'pending' (money already left;
+                    // re-pay = double-pay). Surface it as 'Payment Sent' (ACCEPTED):
+                    // sent-and-settling, non-actionable. Once the SDK moves it off
+                    // 'pending' (a real paid/expired resolution), the override is
+                    // obsolete — drop it and show the SDK's true status.
+                    if (bridged.status === PaymentRequestStatus.PENDING) {
+                        return { ...bridged, status: PaymentRequestStatus.ACCEPTED };
+                    }
+                    settlingIdsRef.current.delete(bridged.id);
+                }
+                return bridged;
+            }),
+        );
     }, [sphere]);
 
     useEffect(() => {
@@ -139,6 +172,24 @@ export const useIncomingPaymentRequests = () => {
         requireSubscriptionKey();
         try {
             await sphere.payments.payPaymentRequest(request.id);
+        } catch (err) {
+            // #441: payPaymentRequest routes through the same send() as a normal
+            // transfer, so it can reject with the possibly-committed keep-open
+            // codes (PENDING_COMMIT_CODES). On those the spend is (or may be)
+            // on-chain and resume completes it under the same transferId — a
+            // second pay would double-pay. The SDK reverts the request to
+            // 'pending' before re-throwing, so we treat the reject as a pending
+            // SUCCESS: pin the settling override (so refresh drops it from the
+            // payable list) and swallow the throw (so the modal shows no
+            // re-payable error). Mirrors useTransfer's pending-commit handling
+            // via the ONE shared isPendingCommitCode definition. Any other error
+            // is a genuine failure — re-throw so PaymentRequestModal surfaces it
+            // and the request stays actionable (safe to retry, nothing committed).
+            if (isPendingCommitCode(err)) {
+                settlingIdsRef.current.add(request.id);
+                return;
+            }
+            throw err;
         } finally {
             refresh();
         }

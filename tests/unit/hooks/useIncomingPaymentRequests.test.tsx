@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { SphereError } from "@unicitylabs/sphere-sdk";
 import {
   useIncomingPaymentRequests,
   PaymentRequestStatus,
 } from "../../../src/components/wallet/L3/hooks/useIncomingPaymentRequests";
+import { PENDING_COMMIT_CODES } from "../../../src/sdk/errors";
 import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from "../../../src/sdk/subscription/keyStatus";
 import * as subscriptionConfig from "../../../src/config/subscription";
 
@@ -215,6 +217,71 @@ describe("useIncomingPaymentRequests", () => {
     ).rejects.toThrow(/INSUFFICIENT_FUNDS/);
 
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
+  });
+
+  // #441: payPaymentRequest routes through the same send() as a normal transfer,
+  // so it can reject with the possibly-committed keep-open codes. The SDK reverts
+  // the request to 'pending' before re-throwing (mirrored here: the rejected mock
+  // never flips status, so the fake list keeps it 'pending'). Without the guard,
+  // the finally-refresh re-lists it as payable → one-click double-pay.
+  it.each(PENDING_COMMIT_CODES)(
+    "treats a %s pay reject as a pending SUCCESS and drops the request from the payable list (no double-pay) (#441)",
+    async (code) => {
+      fakeSphere = makeFakeSphere([makeRequest("a")]);
+      fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
+        new SphereError("possibly committed on-chain", code),
+      );
+      const { result } = renderHook(() => useIncomingPaymentRequests());
+      expect(result.current.pendingCount).toBe(1);
+
+      // pay() RESOLVES (does not throw) — the money is (or may be) on-chain.
+      await act(() => result.current.pay(result.current.requests[0]));
+
+      // The request left the payable (PENDING) state — its Pay button is gone —
+      // even though the SDK reverted it to 'pending'.
+      expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledTimes(1);
+      expect(result.current.requests[0].status).not.toBe(PaymentRequestStatus.PENDING);
+      expect(result.current.pendingCount).toBe(0);
+    },
+  );
+
+  it("keeps the request non-payable across later refreshes while the SDK still lists it 'pending' (#441)", async () => {
+    fakeSphere = makeFakeSphere([makeRequest("a")]);
+    fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
+      new SphereError("possibly committed on-chain", "CHECKPOINT_PERSIST_FAILED"),
+    );
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+
+    await act(() => result.current.pay(result.current.requests[0]));
+    expect(result.current.pendingCount).toBe(0);
+
+    // A subsequent refresh (e.g. an unrelated incoming request) re-reads the SDK
+    // list — where 'a' is STILL 'pending' — but the settling override must persist.
+    act(() => {
+      fakeSphere!._receive(makeRequest("b"));
+    });
+    await waitFor(() => expect(result.current.requests).toHaveLength(2));
+    const a = result.current.requests.find((r) => r.id === "a")!;
+    expect(a.status).not.toBe(PaymentRequestStatus.PENDING);
+    // Only the fresh request 'b' is payable.
+    expect(result.current.pendingCount).toBe(1);
+  });
+
+  it("drops the settling override once the SDK's own list resolves the request (paid via resume/cross-session) (#441)", async () => {
+    fakeSphere = makeFakeSphere([makeRequest("a")]);
+    fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
+      new SphereError("possibly committed on-chain", "SEND_SYNC_PENDING"),
+    );
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+    await act(() => result.current.pay(result.current.requests[0]));
+
+    // SDK later advances the request to a real terminal status.
+    act(() => {
+      fakeSphere!._resolveRemote("a", "paid");
+    });
+
+    await waitFor(() => expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID));
+    expect(result.current.pendingCount).toBe(0);
   });
 
   it("refuses to pay while the subscription key is not ready (same keyless-send guard as a normal send)", async () => {

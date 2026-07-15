@@ -144,6 +144,33 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  // #440: the E.4 split-checkpoint keep-open codes are re-thrown RAW by the SDK
+  // (they are NOT re-tagged SEND_SYNC_PENDING). Each is possibly/definitely
+  // committed on-chain with the intent kept OPEN, so they MUST resolve as a
+  // pending success — never a re-sendable failure (a re-send would double-pay).
+  it.each([
+    'CHECKPOINT_PERSIST_FAILED',
+    'SPLIT_CHECKPOINT_LOST',
+    'CHECKPOINT_TRUSTBASE_MISMATCH',
+  ] as const)(
+    'converts a %s reject into a delivery-pending SUCCESS (keep-open E.4 — no re-send → no double-pay) (#440)',
+    async (code) => {
+      const send = vi.fn().mockRejectedValue(new SphereError('split checkpoint stuck', code));
+      fakeSphere = { payments: { send } };
+      const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+      let res: { deliveryPending?: boolean } | undefined;
+      await act(async () => {
+        res = await result.current.transfer(PARAMS);
+      });
+
+      // Resolved (NOT rejected) as pending — the split burn is on-chain, resume completes it.
+      expect(res?.deliveryPending).toBe(true);
+      expect(result.current.error).toBeNull();
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
     fakeSphere = { payments: { send } };
