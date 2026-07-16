@@ -59,6 +59,7 @@ import {
 } from '../config/walletApi';
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
+import { allowsSharedAggregatorKey } from '../config/networkCapabilities';
 import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
 import { validatePastedKey } from './subscription/keyCheck';
 import { isPaidPlan } from './subscription/usage';
@@ -132,6 +133,22 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
  * instead of silently composing the legacy local-custody bundle.
  */
 function buildProviders(network: NetworkType, apiKey?: string): SphereAppProviders {
+  // Fail closed on the static-key mode where it is unsafe. VITE_AGGREGATOR_API_KEY
+  // is compiled into the bundle every visitor downloads, so on a real-value
+  // network it would hand this deployment's aggregator quota to anyone with
+  // devtools. runtime-config.sh only WARNS on a near-miss flag ('TRUE', '1'),
+  // and it REQUIRES a key in that mode — so a typo'd flag plus a real key is a
+  // silent leak. Throw here (like the #351 custody assert) so it surfaces as a
+  // visible init error instead.
+  if (!allowsSharedAggregatorKey(network) && !SUBSCRIPTION_ENABLED) {
+    throw new Error(
+      `Refusing to run on "${network}" with subscriptions disabled: the static ` +
+        'VITE_AGGREGATOR_API_KEY ships inside the JS bundle, so it is readable by ' +
+        'every visitor and is not a secret on any client. Set SUBSCRIPTION_ENABLED ' +
+        "to exactly 'true' so each wallet provisions its own per-wallet key.",
+    );
+  }
+
   const base = createBrowserProviders({
     network,
     // v2 token engine: aggregator URL + trust base come from the network

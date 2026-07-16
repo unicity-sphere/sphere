@@ -10,8 +10,12 @@
  * names are denied by default.
  */
 
-/** Networks where free self-mint is acceptable (test money only). */
-const SELF_MINT_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+/**
+ * Networks that carry test money only. Every capability below is granted from
+ * this one allowlist, so a new network is denied everything until it is listed
+ * deliberately. Exact match by design: a typo'd network unlocks nothing.
+ */
+const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
 
 /** User-facing error for gated mint attempts (hook throws + Connect intent reject). */
 export const MINT_UNAVAILABLE_MESSAGE = 'Minting is not available on this network';
@@ -19,8 +23,23 @@ export const MINT_UNAVAILABLE_MESSAGE = 'Minting is not available on this networ
 /**
  * Fail-closed allowlist: true only for known test networks. Any other value —
  * including 'mainnet', '', case variants and future network names — is false.
- * Exact match by design: a typo'd network must not unlock minting.
  */
 export function canSelfMint(network: string): boolean {
-  return SELF_MINT_NETWORKS.has(network);
+  return TEST_NETWORKS.has(network);
+}
+
+/**
+ * Whether ONE shared, build-time aggregator key (VITE_AGGREGATOR_API_KEY) may
+ * serve every wallet on this network.
+ *
+ * WHY: that key is compiled into the JS the browser downloads (and
+ * deploy/runtime-config.sh seds it into the built bundle), so it is readable by
+ * every visitor — it is not, and cannot be, a secret. On a test network that is
+ * harmless: the key guards worthless money and is published on purpose. On a
+ * real-value network it would hand the operator's aggregator quota to anyone
+ * who opens devtools, which is exactly what per-wallet subscription keys exist
+ * to prevent. Fail closed: only test networks may use the shared key.
+ */
+export function allowsSharedAggregatorKey(network: string): boolean {
+  return TEST_NETWORKS.has(network);
 }
