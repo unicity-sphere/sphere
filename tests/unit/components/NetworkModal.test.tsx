@@ -7,6 +7,8 @@ import type { NetworkType } from '@unicitylabs/sphere-sdk';
 // re-import per test without resetModules, which would break vi.mock).
 const netState = vi.hoisted(() => ({
   active: 'testnet2' as NetworkType,
+  downgradedFrom: null as string | null,
+  mainnetReason: 'not-onboarded' as string,
   setActiveNetwork: vi.fn(),
 }));
 
@@ -14,10 +16,15 @@ vi.mock('../../../src/config/network', () => ({
   get SPHERE_NETWORK() {
     return netState.active;
   },
-  SUPPORTED_NETWORKS: [
-    { id: 'testnet2', label: 'Testnet2', available: true },
-    { id: 'mainnet', label: 'Mainnet', available: false },
-  ],
+  get NETWORK_DOWNGRADED_FROM() {
+    return netState.downgradedFrom;
+  },
+  get SUPPORTED_NETWORKS() {
+    return [
+      { id: 'testnet2', label: 'Testnet2', available: true },
+      { id: 'mainnet', label: 'Mainnet', available: false, unavailableReason: netState.mainnetReason },
+    ];
+  },
   setActiveNetwork: netState.setActiveNetwork,
 }));
 
@@ -25,6 +32,8 @@ import { NetworkModal } from '../../../src/components/wallet/L3/modals/NetworkMo
 
 beforeEach(() => {
   netState.active = 'testnet2';
+  netState.downgradedFrom = null;
+  netState.mainnetReason = 'not-onboarded';
   netState.setActiveNetwork.mockReset();
 });
 
@@ -82,5 +91,26 @@ describe('NetworkModal', () => {
 
     expect(screen.queryByText(/separate per network/i)).toBeNull();
     expect(netState.setActiveNetwork).not.toHaveBeenCalled();
+  });
+
+  it('says the deployment cannot reach a network rather than "Coming soon"', () => {
+    netState.mainnetReason = 'not-served-here';
+    renderModal();
+    expect(screen.getByText('Not available here')).toBeDefined();
+    expect(screen.queryByText('Coming soon')).toBeNull();
+  });
+
+  it('shows no downgrade notice when the persisted choice was honoured', () => {
+    renderModal();
+    expect(screen.queryByText(/is not available here, so the wallet is on/)).toBeNull();
+  });
+
+  it('explains a fallback, and that the assets on the other network are untouched', () => {
+    // Without this the user lands on another network, sees an empty wallet and
+    // concludes their funds are gone.
+    netState.downgradedFrom = 'mainnet';
+    renderModal();
+    expect(screen.getByText(/mainnet is not available here, so the wallet is on Testnet2/)).toBeDefined();
+    expect(screen.getByText(/assets on mainnet are\s+untouched/)).toBeDefined();
   });
 });

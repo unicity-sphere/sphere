@@ -119,6 +119,24 @@ jobs:
           docker exec "$cid" sh -c "grep -rq '__SPHERE_RUNTIME_CONFIG__' /usr/share/nginx/html/assets" \
             || { echo "ERROR: bundle does not read __SPHERE_RUNTIME_CONFIG__"; exit 1; }
 
+          # Per-network wallet-api availability rides the SAME global, and for a
+          # sharper reason than the flags: it decides whether a network is
+          # OFFERED. On the sed mechanism that branch folds — and folds OPEN
+          # (`Boolean('__RUNTIME_…__')` is true), so mainnet would look
+          # available in every container whatever the task def says. The
+          # placeholder-survival check above CANNOT catch it, because the fold
+          # erases the placeholder it greps for. These two assertions are the
+          # only guard against that class, so do not drop them:
+          #  1. the container wrote the per-network keys, and
+          #  2. the bundle still READS them by name (i.e. nothing folded the
+          #     lookup away).
+          docker exec "$cid" sh -c "grep -q '\"WALLET_API_URL_TESTNET2\": \"https://wallet-api.example.test\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: legacy WALLET_API_URL did not seed WALLET_API_URL_TESTNET2 in runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -q '\"MAINNET_ROLLOUT_ENABLED\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: MAINNET_ROLLOUT_ENABLED not written to runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'WALLET_API_URL_MAINNET' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read WALLET_API_URL_MAINNET — the per-network lookup was folded away at build time, so network availability is frozen into the image"; exit 1; }
+
           # The SGW base URL is derived from the SDK's per-network config —
           # the bundle must carry the gateway origin (no env var, no proxy).
           docker exec "$cid" sh -c "grep -rq 'gateway.testnet2.unicity.network' /usr/share/nginx/html/assets" \

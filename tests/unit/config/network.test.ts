@@ -129,6 +129,36 @@ describe('resolveActiveNetwork — boot cannot brick', () => {
   });
 });
 
+describe('NETWORK_DOWNGRADED_FROM — a fallback must never be silent', () => {
+  it('is null when the persisted choice was honoured', async () => {
+    localStorage.setItem('sphere_active_network', 'dev');
+    const mod = await loadNetworkModule();
+    expect(mod.SPHERE_NETWORK).toBe('dev');
+    expect(mod.NETWORK_DOWNGRADED_FROM).toBeNull();
+  });
+
+  it('is null when nothing was ever persisted', async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.NETWORK_DOWNGRADED_FROM).toBeNull();
+  });
+
+  it('reports the requested network when the session fell back', async () => {
+    // The user picked mainnet; this deployment/SDK cannot serve it. Falling
+    // back is right, doing it silently is not: networks are isolated worlds, so
+    // an unexplained empty wallet reads as lost funds.
+    localStorage.setItem('sphere_active_network', 'mainnet');
+    const mod = await loadNetworkModule();
+    expect(mod.SPHERE_NETWORK).toBe('testnet2');
+    expect(mod.NETWORK_DOWNGRADED_FROM).toBe('mainnet');
+  });
+
+  it('leaves the stored choice intact so the wallet returns once it can', async () => {
+    localStorage.setItem('sphere_active_network', 'mainnet');
+    await loadNetworkModule();
+    expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+  });
+});
+
 describe('setActiveNetwork', () => {
   it('persists, broadcasts and reloads', async () => {
     const mod = await loadNetworkModule();

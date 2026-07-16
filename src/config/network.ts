@@ -120,6 +120,23 @@ function readStoredNetwork(): string | null {
  */
 export const SPHERE_NETWORK: NetworkType = resolveActiveNetwork(readStoredNetwork());
 
+/**
+ * Set when the persisted choice could NOT be honoured and this session fell
+ * back — e.g. the user picked mainnet and the deployment later stopped serving
+ * it, or the SDK has not onboarded it (yet or any more).
+ *
+ * This MUST be surfaced. Networks are isolated worlds, so a silent fallback
+ * shows the user an empty wallet on another network and reads as "my funds are
+ * gone". The stored value is deliberately NOT repaired: it is the user's
+ * standing intent, so the wallet returns to their network by itself once the
+ * deployment can serve it again; the notice is what keeps that from being a
+ * surprise in either direction.
+ */
+export const NETWORK_DOWNGRADED_FROM: string | null = (() => {
+  const stored = readStoredNetwork();
+  return stored !== null && stored !== SPHERE_NETWORK ? stored : null;
+})();
+
 /** BroadcastChannel name used to tell other tabs the active network changed. */
 export const NETWORK_BROADCAST_CHANNEL = 'sphere-network';
 

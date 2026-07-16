@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { Globe, Check, ChevronRight, Layers, RefreshCw } from 'lucide-react';
+import { Globe, Check, ChevronRight, Layers, RefreshCw, AlertTriangle } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, SecondaryButton } from '../../ui';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import {
+  NETWORK_DOWNGRADED_FROM,
   SPHERE_NETWORK,
   setActiveNetwork,
   type SupportedNetwork,
@@ -53,6 +55,19 @@ export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
       <ModalHeader variant="screen" title="Network" icon={Globe} iconVariant="neutral" onClose={onClose} />
 
       <div className="overflow-y-auto flex-1 p-4 space-y-4">
+        {/* The wallet fell back: say so, or an empty wallet on another network
+            reads as lost funds. */}
+        {NETWORK_DOWNGRADED_FROM && (
+          <div className="flex items-start gap-3 px-4 py-3 rounded-2xl bg-orange-50 dark:bg-orange-900/10 border border-orange-200/60 dark:border-orange-500/15">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-orange-500" />
+            <p className="text-xs leading-relaxed text-neutral-600 dark:text-white/60">
+              {NETWORK_DOWNGRADED_FROM} is not available here, so the wallet is on{' '}
+              {NETWORKS[SPHERE_NETWORK].name}. Your assets on {NETWORK_DOWNGRADED_FROM} are
+              untouched — it reopens there once it is available again.
+            </p>
+          </div>
+        )}
+
         {/* Isolation note — the load-bearing fact: networks are separate worlds. */}
         <div className="flex items-start gap-3 px-4 py-3 rounded-2xl bg-neutral-50 dark:bg-white/4">
           <Layers className="w-4 h-4 mt-0.5 shrink-0 text-neutral-400 dark:text-white/35" />

@@ -22,7 +22,10 @@ export function buildNetworkRows(active: NetworkType): SupportedNetwork[] {
   const rows: SupportedNetwork[] = [...SUPPORTED_NETWORKS];
 
   if (!rows.some((n) => n.id === active)) {
-    rows.push({ id: active, label: NETWORKS[active].name, available: true });
+    // `available` describes whether a row can be SELECTED. The active network
+    // never can (it is already current), and claiming otherwise would be a
+    // false assertion the moment anything else reads this list.
+    rows.push({ id: active, label: NETWORKS[active].name, available: false });
   }
   return rows;
 }
