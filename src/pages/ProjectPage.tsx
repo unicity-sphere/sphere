@@ -279,9 +279,20 @@ export function ProjectPage() {
           Preview Mode — this is how your project will appear in the marketplace
         </div>
       )}
-      {/* Banner */}
-      <div className="relative mx-4 sm:mx-6 mt-2">
-        <div className="relative h-48 sm:h-64 rounded-2xl overflow-hidden">
+      {/* Banner — ratio pinned so the crop is identical on every screen. A fixed
+          height on a full-bleed box drove the box ratio to ~6:1 at 2K, cropping
+          the same banner differently at every window width. 3:1 matches the
+          uploaded master, so the hero now crops to zero.
+
+          Width is bounded by the same px-4/max-w-5xl/mx-auto container every
+          other section on this page uses, so the banner lines up with the
+          content below it. The bound must come from max-width, never from
+          max-height on the ratio box: max-height clamps after the ratio
+          resolves and would float the box ratio again. Must stay identical to
+          sphere-ui's ProjectPagePreview. */}
+      <section className="px-4 sm:px-6 mt-2">
+      <div className="relative max-w-5xl mx-auto">
+        <div className="relative aspect-[3/1] rounded-2xl overflow-hidden">
           <div className="absolute inset-0 bg-cover bg-center" style={{
             backgroundColor: project.accentColor,
             backgroundImage: project.bannerUrl ? `url(${project.bannerUrl})` : undefined,
@@ -310,6 +321,7 @@ export function ProjectPage() {
           />
         </div>
       </div>
+      </section>
 
       {/* Info Header + Stats card */}
       <section className="px-4 sm:px-6 pt-10 pb-6">
