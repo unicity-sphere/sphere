@@ -1,6 +1,6 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import { SPHERE_NETWORK } from './network';
-import { runtimeSetting as setting } from './runtimeConfig';
+import { SUBSCRIPTION_ENABLED, runtimeSetting as setting } from './runtimeConfig';
 
 /**
  * Subscription gateway (SGW) config. When SUBSCRIPTION_ENABLED is false the
@@ -31,12 +31,12 @@ function resolveSubscriptionApiUrl(): string {
 }
 export const SUBSCRIPTION_API_URL = resolveSubscriptionApiUrl();
 
-/** Exactly 'true' enables; anything else (including 'TRUE', '1') is off. */
-export const SUBSCRIPTION_ENABLED =
-  setting(
-    'SUBSCRIPTION_ENABLED',
-    import.meta.env.VITE_SUBSCRIPTION_ENABLED as string | undefined,
-  ) === 'true';
+/**
+ * Exactly 'true' enables; anything else (including 'TRUE', '1') is off.
+ * Defined in runtimeConfig.ts (a leaf) because the network availability gate
+ * needs it too and cannot import this module — see the note there.
+ */
+export { SUBSCRIPTION_ENABLED };
 
 /**
  * When true, the SGW client returns canned data instead of hitting the

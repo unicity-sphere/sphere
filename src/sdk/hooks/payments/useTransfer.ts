@@ -8,7 +8,7 @@ import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import { useUpgrade, type UpgradeReason } from '../../../components/upgrade';
 import { getUtilization } from '../../../services/subscriptionApi';
-import { getStoredSubscriptionKey } from '../../../config/storageKeys';
+import { getStoredSubscriptionKey } from '../../../config/subscriptionKeyCache';
 import { showToast } from '../../../components/ui/toast-utils';
 import type { TransferResult } from '@unicitylabs/sphere-sdk';
 

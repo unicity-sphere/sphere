@@ -22,7 +22,8 @@
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import { deriveFieldEncryptionKey, encryptField, decryptField, getPublicKey } from '@unicitylabs/sphere-sdk';
-import { STORAGE_KEYS, setStoredSubscriptionKey } from '../../config/storageKeys';
+import { STORAGE_KEYS } from '../../config/storageKeys';
+import { setStoredSubscriptionKey } from '../../config/subscriptionKeyCache';
 
 export type AddressKeyPreference = 'own' | 'inherit';
 

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { canSelfMint, MINT_UNAVAILABLE_MESSAGE } from '../../../src/config/networkCapabilities';
+import {
+  allowsSharedAggregatorKey,
+  canSelfMint,
+  MINT_UNAVAILABLE_MESSAGE,
+} from '../../../src/config/networkCapabilities';
 
 describe('canSelfMint — fail-closed allowlist', () => {
   it('allows the test networks', () => {
@@ -23,5 +27,27 @@ describe('canSelfMint — fail-closed allowlist', () => {
 
   it('exposes the shared user-facing message', () => {
     expect(MINT_UNAVAILABLE_MESSAGE).toBe('Minting is not available on this network');
+  });
+});
+
+describe('allowsSharedAggregatorKey — fail-closed allowlist', () => {
+  it('allows the shared key on test networks', () => {
+    // The key ships readable to every visitor; on a test network it guards
+    // worthless money and is published on purpose.
+    expect(allowsSharedAggregatorKey('testnet2')).toBe(true);
+    expect(allowsSharedAggregatorKey('testnet')).toBe(true);
+    expect(allowsSharedAggregatorKey('dev')).toBe(true);
+  });
+
+  it('refuses the shared key on mainnet', () => {
+    // It would hand the operator's aggregator quota to anyone with devtools.
+    expect(allowsSharedAggregatorKey('mainnet')).toBe(false);
+  });
+
+  it('denies unknown, empty, cased and padded values', () => {
+    expect(allowsSharedAggregatorKey('')).toBe(false);
+    expect(allowsSharedAggregatorKey('some-future-network')).toBe(false);
+    expect(allowsSharedAggregatorKey('MAINNET')).toBe(false);
+    expect(allowsSharedAggregatorKey(' testnet2')).toBe(false);
   });
 });

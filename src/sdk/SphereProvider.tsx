@@ -82,9 +82,9 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
-  setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
+import { setStoredSubscriptionKey } from '../config/subscriptionKeyCache';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)

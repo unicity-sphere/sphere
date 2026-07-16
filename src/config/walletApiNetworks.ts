@@ -20,14 +20,25 @@
  * and src/config/walletApi.ts import from it, so the graph stays a DAG.
  */
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
-import { readRuntimeConfig, type SphereRuntimeConfig } from './runtimeConfig';
+import { readRuntimeConfig, runtimeSetting, type SphereRuntimeConfig } from './runtimeConfig';
 
 /**
- * The network a build falls back to when no valid choice is persisted, and the
- * one the legacy single-URL env refers to. Lives here (not in network.ts) so
- * this module stays a leaf and the import graph has no cycle.
+ * The network the LEGACY single URL (VITE_WALLET_API_URL) refers to.
+ *
+ * A build-time fact, not a deployment choice: that env var was introduced when
+ * the app ran one network, so it can only ever have meant this one. Which
+ * network a fresh wallet STARTS on is a separate, deployment-configurable
+ * question — see DEFAULT_NETWORK / resolveActiveNetwork in network.ts. The two
+ * were the same value once, and conflating them made a mainnet-first
+ * deployment impossible.
+ *
+ * Lives here (not network.ts) so this module stays a leaf and the import graph
+ * has no cycle.
  */
-export const BUILD_DEFAULT_NETWORK: NetworkType = 'testnet2';
+export const LEGACY_URL_NETWORK: NetworkType = 'testnet2';
+
+/** Last-resort start network when a deployment names none. */
+export const FALLBACK_NETWORK: NetworkType = 'testnet2';
 
 /**
  * Runtime-config key per network. A SOURCE-level map with literal keys — no env
@@ -76,16 +87,16 @@ export function walletApiUrlFor(network: NetworkType): string | null {
   if (env !== undefined && env !== '') return env;
 
   // Legacy single-URL deployments (VITE_WALLET_API_URL, and every deployment
-  // predating per-network config) mean "the build default network's backend".
+  // predating per-network config) mean "the backend for the one network this
+  // app used to run" — testnet2, and nothing else.
   //
   // THE INVARIANT: an env term is fold-eligible anywhere, and survives here
-  // only in the expression form below. It is permitted ONLY for the build
-  // default, where a fold-to-true is a provable no-op: resolveActiveNetwork
-  // returns BUILD_DEFAULT_NETWORK unconditionally without consulting
-  // availability, and runtime-config.sh already fails closed on an empty
-  // legacy URL under REQUIRE_WALLET_API. Every OTHER network reads the global
-  // exclusively — zero env terms — so its gate cannot fail open.
-  if (network !== BUILD_DEFAULT_NETWORK) return null;
+  // only in the expression form below. It is permitted ONLY for that one
+  // network, where a fold cannot open a gate that matters: the legacy var only
+  // ever described testnet2, and runtime-config.sh seeds it into the
+  // per-network key anyway. Every OTHER network reads the global exclusively —
+  // zero env terms — so its gate cannot fail open.
+  if (network !== LEGACY_URL_NETWORK) return null;
 
   const legacy = import.meta.env.VITE_WALLET_API_URL as string | undefined;
   // Do NOT reduce to a bare truthiness test: `!!legacy` folds to true against
@@ -100,9 +111,16 @@ export function hasWalletApiUrl(network: NetworkType): boolean {
 }
 
 /**
- * True when this bundle declares wallet-api intent (`VITE_REQUIRE_WALLET_API`).
- * Set by deployments whose custody model is wallet-api (the Pages workflow):
- * any value other than empty/`false`/`0` counts as set.
+ * True when this deployment declares wallet-api custody (#351). Any value other
+ * than empty/`false`/`0` counts as set.
+ *
+ * Reads the runtime global, NOT a sed placeholder: this gates branches (the
+ * availability gate in network.ts and the #351 throw in walletApi.ts), and as a
+ * placeholder the whole expression const-folded to `true` and was erased from
+ * the Docker bundle — arming both unconditionally while the shell still thought
+ * the flag was off. A container could then pass every start-up check and die in
+ * every browser, with the error naming a remedy ("unset VITE_REQUIRE_WALLET_API")
+ * that no longer existed in the artifact.
  *
  * Lives in this leaf (not walletApi.ts) so src/config/network.ts can ask "is
  * this a wallet-api deployment?" without importing walletApi.ts — which imports
@@ -110,6 +128,9 @@ export function hasWalletApiUrl(network: NetworkType): boolean {
  * keep that module's public surface unchanged.
  */
 export function isWalletApiRequired(): boolean {
-  const raw = import.meta.env.VITE_REQUIRE_WALLET_API as string | undefined;
+  const raw = runtimeSetting(
+    'REQUIRE_WALLET_API',
+    import.meta.env.VITE_REQUIRE_WALLET_API as string | undefined,
+  );
   return !!raw && raw !== 'false' && raw !== '0';
 }

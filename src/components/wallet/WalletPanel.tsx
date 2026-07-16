@@ -12,7 +12,7 @@ import { CreateWalletFlow } from './onboarding/CreateWalletFlow';
 import { UnlockScreen } from './onboarding/components/UnlockScreen';
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import {
-  BUILD_DEFAULT_NETWORK,
+  DEFAULT_NETWORK,
   SPHERE_NETWORK,
   SUPPORTED_NETWORKS,
   isMainnetAnnounced,
@@ -116,14 +116,14 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
                 gate cannot prevent every case either — it can only check what
                 the SDK advertises, while the refusal can come from deeper (a
                 missing trust base). So offer the way out here. */}
-            {SPHERE_NETWORK !== BUILD_DEFAULT_NETWORK && (
+            {SPHERE_NETWORK !== DEFAULT_NETWORK && (
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => resetActiveNetwork()}
                 className="px-5 py-2 bg-neutral-100 dark:bg-white/6 hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-700 dark:text-white text-sm font-medium rounded-xl"
               >
-                Switch to {NETWORKS[BUILD_DEFAULT_NETWORK].name}
+                Switch to {NETWORKS[DEFAULT_NETWORK].name}
               </motion.button>
             )}
           </div>

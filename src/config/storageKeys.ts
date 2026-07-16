@@ -110,10 +110,6 @@ export function getOrCreateWalletApiDeviceId(): string {
   return deviceId;
 }
 
-export function getStoredSubscriptionKey(): string | null {
-  return localStorage.getItem(STORAGE_KEYS.SUBSCRIPTION_API_KEY);
-}
-
-export function setStoredSubscriptionKey(key: string): void {
-  localStorage.setItem(STORAGE_KEYS.SUBSCRIPTION_API_KEY, key);
-}
+// The subscription boot cache is scoped per network and therefore lives in
+// src/config/subscriptionKeyCache.ts — this module is the leaf that
+// src/config/network.ts imports, so it cannot know the active network.

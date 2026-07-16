@@ -10,7 +10,7 @@
  * - Subscriptions OFF: the static env key is the source (and is required at
  *   deploy time — deploy/runtime-config.sh fails closed without it).
  */
-import { getStoredSubscriptionKey } from '../config/storageKeys';
+import { getStoredSubscriptionKey } from '../config/subscriptionKeyCache';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
 
 export function resolveOracleApiKey(opts: {

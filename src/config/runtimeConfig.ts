@@ -37,6 +37,23 @@ export interface SphereRuntimeConfig {
   WALLET_API_URL_MAINNET?: string;
   /** Deliberate mainnet rollout switch; anything but exactly 'true' is off. */
   MAINNET_ROLLOUT_ENABLED?: string;
+  /**
+   * Declares wallet-api custody (#351). Here rather than on a sed placeholder
+   * because it gates branches — the availability gate and the #351 throw. As a
+   * placeholder it const-folded to a hardcoded `true` and vanished from the
+   * bundle, arming both unconditionally and making the flag inert.
+   */
+  REQUIRE_WALLET_API?: string;
+  /**
+   * Which network a wallet with no stored choice starts on. Lets a
+   * mainnet-first deployment exist without a rebuild.
+   *
+   * ⚠️ Changing this on a LIVE deployment moves every user who never chose a
+   * network — they would open an empty balance on another network and read it
+   * as lost funds. To take existing users to mainnet, ship the invitation
+   * (shouldAnnounceMainnet) instead and leave this alone.
+   */
+  DEFAULT_NETWORK?: string;
 }
 
 /** The container-supplied config, or undefined (SSR / not yet written). */
@@ -64,3 +81,18 @@ export function runtimeSetting(
 export function runtimeFlag(key: keyof SphereRuntimeConfig, envValue: string | undefined): boolean {
   return runtimeSetting(key, envValue) === 'true';
 }
+
+/**
+ * Per-wallet SGW subscription keys are in use.
+ *
+ * Defined in this leaf, and re-exported from src/config/subscription.ts as the
+ * public name, because the network availability gate has to know it too: a
+ * real-value network cannot run on the shared build-time aggregator key, so
+ * offering it while subscriptions are off would offer a network that is
+ * guaranteed to throw at provider composition. subscription.ts derives its base
+ * URL from the active network, so network.ts cannot import from it.
+ */
+export const SUBSCRIPTION_ENABLED = runtimeFlag(
+  'SUBSCRIPTION_ENABLED',
+  import.meta.env.VITE_SUBSCRIPTION_ENABLED as string | undefined,
+);

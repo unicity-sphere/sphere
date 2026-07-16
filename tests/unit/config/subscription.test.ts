@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { STORAGE_KEYS, getStoredSubscriptionKey, setStoredSubscriptionKey } from '@/config/storageKeys';
+import { STORAGE_KEYS } from '@/config/storageKeys';
+import { getStoredSubscriptionKey, setStoredSubscriptionKey } from '@/config/subscriptionKeyCache';
 
 describe('subscription storage key', () => {
   beforeEach(() => localStorage.clear());

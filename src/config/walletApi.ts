@@ -1,36 +1,38 @@
 /**
  * wallet-api composition config (S4 provider swap).
  *
- * The ASSET path moves to the wallet-api backend when `VITE_WALLET_API_URL`
- * is set; messaging, DMs and nametags stay on Nostr. When unset, the app
- * keeps the legacy local-custody composition (IndexedDB + Nostr asset
- * delivery) unchanged.
+ * The ASSET path moves to the wallet-api backend when this deployment has a
+ * URL for the ACTIVE network; messaging, DMs and nametags stay on Nostr. With
+ * no URL for that network, the app keeps the legacy local-custody composition
+ * (IndexedDB + Nostr asset delivery) unchanged.
+ *
+ * Which URL applies is a PER-NETWORK question — the SDK client is bound to the
+ * active network and a backend configured for another one refuses its sign-in.
+ * Resolution therefore lives in walletApiNetworks.ts, along with the reason it
+ * reads the runtime global rather than a sed placeholder.
  *
  * URLs may be relative (e.g. `/wallet-api`): they resolve against the app
  * origin, which is how the dev/preview proxy in vite.config.ts is reached —
  * the backend serves no CORS headers, so cross-origin browser calls need the
  * local proxy (production deployments must solve this at the edge).
  *
- * Docker runtime substitution — READ BEFORE EDITING: the Docker image bakes
- * `__RUNTIME_*__` placeholder strings for these env vars and sed-rewrites
- * them at container start (deploy/runtime-config.sh). Know what survives into
- * that bundle: Rollup statically evaluates BRANCH conditions against the
- * baked literals (following const bindings, across modules) and prunes them —
- * in Docker images the `if (!raw)` branch of getWalletApiBaseUrl(), with the
- * whole #351 throw and the legacy `return null` fallback, is compile-time
- * eliminated, and isWalletApiRequired() is tree-shaken with it. The #351 half
- * is guarded at runtime by the fail-closed check in deploy/runtime-config.sh
- * (container refuses to start); the legacy half has NO runtime equivalent —
- * an empty WALLET_API_URL makes the compiled getWalletApiBaseUrl() return the
- * app's own origin instead of null, so legacy local-custody composition is
- * unreachable in Docker images and deployments must always set
- * WALLET_API_URL (runtime-config.sh warns). Expression-position string
- * comparisons (isWalletApiEnabled's `raw !== ''`) DO survive and stay
- * runtime-decided — that is what keeps enable/disable working at runtime.
- * A value that must gate `if` branches at runtime cannot use the placeholder
- * mechanism at all: use window.__SPHERE_RUNTIME_CONFIG__ instead (see
- * src/config/subscription.ts). Non-Docker builds (dev, GitHub Pages) bake
- * real values, so all of this folds correctly per environment there.
+ * Docker runtime substitution — READ BEFORE EDITING: Rollup statically
+ * evaluates BRANCH conditions against baked literals (following const bindings,
+ * across modules) and prunes them, so a value that gates an `if` cannot ride
+ * the `__RUNTIME_*__` sed placeholders at all — see src/config/runtimeConfig.ts
+ * for the rule, the fold directions and the mechanism that replaces it.
+ *
+ * Two former hazards documented here are now gone, and the notes are kept only
+ * to stop them being reintroduced:
+ *  - getWalletApiBaseUrl's null branch used to be compile-eliminated (it tested
+ *    a baked literal directly), which made legacy local custody unreachable in
+ *    Docker images and returned the app's own origin instead. It now tests the
+ *    result of walletApiUrlFor(), a function call the bundler cannot fold, so
+ *    the branch survives and legacy composition works again.
+ *  - isWalletApiRequired() used to fold to a hardcoded `true` and vanish, which
+ *    silently armed both the #351 throw and the availability gate while the
+ *    start-up check still believed the flag was off. It now reads the runtime
+ *    global.
  */
 
 import type { NetworkType } from '@unicitylabs/sphere-sdk';

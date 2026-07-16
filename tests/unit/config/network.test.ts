@@ -70,6 +70,16 @@ describe('SUPPORTED_NETWORKS — the availability gate', () => {
     expect(testnet2?.unavailableReason).toBe('not-served-here');
   });
 
+  it('does not offer a real-value network the shared aggregator key cannot run', async () => {
+    // buildProviders refuses that combination outright, so offering the network
+    // would strand the user on an init error. The gate must know the same rule.
+    vi.stubEnv('VITE_SUBSCRIPTION_ENABLED', '');
+    setRuntimeConfig({ WALLET_API_URL_MAINNET: 'https://mainnet.example' });
+    const mod = await loadNetworkModule();
+    const mainnet = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'mainnet');
+    expect(mainnet?.available).toBe(false);
+  });
+
   it('never throws at module load, even when a wallet-api build has no URLs', async () => {
     // The gate must use a NON-throwing predicate: SUPPORTED_NETWORKS is a
     // module-scope const, so a #351 throw here would white-screen the app
@@ -104,6 +114,35 @@ describe('isSwitchableNetwork', () => {
     vi.stubEnv('VITE_REQUIRE_WALLET_API', 'true');
     const mod = await loadNetworkModule();
     expect(mod.isSwitchableNetwork('dev')).toBe(true);
+  });
+});
+
+describe('DEFAULT_NETWORK — a mainnet-first deployment must be possible', () => {
+  it('starts on the build fallback when the deployment names none', async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.DEFAULT_NETWORK).toBe('testnet2');
+  });
+
+  it('honours a deployment-configured start network', async () => {
+    // While this was hardcoded, a mainnet-only deployment could not start.
+    vi.stubEnv('VITE_DEFAULT_NETWORK', 'dev'); // the one non-default network live today
+    const mod = await loadNetworkModule();
+    expect(mod.DEFAULT_NETWORK).toBe('dev');
+    expect(mod.resolveActiveNetwork(null)).toBe('dev');
+  });
+
+  it('ignores a start network this deployment cannot serve', async () => {
+    // Naming an unavailable network must degrade to the fallback, not boot a
+    // wallet that cannot work.
+    vi.stubEnv('VITE_DEFAULT_NETWORK', 'mainnet'); // not onboarded in the SDK
+    const mod = await loadNetworkModule();
+    expect(mod.DEFAULT_NETWORK).toBe('testnet2');
+  });
+
+  it('ignores garbage', async () => {
+    vi.stubEnv('VITE_DEFAULT_NETWORK', 'nonsense');
+    const mod = await loadNetworkModule();
+    expect(mod.DEFAULT_NETWORK).toBe('testnet2');
   });
 });
 

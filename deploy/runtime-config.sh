@@ -19,9 +19,10 @@
 #
 # Runtime contract — set these on the ECS task definition / `docker -e`:
 #   SPHERE_API_URL         quest-api base (marketplace / user / maintenance)
-#   WALLET_API_URL         wallet-api backend base for the BUILD DEFAULT network
-#                          (testnet2) — legacy single-network form, still
-#                          honoured: it seeds WALLET_API_URL_TESTNET2 below
+#   WALLET_API_URL         legacy single-network form, still honoured: it means
+#                          the testnet2 backend (the one network the app ran
+#                          when it was introduced) and seeds
+#                          WALLET_API_URL_TESTNET2 below
 #   WALLET_API_URL_TESTNET2  wallet-api backend for testnet2
 #   WALLET_API_URL_MAINNET   wallet-api backend for mainnet; EMPTY/UNSET means
 #                          this deployment does not offer mainnet at all (the
@@ -32,6 +33,12 @@
 #   MAINNET_ROLLOUT_ENABLED  deliberate mainnet switch (EXACTLY 'true'); off
 #                          keeps mainnet unselectable even when everything else
 #                          is configured
+#   DEFAULT_NETWORK        which network a wallet with no stored choice starts
+#                          on (testnet2 | mainnet; default testnet2). ⚠️ Changing
+#                          it on a LIVE deployment moves every user who never
+#                          chose a network — they would open an empty balance on
+#                          another network. To take existing users to mainnet,
+#                          ship the in-app invitation instead.
 #   REQUIRE_WALLET_API     #351 fail-closed custody flag ('' / false / 0 = off)
 #   DEV_PORTAL_URL         developer-portal link target
 #   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2) —
@@ -48,13 +55,15 @@
 # (VITE_SUBSCRIPTION_MOCK is intentionally NOT part of this contract either —
 # mock mode is dev-only and stays a build-time constant.)
 #
-# The per-network wallet-api URLs and MAINNET_ROLLOUT_ENABLED ride the
-# window.__SPHERE_RUNTIME_CONFIG__ global, NOT the sed placeholders, and have
-# no Dockerfile ARG on purpose: they decide whether a network is OFFERED, and
-# a branch condition folds against a baked placeholder at build time. That fold
-# would go the dangerous way — `Boolean('__RUNTIME_…__')` is TRUE, so a network
-# would look available in every container whatever the task def says, and the
-# fold erases the placeholder that the docker-validate guard greps for. See
+# The per-network wallet-api URLs, DEFAULT_NETWORK, MAINNET_ROLLOUT_ENABLED and
+# REQUIRE_WALLET_API ride the window.__SPHERE_RUNTIME_CONFIG__ global, NOT the
+# sed placeholders, and have no Dockerfile ARG on purpose: they decide whether a
+# network is OFFERED, and a branch condition folds against a baked placeholder
+# at build time. That fold goes the dangerous way — `Boolean('__RUNTIME_…__')`
+# is TRUE — and it erases the placeholder that the docker-validate guard greps
+# for, so nothing catches it. REQUIRE_WALLET_API was exactly that bug: as a
+# placeholder it folded to a hardcoded `true`, so the flag was inert and this
+# script's fail-closed check and the bundle disagreed about it. See
 # src/config/runtimeConfig.ts.
 #
 # Runs as a stock-nginx `/docker-entrypoint.d/` hook (POSIX sh, BusyBox-safe)
@@ -82,10 +91,23 @@ case "${REQUIRE_WALLET_API-}" in
   '' | false | 0) require_wallet_api=0 ;;
   *)              require_wallet_api=1 ;;
 esac
-if [ "$require_wallet_api" = 1 ] && [ -z "${WALLET_API_URL_TESTNET2-}" ]; then
-  log "ERROR: REQUIRE_WALLET_API is set but neither WALLET_API_URL_TESTNET2 nor the"
-  log "       legacy WALLET_API_URL is set — refusing to start (the build default"
-  log "       network would silently change custody model, #351)."
+# The START network must be serveable, or every fresh visitor lands on a
+# network this deployment cannot run. Which network that is is a deployment
+# choice (DEFAULT_NETWORK), so the check follows it rather than assuming
+# testnet2 — assuming it made a mainnet-only deployment impossible to start.
+start_network="${DEFAULT_NETWORK:-testnet2}"
+case "$start_network" in
+  testnet2) start_url="${WALLET_API_URL_TESTNET2-}" ;;
+  mainnet)  start_url="${WALLET_API_URL_MAINNET-}" ;;
+  *)
+    log "ERROR: DEFAULT_NETWORK='$start_network' is not a network this app offers"
+    log "       (testnet2, mainnet) — refusing to start."
+    exit 1 ;;
+esac
+if [ "$require_wallet_api" = 1 ] && [ -z "$start_url" ]; then
+  log "ERROR: REQUIRE_WALLET_API is set but there is no wallet-api URL for the start"
+  log "       network '$start_network' — refusing to start (every fresh visitor would"
+  log "       silently get the legacy custody model, #351)."
   exit 1
 fi
 # A network is only OFFERED when it has a URL, so mainnet cannot be selected
@@ -98,14 +120,17 @@ if [ "${MAINNET_ROLLOUT_ENABLED-}" = "true" ] && [ -z "${WALLET_API_URL_MAINNET-
   log "       would silently do nothing)."
   exit 1
 fi
-# Even without REQUIRE_WALLET_API, an empty WALLET_API_URL is broken in the
-# Docker bundle: the compiled getWalletApiBaseUrl() cannot fall back to the
-# legacy local-custody composition (its unset-branch is compile-time
-# eliminated against the placeholder — see src/config/walletApi.ts) and would
-# compose wallet-api against the app's own origin. Warn loudly.
-if [ -z "${WALLET_API_URL-}" ]; then
-  log "WARNING: WALLET_API_URL is empty — this image cannot compose the legacy"
-  log "         local-custody bundle; the app would target its own origin as wallet-api."
+# No wallet-api URL for ANY network is legitimate (legacy local custody), but
+# it is far more often a mistake, so say it out loud. Gate on all of them being
+# empty: a deployment that sets only the per-network vars is correctly
+# configured and must not be warned at. (The old warning also claimed the app
+# would target its own origin — that was true while getWalletApiBaseUrl's
+# unset-branch was compile-eliminated against the placeholder; per-network
+# resolution goes through a function call now, so the branch survives and
+# legacy local custody is reachable again.)
+if [ -z "${WALLET_API_URL_TESTNET2-}" ] && [ -z "${WALLET_API_URL_MAINNET-}" ]; then
+  log "WARNING: no wallet-api URL for any network — composing the legacy"
+  log "         local-custody bundle. Intentional only for a legacy deployment."
 fi
 
 # ── Subscription flag sanity ─────────────────────────────────────────────────
@@ -149,7 +174,6 @@ add() { printf 's|%s|%s|g\n' "$1" "$(sed_escape "$2")" >> "$SED_SCRIPT"; }
 
 add __RUNTIME_SPHERE_API_URL__     "${SPHERE_API_URL-}"
 add __RUNTIME_WALLET_API_URL__     "${WALLET_API_URL-}"
-add __RUNTIME_REQUIRE_WALLET_API__ "${REQUIRE_WALLET_API-}"
 add __RUNTIME_DEV_PORTAL_URL__     "${DEV_PORTAL_URL-}"
 add __RUNTIME_AGGREGATOR_API_KEY__ "${AGGREGATOR_API_KEY-}"
 
@@ -169,7 +193,8 @@ nl='
 '
 cr=$(printf '\r')
 for v in SUBSCRIPTION_ENABLED PAID_PLANS_ENABLED MAINNET_ROLLOUT_ENABLED \
-         WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET; do
+         WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET \
+         REQUIRE_WALLET_API DEFAULT_NETWORK; do
   eval "val=\${$v-}"
   case "$val" in
     *"$nl"* | *"$cr"*)
@@ -186,7 +211,9 @@ window.__SPHERE_RUNTIME_CONFIG__ = {
   "PAID_PLANS_ENABLED": "$(json_escape "${PAID_PLANS_ENABLED-}")",
   "MAINNET_ROLLOUT_ENABLED": "$(json_escape "${MAINNET_ROLLOUT_ENABLED-}")",
   "WALLET_API_URL_TESTNET2": "$(json_escape "${WALLET_API_URL_TESTNET2-}")",
-  "WALLET_API_URL_MAINNET": "$(json_escape "${WALLET_API_URL_MAINNET-}")"
+  "WALLET_API_URL_MAINNET": "$(json_escape "${WALLET_API_URL_MAINNET-}")",
+  "REQUIRE_WALLET_API": "$(json_escape "${REQUIRE_WALLET_API-}")",
+  "DEFAULT_NETWORK": "$(json_escape "${DEFAULT_NETWORK-}")"
 };
 EOF
 log "wrote $WEBROOT/runtime-config.js"

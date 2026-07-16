@@ -40,8 +40,8 @@ vi.mock('../../../src/services/subscriptionApi', async (orig) => ({
   ...(await orig<typeof import('../../../src/services/subscriptionApi')>()),
   getUtilization: vi.fn(),
 }));
-vi.mock('../../../src/config/storageKeys', async (orig) => ({
-  ...(await orig<typeof import('../../../src/config/storageKeys')>()),
+vi.mock('../../../src/config/subscriptionKeyCache', async (orig) => ({
+  ...(await orig<typeof import('../../../src/config/subscriptionKeyCache')>()),
   getStoredSubscriptionKey: vi.fn(),
 }));
 vi.mock('../../../src/components/ui/toast-utils', () => ({
@@ -52,7 +52,7 @@ import { checkSendQuota, QuotaBlockedError } from '../../../src/sdk/quotaGate';
 import * as subscriptionConfig from '../../../src/config/subscription';
 import { useUpgrade } from '../../../src/components/upgrade';
 import { getUtilization } from '../../../src/services/subscriptionApi';
-import { getStoredSubscriptionKey } from '../../../src/config/storageKeys';
+import { getStoredSubscriptionKey } from '../../../src/config/subscriptionKeyCache';
 import { showToast } from '../../../src/components/ui/toast-utils';
 
 // Fabricate the duck-typed transport error shape that JsonRpcNetworkError

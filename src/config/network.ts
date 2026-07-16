@@ -1,10 +1,9 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { STORAGE_KEYS } from './storageKeys';
-import { runtimeFlag } from './runtimeConfig';
-import { BUILD_DEFAULT_NETWORK, hasWalletApiUrl, isWalletApiRequired } from './walletApiNetworks';
-
-export { BUILD_DEFAULT_NETWORK };
+import { SUBSCRIPTION_ENABLED, runtimeFlag, runtimeSetting } from './runtimeConfig';
+import { FALLBACK_NETWORK, hasWalletApiUrl, isWalletApiRequired } from './walletApiNetworks';
+import { allowsSharedAggregatorKey } from './networkCapabilities';
 
 /** Why a network is not offered — drives honest UI copy, never a lie. */
 export type UnavailableReason =
@@ -60,6 +59,11 @@ function unavailableReasonFor(id: NetworkType, entry: NetworkTableEntry): Unavai
   // Legacy local-custody deployments serve every network locally, so only
   // wallet-api deployments are gated on having a URL.
   if (isWalletApiRequired() && !hasWalletApiUrl(id)) return 'not-served-here';
+  // buildProviders REFUSES a real-value network on the shared build-time
+  // aggregator key (it ships readable to every visitor). Offering a network
+  // that provider composition is guaranteed to throw on would strand the user
+  // on an error screen, so the gate has to know the same precondition.
+  if (!allowsSharedAggregatorKey(id) && !SUBSCRIPTION_ENABLED) return 'not-served-here';
   if (id === 'mainnet' && !MAINNET_ROLLOUT_ENABLED) return 'not-rolled-out';
   return undefined;
 }
@@ -92,14 +96,31 @@ export function isSwitchableNetwork(id: string): id is NetworkType {
 }
 
 /**
+ * The network a wallet with no stored choice starts on.
+ *
+ * Deployment-configurable (DEFAULT_NETWORK) so a mainnet-first deployment can
+ * exist without a rebuild — while it was hardcoded, such a deployment could not
+ * start at all. Validated through the same gate as everything else, so naming a
+ * network this deployment cannot serve degrades to the fallback instead of
+ * booting a wallet that cannot work.
+ */
+export const DEFAULT_NETWORK: NetworkType = (() => {
+  const configured = runtimeSetting(
+    'DEFAULT_NETWORK',
+    import.meta.env.VITE_DEFAULT_NETWORK as string | undefined,
+  );
+  return configured != null && isSwitchableNetwork(configured) ? configured : FALLBACK_NETWORK;
+})();
+
+/**
  * Maps a persisted raw value to the network this session should run on.
  * Anything unknown or unavailable (e.g. 'mainnet' before SDK onboarding, the
  * legacy 'testnet' alias, or a hand-edited garbage value) falls back to the
- * build default, so a bad localStorage value can never brick the app into a
- * network whose providers refuse to construct.
+ * deployment default, so a bad localStorage value can never brick the app into
+ * a network whose providers refuse to construct.
  */
 export function resolveActiveNetwork(stored: string | null): NetworkType {
-  return stored !== null && isSwitchableNetwork(stored) ? stored : BUILD_DEFAULT_NETWORK;
+  return stored !== null && isSwitchableNetwork(stored) ? stored : DEFAULT_NETWORK;
 }
 
 function readStoredNetwork(): string | null {
@@ -216,9 +237,9 @@ function broadcastNetworkChange(network: NetworkType): void {
  * The recovery path for a wallet stranded on a network that cannot start —
  * which the availability gate cannot rule out entirely: it can only check what
  * the SDK advertises, while the refusal may come from deeper (a missing trust
- * base). Deliberately NOT setActiveNetwork(BUILD_DEFAULT_NETWORK): that throws
- * for a network the gate considers unavailable, and a recovery action that can
- * itself fail is no recovery. Clearing the key always resolves to the build
+ * base). Deliberately NOT setActiveNetwork(DEFAULT_NETWORK): that throws for a
+ * network the gate considers unavailable, and a recovery action that can itself
+ * fail is no recovery. Clearing the key always resolves to the deployment
  * default (resolveActiveNetwork treats null as "no choice"), so this cannot
  * throw and cannot leave the user stuck.
  */
@@ -229,7 +250,7 @@ export function resetActiveNetwork(opts: { reload?: () => void } = {}): void {
     // Storage blocked — the build default is what a failed read resolves to
     // anyway, so a reload still recovers.
   }
-  broadcastNetworkChange(BUILD_DEFAULT_NETWORK);
+  broadcastNetworkChange(DEFAULT_NETWORK);
   (opts.reload ?? (() => window.location.reload()))();
 }
 

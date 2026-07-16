@@ -4,8 +4,8 @@ import type { UtilizationInfo } from '@/services/subscriptionApi';
 vi.mock('@/services/subscriptionApi', () => ({
   getUtilization: vi.fn(),
 }));
-vi.mock('@/config/storageKeys', async (orig) => ({
-  ...(await orig<typeof import('@/config/storageKeys')>()),
+vi.mock('@/config/subscriptionKeyCache', async (orig) => ({
+  ...(await orig<typeof import('@/config/subscriptionKeyCache')>()),
   getStoredSubscriptionKey: vi.fn(),
 }));
 vi.mock('@/config/subscription', async (orig) => ({
@@ -16,7 +16,7 @@ vi.mock('@/config/subscription', async (orig) => ({
 
 import { checkSendQuota, QuotaBlockedError, SEND_OPS_HEADROOM } from '@/sdk/quotaGate';
 import { getUtilization } from '@/services/subscriptionApi';
-import { getStoredSubscriptionKey } from '@/config/storageKeys';
+import { getStoredSubscriptionKey } from '@/config/subscriptionKeyCache';
 import * as subscriptionConfig from '@/config/subscription';
 
 function utilization(overrides: {

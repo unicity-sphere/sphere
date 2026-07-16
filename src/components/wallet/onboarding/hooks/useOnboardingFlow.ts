@@ -15,7 +15,7 @@ import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
 import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
-import { getStoredSubscriptionKey, setStoredSubscriptionKey } from "../../../../config/storageKeys";
+import { getStoredSubscriptionKey, setStoredSubscriptionKey } from "../../../../config/subscriptionKeyCache";
 import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
 import { isFreePlanName } from "../../../subscription/planFeatures";
 

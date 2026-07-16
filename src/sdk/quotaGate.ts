@@ -11,7 +11,7 @@
  * money on a metering-endpoint problem (spec §2 "Fail-open").
  */
 import { getUtilization, type UtilizationInfo } from '../services/subscriptionApi';
-import { getStoredSubscriptionKey } from '../config/storageKeys';
+import { getStoredSubscriptionKey } from '../config/subscriptionKeyCache';
 import { SUBSCRIPTION_ENABLED, SUBSCRIPTION_MOCK } from '../config/subscription';
 
 /**

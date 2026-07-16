@@ -137,6 +137,23 @@ jobs:
           docker exec "$cid" sh -c "grep -rq 'WALLET_API_URL_MAINNET' /usr/share/nginx/html/assets" \
             || { echo "ERROR: bundle does not read WALLET_API_URL_MAINNET — the per-network lookup was folded away at build time, so network availability is frozen into the image"; exit 1; }
 
+          # REQUIRE_WALLET_API and DEFAULT_NETWORK gate branches too (the
+          # availability gate, the #351 throw, and which network a fresh wallet
+          # starts on), so they ride the same global. REQUIRE_WALLET_API was
+          # this exact bug once: as a sed placeholder the whole expression
+          # folded to a hardcoded `true`, leaving the flag inert while this
+          # script still believed it was off.
+          docker exec "$cid" sh -c "grep -q '\"REQUIRE_WALLET_API\": \"true\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: REQUIRE_WALLET_API not written to runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'REQUIRE_WALLET_API' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read REQUIRE_WALLET_API — it folded away at build time, so the custody flag is frozen into the image"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'DEFAULT_NETWORK' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read DEFAULT_NETWORK — it folded away at build time, so the start network is frozen into the image"; exit 1; }
+          # The retired placeholder must not come back: it cannot work.
+          if docker exec "$cid" sh -c "grep -rl '__RUNTIME_REQUIRE_WALLET_API__' /usr/share/nginx/html"; then
+            echo "ERROR: REQUIRE_WALLET_API is back on the sed mechanism — it const-folds; use the runtime global"; exit 1
+          fi
+
           # The SGW base URL is derived from the SDK's per-network config —
           # the bundle must carry the gateway origin (no env var, no proxy).
           docker exec "$cid" sh -c "grep -rq 'gateway.testnet2.unicity.network' /usr/share/nginx/html/assets" \

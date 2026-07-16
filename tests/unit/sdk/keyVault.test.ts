@@ -8,7 +8,7 @@ import {
   setAddressPreference,
   scopedSubscriptionSlot,
 } from '@/sdk/subscription/keyVault';
-import { getStoredSubscriptionKey } from '@/config/storageKeys';
+import { getStoredSubscriptionKey } from '@/config/subscriptionKeyCache';
 
 const ROOT_PRIV = '1'.repeat(64);
 const ROOT_PUBKEY = getPublicKey(ROOT_PRIV);

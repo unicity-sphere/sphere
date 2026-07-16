@@ -5,7 +5,7 @@ import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, EmptyState, AlertMessage } from '../../ui';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
 import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../../sdk/subscription/usage';
-import { getStoredSubscriptionKey } from '../../../../config/storageKeys';
+import { getStoredSubscriptionKey } from '../../../../config/subscriptionKeyCache';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { provisionOrRecoverKey } from '../../../../services/subscriptionApi';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
