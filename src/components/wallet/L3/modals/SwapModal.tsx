@@ -9,6 +9,7 @@ import { parseTokenAmount, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { useRegistryReady } from '../../../../sdk/hooks/payments/useRegistryReady';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { canSelfMint } from '../../../../config/networkCapabilities';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { WalletScreen } from '../../ui/WalletScreen';
@@ -56,9 +57,14 @@ interface SwapModalProps {
 export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const { assets } = useAssets();
   const { transfer } = useTransfer();
-  const { sphere, providers } = useSphereContext();
+  const { sphere, providers, network } = useSphereContext();
   const registryReady = useRegistryReady();
   const queryClient = useQueryClient();
+
+  // The swap's "to" leg is a self-mint, so this whole screen is unavailable
+  // where minting is not allowed (mainnet — see networkCapabilities.ts). The
+  // entry point is already disabled in WalletActions; this is defence in depth.
+  const mintAllowed = canSelfMint(network);
 
   const [step, setStep] = useState<Step>('swap');
   const [fromAsset, setFromAsset] = useState<Asset | null>(null);
@@ -160,12 +166,15 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
 
     // Any throw here (registry read, unexpected provider error) must land in the
     // explanatory state — never leave the modal spinning on "loading" forever.
-    loadSwappableCoins().catch((e) => {
-      console.warn('Failed to load swap rates:', e);
-      if (!cancelled) setRateStatus('unavailable');
-    });
+    // Gated on mintAllowed: the swap mint leg is refused off test networks.
+    if (mintAllowed) {
+      loadSwappableCoins().catch((e) => {
+        console.warn('Failed to load swap rates:', e);
+        if (!cancelled) setRateStatus('unavailable');
+      });
+    }
     return () => { cancelled = true; };
-  }, [isOpen, providers?.price, assets, registryReady, rateAttempt]);
+  }, [isOpen, mintAllowed, providers?.price, assets, registryReady, rateAttempt]);
 
   const getUserBalance = (coinId: string): string => {
     const userAsset = assets.find(a => a.coinId === coinId);
@@ -279,6 +288,11 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       case 'success': return 'Swap Complete!';
     }
   };
+
+  // Placed after every hook so the hook order stays stable. Unreachable through
+  // the UI (WalletActions disables the entry point), but it keeps the mint leg
+  // off any network that forbids self-mint even if opened another way.
+  if (!mintAllowed) return null;
 
   return (
     <WalletScreen isOpen={isOpen} onClose={handleClose}>

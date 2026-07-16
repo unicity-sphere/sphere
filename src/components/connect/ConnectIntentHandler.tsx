@@ -10,6 +10,7 @@ import { useConnectContext } from './ConnectContext';
 import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
+import { canSelfMint, MINT_UNAVAILABLE_MESSAGE } from '../../config/networkCapabilities';
 import { useSubscriptionKeyGuard } from '../../sdk/hooks/subscription';
 import { useDuplicateSendGuard } from './duplicateSendGuard';
 import { truncateId } from '../../utils/identifiers';
@@ -28,12 +29,22 @@ const COIN_ID_RE = /^([0-9a-f]{2})+$/;
  * supported and well-formed. `mint` does its own engine-specific validation in
  * its handler, so it is only checked for support here.
  */
-function validateIntent(action: string, params: Record<string, unknown>): IntentError | null {
+function validateIntent(
+  action: string,
+  params: Record<string, unknown>,
+  network: string,
+): IntentError | null {
   if (!SUPPORTED_INTENTS.has(action)) {
     return {
       code: ERROR_CODES.METHOD_NOT_FOUND,
       message: `Intent "${action}" is not supported by this wallet`,
     };
+  }
+  // Minting is a network capability, not a permission: on a network that
+  // forbids self-mint the wallet cannot serve this intent at all, so it is
+  // reported as unsupported here — before any confirmation modal is shown.
+  if (action === 'mint' && !canSelfMint(network)) {
+    return { code: ERROR_CODES.METHOD_NOT_FOUND, message: MINT_UNAVAILABLE_MESSAGE };
   }
   if (action === 'send' || action === 'payment_request') {
     if (typeof params.to !== 'string' || params.to.trim() === '') {
@@ -73,7 +84,7 @@ function validateIntent(action: string, params: Record<string, unknown>): Intent
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
     useConnectContext();
-  const { sphere } = useSphereContext();
+  const { sphere, network } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
   const [dmError, setDmError] = useState<string | null>(null);
@@ -93,7 +104,7 @@ export function ConnectIntentHandler() {
   // Runs once per pending intent.
   useEffect(() => {
     if (!pendingIntent) return;
-    const error = validateIntent(pendingIntent.action, pendingIntent.params);
+    const error = validateIntent(pendingIntent.action, pendingIntent.params, network);
     if (error) rejectIntent(pendingIntent.id, error.code, error.message);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIntent]);
@@ -137,7 +148,7 @@ export function ConnectIntentHandler() {
   const { action, params } = pendingIntent;
 
   // Malformed / unsupported intents are rejected by the effect above — render nothing.
-  if (validateIntent(action, params)) return null;
+  if (validateIntent(action, params, network)) return null;
 
   const handleClose = () => {
     rejectIntent(intentId, ERROR_CODES.USER_REJECTED, 'User cancelled');
