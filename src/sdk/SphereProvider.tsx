@@ -163,7 +163,7 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     market: true,
   });
 
-  const engineOverride = getEngineOverride();
+  const engineOverride = getEngineOverride(network);
   const withEngine = engineOverride
     ? createSphereProviders(base, {
         engine: createUnicityAggregatorProvider({

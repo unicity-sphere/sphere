@@ -36,7 +36,7 @@
  */
 
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
-import { SUPPORTED_NETWORKS } from './network';
+import { DEFAULT_NETWORK, SUPPORTED_NETWORKS } from './network';
 import { hasWalletApiUrl, isWalletApiRequired, walletApiUrlFor } from './walletApiNetworks';
 
 // Re-exported so this module's public surface is unchanged; it lives in the
@@ -56,13 +56,6 @@ export interface EngineOverrideConfig {
 function resolveUrl(value: string): string {
   return new URL(value, window.location.origin).toString();
 }
-
-/**
- * Which wallet-api URL applies is a PER-NETWORK question: the SDK client is
- * bound to the active network and refuses a challenge naming another one, so
- * one URL cannot serve two networks. Resolution (and the reason it reads the
- * runtime global rather than a sed placeholder) lives in walletApiNetworks.ts.
- */
 
 /**
  * Backend base URL for `network`, or null when this deployment does not serve
@@ -122,8 +115,16 @@ export function isWalletApiEnabled(network: NetworkType): boolean {
  * set together: the trustbase is the engine's source of truth for the
  * network id, and mixing a gateway with another network's trustbase would
  * make the engine reject every proof (or worse, accept the wrong network).
+ *
+ * A gateway+trustbase pair IS a network, and there is only one pair of vars —
+ * so the override describes exactly one network: the one this deployment
+ * starts on, which is what a local stack is brought up for. It must therefore
+ * NOT follow a network switch: applying it to another network is precisely the
+ * trustbase mixing the pairing rule above exists to prevent. Before switching
+ * existed the active network was always the start network, so this could not
+ * arise; now it can, so the override is scoped rather than global.
  */
-export function getEngineOverride(): EngineOverrideConfig | null {
+export function getEngineOverride(network: NetworkType): EngineOverrideConfig | null {
   const aggregatorUrl = import.meta.env.VITE_AGGREGATOR_URL as string | undefined;
   const trustBaseUrl = import.meta.env.VITE_TRUSTBASE_URL as string | undefined;
   if (!aggregatorUrl && !trustBaseUrl) return null;
@@ -132,6 +133,19 @@ export function getEngineOverride(): EngineOverrideConfig | null {
       'VITE_AGGREGATOR_URL and VITE_TRUSTBASE_URL must be set together — ' +
         'a gateway must be paired with the trustbase it serves (never mix trustbases).',
     );
+  }
+  if (network !== DEFAULT_NETWORK) {
+    // Ignore rather than throw: the SDK's own preset for this network is
+    // correct, so the switch should work — the override simply does not
+    // describe where the wallet now is.
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[walletApi] Ignoring VITE_AGGREGATOR_URL/VITE_TRUSTBASE_URL on network "${network}": ` +
+          `the override is configured for "${DEFAULT_NETWORK}", and pairing its gateway with ` +
+          `another network's trustbase would make the engine reject every proof.`,
+      );
+    }
+    return null;
   }
   return {
     aggregatorUrl: resolveUrl(aggregatorUrl),

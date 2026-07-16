@@ -142,13 +142,13 @@ describe("getEngineOverride", () => {
   it("is null when neither override is set", () => {
     vi.stubEnv("VITE_AGGREGATOR_URL", "");
     vi.stubEnv("VITE_TRUSTBASE_URL", "");
-    expect(getEngineOverride()).toBeNull();
+    expect(getEngineOverride(DEFAULT_NET)).toBeNull();
   });
 
   it("resolves both URLs when both are set", () => {
     vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
     vi.stubEnv("VITE_TRUSTBASE_URL", "/local-agg/trustbase.json");
-    expect(getEngineOverride()).toEqual({
+    expect(getEngineOverride(DEFAULT_NET)).toEqual({
       aggregatorUrl: `${window.location.origin}/local-agg`,
       trustBaseUrl: `${window.location.origin}/local-agg/trustbase.json`,
     });
@@ -157,10 +157,30 @@ describe("getEngineOverride", () => {
   it("fails loud when only one of the pair is set (trustbase mixing guard)", () => {
     vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
     vi.stubEnv("VITE_TRUSTBASE_URL", "");
-    expect(() => getEngineOverride()).toThrow(/must be set together/);
+    expect(() => getEngineOverride(DEFAULT_NET)).toThrow(/must be set together/);
 
     vi.stubEnv("VITE_AGGREGATOR_URL", "");
     vi.stubEnv("VITE_TRUSTBASE_URL", "/local-agg/trustbase.json");
-    expect(() => getEngineOverride()).toThrow(/must be set together/);
+    expect(() => getEngineOverride(DEFAULT_NET)).toThrow(/must be set together/);
+  });
+
+  it("does not follow a network switch — that would mix trustbases", () => {
+    // A gateway+trustbase pair IS a network, and there is only one pair of
+    // vars, so the override describes the network the deployment starts on.
+    // Applying it to another network is exactly the mixing the pairing rule
+    // exists to prevent; before switching existed this could not arise.
+    vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
+    vi.stubEnv("VITE_TRUSTBASE_URL", "/local-agg/trustbase.json");
+
+    expect(getEngineOverride("dev")).toBeNull();
+    expect(getEngineOverride("mainnet")).toBeNull();
+    // ...and still applies where it was configured.
+    expect(getEngineOverride(DEFAULT_NET)).not.toBeNull();
+  });
+
+  it("still validates the pairing before scoping (a half-set override is a bug anywhere)", () => {
+    vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
+    vi.stubEnv("VITE_TRUSTBASE_URL", "");
+    expect(() => getEngineOverride("dev")).toThrow(/must be set together/);
   });
 });
