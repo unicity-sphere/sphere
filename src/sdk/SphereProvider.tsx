@@ -174,7 +174,7 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
       })
     : base;
 
-  const walletApiBaseUrl = getWalletApiBaseUrl();
+  const walletApiBaseUrl = getWalletApiBaseUrl(network);
   if (!walletApiBaseUrl) return withEngine;
   // Post-flip (sdk 0.14.1): createWalletApiProviders attaches a plain
   // `walletApi` transport CONFIG (WalletApiTransportConfig) — the session,
@@ -241,13 +241,16 @@ async function withPasswordOpLock(
 
 interface SphereProviderProps {
   children: ReactNode;
-  network?: NetworkType;
+  /**
+   * The active network. Required: a default here would be a SECOND build
+   * default that can silently drift from the one src/config/network.ts
+   * resolves — and module-scope consts (the SGW base URL, the SGW challenge
+   * pin, per-network wallet-api resolution) all derive from that one.
+   */
+  network: NetworkType;
 }
 
-export function SphereProvider({
-  children,
-  network = 'testnet2',
-}: SphereProviderProps) {
+export function SphereProvider({ children, network }: SphereProviderProps) {
   const queryClient = useQueryClient();
   const [sphere, setSphere] = useState<Sphere | null>(null);
   const [providers, setProviders] = useState<SphereAppProviders | null>(null);
@@ -1328,7 +1331,7 @@ export function SphereProvider({
     reinitialize: initialize,
     applySubscriptionKey,
     subscriptionKeyStatus,
-    walletApiEnabled: isWalletApiEnabled(),
+    walletApiEnabled: isWalletApiEnabled(network),
   };
 
   return (

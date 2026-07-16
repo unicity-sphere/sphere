@@ -8,7 +8,7 @@ import {
   setActiveNetwork,
   type SupportedNetwork,
 } from '../../../../config/network';
-import { buildNetworkRows, rowState, type RowState } from './networkRows';
+import { buildNetworkRows, rowState, unavailableLabel, type RowState } from './networkRows';
 
 interface NetworkModalProps {
   isOpen: boolean;
@@ -100,7 +100,7 @@ export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
                 )}
                 {state === 'unavailable' && (
                   <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-neutral-200/70 dark:bg-white/8 text-neutral-500 dark:text-white/45 shrink-0">
-                    Coming soon
+                    {unavailableLabel(row)}
                   </span>
                 )}
                 {state === 'selectable' && (

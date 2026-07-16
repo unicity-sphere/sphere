@@ -32,3 +32,20 @@ export function rowState(row: SupportedNetwork, active: NetworkType): RowState {
   if (row.id === active) return 'current';
   return row.available ? 'selectable' : 'unavailable';
 }
+
+/**
+ * The badge for an unavailable row. The two reasons are operationally
+ * opposite — "the network does not exist yet" versus "it exists but this
+ * deployment cannot reach it" — and this badge is the only signal a user or a
+ * support engineer gets, so it must not flatten them into one word.
+ */
+export function unavailableLabel(row: SupportedNetwork): string {
+  switch (row.unavailableReason) {
+    case 'not-served-here':
+      return 'Not available here';
+    // 'not-onboarded' and 'not-rolled-out' are both "not live for you yet", and
+    // the distinction (SDK vs rollout switch) is ours, not the user's.
+    default:
+      return 'Coming soon';
+  }
+}

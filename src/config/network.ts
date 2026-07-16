@@ -1,15 +1,26 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { STORAGE_KEYS } from './storageKeys';
+import { runtimeFlag } from './runtimeConfig';
+import { BUILD_DEFAULT_NETWORK, hasWalletApiUrl, isWalletApiRequired } from './walletApiNetworks';
 
-/** The network this build falls back to when no (valid) choice is persisted. */
-const BUILD_DEFAULT_NETWORK: NetworkType = 'testnet2';
+export { BUILD_DEFAULT_NETWORK };
 
-/** One selectable row in the Settings → Network screen. */
+/** Why a network is not offered — drives honest UI copy, never a lie. */
+export type UnavailableReason =
+  /** The SDK has not onboarded it (no trust base / networkId yet). */
+  | 'not-onboarded'
+  /** Live, but THIS deployment has no backend for it. */
+  | 'not-served-here'
+  /** Live and served, but the rollout switch is still off. */
+  | 'not-rolled-out';
+
+/** One row in the Settings → Network screen. */
 export interface SupportedNetwork {
   readonly id: NetworkType;
   readonly label: string;
   readonly available: boolean;
+  readonly unavailableReason?: UnavailableReason;
 }
 
 /**
@@ -23,18 +34,50 @@ interface NetworkTableEntry {
 }
 
 /**
- * Networks the wallet offers in the UI, in display order. `available` derives
- * from the SDK's NETWORKS table: a network is selectable once it carries a
- * canonical `networkId` (only live v2 networks do — see SPHERE_NETWORKS in
- * sphere-sdk/constants.ts). Mainnet therefore lists as "Coming soon" and
- * flips to selectable automatically when the SDK onboards it — nothing to
- * change here.
+ * Deliberate mainnet rollout switch, off unless EXACTLY 'true' — the
+ * PAID_PLANS_ENABLED precedent. Without it, mainnet would go live the moment
+ * the SDK ships a networkId AND someone sets a URL, turning a routine config
+ * change into a launch while money-safety prerequisites are still open.
+ */
+const MAINNET_ROLLOUT_ENABLED = runtimeFlag(
+  'MAINNET_ROLLOUT_ENABLED',
+  import.meta.env.VITE_MAINNET_ROLLOUT_ENABLED as string | undefined,
+);
+
+/**
+ * Why a network cannot be offered, or undefined when it can. Three independent
+ * gates, reported in the order they must be fixed:
+ *  (a) the SDK must know the network (a canonical networkId marks a live v2
+ *      network — see SPHERE_NETWORKS in sphere-sdk/constants.ts);
+ *  (b) THIS deployment must be able to serve it — a wallet-api deployment with
+ *      no backend URL for a network cannot run it at all (the SDK client is
+ *      bound to the network and its sign-in would be refused), so offering the
+ *      row would only ever produce a broken wallet;
+ *  (c) mainnet additionally waits for the explicit rollout switch.
+ */
+function unavailableReasonFor(id: NetworkType, entry: NetworkTableEntry): UnavailableReason | undefined {
+  if (entry.networkId == null) return 'not-onboarded';
+  // Legacy local-custody deployments serve every network locally, so only
+  // wallet-api deployments are gated on having a URL.
+  if (isWalletApiRequired() && !hasWalletApiUrl(id)) return 'not-served-here';
+  if (id === 'mainnet' && !MAINNET_ROLLOUT_ENABLED) return 'not-rolled-out';
+  return undefined;
+}
+
+/**
+ * Networks the wallet offers, in display order. This is the SINGLE predicate
+ * behind the UI gate, isSwitchableNetwork, the boot resolve and the
+ * setActiveNetwork throw — which is what makes a broken switch impossible: a
+ * network this deployment cannot serve is never selectable, and a persisted
+ * choice that stops being available falls back to the build default on the
+ * next load rather than booting a wallet that cannot work.
  */
 export const SUPPORTED_NETWORKS: readonly SupportedNetwork[] = (
   ['testnet2', 'mainnet'] as const
 ).map((id) => {
   const entry: NetworkTableEntry = NETWORKS[id];
-  return { id, label: entry.name, available: entry.networkId != null };
+  const unavailableReason = unavailableReasonFor(id, entry);
+  return { id, label: entry.name, available: unavailableReason === undefined, unavailableReason };
 });
 
 /**

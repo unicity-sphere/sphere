@@ -33,6 +33,15 @@
  * real values, so all of this folds correctly per environment there.
  */
 
+import type { NetworkType } from '@unicitylabs/sphere-sdk';
+import { SUPPORTED_NETWORKS } from './network';
+import { hasWalletApiUrl, isWalletApiRequired, walletApiUrlFor } from './walletApiNetworks';
+
+// Re-exported so this module's public surface is unchanged; it lives in the
+// leaf so network.ts can read it without importing this file (which imports
+// SUPPORTED_NETWORKS from network.ts — that would be a cycle).
+export { isWalletApiRequired };
+
 /** Engine override for the LOCAL compose stack (smoke tests / local dev). */
 export interface EngineOverrideConfig {
   /** Aggregator gateway URL (the mock aggregator of the dev stack). */
@@ -47,36 +56,43 @@ function resolveUrl(value: string): string {
 }
 
 /**
- * True when this bundle declares wallet-api intent (`VITE_REQUIRE_WALLET_API`).
- * Set by deployments whose custody model is wallet-api (the Pages workflow):
- * any value other than empty/`false`/`0` counts as set.
+ * Which wallet-api URL applies is a PER-NETWORK question: the SDK client is
+ * bound to the active network and refuses a challenge naming another one, so
+ * one URL cannot serve two networks. Resolution (and the reason it reads the
+ * runtime global rather than a sed placeholder) lives in walletApiNetworks.ts.
  */
-export function isWalletApiRequired(): boolean {
-  const raw = import.meta.env.VITE_REQUIRE_WALLET_API as string | undefined;
-  return !!raw && raw !== 'false' && raw !== '0';
-}
 
 /**
- * Backend base URL when wallet-api mode is enabled; null otherwise.
+ * Backend base URL for `network`, or null when this deployment does not serve
+ * it (which composes the legacy local-custody bundle).
  *
- * #351 assert (2026-06-12 incident): a bundle built with
- * `VITE_REQUIRE_WALLET_API` but without `VITE_WALLET_API_URL` must fail at
- * provider composition instead of silently falling back to the legacy
- * local-custody composition — a missing URL would otherwise CHANGE the
- * custody model, not just degrade a feature.
+ * #351 assert (2026-06-12 incident): a bundle that DECLARES wallet-api custody
+ * but has no URL for the network it is about to run must fail at provider
+ * composition instead of silently composing local custody — a missing URL
+ * CHANGES the custody model, not just degrades a feature.
+ *
+ * Armed only for networks the switcher can select (SUPPORTED_NETWORKS). 'dev'
+ * is exempt on purpose: it is a console-only local escape hatch with no
+ * deployed backend, and arming it there would break the very deployment used
+ * to verify switching (the Pages build sets VITE_REQUIRE_WALLET_API=true) —
+ * dev correctly falls back to local custody instead. Note the availability
+ * gate largely SUBSUMES this assert: a network is only selectable when a URL
+ * exists for it, so in practice this now guards the build-default network.
  */
-export function getWalletApiBaseUrl(): string | null {
-  const raw = import.meta.env.VITE_WALLET_API_URL as string | undefined;
-  // NOTE: in Docker images this branch is compile-time-eliminated against the
-  // baked placeholder (see file header); deploy/runtime-config.sh enforces
-  // #351 there. This code path is live in dev / GitHub Pages builds.
-  if (!raw) {
-    if (isWalletApiRequired()) {
+export function getWalletApiBaseUrl(network: NetworkType): string | null {
+  const raw = walletApiUrlFor(network);
+  // Unlike the previous single-env version, this null branch is NOT foldable:
+  // `raw` comes from a function call rather than a baked literal, so legacy
+  // local custody is reachable in Docker bundles again.
+  if (raw === null) {
+    if (isWalletApiRequired() && SUPPORTED_NETWORKS.some((n) => n.id === network)) {
       throw new Error(
-        'VITE_REQUIRE_WALLET_API is set but VITE_WALLET_API_URL is missing or empty — ' +
-          'this build declares wallet-api custody, so composing the legacy local-custody ' +
-          'bundle instead would silently change the custody model. Bake VITE_WALLET_API_URL ' +
-          'into the build, or unset VITE_REQUIRE_WALLET_API for an intentionally legacy deployment.',
+        `This build declares wallet-api custody (VITE_REQUIRE_WALLET_API) but has no ` +
+          `wallet-api URL for network "${network}", so composing the legacy local-custody ` +
+          `bundle instead would silently change the custody model. Set ` +
+          `WALLET_API_URL_${network.toUpperCase()} on the container env (or ` +
+          `VITE_WALLET_API_URL for the build default network), or unset ` +
+          `VITE_REQUIRE_WALLET_API for an intentionally legacy deployment.`,
       );
     }
     return null;
@@ -85,18 +101,18 @@ export function getWalletApiBaseUrl(): string | null {
 }
 
 /**
- * True when the asset path rides wallet-api (drives UI hints).
- * Reads the raw env (no #351 assert) so render paths never throw: the assert
+ * True when the asset path rides wallet-api for `network` (drives IPFS-off, UI
+ * hints). Never throws (no #351 assert) so render paths are safe: the assert
  * fires once, at provider composition (`buildProviders`), where
  * SphereProvider catches it and surfaces a visible initialization error.
+ *
+ * Per-network on purpose: a deployment-wide flag would disagree with the
+ * composition once URLs are per-network — reporting "wallet-api on" for a
+ * network that actually composed local custody would force IPFS token sync off
+ * beside local custody (and the reverse on dev).
  */
-export function isWalletApiEnabled(): boolean {
-  // The `!!raw` term folds to `true` against the baked placeholder; the
-  // `raw !== ''` term is what survives into the Docker bundle and keeps this
-  // a runtime decision after substitution (see file header). Don't reduce
-  // this to a bare truthiness test.
-  const raw = import.meta.env.VITE_WALLET_API_URL as string | undefined;
-  return !!raw && raw !== '';
+export function isWalletApiEnabled(network: NetworkType): boolean {
+  return hasWalletApiUrl(network);
 }
 
 /**
