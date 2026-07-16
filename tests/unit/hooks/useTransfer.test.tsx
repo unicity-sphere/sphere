@@ -171,6 +171,25 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     },
   );
 
+  it('converts a SEND_PARTIALLY_COMPLETED reject into a delivery-pending SUCCESS — a partial send is never re-sendable (no double-pay of the delivered legs) (#681)', async () => {
+    // sdk #681: a multi-leg send certified + delivered >=1 leg, then could not cover
+    // the remainder → PartialSendConflictError (code SEND_PARTIALLY_COMPLETED). Money
+    // has irreversibly left the wallet; a full re-send would double-pay the delivered
+    // legs, so useTransfer MUST present it as pending, never a re-sendable failure.
+    const send = vi.fn().mockRejectedValue(new SphereError('part sent', 'SEND_PARTIALLY_COMPLETED'));
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.deliveryPending).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
     fakeSphere = { payments: { send } };

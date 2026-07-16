@@ -79,12 +79,19 @@ export function getErrorCode(err: unknown): SphereErrorCode | null {
 //    these codes off the re-send path (the SendModal still must present pending).
 //  - SEND_SYNC_PENDING (#665): the spend committed but the post-commit wallet-api
 //    mirror-sync failed; resume converges the mirror (idempotent apply).
+//  - SEND_PARTIALLY_COMPLETED (sdk #681, PartialSendConflictError): a multi-leg
+//    send certified + delivered >=1 leg, then could not cover the remainder. Money
+//    has irreversibly left the wallet, so it MUST NOT be re-sent in full (that
+//    double-pays the delivered legs) — present it as pending, never re-sendable.
+//    (A richer "partially sent, remainder X uncovered" UX is a follow-up; the
+//    money-safety requirement is only that it stays off the re-send path.)
 export const PENDING_COMMIT_CODES: readonly SphereErrorCode[] = [
   'SEND_SYNC_PENDING',
   'CERTIFICATION_UNCONFIRMED',
   'CHECKPOINT_PERSIST_FAILED',
   'SPLIT_CHECKPOINT_LOST',
   'CHECKPOINT_TRUSTBASE_MISMATCH',
+  'SEND_PARTIALLY_COMPLETED',
 ];
 
 /**

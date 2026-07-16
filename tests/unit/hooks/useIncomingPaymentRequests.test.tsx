@@ -16,7 +16,7 @@ import * as subscriptionConfig from "../../../src/config/subscription";
 // no-ops on the wallet-api path; any regression to it throws here.
 // ============================================================================
 
-type SdkStatus = "pending" | "accepted" | "rejected" | "paid" | "expired";
+type SdkStatus = "pending" | "accepted" | "rejected" | "paid" | "expired" | "settling";
 
 interface FakeSdkRequest {
   id: string;
@@ -81,6 +81,10 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
       }),
     },
     // Test-side helpers
+    _setStatus: (id: string, status: SdkStatus) => {
+      const r = find(id);
+      if (r) r.status = status;
+    },
     _receive: (r: FakeSdkRequest) => {
       requests.unshift(r);
       listeners.get("payment_request:incoming")?.forEach((fn) => fn({ ...r }));
@@ -220,62 +224,54 @@ describe("useIncomingPaymentRequests", () => {
   });
 
   // #441: payPaymentRequest routes through the same send() as a normal transfer,
-  // so it can reject with the possibly-committed keep-open codes. The SDK reverts
-  // the request to 'pending' before re-throwing (mirrored here: the rejected mock
-  // never flips status, so the fake list keeps it 'pending'). Without the guard,
-  // the finally-refresh re-lists it as payable → one-click double-pay.
+  // so it can reject with the possibly-committed keep-open codes. The SDK (0.11.14+)
+  // marks the request DURABLY 'settling' (survives reload via its journal) before
+  // re-throwing — mirrored here by _setStatus(id, 'settling'). The app swallows the
+  // throw and maps 'settling' → ACCEPTED (non-payable). Without that mapping the
+  // finally-refresh re-lists it as payable → one-click double-pay.
   it.each(PENDING_COMMIT_CODES)(
-    "treats a %s pay reject as a pending SUCCESS and drops the request from the payable list (no double-pay) (#441)",
+    "a %s pay reject is swallowed and the request is held NON-payable via the SDK's durable 'settling' status (no double-pay) (#441)",
     async (code) => {
       fakeSphere = makeFakeSphere([makeRequest("a")]);
-      fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
-        new SphereError("possibly committed on-chain", code),
-      );
+      fakeSphere.payments.payPaymentRequest.mockImplementationOnce(async (id: string) => {
+        fakeSphere!._setStatus(id, "settling"); // the real SDK's durable mark
+        throw new SphereError("possibly committed on-chain", code);
+      });
       const { result } = renderHook(() => useIncomingPaymentRequests());
       expect(result.current.pendingCount).toBe(1);
 
       // pay() RESOLVES (does not throw) — the money is (or may be) on-chain.
       await act(() => result.current.pay(result.current.requests[0]));
 
-      // The request left the payable (PENDING) state — its Pay button is gone —
-      // even though the SDK reverted it to 'pending'.
+      // Mapped to ACCEPTED ('Payment Sent', non-payable) via STATUS_MAP['settling'].
       expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledTimes(1);
-      expect(result.current.requests[0].status).not.toBe(PaymentRequestStatus.PENDING);
+      expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
       expect(result.current.pendingCount).toBe(0);
     },
   );
 
-  it("keeps the request non-payable across later refreshes while the SDK still lists it 'pending' (#441)", async () => {
-    fakeSphere = makeFakeSphere([makeRequest("a")]);
-    fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
-      new SphereError("possibly committed on-chain", "CHECKPOINT_PERSIST_FAILED"),
-    );
-    const { result } = renderHook(() => useIncomingPaymentRequests());
-
-    await act(() => result.current.pay(result.current.requests[0]));
+  it("a 'settling' request stays NON-payable across a remount/reload — the durable SDK status, no in-memory override (#441)", async () => {
+    // The SDK durably lists the request 'settling' (its journal survives reload).
+    fakeSphere = makeFakeSphere([makeRequest("a", "settling")]);
+    const { result, unmount } = renderHook(() => useIncomingPaymentRequests());
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
     expect(result.current.pendingCount).toBe(0);
 
-    // A subsequent refresh (e.g. an unrelated incoming request) re-reads the SDK
-    // list — where 'a' is STILL 'pending' — but the settling override must persist.
-    act(() => {
-      fakeSphere!._receive(makeRequest("b"));
-    });
-    await waitFor(() => expect(result.current.requests).toHaveLength(2));
-    const a = result.current.requests.find((r) => r.id === "a")!;
-    expect(a.status).not.toBe(PaymentRequestStatus.PENDING);
-    // Only the fresh request 'b' is payable.
-    expect(result.current.pendingCount).toBe(1);
+    // Remount (a reload / new tab): a fresh hook over the SAME SDK list. The old
+    // in-memory override was empty here — its reload gap, the exact double-pay
+    // this fix closes. The SDK's durable 'settling' keeps it non-payable.
+    unmount();
+    const { result: result2 } = renderHook(() => useIncomingPaymentRequests());
+    expect(result2.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
+    expect(result2.current.pendingCount).toBe(0);
   });
 
-  it("drops the settling override once the SDK's own list resolves the request (paid via resume/cross-session) (#441)", async () => {
-    fakeSphere = makeFakeSphere([makeRequest("a")]);
-    fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
-      new SphereError("possibly committed on-chain", "SEND_SYNC_PENDING"),
-    );
+  it("a settling request advances to PAID when the SDK resolves its linked transfer (resume/cross-session) (#441)", async () => {
+    fakeSphere = makeFakeSphere([makeRequest("a", "settling")]);
     const { result } = renderHook(() => useIncomingPaymentRequests());
-    await act(() => result.current.pay(result.current.requests[0]));
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED); // settling → non-payable
 
-    // SDK later advances the request to a real terminal status.
+    // SDK later advances the request to a real terminal status (deferred paid).
     act(() => {
       fakeSphere!._resolveRemote("a", "paid");
     });

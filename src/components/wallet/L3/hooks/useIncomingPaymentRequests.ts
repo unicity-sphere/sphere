@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
 import { isPendingCommitCode } from '../../../../sdk/errors';
@@ -22,6 +22,12 @@ const STATUS_MAP: Record<SDKPaymentRequest['status'], PaymentRequestStatus> = {
     rejected: PaymentRequestStatus.REJECTED,
     paid: PaymentRequestStatus.PAID,
     expired: PaymentRequestStatus.EXPIRED,
+    // #441: the SDK holds a possibly-committed pay in a DURABLE 'settling' state
+    // (survives reload via its journal) until the linked transfer resolves. Money
+    // has (or may have) left the wallet, so the request must be NON-payable —
+    // surface it as ACCEPTED ('Payment Sent'), the same non-actionable state the
+    // (now-removed) in-memory override used, but durable across reload.
+    settling: PaymentRequestStatus.ACCEPTED,
 };
 
 export interface IncomingPaymentRequest {
@@ -50,7 +56,11 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
         recipientNametag: sdk.senderNametag ?? '',
         requestId: sdk.requestId,
         timestamp: sdk.timestamp,
-        status: STATUS_MAP[sdk.status] ?? PaymentRequestStatus.PENDING,
+        // sdk.status widens to `string` here (no compile check on the union), so an
+        // UNKNOWN/unmapped status must default NON-payable — NEVER PENDING. A future
+        // SDK status we haven't mapped would otherwise fall through to payable and
+        // risk a double-pay. ACCEPTED = non-actionable 'Payment Sent'.
+        status: STATUS_MAP[sdk.status] ?? PaymentRequestStatus.ACCEPTED,
     };
 }
 
@@ -79,37 +89,13 @@ export const useIncomingPaymentRequests = () => {
     const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
-    // #441: request ids whose pay() hit a possibly-committed keep-open code. The
-    // spend is (or may be) on-chain and resume completes the ORIGINAL payment
-    // under the same transferId, but the SDK's payPaymentRequest REVERTS the
-    // request to 'pending' before re-throwing (PaymentsModule catch), so a bare
-    // refresh() would re-list it as payable → one-click double-pay. We pin a
-    // local override here (applied in refresh) so the request leaves the payable
-    // (PENDING) state until the SDK's own list resolves it (paid/expired). A ref,
-    // not state: refresh() reads it synchronously and it must survive re-renders
-    // without itself triggering one.
-    const settlingIdsRef = useRef<Set<string>>(new Set());
-
     const refresh = useCallback(() => {
         if (!sphere) return;
-        setRequests(
-            sphere.payments.getPaymentRequests().map((r) => {
-                const bridged = bridgeRequest(r);
-                if (settlingIdsRef.current.has(bridged.id)) {
-                    // Keep a pending-commit'd request OUT of the payable state even
-                    // though the SDK reverted it to 'pending' (money already left;
-                    // re-pay = double-pay). Surface it as 'Payment Sent' (ACCEPTED):
-                    // sent-and-settling, non-actionable. Once the SDK moves it off
-                    // 'pending' (a real paid/expired resolution), the override is
-                    // obsolete — drop it and show the SDK's true status.
-                    if (bridged.status === PaymentRequestStatus.PENDING) {
-                        return { ...bridged, status: PaymentRequestStatus.ACCEPTED };
-                    }
-                    settlingIdsRef.current.delete(bridged.id);
-                }
-                return bridged;
-            }),
-        );
+        // The SDK list is the source of truth. A possibly-committed pay is held by
+        // the SDK in a DURABLE 'settling' state (→ ACCEPTED via STATUS_MAP, non-
+        // payable) that survives reload — so no client-side override is needed
+        // here; bridging the SDK status directly is both correct and reload-safe.
+        setRequests(sphere.payments.getPaymentRequests().map(bridgeRequest));
     }, [sphere]);
 
     useEffect(() => {
@@ -174,21 +160,16 @@ export const useIncomingPaymentRequests = () => {
             await sphere.payments.payPaymentRequest(request.id);
         } catch (err) {
             // #441: payPaymentRequest routes through the same send() as a normal
-            // transfer, so it can reject with the possibly-committed keep-open
-            // codes (PENDING_COMMIT_CODES). On those the spend is (or may be)
-            // on-chain and resume completes it under the same transferId — a
-            // second pay would double-pay. The SDK reverts the request to
-            // 'pending' before re-throwing, so we treat the reject as a pending
-            // SUCCESS: pin the settling override (so refresh drops it from the
-            // payable list) and swallow the throw (so the modal shows no
-            // re-payable error). Mirrors useTransfer's pending-commit handling
-            // via the ONE shared isPendingCommitCode definition. Any other error
-            // is a genuine failure — re-throw so PaymentRequestModal surfaces it
-            // and the request stays actionable (safe to retry, nothing committed).
-            if (isPendingCommitCode(err)) {
-                settlingIdsRef.current.add(request.id);
-                return;
-            }
+            // transfer, so it can reject with a possibly-committed keep-open code
+            // (PENDING_COMMIT_CODES). On those the spend is (or may be) on-chain and
+            // the SDK holds the request in a DURABLE 'settling' state (non-payable,
+            // survives reload) until its transfer resolves — so a second pay can't
+            // double-pay. Swallow the throw so the modal shows no re-payable error;
+            // the finally→refresh reads the SDK's 'settling' status (→ ACCEPTED,
+            // non-payable). Any OTHER error is a genuine failure — re-throw so
+            // PaymentRequestModal surfaces it and the request stays actionable
+            // (safe to retry; nothing committed).
+            if (isPendingCommitCode(err)) return;
             throw err;
         } finally {
             refresh();
