@@ -61,6 +61,12 @@ export const STORAGE_KEYS = {
   // message — cannot come back holding a decrypted Sphere. Carries no secret,
   // only a timestamp (graceful lock §8.4).
   LOCK_EPOCH: 'sphere_lock_epoch',
+
+  // Active network choice (runtime network switcher). Read ONCE at module
+  // load by src/config/network.ts; written by setActiveNetwork(), which then
+  // reloads the page. Carries the sphere_ prefix on purpose: wallet deletion
+  // (clearAllSphereData) also resets the network choice to the build default.
+  ACTIVE_NETWORK: 'sphere_active_network',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
