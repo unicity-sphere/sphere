@@ -67,6 +67,10 @@ export const STORAGE_KEYS = {
   // reloads the page. Carries the sphere_ prefix on purpose: wallet deletion
   // (clearAllSphereData) also resets the network choice to the build default.
   ACTIVE_NETWORK: 'sphere_active_network',
+
+  // Set once the user has been told mainnet is live — whether they switched or
+  // declined. The announcement is an invitation, so it must never nag.
+  MAINNET_ANNOUNCED: 'sphere_mainnet_announced',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';

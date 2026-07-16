@@ -20,6 +20,8 @@ beforeEach(() => {
   // Isolate from the developer's local .env, which sets a wallet-api URL.
   vi.stubEnv('VITE_REQUIRE_WALLET_API', '');
   vi.stubEnv('VITE_WALLET_API_URL', '');
+  vi.stubEnv('VITE_WALLET_API_URL_TESTNET2', '');
+  vi.stubEnv('VITE_WALLET_API_URL_MAINNET', '');
   vi.stubEnv('VITE_MAINNET_ROLLOUT_ENABLED', '');
 });
 
@@ -156,6 +158,82 @@ describe('NETWORK_DOWNGRADED_FROM — a fallback must never be silent', () => {
     localStorage.setItem('sphere_active_network', 'mainnet');
     await loadNetworkModule();
     expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+  });
+});
+
+describe('shouldAnnounceMainnet — invite once, never move anyone', () => {
+  const LIVE = [
+    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'mainnet' as const, label: 'Mainnet', available: true },
+  ];
+  const NOT_LIVE = [
+    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'mainnet' as const, label: 'Mainnet', available: false, unavailableReason: 'not-onboarded' as const },
+  ];
+
+  it('invites a test-network wallet once mainnet is live', async () => {
+    const mod = await loadNetworkModule();
+    expect(
+      mod.shouldAnnounceMainnet({ active: 'testnet2', networks: LIVE, announced: false }),
+    ).toBe(true);
+  });
+
+  it('stays quiet while mainnet is not selectable here', async () => {
+    // Never advertise what this deployment cannot actually switch to.
+    const mod = await loadNetworkModule();
+    expect(
+      mod.shouldAnnounceMainnet({ active: 'testnet2', networks: NOT_LIVE, announced: false }),
+    ).toBe(false);
+  });
+
+  it('never asks a wallet already on mainnet', async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.shouldAnnounceMainnet({ active: 'mainnet', networks: LIVE, announced: false })).toBe(
+      false,
+    );
+  });
+
+  it('never asks twice — declining is a real answer, not a postponement', async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.shouldAnnounceMainnet({ active: 'testnet2', networks: LIVE, announced: true })).toBe(
+      false,
+    );
+  });
+
+  it('remembers the answer across loads', async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.isMainnetAnnounced()).toBe(false);
+    mod.markMainnetAnnounced();
+    expect(mod.isMainnetAnnounced()).toBe(true);
+  });
+});
+
+describe('resetActiveNetwork — the way out of a network that cannot start', () => {
+  it('clears the choice and reloads onto the build default', async () => {
+    localStorage.setItem('sphere_active_network', 'dev');
+    const mod = await loadNetworkModule();
+    const reload = vi.fn();
+
+    mod.resetActiveNetwork({ reload });
+
+    expect(localStorage.getItem('sphere_active_network')).toBeNull();
+    expect(reload).toHaveBeenCalledOnce();
+    // Nothing persisted => the next boot resolves the build default.
+    expect(mod.resolveActiveNetwork(null)).toBe('testnet2');
+  });
+
+  it('never throws — a recovery action that can fail is no recovery', async () => {
+    // setActiveNetwork(BUILD_DEFAULT) would throw if the gate considered the
+    // default unavailable; clearing the key cannot, which is why recovery does
+    // not reuse it.
+    vi.stubEnv('VITE_REQUIRE_WALLET_API', 'true'); // no URLs => nothing available
+    localStorage.setItem('sphere_active_network', 'mainnet');
+    const mod = await loadNetworkModule();
+    const reload = vi.fn();
+
+    expect(() => mod.resetActiveNetwork({ reload })).not.toThrow();
+    expect(() => mod.setActiveNetwork('testnet2', { reload })).toThrow(/not available/);
+    expect(reload).toHaveBeenCalledOnce(); // only the reset one
   });
 });
 

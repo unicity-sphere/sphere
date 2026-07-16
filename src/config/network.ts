@@ -153,6 +153,86 @@ export interface NetworkChangedMessage {
  * is a test seam — jsdom cannot mock window.location.reload; production
  * callers omit it.
  */
+/**
+ * Whether to invite this wallet onto mainnet.
+ *
+ * WHY AN INVITATION AND NOT A NEW DEFAULT: almost nobody has a persisted
+ * choice — they simply follow the build default — so flipping that default to
+ * mainnet would move every existing wallet to a different network on its next
+ * load. Networks are isolated worlds, so they would open to an empty balance
+ * and reasonably conclude their funds were gone. Moving someone's wallet
+ * between networks is theirs to decide; ours is to tell them it is possible.
+ *
+ * Pure so the "never nag" rule is testable: true only while mainnet is
+ * genuinely selectable here, the wallet is not already on it, and the user has
+ * not yet been asked. Answering — either way — ends it for good.
+ */
+export function shouldAnnounceMainnet(opts: {
+  active: NetworkType;
+  networks: readonly SupportedNetwork[];
+  announced: boolean;
+}): boolean {
+  if (opts.announced) return false;
+  if (opts.active === 'mainnet') return false;
+  return opts.networks.some((n) => n.id === 'mainnet' && n.available);
+}
+
+/** True once the user has answered the mainnet invitation, either way. */
+export function isMainnetAnnounced(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.MAINNET_ANNOUNCED) === 'true';
+  } catch {
+    return true; // storage blocked — never nag rather than ask on every load
+  }
+}
+
+/** Record that the user has been asked, so the invitation never repeats. */
+export function markMainnetAnnounced(): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.MAINNET_ANNOUNCED, 'true');
+  } catch {
+    // Storage blocked; isMainnetAnnounced() already fails to "asked".
+  }
+}
+
+/** Best-effort cross-tab notify; the storage-event fallback covers a failure. */
+function broadcastNetworkChange(network: NetworkType): void {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel(NETWORK_BROADCAST_CHANNEL);
+      const message: NetworkChangedMessage = { type: 'network-changed', network };
+      channel.postMessage(message);
+      channel.close();
+    }
+  } catch {
+    // Cross-tab notify is best-effort — the 'storage' event listener in
+    // src/sdk/networkSync.ts still reloads other tabs.
+  }
+}
+
+/**
+ * Drop the persisted choice and reload onto the build default.
+ *
+ * The recovery path for a wallet stranded on a network that cannot start —
+ * which the availability gate cannot rule out entirely: it can only check what
+ * the SDK advertises, while the refusal may come from deeper (a missing trust
+ * base). Deliberately NOT setActiveNetwork(BUILD_DEFAULT_NETWORK): that throws
+ * for a network the gate considers unavailable, and a recovery action that can
+ * itself fail is no recovery. Clearing the key always resolves to the build
+ * default (resolveActiveNetwork treats null as "no choice"), so this cannot
+ * throw and cannot leave the user stuck.
+ */
+export function resetActiveNetwork(opts: { reload?: () => void } = {}): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_NETWORK);
+  } catch {
+    // Storage blocked — the build default is what a failed read resolves to
+    // anyway, so a reload still recovers.
+  }
+  broadcastNetworkChange(BUILD_DEFAULT_NETWORK);
+  (opts.reload ?? (() => window.location.reload()))();
+}
+
 export function setActiveNetwork(id: NetworkType, opts: { reload?: () => void } = {}): void {
   if (!isSwitchableNetwork(id)) {
     throw new Error(`Network "${id}" is not available for switching`);
@@ -160,16 +240,6 @@ export function setActiveNetwork(id: NetworkType, opts: { reload?: () => void } 
   if (id === SPHERE_NETWORK) return; // already active — nothing to do
 
   localStorage.setItem(STORAGE_KEYS.ACTIVE_NETWORK, id);
-  try {
-    if (typeof BroadcastChannel !== 'undefined') {
-      const channel = new BroadcastChannel(NETWORK_BROADCAST_CHANNEL);
-      const message: NetworkChangedMessage = { type: 'network-changed', network: id };
-      channel.postMessage(message);
-      channel.close();
-    }
-  } catch {
-    // Cross-tab notify is best-effort — the 'storage' event fallback in
-    // src/sdk/networkSync.ts still reloads other tabs.
-  }
+  broadcastNetworkChange(id);
   (opts.reload ?? (() => window.location.reload()))();
 }

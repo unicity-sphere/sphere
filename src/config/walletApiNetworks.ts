@@ -41,14 +41,39 @@ const RUNTIME_KEY: Partial<Record<NetworkType, keyof SphereRuntimeConfig>> = {
 };
 
 /**
+ * Build-time per-network URLs, for builds that HAVE no container to write the
+ * global: `npm run dev`, GitHub Pages, tests. Docker images must never define
+ * these — see the warning below.
+ *
+ * ⚠️ NEVER add a Dockerfile ARG / `__RUNTIME_*__` placeholder for these keys.
+ * The safety of this map rests on WHAT the env holds, not on the map's shape:
+ *  - dev/Pages bake the REAL value, so even if a bundler folds a branch on it,
+ *    it folds to the truth — harmless;
+ *  - Docker leaves them undefined (no ARG), so they fold to `undefined` and the
+ *    runtime global stays the only source — also harmless.
+ * Give them a placeholder and that invariant dies: the fold would go fail-OPEN
+ * against a truthy `'__RUNTIME_…__'` and mark the network available in every
+ * image, exactly the bug this module exists to prevent.
+ */
+const ENV_URL: Partial<Record<NetworkType, string | undefined>> = {
+  testnet2: import.meta.env.VITE_WALLET_API_URL_TESTNET2 as string | undefined,
+  mainnet: import.meta.env.VITE_WALLET_API_URL_MAINNET as string | undefined,
+};
+
+/**
  * The wallet-api base for `network`, or null when this deployment does not
  * serve it. Raw value — callers resolve relative URLs against the origin.
  */
 export function walletApiUrlFor(network: NetworkType): string | null {
   const key = RUNTIME_KEY[network];
-  // Computed access on a window global: unfoldable by construction.
+  // Computed access on a window global: unfoldable by construction. The
+  // container is authoritative, so it wins over anything baked at build time.
   const runtime = key ? readRuntimeConfig()?.[key] : undefined;
   if (runtime !== undefined && runtime !== '') return runtime;
+
+  // Build-time per-network URL (dev / Pages / tests — never Docker).
+  const env = ENV_URL[network];
+  if (env !== undefined && env !== '') return env;
 
   // Legacy single-URL deployments (VITE_WALLET_API_URL, and every deployment
   // predating per-network config) mean "the build default network's backend".

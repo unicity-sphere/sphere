@@ -9,6 +9,7 @@ import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hook
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow } from '../../shared/components';
 import { WalletActions } from '../components/WalletActions';
+import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
@@ -323,6 +324,8 @@ export function L3WalletView({
             onToggle={handleToggleBalances}
             isLoading={isLoadingAssets && totalValue === 0}
           />
+          {/* The network the balance above belongs to — see NetworkBadge. */}
+          <NetworkBadge />
           <WalletStatusLine
             isLoadingAssets={isLoadingAssets}
             pendingCount={pendingTokens.length}

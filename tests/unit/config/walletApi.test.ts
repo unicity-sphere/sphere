@@ -16,6 +16,10 @@ function setRuntimeConfig(config: Record<string, string>): void {
 beforeEach(() => {
   // Containers always write every key; dev/Pages ship {} and fall back to env.
   setRuntimeConfig({});
+  // Isolate from the developer's local .env: these are read at call time, so a
+  // machine that happens to define them would otherwise change the outcome.
+  vi.stubEnv('VITE_WALLET_API_URL_TESTNET2', '');
+  vi.stubEnv('VITE_WALLET_API_URL_MAINNET', '');
 });
 
 afterEach(() => {
