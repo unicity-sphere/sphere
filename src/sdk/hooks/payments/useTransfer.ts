@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getErrorCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
+import { getErrorCode, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
@@ -110,19 +110,10 @@ export function useTransfer(): UseTransferReturn {
           memo: params.memo,
         });
       } catch (e) {
-        // #665: a POST-COMMIT wallet-api mirror-sync failure rejects with
-        // SEND_SYNC_PENDING — the spend already committed on-chain, the SDK keeps
-        // the intent OPEN, and resume converges the server mirror (idempotent
-        // apply). Present it as a pending SUCCESS, never a re-sendable failure
-        // (re-sending would double-pay), exactly like CERTIFICATION_UNCONFIRMED.
-        if (getErrorCode(e) === 'SEND_SYNC_PENDING') {
-          return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
-        }
         // #631/#633: a POSSIBLY-CERTIFIED send rejects with ProofUnconfirmedError
-        // (code CERTIFICATION_UNCONFIRMED) — the spend may already be final on-chain and
-        // the SDK keeps the intent OPEN, so resume completes it under the same transferId.
-        // Treat it as a delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a
-        // fresh send() would consume a DIFFERENT source and double-pay the recipient.
+        // (code CERTIFICATION_UNCONFIRMED). It ALONE carries the JsonRpcNetworkError
+        // cause, so the reactive 429/401 annotation (spec §1) keys off it specifically
+        // — the shared pending-commit conversion below then owns the money-safe return.
         if (getErrorCode(e) === 'CERTIFICATION_UNCONFIRMED') {
           // Reactive 429/401 annotation (spec §1). Purely additive — the
           // synthetic pending result below is returned in ALL cases,
@@ -149,9 +140,20 @@ export function useTransfer(): UseTransferReturn {
               // (the pending return) always wins.
             }
           }
-          // `id` is intentionally empty: ProofUnconfirmedError carries no transferId
-          // (the still-open intent + resume own it), and no send UI reads result.id
-          // on this path — it exists only to render the "pending" state.
+        }
+        // Every possibly-committed "keep-open" send code — SEND_SYNC_PENDING (#665),
+        // CERTIFICATION_UNCONFIRMED (#631/#633), and the E.4 split-checkpoint trio
+        // CHECKPOINT_PERSIST_FAILED / SPLIT_CHECKPOINT_LOST / CHECKPOINT_TRUSTBASE_MISMATCH
+        // (sphere-sdk#501, all re-thrown RAW by the SDK) — means the spend is (or may be)
+        // already committed on-chain and the intent stays OPEN, so resume completes the
+        // ORIGINAL payment under the same transferId. Present ALL of them as a
+        // delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a fresh send()
+        // would consume a DIFFERENT source and double-pay the recipient. (See the single
+        // PENDING_COMMIT_CODES definition in ../../errors — shared with the pay path.)
+        // `id` is intentionally empty: these errors carry no transferId (the still-open
+        // intent + resume own it) and no send UI reads result.id on this path — it exists
+        // only to render the "pending" state.
+        if (isPendingCommitCode(e)) {
           return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
         }
         throw e;

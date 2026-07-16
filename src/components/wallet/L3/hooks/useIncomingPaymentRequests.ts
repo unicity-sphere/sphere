@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
+import { isPendingCommitCode } from '../../../../sdk/errors';
 import type { IncomingPaymentRequest as SDKPaymentRequest } from '@unicitylabs/sphere-sdk';
 
 export const PaymentRequestStatus = {
@@ -21,6 +22,12 @@ const STATUS_MAP: Record<SDKPaymentRequest['status'], PaymentRequestStatus> = {
     rejected: PaymentRequestStatus.REJECTED,
     paid: PaymentRequestStatus.PAID,
     expired: PaymentRequestStatus.EXPIRED,
+    // #441: the SDK holds a possibly-committed pay in a DURABLE 'settling' state
+    // (survives reload via its journal) until the linked transfer resolves. Money
+    // has (or may have) left the wallet, so the request must be NON-payable —
+    // surface it as ACCEPTED ('Payment Sent'), the same non-actionable state the
+    // (now-removed) in-memory override used, but durable across reload.
+    settling: PaymentRequestStatus.ACCEPTED,
 };
 
 export interface IncomingPaymentRequest {
@@ -49,7 +56,11 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
         recipientNametag: sdk.senderNametag ?? '',
         requestId: sdk.requestId,
         timestamp: sdk.timestamp,
-        status: STATUS_MAP[sdk.status] ?? PaymentRequestStatus.PENDING,
+        // sdk.status widens to `string` here (no compile check on the union), so an
+        // UNKNOWN/unmapped status must default NON-payable — NEVER PENDING. A future
+        // SDK status we haven't mapped would otherwise fall through to payable and
+        // risk a double-pay. ACCEPTED = non-actionable 'Payment Sent'.
+        status: STATUS_MAP[sdk.status] ?? PaymentRequestStatus.ACCEPTED,
     };
 }
 
@@ -65,9 +76,13 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  *   respond happens BEFORE the local flip, and a server rejection (403
  *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
  *   surface it, the local status stays pending.
- * - `pay` — `payments.payPaymentRequest`: sends the transfer, then links the
- *   transferId in the 'paid' respond. A failed respond after a successful
- *   send is logged by the SDK, never reported as a payment failure.
+ * - `pay` — `payments.payPaymentRequest`: sends the transfer (through the same
+ *   payments.send() as a normal send), then links the transferId in the 'paid'
+ *   respond. A failed respond after a successful send is logged by the SDK,
+ *   never reported as a payment failure. A possibly-committed keep-open reject
+ *   (PENDING_COMMIT_CODES — SEND_SYNC_PENDING / CERTIFICATION_UNCONFIRMED / the
+ *   E.4 split-checkpoint trio) is presented as a pending SUCCESS, never a
+ *   re-payable failure (see `pay` below for the double-pay reasoning).
  */
 export const useIncomingPaymentRequests = () => {
     const { sphere } = useSphereContext();
@@ -76,6 +91,10 @@ export const useIncomingPaymentRequests = () => {
 
     const refresh = useCallback(() => {
         if (!sphere) return;
+        // The SDK list is the source of truth. A possibly-committed pay is held by
+        // the SDK in a DURABLE 'settling' state (→ ACCEPTED via STATUS_MAP, non-
+        // payable) that survives reload — so no client-side override is needed
+        // here; bridging the SDK status directly is both correct and reload-safe.
         setRequests(sphere.payments.getPaymentRequests().map(bridgeRequest));
     }, [sphere]);
 
@@ -139,6 +158,28 @@ export const useIncomingPaymentRequests = () => {
         requireSubscriptionKey();
         try {
             await sphere.payments.payPaymentRequest(request.id);
+        } catch (err) {
+            // #441: payPaymentRequest routes through the same send() as a normal
+            // transfer, so it can reject with a possibly-committed keep-open code
+            // (PENDING_COMMIT_CODES). On those the spend is (or may be) on-chain and
+            // resume completes it — a second pay would double-pay. We swallow the
+            // throw so the modal shows no re-payable error, and rely on the SDK to
+            // have marked the request DURABLY 'settling' (→ ACCEPTED, non-payable,
+            // survives reload) before it threw.
+            //
+            // CONTRACT DEPENDENCY: non-payability here is the SDK's job, not this
+            // hook's. sphere-sdk >= 0.11.14 (pinned in package.json) sets 'settling'
+            // on every possibly-committed throw (PaymentsModule.payPaymentRequest,
+            // covered by the sdk deferred-paid tests). This hook must stay on an SDK
+            // that upholds it — if a downgrade ever left the request 'pending' on
+            // such a throw, the finally→refresh would re-list it payable. The
+            // earlier in-memory override that guarded this locally was removed
+            // because it did NOT survive reload (its own double-pay gap); the SDK's
+            // durable 'settling' is the correct, reload-safe mechanism.
+            if (isPendingCommitCode(err)) return;
+            // Any OTHER error is a genuine failure — re-throw so PaymentRequestModal
+            // surfaces it and the request stays actionable (safe to retry).
+            throw err;
         } finally {
             refresh();
         }

@@ -56,6 +56,55 @@ export function getErrorCode(err: unknown): SphereErrorCode | null {
   return isSphereError(err) ? err.code : null;
 }
 
+// --- Possibly-committed "keep-open" send codes -----------------------------
+//
+// The SINGLE source of truth for the send-pipeline error codes that mean the
+// spend is (or may be) already committed on-chain and the SDK has kept the
+// intent OPEN, so `resumeOpenIntents` completes the ORIGINAL payment under the
+// same transferId. Re-issuing send() would consume a DIFFERENT source and
+// DOUBLE-PAY the recipient, so every one of these MUST be presented as a
+// delivery-PENDING success — never a re-sendable failure. Shared by useTransfer
+// (a normal send) and useIncomingPaymentRequests.pay (payPaymentRequest routes
+// through the same send()), so the set can never drift between the two paths.
+//
+// Mirrors the SDK's send-failure catch (PaymentsModule):
+//  - the `keepOpen` set, each re-thrown RAW:
+//      CERTIFICATION_UNCONFIRMED       ProofUnconfirmedError — submit accepted, proof fetch inconclusive; spend may be final (#631/#633).
+//      CHECKPOINT_PERSIST_FAILED       CheckpointPersistFailedError — split burn certified on-chain, checkpoint persist failed; recover on resume (sphere-sdk#501 / E.4).
+//      SPLIT_CHECKPOINT_LOST           SplitCheckpointLostError — certified split can't be rebuilt from its checkpoint; HKDF-derived, never a foreign spend; keep-open (E.4).
+//      CHECKPOINT_TRUSTBASE_MISMATCH   CheckpointTrustbaseMismatchError — certified split's proof no longer verifies vs the current trust base (validator rotation); keep-open (E.4).
+//    The split-checkpoint pair (SPLIT_CHECKPOINT_LOST / CHECKPOINT_TRUSTBASE_MISMATCH)
+//    ALSO emits `split:checkpoint-stuck` — bridged to a "funds are safe" toast in
+//    useSphereEvents. That toast is ADDITIVE; it is not a substitute for keeping
+//    these codes off the re-send path (the SendModal still must present pending).
+//  - SEND_SYNC_PENDING (#665): the spend committed but the post-commit wallet-api
+//    mirror-sync failed; resume converges the mirror (idempotent apply).
+//  - SEND_PARTIALLY_COMPLETED (sdk #681, PartialSendConflictError): a multi-leg
+//    send certified + delivered >=1 leg, then could not cover the remainder. Money
+//    has irreversibly left the wallet, so it MUST NOT be re-sent in full (that
+//    double-pays the delivered legs) — present it as pending, never re-sendable.
+//    (A richer "partially sent, remainder X uncovered" UX is a follow-up; the
+//    money-safety requirement is only that it stays off the re-send path.)
+export const PENDING_COMMIT_CODES: readonly SphereErrorCode[] = [
+  'SEND_SYNC_PENDING',
+  'CERTIFICATION_UNCONFIRMED',
+  'CHECKPOINT_PERSIST_FAILED',
+  'SPLIT_CHECKPOINT_LOST',
+  'CHECKPOINT_TRUSTBASE_MISMATCH',
+  'SEND_PARTIALLY_COMPLETED',
+];
+
+/**
+ * True when `err` is one of the possibly-committed keep-open send errors (see
+ * {@link PENDING_COMMIT_CODES}): the spend may already be on-chain and resume
+ * completes it under the same transferId, so the caller MUST present it as
+ * pending and MUST NOT offer a re-send (that would double-pay).
+ */
+export function isPendingCommitCode(err: unknown): boolean {
+  const code = getErrorCode(err);
+  return code !== null && PENDING_COMMIT_CODES.includes(code);
+}
+
 // --- Gateway (SGW) 429/401 classification ---------------------------------
 //
 // duck-type; JsonRpcNetworkError is NOT exported by sphere-sdk root or

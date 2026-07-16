@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { SphereError } from "@unicitylabs/sphere-sdk";
 import {
   useIncomingPaymentRequests,
   PaymentRequestStatus,
 } from "../../../src/components/wallet/L3/hooks/useIncomingPaymentRequests";
+import { PENDING_COMMIT_CODES } from "../../../src/sdk/errors";
 import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from "../../../src/sdk/subscription/keyStatus";
 import * as subscriptionConfig from "../../../src/config/subscription";
 
@@ -14,7 +16,7 @@ import * as subscriptionConfig from "../../../src/config/subscription";
 // no-ops on the wallet-api path; any regression to it throws here.
 // ============================================================================
 
-type SdkStatus = "pending" | "accepted" | "rejected" | "paid" | "expired";
+type SdkStatus = "pending" | "accepted" | "rejected" | "paid" | "expired" | "settling";
 
 interface FakeSdkRequest {
   id: string;
@@ -79,6 +81,10 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
       }),
     },
     // Test-side helpers
+    _setStatus: (id: string, status: SdkStatus) => {
+      const r = find(id);
+      if (r) r.status = status;
+    },
     _receive: (r: FakeSdkRequest) => {
       requests.unshift(r);
       listeners.get("payment_request:incoming")?.forEach((fn) => fn({ ...r }));
@@ -215,6 +221,63 @@ describe("useIncomingPaymentRequests", () => {
     ).rejects.toThrow(/INSUFFICIENT_FUNDS/);
 
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
+  });
+
+  // #441: payPaymentRequest routes through the same send() as a normal transfer,
+  // so it can reject with the possibly-committed keep-open codes. The SDK (0.11.14+)
+  // marks the request DURABLY 'settling' (survives reload via its journal) before
+  // re-throwing — mirrored here by _setStatus(id, 'settling'). The app swallows the
+  // throw and maps 'settling' → ACCEPTED (non-payable). Without that mapping the
+  // finally-refresh re-lists it as payable → one-click double-pay.
+  it.each(PENDING_COMMIT_CODES)(
+    "a %s pay reject is swallowed and the request is held NON-payable via the SDK's durable 'settling' status (no double-pay) (#441)",
+    async (code) => {
+      fakeSphere = makeFakeSphere([makeRequest("a")]);
+      fakeSphere.payments.payPaymentRequest.mockImplementationOnce(async (id: string) => {
+        fakeSphere!._setStatus(id, "settling"); // the real SDK's durable mark
+        throw new SphereError("possibly committed on-chain", code);
+      });
+      const { result } = renderHook(() => useIncomingPaymentRequests());
+      expect(result.current.pendingCount).toBe(1);
+
+      // pay() RESOLVES (does not throw) — the money is (or may be) on-chain.
+      await act(() => result.current.pay(result.current.requests[0]));
+
+      // Mapped to ACCEPTED ('Payment Sent', non-payable) via STATUS_MAP['settling'].
+      expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledTimes(1);
+      expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
+      expect(result.current.pendingCount).toBe(0);
+    },
+  );
+
+  it("a 'settling' request stays NON-payable across a remount/reload — the durable SDK status, no in-memory override (#441)", async () => {
+    // The SDK durably lists the request 'settling' (its journal survives reload).
+    fakeSphere = makeFakeSphere([makeRequest("a", "settling")]);
+    const { result, unmount } = renderHook(() => useIncomingPaymentRequests());
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
+    expect(result.current.pendingCount).toBe(0);
+
+    // Remount (a reload / new tab): a fresh hook over the SAME SDK list. The old
+    // in-memory override was empty here — its reload gap, the exact double-pay
+    // this fix closes. The SDK's durable 'settling' keeps it non-payable.
+    unmount();
+    const { result: result2 } = renderHook(() => useIncomingPaymentRequests());
+    expect(result2.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
+    expect(result2.current.pendingCount).toBe(0);
+  });
+
+  it("a settling request advances to PAID when the SDK resolves its linked transfer (resume/cross-session) (#441)", async () => {
+    fakeSphere = makeFakeSphere([makeRequest("a", "settling")]);
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED); // settling → non-payable
+
+    // SDK later advances the request to a real terminal status (deferred paid).
+    act(() => {
+      fakeSphere!._resolveRemote("a", "paid");
+    });
+
+    await waitFor(() => expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID));
+    expect(result.current.pendingCount).toBe(0);
   });
 
   it("refuses to pay while the subscription key is not ready (same keyless-send guard as a normal send)", async () => {
