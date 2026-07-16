@@ -46,5 +46,9 @@ docs/TESTING_ROADMAP.md
 docs/TEST_*.md
 MAINNET-RISK-REGISTER.md
 
-# Local-only design docs: specs and plans never ship in the repo.
+# Working specs and plans stay local — they are drafting material, not
+# deliverables, and they go stale the moment the code lands. Matches
+# sphere-sdk/.gitignore:41 and sphere-api; this repo was the only one relying
+# on nobody running `git add .` (which has already swept them into a commit
+# once).
 docs/superpowers/
