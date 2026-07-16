@@ -162,14 +162,23 @@ export const useIncomingPaymentRequests = () => {
             // #441: payPaymentRequest routes through the same send() as a normal
             // transfer, so it can reject with a possibly-committed keep-open code
             // (PENDING_COMMIT_CODES). On those the spend is (or may be) on-chain and
-            // the SDK holds the request in a DURABLE 'settling' state (non-payable,
-            // survives reload) until its transfer resolves — so a second pay can't
-            // double-pay. Swallow the throw so the modal shows no re-payable error;
-            // the finally→refresh reads the SDK's 'settling' status (→ ACCEPTED,
-            // non-payable). Any OTHER error is a genuine failure — re-throw so
-            // PaymentRequestModal surfaces it and the request stays actionable
-            // (safe to retry; nothing committed).
+            // resume completes it — a second pay would double-pay. We swallow the
+            // throw so the modal shows no re-payable error, and rely on the SDK to
+            // have marked the request DURABLY 'settling' (→ ACCEPTED, non-payable,
+            // survives reload) before it threw.
+            //
+            // CONTRACT DEPENDENCY: non-payability here is the SDK's job, not this
+            // hook's. sphere-sdk >= 0.11.14 (pinned in package.json) sets 'settling'
+            // on every possibly-committed throw (PaymentsModule.payPaymentRequest,
+            // covered by the sdk deferred-paid tests). This hook must stay on an SDK
+            // that upholds it — if a downgrade ever left the request 'pending' on
+            // such a throw, the finally→refresh would re-list it payable. The
+            // earlier in-memory override that guarded this locally was removed
+            // because it did NOT survive reload (its own double-pay gap); the SDK's
+            // durable 'settling' is the correct, reload-safe mechanism.
             if (isPendingCommitCode(err)) return;
+            // Any OTHER error is a genuine failure — re-throw so PaymentRequestModal
+            // surfaces it and the request stays actionable (safe to retry).
             throw err;
         } finally {
             refresh();

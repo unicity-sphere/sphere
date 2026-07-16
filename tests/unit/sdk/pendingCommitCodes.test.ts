@@ -7,7 +7,7 @@ import { PENDING_COMMIT_CODES, isPendingCommitCode } from '@/sdk/errors';
 // the exact set: dropping a code here silently re-opens the double-pay path.
 
 describe('PENDING_COMMIT_CODES', () => {
-  it('is exactly the possibly-committed keep-open set (SDK PaymentsModule send-failure catch)', () => {
+  it('is exactly the possibly-committed, non-re-sendable set (keep-open certification codes + the partial-send outcome)', () => {
     // Sorted compare so the assertion is order-independent but membership-exact.
     expect([...PENDING_COMMIT_CODES].sort()).toEqual(
       [
