@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck, Lock } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck, Lock, Globe } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
+import { NetworkModal } from './NetworkModal';
 import { SubscriptionModal } from './SubscriptionModal';
 import { SecurityModal } from './SecurityModal';
 import { useUpgrade } from '../../../upgrade';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
+import { SPHERE_NETWORK, SUPPORTED_NETWORKS } from '../../../../config/network';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -29,10 +31,15 @@ export function SettingsModal({
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
+  const [isNetworkOpen, setIsNetworkOpen] = useState(false);
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
   const [isSecurityOpen, setIsSecurityOpen] = useState(false);
   const { openUpgrade } = useUpgrade();
   const { hasWalletPassword, lock } = useSphereContext();
+
+  // Show the human-readable name of the active network in the row subtitle.
+  const activeNetworkLabel =
+    SUPPORTED_NETWORKS.find((n) => n.id === SPHERE_NETWORK)?.label ?? SPHERE_NETWORK;
 
   // Show the active address's current plan in the row subtitle, e.g. "Free plan".
   const util = useUtilization();
@@ -72,6 +79,14 @@ export function SettingsModal({
             color="neutral"
             label="Connected Sites"
             onClick={() => setIsConnectedSitesOpen(true)}
+          />
+
+          <MenuButton
+            icon={Globe}
+            color="blue"
+            label="Network"
+            subtitle={activeNetworkLabel}
+            onClick={() => setIsNetworkOpen(true)}
           />
 
           {SUBSCRIPTION_ENABLED && (
@@ -155,6 +170,11 @@ export function SettingsModal({
       <ConnectedSitesModal
         isOpen={isConnectedSitesOpen}
         onClose={() => setIsConnectedSitesOpen(false)}
+      />
+
+      <NetworkModal
+        isOpen={isNetworkOpen}
+        onClose={() => setIsNetworkOpen(false)}
       />
 
       <SubscriptionModal
