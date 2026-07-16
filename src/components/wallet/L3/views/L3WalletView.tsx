@@ -1,4 +1,4 @@
-import { Plus, ArrowUpRight, ArrowDownUp, Loader2, Coins, Layers, Eye, EyeOff, Wifi, Shield, AlertCircle, FileJson } from 'lucide-react';
+import { Loader2, Coins, Layers, Eye, EyeOff, Wifi, Shield, AlertCircle, FileJson } from 'lucide-react';
 import { AnimatePresence, motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -8,6 +8,7 @@ import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow } from '../../shared/components';
+import { WalletActions } from '../components/WalletActions';
 import { SendModal } from '../modals/SendModal';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
@@ -329,39 +330,14 @@ export function L3WalletView({
           />
         </div>
 
-        {/* Actions - Speed focused */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
-          <motion.button
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setIsTopUpModalOpen(true)}
-            className="relative px-2 py-2.5 sm:px-3 sm:py-3 rounded-xl bg-linear-to-br from-orange-500 to-orange-600 dark:from-brand-orange dark:to-brand-orange-dark text-white text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 overflow-hidden whitespace-nowrap"
-          >
-            <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Top Up</span>
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setIsSwapModalOpen(true)}
-            className="relative px-2 py-2.5 sm:px-3 sm:py-3 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] hover:bg-neutral-200 dark:hover:bg-[rgba(255,255,255,0.1)] text-neutral-900 dark:text-white text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap"
-          >
-            <ArrowDownUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Swap</span>
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: sendableTokens.length > 0 ? 1.02 : 1, y: sendableTokens.length > 0 ? -2 : 0 }}
-            whileTap={{ scale: sendableTokens.length > 0 ? 0.98 : 1 }}
-            onClick={() => setIsSendModalOpen(true)}
-            disabled={sendableTokens.length === 0}
-            className="relative px-2 py-2.5 sm:px-3 sm:py-3 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] hover:bg-neutral-200 dark:hover:bg-[rgba(255,255,255,0.1)] text-neutral-900 dark:text-white text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <ArrowUpRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>Send</span>
-          </motion.button>
-        </div>
+        {/* Actions - Speed focused. Top Up / Swap self-mint, so WalletActions
+            gates them on the active network (networkCapabilities.ts). */}
+        <WalletActions
+          onTopUp={() => setIsTopUpModalOpen(true)}
+          onSwap={() => setIsSwapModalOpen(true)}
+          onSend={() => setIsSendModalOpen(true)}
+          sendDisabled={sendableTokens.length === 0}
+        />
 
       </div>
 
