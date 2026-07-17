@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Unicity AgentSphere is a React-based cryptocurrency wallet application for the Unicity network. It provides a dual-layer wallet interface supporting both Layer 1 (ALPHA blockchain) and Layer 3 (Unicity state transition network) operations, along with DMs, group chat, and an iframe-based agent system. All wallet operations are handled through `@unicitylabs/sphere-sdk`, with a thin React adapter layer in `src/sdk/`.
+Unicity AgentSphere is a React-based cryptocurrency wallet application for the Unicity network. It provides Unicity state transition network operations, along with DMs, group chat, and an iframe-based agent system. All wallet operations are handled through `@unicitylabs/sphere-sdk`, with a thin React adapter layer in `src/sdk/`.
 
 ## Development Commands
 
