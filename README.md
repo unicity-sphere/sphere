@@ -1,6 +1,6 @@
 # Unicity AgentSphere
 
-A Web3 wallet and agent platform for the Unicity network — dual-layer crypto wallet, DMs, group chat, and marketplace.
+A Web3 wallet and agent platform for the Unicity network — crypto wallet, DMs, group chat, and marketplace.
 
 ## Features
 
@@ -106,7 +106,7 @@ BASE_PATH=/                      # Deployment base path
 - **Tailwind CSS 4** — styling
 - **Framer Motion** — animations
 - **React Router DOM v7** — routing
-- **@unicitylabs/sphere-sdk** — all wallet operations (L1, L3, Nostr, IPFS)
+- **@unicitylabs/sphere-sdk** — all wallet operations (L3, Nostr, IPFS)
 - **Vitest** + jsdom — testing
 
 ## Project Structure
@@ -119,14 +119,13 @@ src/
 ├── sdk/                 # React adapter layer over sphere-sdk (24 files)
 │   ├── hooks/core/      # useSphere, useWalletStatus, useIdentity, useNametag, useSphereEvents, useIpfsSync
 │   ├── hooks/payments/  # useTokens, useBalance, useAssets, useTransfer, useTransactionHistory
-│   ├── hooks/l1/        # useL1Balance, useL1Utxos, useL1Send, useL1Transactions
 │   ├── hooks/comms/     # useSendDM, usePaymentRequests
 │   └── utils/           # format utilities
 ├── components/
 │   ├── activity/        # Activity ticker, market feed display
 │   ├── agents/          # Agent cards and selection
 │   ├── chat/            # DM, group chat, mini chat, hooks
-│   ├── wallet/          # L1, L3, onboarding, shared components
+│   ├── wallet/          # L3, onboarding, shared, ui components
 │   ├── layout/          # DashboardLayout, Header
 │   ├── desktop/         # Desktop layout, TabBar, Taskbar
 │   ├── connect/         # Wallet connection flow
