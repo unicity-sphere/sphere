@@ -27,7 +27,7 @@ npx tsc --noEmit     # Type check only
 - Framer Motion for animations
 - React Router DOM v7 for routing
 - Vitest 4 + jsdom for testing
-- `@unicitylabs/sphere-sdk` ^0.5 for all wallet operations (L1, L3, Nostr, IPFS)
+- `@unicitylabs/sphere-sdk` ^0.5 for all wallet operations (L3, Nostr, IPFS)
 - Lucide React for icons
 - KaTeX for math rendering
 
@@ -79,7 +79,6 @@ src/
 │   ├── SphereProvider.tsx, SphereContext.ts, types.ts, queryKeys.ts
 │   ├── hooks/core/          # useSphere, useWalletStatus, useIdentity, useNametag, useSphereEvents, useIpfsSync
 │   ├── hooks/payments/      # useTokens, useBalance, useAssets, useTransfer, useTransactionHistory
-│   ├── hooks/l1/            # useL1Balance, useL1Utxos, useL1Send, useL1Transactions
 │   ├── hooks/comms/         # useSendDM, usePaymentRequests
 │   └── utils/format.ts
 ├── hooks/                   # 9 app-level hooks
@@ -91,12 +90,11 @@ src/
 │   ├── chat/                # ChatSection
 │   │   ├── dm/              # DMChatSection, DMConversationList, DMMessageList
 │   │   ├── group/           # GroupChatSection, GroupList, GroupMessageList
-│   │   ├── mini/            # MiniChatWindow, miniChatStore
+│   │   ├── mini/             # MiniChatWindow, miniChatStore
 │   │   ├── hooks/           # useChat, useDmUnreadCount, useGroupChat, useGroupUnreadCount
 │   │   ├── data/            # chatTypes (CHAT_KEYS, GROUP_CHAT_KEYS)
 │   │   └── utils/           # avatarColors, groupChatHelpers
 │   ├── wallet/
-│   │   ├── L1/              # L1WalletModal, VestingDisplay, BridgeModal, modals
 │   │   ├── L3/              # L3WalletView, modals, currency utils
 │   │   ├── onboarding/      # CreateWalletFlow, hooks
 │   │   ├── shared/          # Shared wallet components, modals, hooks
@@ -125,7 +123,7 @@ SDK events → TanStack Query invalidations + custom DOM events:
 - `transfer:incoming` → invalidates payments queries + toast (deduplicated)
 - `transfer:confirmed` → invalidates payments
 - `history:updated` → invalidates transaction history
-- `identity:changed` → invalidates identity, payments, L1, chat queries
+- `identity:changed` → invalidates identity, payments, chat queries
 - `nametag:registered`, `nametag:recovered` → refreshes identity cache + invalidates identity
 - `sync:completed`, `sync:remote-update` → invalidates payments (debounced 300ms)
 - `message:dm` → invalidates chat queries + dispatches `dm-received` CustomEvent
@@ -140,7 +138,6 @@ SPHERE_KEYS:
   wallet: { exists, status }
   identity: { current, nametag, addresses }
   payments: { tokens, balance, assets, transactions }
-  l1: { balance, utxos, transactions, vesting, blockHeight }
   communications: { conversations }
   market: { prices, registry }
 
@@ -265,4 +262,4 @@ Tests are in `tests/` and run with Vitest:
 Node polyfills (`vite-plugin-node-polyfills`) are needed for `@unicitylabs/sphere-sdk`: its browser/core dist bundles import the bare `buffer` module (`import { Buffer } from "buffer"`) and reference `process`, which the plugin resolves and shims.
 
 ### Key External Dependencies
-- `@unicitylabs/sphere-sdk` — Core SDK: L1/L3 operations, Nostr messaging, IPFS sync, market feed
+- `@unicitylabs/sphere-sdk` — Core SDK: L3 operations, Nostr messaging, IPFS sync, market feed
