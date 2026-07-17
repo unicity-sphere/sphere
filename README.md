@@ -4,15 +4,7 @@ A Web3 wallet and agent platform for the Unicity network — dual-layer crypto w
 
 ## Features
 
-### Multi-Layer Wallet
-
-**Layer 1 (ALPHA blockchain):**
-- Wallet creation, import, and management
-- Transaction history and vesting
-- Password protection
-- L1-L3 bridge
-
-**Layer 3 (Unicity state transitions):**
+**Unicity state transitions:**
 - Fast, low-cost token transfers
 - Token management and balance tracking
 - Incoming payment notifications
