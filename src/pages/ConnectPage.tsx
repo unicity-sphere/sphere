@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
+import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
 import { WalletPanel } from '../components/wallet/WalletPanel';
@@ -109,6 +110,8 @@ export function ConnectPage() {
     const host = new ConnectHost({
       sphere: currentSphere,
       transport,
+      // Reject dApps built against sphere-sdk < 0.12 (incompatible Connect/token contract).
+      minSdkVersion: CONNECT_MIN_SDK_VERSION,
       onConnectionRequest: async (dapp: DAppMetadata, perms: PermissionScope[], silent?: boolean) => {
         // Check if this origin was already approved
         const saved = getApprovedOrigin(origin);
