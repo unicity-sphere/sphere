@@ -8,6 +8,7 @@ import { useIdentity } from '../../../sdk/hooks/core/useIdentity';
 import { useActiveTabId } from '../../../hooks/useDesktopState';
 import { STORAGE_KEYS } from '../../../config/storageKeys';
 import { getGroupDisplayName, isPinnedGroup } from '../utils/groupChatHelpers';
+import { requireSent } from '../utils/requireSent';
 import { buildAddressId } from '../data/chatTypes';
 
 export const groupChatKeys = (addressId: string) => ({
@@ -364,8 +365,13 @@ export const useGroupChat = (): UseGroupChatReturn => {
       if (!selectedGroup) throw new Error('No group selected');
       if (!groupChat) throw new Error('Group chat not available');
 
+      // GroupChatModule.sendMessage resolves to null on failure (it swallows
+      // its own errors). requireSent turns that into a rejection so onSuccess
+      // (which clears the input) is skipped and the global onError toast fires,
+      // instead of the typed message being discarded silently. See #454.
       const message = await groupChat.sendMessage(selectedGroup.id, content, replyToId);
-      return !!message;
+      requireSent(message);
+      return true;
     },
     onSuccess: () => {
       setMessageInput('');
@@ -432,7 +438,15 @@ export const useGroupChat = (): UseGroupChatReturn => {
   const sendMessage = useCallback(
     async (content: string, replyToId?: string): Promise<boolean> => {
       if (!content.trim()) return false;
-      return sendMessageMutation.mutateAsync({ content, replyToId });
+      try {
+        await sendMessageMutation.mutateAsync({ content, replyToId });
+        return true;
+      } catch {
+        // The failure is surfaced by the mutation's global onError toast; return
+        // false here so the click handler doesn't also raise an unhandled
+        // rejection (which would double-report to Sentry). Input stays intact.
+        return false;
+      }
     },
     [sendMessageMutation]
   );
