@@ -5,6 +5,13 @@ import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
 export interface PendingApproval {
   dapp: DAppMetadata;
   permissions: PermissionScope[];
+  /**
+   * The transport-verified origin the dApp is loaded from (from the iframe URL
+   * or the popup `origin` param, enforced by the transport's allowedOrigins).
+   * This — NOT the dApp-supplied `dapp.url` — is the trust anchor shown to the
+   * user. See config/agentOrigins.ts.
+   */
+  origin: string;
   resolve: (result: { approved: boolean; grantedPermissions: PermissionScope[] }) => void;
 }
 
@@ -15,10 +22,15 @@ export interface PendingIntent {
 }
 
 export interface ConnectContextValue {
-  /** Called by IframeAgent's ConnectHost when a dApp requests connection */
+  /**
+   * Called by the ConnectHost host (IframeAgent / ConnectPage) when a dApp
+   * requests connection. `origin` is the transport-verified origin — pass the
+   * value the transport pins (never `dapp.url`).
+   */
   requestApproval: (
     dapp: DAppMetadata,
     permissions: PermissionScope[],
+    origin: string,
   ) => Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>;
 
   /** Called by IframeAgent's ConnectHost when a dApp sends an intent */

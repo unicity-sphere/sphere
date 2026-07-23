@@ -134,8 +134,9 @@ export function IframeAgent({ agent }: IframeAgentProps) {
           return { approved: false, grantedPermissions: [] };
         }
 
-        // First time — show approval modal via ConnectProvider
-        const result = await requestApprovalRef.current(dapp, perms);
+        // First time — show approval modal via ConnectProvider (anchor trust to
+        // the transport-verified origin, not the dApp-supplied metadata).
+        const result = await requestApprovalRef.current(dapp, perms, origin);
         if (result.approved) {
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
