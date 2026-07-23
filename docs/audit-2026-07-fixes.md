@@ -41,8 +41,8 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 |---|-----|--------|-----------|--------|
 | #451 | high | `fix/iframe-agent-origin-allowlist` | — | **merged** (self-origin guard + hardened sandbox + `agentOrigins` trust module); follow-ups: verified-origin in modal → #452, CSP `frame-src` |
 | #452 | high | `fix/connect-verified-origin` | #451 | **merged** (approval modal shows verified origin + untrusted/host-mismatch warnings; `requestApproval` carries the pinned origin) |
-| #449 | high | `feat/wallet-password-unlock` | — | todo |
-| #450 | high | `fix/onboarding-encrypted-backup` | #449 | todo |
+| #449 | high | `feat/wallet-password-unlock` | — | **DEFERRED — designed feature, not merged**. All-or-nothing (encrypting at rest without a complete unlock flow itself loses wallets). Needs a designed UX with a forgot-password→restore-from-seed escape. SDK is ready (password option + DECRYPTION_ERROR detection). |
+| #450 | high | `fix/onboarding-encrypted-backup` | — (independent of #449) | **merged** (generic filename, optional backup-file encryption, honest copy) |
 | #448 | high | `fix/nametag-create-atomicity` | — | **merged** (createWalletThenRegister: create without nametag → register separately; failure never wipes the wallet) |
 | #453 | high | `fix/sphere-init-reentrancy-guard` | — | **merged** (initGenRef generation guard + adoptOrDiscardInstance; one live instance) |
 | #454 | high | `fix/group-send-throw-on-null` | — | **merged** (send path; `requireSent` guard + `sendMessage` catch). Follow-ups: moderation actions (boolean-false) + DM/mini-chat sends |
