@@ -6,6 +6,7 @@ import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
 import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
+import { describeConnectRejection } from '../components/connect/rejectionMessage';
 import { WalletPanel } from '../components/wallet/WalletPanel';
 import {
   getApprovedOrigin,
@@ -15,17 +16,6 @@ import {
 } from '../utils/connected-sites';
 
 type RejectionInfo = { dappName: string; code: number; message: string; data: Record<string, unknown> | undefined };
-
-function describeRejection(data: Record<string, unknown> | undefined): string {
-  const reason = data?.reason as string | undefined;
-  if (reason === 'protocol_incompatible') {
-    return 'was built for an older version of Sphere. Its developer needs to update it before it can connect.';
-  }
-  if (reason === 'network_incompatible') {
-    return 'is built for a different Unicity network than your wallet, so it cannot connect here.';
-  }
-  return 'is not compatible with this wallet.';
-}
 
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
@@ -217,7 +207,7 @@ export function ConnectPage() {
               <h2 className="text-base font-semibold text-gray-900 dark:text-neutral-100">Unable to connect</h2>
             </div>
             <p className="text-sm text-gray-700 dark:text-neutral-300">
-              <span className="font-medium">{rejection.dappName}</span> {describeRejection(rejection.data)}
+              <span className="font-medium">{rejection.dappName}</span> {describeConnectRejection(rejection.data)}
             </p>
             <p className="mt-2 text-xs text-gray-400 dark:text-neutral-500">Error code {rejection.code}</p>
             <button

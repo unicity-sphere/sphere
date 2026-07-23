@@ -7,6 +7,8 @@ import type { AgentConfig } from '../../config/activities';
 import { CONNECT_MIN_SDK_VERSION } from '../../config/connect';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../connect/ConnectContext';
+import { describeConnectRejection } from '../connect/rejectionMessage';
+import { showToast } from '../ui/toast-utils';
 import {
   getApprovedOrigin,
   saveApprovedOrigin,
@@ -114,6 +116,13 @@ export function IframeAgent({ agent }: IframeAgentProps) {
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
         return result;
+      },
+      onConnectionRejected: (dapp, error, silent) => {
+        // The compatibility gate refused the connection (e.g. an app built against
+        // sphere-sdk < 0.12). Surface why — but stay quiet for background auto-connect.
+        if (silent) return;
+        const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
+        showToast(`${dapp?.name ?? 'This app'} ${describeConnectRejection(data)}`, 'warning');
       },
       onDisconnect: () => {
         revokeApprovedOrigin(origin);
