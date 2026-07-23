@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
-import { DesktopLayout } from '../components/desktop/DesktopLayout';
 import { useDesktopState } from '../hooks/useDesktopState';
 
+/**
+ * Route sync for /home. DesktopLayout is rendered by the shared DesktopShell
+ * (see #455), so this only resets to the desktop (no active tab) and renders
+ * nothing itself.
+ */
 export function HomePage() {
   const { activeTabId, showDesktop } = useDesktopState();
 
@@ -12,5 +16,5 @@ export function HomePage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <DesktopLayout />;
+  return null;
 }
