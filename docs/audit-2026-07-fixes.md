@@ -43,7 +43,7 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 | #452 | high | `fix/connect-verified-origin` | #451 | **merged** (approval modal shows verified origin + untrusted/host-mismatch warnings; `requestApproval` carries the pinned origin) |
 | #449 | high | `feat/wallet-password-unlock` | — | todo |
 | #450 | high | `fix/onboarding-encrypted-backup` | #449 | todo |
-| #448 | high | `fix/nametag-create-atomicity` | — | todo |
+| #448 | high | `fix/nametag-create-atomicity` | — | **merged** (createWalletThenRegister: create without nametag → register separately; failure never wipes the wallet) |
 | #453 | high | `fix/sphere-init-reentrancy-guard` | — | **merged** (initGenRef generation guard + adoptOrDiscardInstance; one live instance) |
 | #454 | high | `fix/group-send-throw-on-null` | — | **merged** (send path; `requireSent` guard + `sendMessage` catch). Follow-ups: moderation actions (boolean-false) + DM/mini-chat sends |
 | #455 | high | `fix/desktop-layout-shared-route` | — | **merged** (DesktopShell layout route; DesktopLayout mounts once across /home<->/agents) |
