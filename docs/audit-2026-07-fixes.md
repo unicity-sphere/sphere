@@ -21,6 +21,19 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 2. `npx tsc --noEmit -p tsconfig.app.json` — clean.
 3. `npm run test:run` — green, **including a new test for the fixed behaviour**.
 4. Manual check of the specific flow where feasible.
+5. **NO EXISTING USER LOSES THEIR WALLET.** Hard requirement, overrides everything. Any change that reads/writes wallet storage, the mnemonic, identity, IndexedDB DB names, or a persisted-state schema MUST keep already-created wallets loadable. For those changes add a regression test that a wallet persisted by the PRE-fix code still opens/restores after the change. Migrations must be non-destructive and forward-only; never gate an existing user out of a wallet they already have.
+
+### Backward-compatibility risk per issue (existing wallets)
+
+| # | Storage / identity touched? | Backward-compat requirement |
+|---|---|---|
+| #451 | no (iframe framing only) | none — merged, safe |
+| #452 | connected-sites display only | keep reading the existing approved-origins shape |
+| #448 | new-wallet create flow + nametag persistence | existing wallets & restore path must be untouched; only the create ordering changes |
+| #453 | `SphereProvider.initialize()` (no storage writes) | guard must never end with zero live instance or destroy the winner → transient lockout risk; test init still resolves for an existing wallet |
+| **#449** | **mnemonic at-rest encryption** | **HIGHEST RISK.** Existing wallets are stored UNENCRYPTED. Password must be an opt-in migration: an existing plaintext wallet must still load with no password, then be offered encryption. NEVER pass a password to `Sphere.init` for a wallet stored without one (decrypt would fail → wallet appears lost). Add a test: a plaintext-persisted wallet opens after the change. |
+| #450 | backup export only | none (export path, not the live store) |
+| #454 / #455 / #447 | no | none |
 
 ## Issues → branches
 
