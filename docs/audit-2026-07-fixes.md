@@ -26,7 +26,7 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 
 | # | Sev | Branch | Depends on | Status |
 |---|-----|--------|-----------|--------|
-| #451 | high | `fix/iframe-agent-origin-allowlist` | — | todo |
+| #451 | high | `fix/iframe-agent-origin-allowlist` | — | **merged** (self-origin guard + hardened sandbox + `agentOrigins` trust module); follow-ups: verified-origin in modal → #452, CSP `frame-src` |
 | #452 | high | `fix/connect-verified-origin` | #451 | todo |
 | #449 | high | `feat/wallet-password-unlock` | — | todo |
 | #450 | high | `fix/onboarding-encrypted-backup` | #449 | todo |
