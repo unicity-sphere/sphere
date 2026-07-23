@@ -46,7 +46,7 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 | #448 | high | `fix/nametag-create-atomicity` | — | todo |
 | #453 | high | `fix/sphere-init-reentrancy-guard` | — | todo |
 | #454 | high | `fix/group-send-throw-on-null` | — | **merged** (send path; `requireSent` guard + `sendMessage` catch). Follow-ups: moderation actions (boolean-false) + DM/mini-chat sends |
-| #455 | high | `fix/desktop-layout-shared-route` | — | todo |
+| #455 | high | `fix/desktop-layout-shared-route` | — | **merged** (DesktopShell layout route; DesktopLayout mounts once across /home<->/agents) |
 | #447 | medium | `fix/swap-atomicity` (testnet-only) | — | todo |
 
 Deferred / not yet filed as issues (drafts exist): a11y dialog primitive, HTTP-service hardening, deploy-config follow-ups (may go into #443 instead), money-action modal-flow, marketplace pagination, perf dedupe.
