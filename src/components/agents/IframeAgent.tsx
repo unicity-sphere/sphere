@@ -4,8 +4,11 @@ import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
 import type { AgentConfig } from '../../config/activities';
+import { CONNECT_MIN_SDK_VERSION } from '../../config/connect';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../connect/ConnectContext';
+import { describeConnectRejection } from '../connect/rejectionMessage';
+import { showToast } from '../ui/toast-utils';
 import {
   getApprovedOrigin,
   saveApprovedOrigin,
@@ -92,6 +95,8 @@ export function IframeAgent({ agent }: IframeAgentProps) {
     const host = new ConnectHost({
       sphere: sphereRef.current,
       transport,
+      // Reject dApps built against sphere-sdk < 0.12 (incompatible Connect/token contract).
+      minSdkVersion: CONNECT_MIN_SDK_VERSION,
       onConnectionRequest: async (dapp: DAppMetadata, perms: PermissionScope[], silent?: boolean) => {
         // Check if this iframe origin was already approved
         const saved = getApprovedOrigin(origin);
@@ -111,6 +116,13 @@ export function IframeAgent({ agent }: IframeAgentProps) {
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
         return result;
+      },
+      onConnectionRejected: (dapp, error, silent) => {
+        // The compatibility gate refused the connection (e.g. an app built against
+        // sphere-sdk < 0.12). Surface why — but stay quiet for background auto-connect.
+        if (silent) return;
+        const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
+        showToast(`${dapp?.name ?? 'This app'} ${describeConnectRejection(data)}`, 'warning');
       },
       onDisconnect: () => {
         revokeApprovedOrigin(origin);
