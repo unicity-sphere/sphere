@@ -45,7 +45,7 @@ Rationale: keeps `main` untouched until the whole audit-fix set is green and rev
 | #450 | high | `fix/onboarding-encrypted-backup` | #449 | todo |
 | #448 | high | `fix/nametag-create-atomicity` | — | todo |
 | #453 | high | `fix/sphere-init-reentrancy-guard` | — | todo |
-| #454 | high | `fix/group-send-throw-on-null` | — | todo |
+| #454 | high | `fix/group-send-throw-on-null` | — | **merged** (send path; `requireSent` guard + `sendMessage` catch). Follow-ups: moderation actions (boolean-false) + DM/mini-chat sends |
 | #455 | high | `fix/desktop-layout-shared-route` | — | todo |
 | #447 | medium | `fix/swap-atomicity` (testnet-only) | — | todo |
 
