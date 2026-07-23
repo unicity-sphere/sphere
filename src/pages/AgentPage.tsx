@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { useParams, useSearchParams, Navigate } from 'react-router-dom';
-import { DesktopLayout } from '../components/desktop/DesktopLayout';
 import { getAgentConfig } from '../config/activities';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { normalizeUrl } from '../utils/normalizeUrl';
@@ -42,5 +41,7 @@ export function AgentPage() {
     return <Navigate to="/home" replace />;
   }
 
-  return <DesktopLayout />;
+  // DesktopLayout is rendered by the shared DesktopShell (see #455); this route
+  // only syncs the URL into desktop state.
+  return null;
 }

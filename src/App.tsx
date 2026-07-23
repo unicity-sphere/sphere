@@ -5,6 +5,7 @@ import { IntroPage } from './pages/IntroPage';
 import { HomePage } from './pages/HomePage';
 import { AgentPage } from './pages/AgentPage';
 import { ConnectPage } from './pages/ConnectPage';
+import { DesktopShell } from './components/desktop/DesktopShell';
 import { useSphereEvents } from './sdk';
 
 // Retry wrapper: auto-reload page once on chunk load failure (stale deployment)
@@ -40,16 +41,18 @@ function LazyFallback() {
   );
 }
 
-export default function App() {
-  useSphereEvents();
-
+export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<IntroPage />} />
       <Route path="/connect" element={<ConnectPage />} />
       <Route element={<DashboardLayout />}>
-        <Route path="/home" element={<HomePage />} />
-        <Route path="/agents/:agentId" element={<AgentPage />} />
+        {/* DesktopShell renders DesktopLayout once so /home <-> /agents/:id
+            navigation keeps open iframe tabs mounted (see #455). */}
+        <Route element={<DesktopShell />}>
+          <Route path="/home" element={<HomePage />} />
+          <Route path="/agents/:agentId" element={<AgentPage />} />
+        </Route>
         <Route path="/developers" element={<Suspense fallback={<LazyFallback />}><DevelopersPage /></Suspense>} />
         <Route path="/developers/docs" element={<Suspense fallback={<LazyFallback />}><DocsPage /></Suspense>} />
         <Route path="/markets" element={<Suspense fallback={<LazyFallback />}><MarketsPage /></Suspense>} />
@@ -60,4 +63,9 @@ export default function App() {
       </Route>
     </Routes>
   );
+}
+
+export default function App() {
+  useSphereEvents();
+  return <AppRoutes />;
 }
