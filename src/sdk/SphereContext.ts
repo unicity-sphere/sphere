@@ -62,6 +62,15 @@ export interface SphereContextValue {
    * mnemonic. Verifies `currentPassword` first. Disarms idle auto-lock.
    */
   removeWalletPassword: (currentPassword: string) => Promise<void>;
+  /**
+   * In-wallet backup gate (#449): verify a candidate password against the
+   * wallet's CURRENT at-rest mnemonic encryption — read-only, never mutates
+   * storage and never persists the entered password anywhere. Resolves
+   * `true` iff decrypting the stored mnemonic with `password` yields a valid
+   * BIP39 mnemonic; resolves `false` on any mismatch or failure (never
+   * throws to the caller).
+   */
+  verifyWalletPassword: (password: string) => Promise<boolean>;
 
   /** Current auto-lock timeout selection (Settings → Security). Only meaningful while a password is set. */
   autoLockMinutes: AutoLockValue;

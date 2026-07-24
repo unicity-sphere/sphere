@@ -15,6 +15,7 @@ import {
   getPublicKey,
   STORAGE_KEYS_GLOBAL,
   validateMnemonic,
+  decryptMnemonic,
 } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
@@ -1031,6 +1032,26 @@ export function SphereProvider({
     });
   }, [providers, setSessionPassword]);
 
+  // In-wallet backup gate (#449): read-only password check used by
+  // BackupWalletModal before it reveals "Export Wallet File" / "Show
+  // Recovery Phrase" (both expose the seed). Deliberately independent of
+  // passwordRef/setSessionPassword — this must work purely by re-deriving
+  // from on-disk storage, never mutates anything, and never persists the
+  // candidate password anywhere. Any failure (missing providers, no stored
+  // mnemonic, wrong password, corrupt blob) resolves false — never throws to
+  // the caller.
+  const verifyWalletPassword = useCallback(async (password: string): Promise<boolean> => {
+    if (!providers) return false;
+    try {
+      const stored = await providers.storage.get(STORAGE_KEYS_GLOBAL.MNEMONIC);
+      if (!stored) return false;
+      const decrypted = decryptMnemonic(stored, password);
+      return validateMnemonic(decrypted);
+    } catch {
+      return false;
+    }
+  }, [providers]);
+
   // Settings → Security auto-lock timeout selector. Only meaningful while a
   // session password is held (the persisted blob is encrypted with it) — a
   // no-op without one, since there's nothing to arm.
@@ -1156,6 +1177,7 @@ export function SphereProvider({
     setWalletPassword,
     changeWalletPassword,
     removeWalletPassword,
+    verifyWalletPassword,
     autoLockMinutes,
     setAutoLockTimeout,
     isDiscoveringAddresses,
