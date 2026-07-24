@@ -18,6 +18,7 @@ import {
   NametagScreen,
   ProcessingScreen,
   MnemonicBackupScreen,
+  SetPasswordScreen,
   PlanCapabilitiesScreen,
 } from "./components";
 
@@ -71,6 +72,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
     isProcessingComplete,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+    handleSetPassword,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
     planName,
@@ -114,7 +116,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
   // Block navigation clicks outside wallet panel during critical steps.
   // Sets pointer-events:none on body, re-enables on wallet panel and on
   // fixed/absolute modals (z-100) so Connect intents still work.
-  const isLocked = step === "processing" || step === "mnemonicBackup";
+  const isLocked = step === "processing" || step === "mnemonicBackup" || step === "setPassword";
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -250,6 +252,13 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
             mnemonic={generatedMnemonic}
             onDownloadBackup={handleDownloadBackup}
             onConfirm={handleMnemonicBackupComplete}
+          />
+        )}
+
+        {step === "setPassword" && (
+          <SetPasswordScreen
+            onSet={(password) => void handleSetPassword(password)}
+            onSkip={() => void handleSetPassword()}
           />
         )}
 

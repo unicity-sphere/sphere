@@ -31,6 +31,7 @@ export type OnboardingStep =
   | "nametag"
   | "processing"
   | "mnemonicBackup"
+  | "setPassword"
   | "planCapabilities";
 
 export interface UseOnboardingFlowReturn {
@@ -66,6 +67,13 @@ export interface UseOnboardingFlowReturn {
   handleCompleteOnboarding: () => Promise<void>;
   handleMnemonicBackupComplete: () => void;
   handleDownloadBackup: (password?: string) => Promise<void>;
+  /**
+   * Set/Skip handler for `SetPasswordScreen` (#449) — shared by the create
+   * flow (after the seed-backup screen) and the restore/import-from-mnemonic
+   * flow (before the wallet's one-and-only persisting call). Omit `password`
+   * to skip.
+   */
+  handleSetPassword: (password?: string) => Promise<void>;
 
   // Subscription plan-capabilities state (post-finalize provisioning)
   planName: string | null;
@@ -144,8 +152,12 @@ export function useOnboardingFlow(
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Block page reload / tab close during wallet creation
-  const isProcessingActive = step === "processing" || step === "mnemonicBackup";
+  // Block page reload / tab close during wallet creation. "setPassword" is
+  // included here too (#449): in the create flow it sits between a just
+  // created, still-unprotected wallet and finalize; guarding it the same way
+  // as "mnemonicBackup" costs nothing on the restore path (nothing persisted
+  // yet there either).
+  const isProcessingActive = step === "processing" || step === "mnemonicBackup" || step === "setPassword";
   useEffect(() => {
     if (!isProcessingActive) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -169,6 +181,13 @@ export function useOnboardingFlow(
   const importedSphereRef = useRef<Sphere | null>(null);
   // True when the current flow created a brand-new wallet (vs import/restore).
   const isCreateFlowRef = useRef(false);
+  // #449: holds a validated-but-not-yet-imported restore mnemonic while
+  // `setPassword` step is shown, so the chosen (or skipped) password can be
+  // threaded straight into the ONE `importWallet` call that persists it —
+  // nothing is on disk yet for this mnemonic, so no re-encryption is needed.
+  // null while in the create-flow's post-backup `setPassword` step (there the
+  // already-created wallet's own `generatedMnemonic` is used instead).
+  const pendingRestoreMnemonicRef = useRef<string | null>(null);
 
   // Nametag state
   const [nametagInput, setNametagInput] = useState("");
@@ -499,56 +518,17 @@ export function useOnboardingFlow(
       return;
     }
 
-    setIsBusy(true);
     setError(null);
 
-    // Show processing screen during import
-    setStep("processing");
-    setProcessingTitle("Importing Wallet...");
-    setProcessingCompleteTitle("Import Complete!");
-    setProcessingStep(0);
-    setProcessingTotalSteps(3);
-    setProcessingStatus("Importing wallet...");
-    setIsProcessingComplete(false);
-
-    try {
-      const instance = await importWallet(mnemonic);
-
-      // Store in ref so handleMintNametag / handleSkipNametag can access it
-      importedSphereRef.current = instance;
-
-      // Route to next screen after import completes
-      const allAddresses = instance.getAllTrackedAddresses();
-      if (allAddresses.length >= 1) {
-        const addresses: DerivedAddressInfo[] = allAddresses.map(a => ({
-          index: a.index,
-          l3Address: a.directAddress,
-          chainPubkey: a.chainPubkey,
-          path: `m/44'/60'/0'/0/${a.index}`,
-          hasNametag: !!a.nametag,
-          existingNametag: a.nametag,
-          isChange: false,
-          balanceLoading: false,
-          ipnsLoading: false,
-        }));
-        setDerivedAddresses(addresses);
-        setSelectedKeys(new Set(addresses.map(a => addrKey(a.index, false))));
-        setStep("addressSelection");
-      } else if (instance.identity?.nametag) {
-        setProcessingStep(2);
-        setProcessingStatus("Setup complete!");
-        setIsProcessingComplete(true);
-      } else {
-        setStep("nametag");
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Invalid recovery phrase";
-      setError(message);
-      setStep("restore");
-    } finally {
-      setIsBusy(false);
-    }
-  }, [seedWords, importWallet]);
+    // #449: offer the SAME optional at-rest password as the create flow —
+    // BEFORE the one-and-only `importWallet` call for this mnemonic, so
+    // nothing has been persisted yet and the (optional) password can be
+    // threaded straight into that single call. No re-encryption/re-persist
+    // step is ever needed. `handleSetPassword` performs the actual import
+    // once the user sets or skips a password on `SetPasswordScreen`.
+    pendingRestoreMnemonicRef.current = mnemonic;
+    setStep("setPassword");
+  }, [seedWords]);
 
   // Action: Create wallet WITH nametag (or register nametag on imported wallet)
   const handleMintNametag = useCallback(async () => {
@@ -726,10 +706,112 @@ export function useOnboardingFlow(
     void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
-  // Action: Confirm mnemonic backup (called after user saves recovery phrase)
+  // Action: Confirm mnemonic backup (called after user saves recovery phrase).
+  // #449: instead of finalizing immediately, offer the optional SetPasswordScreen
+  // next — the seed is secured first, so a forgotten password still has the
+  // seed as an escape hatch. `handleSetPassword` (below) finalizes afterwards.
   const handleMnemonicBackupComplete = useCallback(() => {
+    setStep("setPassword");
+  }, []);
+
+  // Action: Set/Skip handler for SetPasswordScreen (#449). Shared by two
+  // distinct call sites, distinguished by `pendingRestoreMnemonicRef`:
+  //  - Restore/import flow (from handleRestoreWallet): nothing has been
+  //    persisted for this mnemonic yet — thread the (optional) password
+  //    straight into the ONE importWallet call that creates it.
+  //  - Create flow (from handleMnemonicBackupComplete above): the wallet
+  //    already exists (created before the backup screen, #448) WITHOUT a
+  //    password. The only safe way to protect it here is to re-create it
+  //    from its OWN already-shown, already-backed-up mnemonic — the wallet is
+  //    brand new (no funds/history yet), so nothing can be lost.
+  //    Re-encrypting an EXISTING/funded wallet in place is a separate,
+  //    riskier operation (Settings "set password", out of scope here) —
+  //    never performed by this handler.
+  const handleSetPassword = useCallback(async (password?: string) => {
+    const restoreMnemonic = pendingRestoreMnemonicRef.current;
+    pendingRestoreMnemonicRef.current = null;
+
+    if (restoreMnemonic) {
+      setIsBusy(true);
+      setError(null);
+
+      // Show processing screen during import
+      setStep("processing");
+      setProcessingTitle("Importing Wallet...");
+      setProcessingCompleteTitle("Import Complete!");
+      setProcessingStep(0);
+      setProcessingTotalSteps(3);
+      setProcessingStatus("Importing wallet...");
+      setIsProcessingComplete(false);
+
+      try {
+        // Call shape mirrors the pre-#449 direct call exactly when no
+        // password is chosen (`importWallet(mnemonic)`, single argument) —
+        // the SKIP path stays byte-for-byte identical, down to call arity.
+        const instance = password
+          ? await importWallet(restoreMnemonic, { password })
+          : await importWallet(restoreMnemonic);
+
+        // Store in ref so handleMintNametag / handleSkipNametag can access it
+        importedSphereRef.current = instance;
+
+        // Route to next screen after import completes
+        const allAddresses = instance.getAllTrackedAddresses();
+        if (allAddresses.length >= 1) {
+          const addresses: DerivedAddressInfo[] = allAddresses.map(a => ({
+            index: a.index,
+            l3Address: a.directAddress,
+            chainPubkey: a.chainPubkey,
+            path: `m/44'/60'/0'/0/${a.index}`,
+            hasNametag: !!a.nametag,
+            existingNametag: a.nametag,
+            isChange: false,
+            balanceLoading: false,
+            ipnsLoading: false,
+          }));
+          setDerivedAddresses(addresses);
+          setSelectedKeys(new Set(addresses.map(a => addrKey(a.index, false))));
+          setStep("addressSelection");
+        } else if (instance.identity?.nametag) {
+          setProcessingStep(2);
+          setProcessingStatus("Setup complete!");
+          setIsProcessingComplete(true);
+        } else {
+          setStep("nametag");
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Invalid recovery phrase";
+        setError(message);
+        setStep("restore");
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
+    // Create flow: re-create the just-shown, brand-new wallet from its own
+    // mnemonic WITH the chosen password. Skipped (no password) is a no-op —
+    // `importedSphereRef.current` stays the original plaintext instance, and
+    // finalize proceeds exactly as it did before this step existed (#449
+    // no-wallet-loss: the SKIP path is byte-for-byte identical to today).
+    if (password && generatedMnemonic && Sphere.validateMnemonic(generatedMnemonic)) {
+      setIsBusy(true);
+      setError(null);
+      try {
+        const instance = await importWallet(generatedMnemonic, { password });
+        importedSphereRef.current = instance;
+      } catch (e) {
+        // Never lose the wallet: the plaintext instance created earlier is
+        // still valid and already persisted on disk — fall back to it rather
+        // than surface an error that could strand the user mid-onboarding.
+        console.error("Failed to protect the wallet with a password; continuing without one", e);
+      } finally {
+        setIsBusy(false);
+      }
+    }
+
     void doFinalizeWallet();
-  }, [doFinalizeWallet]);
+  }, [importWallet, generatedMnemonic, doFinalizeWallet]);
 
   // Action: Continue from the plan-capabilities screen into the wallet
   const handlePlanCapabilitiesContinue = useCallback(() => {
@@ -915,6 +997,7 @@ export function useOnboardingFlow(
     handleCompleteOnboarding,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+    handleSetPassword,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
     planName,

@@ -13,3 +13,4 @@ export { ProcessingScreen } from "./ProcessingScreen";
 export { MnemonicBackupScreen } from "./MnemonicBackupScreen";
 export { PlanCapabilitiesScreen } from "./PlanCapabilitiesScreen";
 export { UnlockScreen } from "./UnlockScreen";
+export { SetPasswordScreen } from "./SetPasswordScreen";
