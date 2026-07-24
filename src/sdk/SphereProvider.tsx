@@ -562,6 +562,19 @@ export function SphereProvider({
         return { mnemonic: generatedMnemonic, sphere: instance };
       } catch (err) {
         setInitProgress(null);
+        // #449 no-wallet-loss guard: Sphere.init({autoGenerate:true}) only
+        // creates a fresh wallet when NONE exists on disk — if the storage
+        // already holds an encrypted wallet, Sphere.init delegates to
+        // Sphere.load(), which throws DECRYPTION_ERROR when (as here) no
+        // password was supplied. That is a LOCKED, still-recoverable wallet,
+        // not a broken create — never run the destructive cleanup for it.
+        // The onboarding UI's lock-escape routing (CreateWalletFlow's
+        // fromLock/goToStart) should prevent "Create New Wallet" from ever
+        // being reachable while such a wallet is present; this is the last
+        // line of defense against a stray/future path reaching it anyway.
+        if (classifyInitFailure(err) === 'locked') {
+          throw err;
+        }
         await cleanupOnError(providers);
         sphereRef.current = null;
         setSphere(null);

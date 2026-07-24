@@ -23,7 +23,20 @@ import {
 
 export type { OnboardingStep } from "./hooks/useOnboardingFlow";
 
-export function CreateWalletFlow({ initialStep }: { initialStep?: OnboardingStep } = {}) {
+interface CreateWalletFlowProps {
+  initialStep?: OnboardingStep;
+  /**
+   * True when entered via the UnlockScreen "forgot password" lock-escape
+   * (#449) — a real, locked wallet sits on disk. Requires the restore path
+   * to show an explicit erase-confirmation and never fall through to the
+   * generic StartScreen's "Create New Wallet".
+   */
+  fromLock?: boolean;
+  /** Called instead of showing the "start" step when `fromLock` is true (exits back to UnlockScreen). */
+  onExitToUnlock?: () => void;
+}
+
+export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: CreateWalletFlowProps = {}) {
   const { initProgress } = useSphereContext();
   const progressMessage = initProgress?.message ?? null;
 
@@ -96,7 +109,7 @@ export function CreateWalletFlow({ initialStep }: { initialStep?: OnboardingStep
     // Wallet context
     identity,
     nametag,
-  } = useOnboardingFlow(initialStep);
+  } = useOnboardingFlow(initialStep, { fromLock, onExitToUnlock });
 
   // Block navigation clicks outside wallet panel during critical steps.
   // Sets pointer-events:none on body, re-enables on wallet panel and on
@@ -147,6 +160,7 @@ export function CreateWalletFlow({ initialStep }: { initialStep?: OnboardingStep
           <RestoreMethodScreen
             isBusy={isBusy}
             error={error}
+            fromLock={fromLock}
             onSelectMnemonic={() => setStep("restore")}
             onSelectFile={() => setStep("importFile")}
             onBack={goToStart}

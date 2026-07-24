@@ -1,12 +1,20 @@
 /**
  * RestoreMethodScreen - Choose restore method (mnemonic or file)
  */
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { KeyRound, Upload, ArrowRight, ArrowLeft } from "lucide-react";
+import { KeyRound, Upload, ArrowRight, ArrowLeft, AlertTriangle } from "lucide-react";
 
 interface RestoreMethodScreenProps {
   isBusy: boolean;
   error: string | null;
+  /**
+   * True when entered via the UnlockScreen "forgot password" lock-escape
+   * (#449): a real, still-recoverable (locked) wallet sits on disk. Gates
+   * both restore options behind an explicit erase-confirmation checkbox so
+   * the destructive replace (mnemonic/file import) can't run by accident.
+   */
+  fromLock?: boolean;
   onSelectMnemonic: () => void;
   onSelectFile: () => void;
   onBack: () => void;
@@ -15,10 +23,14 @@ interface RestoreMethodScreenProps {
 export function RestoreMethodScreen({
   isBusy,
   error,
+  fromLock,
   onSelectMnemonic,
   onSelectFile,
   onBack,
 }: RestoreMethodScreenProps) {
+  const [eraseConfirmed, setEraseConfirmed] = useState(false);
+  const optionsDisabled = isBusy || (!!fromLock && !eraseConfirmed);
+
   return (
     <motion.div
       key="restoreMethod"
@@ -46,13 +58,41 @@ export function RestoreMethodScreen({
         Choose how you want to restore your wallet
       </p>
 
+      {/* Lock-escape erase confirmation (#449): a real, recoverable wallet is
+          still on disk — restoring here replaces it, so require an explicit,
+          affirmative confirmation before either option becomes clickable. */}
+      {fromLock && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-left"
+        >
+          <div className="flex gap-2 mb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+              Restoring will erase the wallet currently on this device. Only continue if you have its recovery phrase.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300 pl-6 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={eraseConfirmed}
+              onChange={(e) => setEraseConfirmed(e.target.checked)}
+              className="w-3.5 h-3.5 accent-amber-500"
+            />
+            I understand, and I have the recovery phrase
+          </label>
+        </motion.div>
+      )}
+
       <div className="space-y-3 mb-5">
         {/* Recovery Phrase Option */}
         <motion.button
           onClick={onSelectMnemonic}
+          disabled={optionsDisabled}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
-          className="w-full p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700/50 hover:border-blue-500/50 dark:hover:border-blue-500/50 transition-all text-left group"
+          className="w-full p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700/50 hover:border-blue-500/50 dark:hover:border-blue-500/50 transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center group-hover:bg-blue-500/20 transition-colors">
@@ -73,9 +113,10 @@ export function RestoreMethodScreen({
         {/* Import from File Option */}
         <motion.button
           onClick={onSelectFile}
+          disabled={optionsDisabled}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
-          className="w-full p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700/50 hover:border-orange-500/50 dark:hover:border-orange-500/50 transition-all text-left group"
+          className="w-full p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700/50 hover:border-orange-500/50 dark:hover:border-orange-500/50 transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center group-hover:bg-orange-500/20 transition-colors">

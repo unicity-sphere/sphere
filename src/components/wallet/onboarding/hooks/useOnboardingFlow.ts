@@ -105,7 +105,28 @@ export interface UseOnboardingFlowReturn {
   generatedMnemonic: string | null;
 }
 
-export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFlowReturn {
+export interface UseOnboardingFlowOptions {
+  /**
+   * True when this flow was entered via the UnlockScreen's "forgot password
+   * → restore from recovery phrase" lock-escape (#449): a REAL, still-
+   * recoverable (locked) wallet sits on disk. In this mode `goToStart()`
+   * must never land on the generic StartScreen — its "Create New Wallet"
+   * button would call `createWallet()` against storage that still holds the
+   * locked wallet, which SDK-level `Sphere.init`/`Sphere.load` cannot open
+   * without the password, tripping the create-wallet failure cleanup and
+   * wiping it. `onExitToUnlock` is called instead wherever `goToStart()`
+   * would otherwise fire.
+   */
+  fromLock?: boolean;
+  /** Called instead of showing the "start" step when `fromLock` is true. */
+  onExitToUnlock?: () => void;
+}
+
+export function useOnboardingFlow(
+  initialStep?: OnboardingStep,
+  options?: UseOnboardingFlowOptions,
+): UseOnboardingFlowReturn {
+  const { fromLock, onExitToUnlock } = options ?? {};
   const queryClient = useQueryClient();
   const { sphere, network, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
 
@@ -232,7 +253,6 @@ export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFl
 
   // Go back to start screen
   const goToStart = useCallback(() => {
-    setStep("start");
     setSeedWords(Array(12).fill(""));
     setSelectedFile(null);
     setFileContent(null);
@@ -242,7 +262,17 @@ export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFl
     importedSphereRef.current = null;
     isCreateFlowRef.current = false;
     setError(null);
-  }, []);
+    // #449 no-wallet-loss: entered via the lock-escape → never show the
+    // generic StartScreen (its "Create New Wallet" would run against storage
+    // that still holds the locked, recoverable wallet). Exit back up to the
+    // UnlockScreen instead; the caller (WalletPanel) resets its
+    // "restoreFromLock" flag so the lock gate renders UnlockScreen again.
+    if (fromLock) {
+      onExitToUnlock?.();
+      return;
+    }
+    setStep("start");
+  }, [fromLock, onExitToUnlock]);
 
   // ---- File import handlers ----
 
@@ -455,6 +485,20 @@ export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFl
       return;
     }
 
+    const mnemonic = words.join(" ");
+
+    // #449 no-wallet-loss: validate the mnemonic BEFORE calling importWallet.
+    // Sphere.import() clears any existing wallet from storage BEFORE it
+    // validates the mnemonic internally — so a wrong/typo'd recovery phrase
+    // would otherwise wipe whatever wallet (locked or plaintext) is
+    // currently on disk before ever discovering it can't even use the
+    // phrase it just destroyed the wallet for. Checking here means an
+    // invalid phrase never reaches importWallet: nothing touches storage.
+    if (!Sphere.validateMnemonic(mnemonic)) {
+      setError("Invalid recovery phrase. Please check the words and try again.");
+      return;
+    }
+
     setIsBusy(true);
     setError(null);
 
@@ -468,7 +512,6 @@ export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFl
     setIsProcessingComplete(false);
 
     try {
-      const mnemonic = words.join(" ");
       const instance = await importWallet(mnemonic);
 
       // Store in ref so handleMintNametag / handleSkipNametag can access it

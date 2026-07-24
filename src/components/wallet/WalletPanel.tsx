@@ -145,7 +145,11 @@ export function WalletPanel() {
       <div className={PANEL_SHELL} data-wallet-panel>
         <div className="flex-1 relative overflow-y-auto flex items-center justify-center">
           {restoreFromLock ? (
-            <CreateWalletFlow initialStep="restoreMethod" />
+            <CreateWalletFlow
+              initialStep="restoreMethod"
+              fromLock
+              onExitToUnlock={() => setRestoreFromLock(false)}
+            />
           ) : (
             <UnlockScreen onRestore={() => setRestoreFromLock(true)} />
           )}
