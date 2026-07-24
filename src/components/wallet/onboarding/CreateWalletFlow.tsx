@@ -257,6 +257,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
 
         {step === "setPassword" && (
           <SetPasswordScreen
+            isBusy={isBusy}
             onSet={(password) => void handleSetPassword(password)}
             onSkip={() => void handleSetPassword()}
           />

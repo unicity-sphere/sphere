@@ -19,9 +19,13 @@ const MIN_PASSWORD_LENGTH = 8;
 interface SetPasswordScreenProps {
   onSet: (password: string) => void;
   onSkip: () => void;
+  /** Disables Set/Skip while a persist is in flight (#449 re-entrancy guard —
+   *  this screen has no other affordance stopping a double-click / a fast
+   *  Set-then-Skip from firing two overlapping persist calls). */
+  isBusy?: boolean;
 }
 
-export function SetPasswordScreen({ onSet, onSkip }: SetPasswordScreenProps) {
+export function SetPasswordScreen({ onSet, onSkip, isBusy = false }: SetPasswordScreenProps) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -97,14 +101,16 @@ export function SetPasswordScreen({ onSet, onSkip }: SetPasswordScreenProps) {
 
       <button
         onClick={handleSet}
-        className="relative w-full py-3.5 px-5 rounded-xl bg-linear-to-r from-brand-orange to-brand-orange-dark text-white text-sm font-bold shadow-xl shadow-brand-orange/25 flex items-center justify-center gap-2 overflow-hidden group mb-2.5"
+        disabled={isBusy}
+        className="relative w-full py-3.5 px-5 rounded-xl bg-linear-to-r from-brand-orange to-brand-orange-dark text-white text-sm font-bold shadow-xl shadow-brand-orange/25 flex items-center justify-center gap-2 overflow-hidden group mb-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <div className="absolute inset-0 bg-linear-to-r from-brand-orange to-brand-orange-dark opacity-0 group-hover:opacity-100 transition-opacity" />
         <span className="relative z-10">Set Password</span>
       </button>
       <button
         onClick={onSkip}
-        className="w-full py-2.5 px-5 text-sm text-neutral-500 dark:text-[#ffe2cc] hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors rounded-xl hover:bg-neutral-100 dark:hover:bg-white/6"
+        disabled={isBusy}
+        className="w-full py-2.5 px-5 text-sm text-neutral-500 dark:text-[#ffe2cc] hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors rounded-xl hover:bg-neutral-100 dark:hover:bg-white/6 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Skip
       </button>
