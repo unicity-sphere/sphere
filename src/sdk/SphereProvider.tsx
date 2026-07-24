@@ -746,6 +746,9 @@ export function SphereProvider({
   const unlock = useCallback(async (password: string) => {
     if (!providers) throw new Error('Providers not initialized');
     const gen = ++initGenRef.current;
+    // Snapshot the resolved oracle key exactly like initialize() does, for the
+    // post-adopt subscription-key wiring below.
+    const oracleApiKey = getActiveOracleApiKey();
     const { sphere: instance } = await Sphere.init({
       ...providers,
       network,
@@ -757,8 +760,31 @@ export function SphereProvider({
       sphereRef.current = inst;
       setSphere(inst);
     });
-    if (outcome === 'adopted') setIsLocked(false);
-  }, [providers, network]);
+    if (outcome !== 'adopted') return;
+    setIsLocked(false);
+
+    // Mirror initialize()'s existing-wallet success branch (review parity, #449):
+    // the destroyed instance took its `identity:changed` reconcile listener with
+    // it, so without re-attaching it here a post-unlock address switch would
+    // silently stop reconciling the per-wallet subscription key. Deliberately
+    // does NOT call sendWelcomeDM — a re-unlock must not re-welcome the user.
+    setSubscriptionKeyStatus(
+      !SUBSCRIPTION_ENABLED ? 'not-required' : oracleApiKey ? 'ready' : 'provisioning',
+    );
+    setupSubscriptionKey(instance, oracleApiKey);
+
+    // Run address discovery in background after wallet is visible, same as initialize().
+    setIsDiscoveringAddresses(true);
+    instance.discoverAddresses({ autoTrack: true }).then(result => {
+      if (result.addresses.length > 0) {
+        logger.debug('SphereProvider', `Discovered ${result.addresses.length} address(es)`);
+      }
+    }).catch(err => {
+      logger.warn('SphereProvider', 'Address discovery failed', err);
+    }).finally(() => {
+      setIsDiscoveringAddresses(false);
+    });
+  }, [providers, network, setupSubscriptionKey]);
 
   // Lock the wallet: destroy the live Sphere instance (keys leave memory —
   // a real lock, not just a UI gate) and require unlock() again.
