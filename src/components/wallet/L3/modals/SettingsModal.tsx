@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck, Lock } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
@@ -32,7 +32,7 @@ export function SettingsModal({
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
   const [isSecurityOpen, setIsSecurityOpen] = useState(false);
   const { openUpgrade } = useUpgrade();
-  const { hasWalletPassword } = useSphereContext();
+  const { hasWalletPassword, lock } = useSphereContext();
 
   // Show the active address's current plan in the row subtitle, e.g. "Free plan".
   const util = useUtilization();
@@ -110,6 +110,24 @@ export function SettingsModal({
               onBackupWallet();
             }}
           />
+
+          {/* Manual lock — only when a password is set. Locking a
+              password-less wallet would demand an unlock password that
+              doesn't exist (recoverable only from seed), so it is hidden
+              in that case (#449). */}
+          {hasWalletPassword && (
+            <MenuButton
+              icon={Lock}
+              color="neutral"
+              label="Lock Wallet"
+              subtitle="Lock now; unlock with your password"
+              showChevron={false}
+              onClick={() => {
+                onClose();
+                void lock();
+              }}
+            />
+          )}
 
           <MenuButton
             icon={LogOut}
