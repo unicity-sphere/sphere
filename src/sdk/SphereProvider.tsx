@@ -876,11 +876,17 @@ export function SphereProvider({
     // DECRYPTION_ERROR classification) also clears/never-set the password.
     enabled: idleLockConfig.enabled && !isLocked,
     onIdle: () => {
-      // Tell every other tab to lock too, THEN lock this one (order doesn't
-      // matter for correctness — subscribeLockBroadcast below ignores our own
-      // broadcastLock() since it's a fresh BroadcastChannel instance per call
-      // and this tab isn't subscribed to its own post — but keeping broadcast
-      // first means other tabs start locking sooner).
+      // Tell every other tab to lock too, THEN lock this one. Order doesn't
+      // matter for correctness, but NOTE: a same-name BroadcastChannel DOES
+      // receive its own tab's postMessage (it's a fresh instance per call,
+      // but same-tab loopback still happens) — so subscribeLockBroadcast
+      // below will ALSO fire for this tab's own broadcastLock(), meaning
+      // lock() can run twice here in the triggering tab. That's safe only
+      // because lock() and notifyWalletLocked() are intentionally idempotent
+      // (destroying an already-null sphereRef, re-notifying an already-locked
+      // dApp, etc. are all harmless no-ops/re-sends) — do not remove those
+      // guards. Keeping broadcast first just means other tabs start locking
+      // sooner.
       broadcastLock();
       void lock();
     },

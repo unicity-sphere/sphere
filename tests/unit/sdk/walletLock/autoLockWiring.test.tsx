@@ -1,0 +1,228 @@
+/**
+ * #449 Task 8a integration coverage: the idle-auto-lock WIRING inside
+ * SphereProvider (as opposed to the unit-level useIdleTimer/lockBroadcast
+ * tests, which don't touch the provider at all).
+ *
+ * Covers the two load-bearing behaviors:
+ *  - A wallet unlocked WITH a password arms the idle timer (idleLockConfig
+ *    goes enabled), and an idle timeout actually locks the wallet AND
+ *    notifies the registered ConnectHost via notifyWalletLocked().
+ *  - A wallet that never had a password (this session) — the plaintext
+ *    regression, from the OTHER side of the invariant — never arms the idle
+ *    timer, no matter how long the user is "idle" for.
+ *
+ * See also plaintextWalletLoads.test.tsx (init-path plaintext regression)
+ * and useIdleTimer.test.tsx / lockBroadcast.test.ts (unit-level timer/
+ * broadcast mechanics).
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act } from '@testing-library/react';
+import { useState, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
+import type { SphereContextValue } from '../../../../src/sdk/SphereContext';
+
+const PUBKEY = '02' + 'ab'.repeat(32);
+
+const initSpy = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[] }));
+// Toggles the mocked Sphere.init behavior between the two wallet shapes this
+// file exercises: an existing wallet stored WITHOUT a password (Sphere.init
+// always succeeds, like plaintextWalletLoads.test.tsx) vs one stored WITH a
+// password (the passwordless load throws DECRYPTION_ERROR — "locked" — and
+// only a call carrying the right password succeeds, mirroring unlock()).
+const mockState = vi.hoisted(() => ({ mode: 'plaintext' as 'plaintext' | 'encrypted' }));
+
+function makeFakeSphere() {
+  return {
+    identity: { chainPubkey: PUBKEY },
+    // SphereProvider's existing-wallet / unlock() success paths only ever
+    // call these on the adopted instance — keep in sync with SphereProvider.
+    on: vi.fn(() => () => {}),
+    destroy: vi.fn(async () => {}),
+    discoverAddresses: vi.fn(async () => ({ addresses: [] })),
+  };
+}
+
+vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@unicitylabs/sphere-sdk')>();
+  return {
+    ...actual,
+    Sphere: {
+      ...actual.Sphere,
+      exists: vi.fn(async () => true),
+      init: vi.fn(async (opts: Record<string, unknown>) => {
+        initSpy.calls.push(opts);
+        if (mockState.mode === 'encrypted' && !opts.password) {
+          throw { code: 'DECRYPTION_ERROR' };
+        }
+        return { sphere: makeFakeSphere() };
+      }),
+    },
+  };
+});
+
+// The real browser provider bundle opens IndexedDB/Nostr/network connections
+// that are irrelevant here — stub it with a minimal, inert bundle (shape:
+// BrowserProviders), same as plaintextWalletLoads.test.tsx.
+vi.mock('@unicitylabs/sphere-sdk/impl/browser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@unicitylabs/sphere-sdk/impl/browser')>();
+  return {
+    ...actual,
+    createBrowserProviders: vi.fn(() => ({
+      storage: {
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+      },
+      transport: {
+        isConnected: () => false,
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+        setIdentity: vi.fn(async () => {}),
+      },
+      oracle: {},
+      tokenStorage: { disconnect: vi.fn(async () => {}) },
+      ipfsTokenStorage: undefined,
+      groupChat: true,
+      market: true,
+    })),
+  };
+});
+
+import { TokenRegistry } from '@unicitylabs/sphere-sdk';
+import { SphereProvider } from '../../../../src/sdk/SphereProvider';
+import { useSphereContext } from '../../../../src/sdk/hooks/core/useSphere';
+import { setActiveConnectHost } from '../../../../src/sdk/connectHostRegistry';
+
+function Wrapper({ children }: { children: ReactNode }) {
+  const [qc] = useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  );
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
+// Captures the live context so the test can call unlock()/etc. imperatively
+// — this file needs to DRIVE the provider (not just observe it), which a
+// display-only Probe (as in plaintextWalletLoads.test.tsx) can't do.
+let ctx: SphereContextValue | null = null;
+function Probe() {
+  ctx = useSphereContext();
+  const { isLocked, isLoading, sphere } = ctx;
+  return (
+    <div>
+      <div data-testid="loading">{String(isLoading)}</div>
+      <div data-testid="sphere">{sphere ? 'present' : 'null'}</div>
+      <div data-testid="locked">{String(isLocked)}</div>
+    </div>
+  );
+}
+
+function renderProvider() {
+  render(
+    <Wrapper>
+      <SphereProvider>
+        <Probe />
+      </SphereProvider>
+    </Wrapper>,
+  );
+}
+
+beforeEach(() => {
+  initSpy.calls.length = 0;
+  mockState.mode = 'plaintext';
+  ctx = null;
+  // SphereProvider calls the real TokenRegistry.configure() as part of its
+  // normal init flow; with a cache miss that fetches its remote token list
+  // for real. Stub fetch so this test never makes a real network call.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      throw new Error('network disabled in test');
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  setActiveConnectHost(null);
+  // TokenRegistry is a process-wide singleton that starts a background
+  // refresh timer on configure() — reset it so it doesn't leak into (or slow
+  // down) other test files.
+  TokenRegistry.resetInstance();
+});
+
+describe('idle auto-lock wiring (#449 Task 8a)', () => {
+  it('a wallet WITH a password arms auto-lock, and idle locks it + notifies the connected dApp', async () => {
+    mockState.mode = 'encrypted';
+    renderProvider();
+
+    // Mount-time initialize() runs the passwordless load path first, which
+    // throws DECRYPTION_ERROR for this wallet shape — real timers here, this
+    // part is plain async resolution (see plaintextWalletLoads.test.tsx).
+    await waitFor(() => expect(screen.getByTestId('locked').textContent).toBe('true'));
+    expect(screen.getByTestId('loading').textContent).toBe('false');
+    expect(screen.getByTestId('sphere').textContent).toBe('null');
+
+    const fakeHost = { notifyWalletLocked: vi.fn() };
+    setActiveConnectHost(fakeHost as unknown as ConnectHost);
+
+    // Fake timers from here on — the idle timer's setTimeout must be armed by
+    // unlock()'s setSessionPassword(password) call, and we need to fast-forward
+    // past it deterministically.
+    vi.useFakeTimers();
+    await act(async () => {
+      await ctx!.unlock('correct horse battery staple');
+    });
+
+    // Unlock succeeded: the wallet is live and no longer locked.
+    expect(screen.getByTestId('locked').textContent).toBe('false');
+    expect(screen.getByTestId('sphere').textContent).toBe('present');
+    expect(fakeHost.notifyWalletLocked).not.toHaveBeenCalled();
+
+    // Default auto-lock timeout (no stored settings blob → DEFAULT_AUTO_LOCK_MINUTES,
+    // 15 minutes — src/sdk/walletLock/lockSettings.ts) — advance just past it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 5000);
+    });
+
+    // Idle timeout fired: the provider locked itself and told the dApp.
+    expect(screen.getByTestId('locked').textContent).toBe('true');
+    expect(screen.getByTestId('sphere').textContent).toBe('null');
+    // At least once — the same-tab BroadcastChannel loopback (see the onIdle
+    // comment in SphereProvider.tsx) can legitimately drive lock() a second
+    // time in this very tab; lock()/notifyWalletLocked() are idempotent, so
+    // this test asserts the load-bearing fact (the dApp WAS told) rather than
+    // an exact call count that depends on that loopback timing.
+    expect(fakeHost.notifyWalletLocked).toHaveBeenCalled();
+  });
+
+  it('a wallet with NO password never arms auto-lock, even far past any timeout', async () => {
+    mockState.mode = 'plaintext';
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'));
+    expect(screen.getByTestId('sphere').textContent).toBe('present');
+    expect(screen.getByTestId('locked').textContent).toBe('false');
+
+    const fakeHost = { notifyWalletLocked: vi.fn() };
+    setActiveConnectHost(fakeHost as unknown as ConnectHost);
+
+    vi.useFakeTimers();
+    // Ten times the longest configurable auto-lock option (30 min) — if the
+    // no-password invariant ever regressed, this would be more than enough
+    // time to observe a false lock.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 30 * 60 * 1000);
+    });
+
+    expect(screen.getByTestId('locked').textContent).toBe('false');
+    expect(screen.getByTestId('sphere').textContent).toBe('present');
+    expect(fakeHost.notifyWalletLocked).not.toHaveBeenCalled();
+
+    // The existing-wallet load path must still never have passed a password —
+    // this is a plaintext wallet throughout (mirrors plaintextWalletLoads.test.tsx).
+    expect(initSpy.calls.length).toBeGreaterThan(0);
+    expect(initSpy.calls.every((c) => c.password === undefined)).toBe(true);
+  });
+});
