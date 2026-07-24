@@ -94,20 +94,19 @@ export interface UseOnboardingFlowReturn {
    */
   backupEncrypted: boolean;
   /**
-   * Set/Skip handler for `SetPasswordScreen` (#449 / #449 follow-up). Reached
-   * from BOTH flows now:
-   *  - Restore/import-from-mnemonic: nothing is persisted yet for this
-   *    mnemonic, so the chosen (or skipped) password threads straight into
-   *    the ONE `importWallet` call that creates it.
+   * Set/Skip handler for `SetPasswordScreen` (#449 / #449 follow-up / #449
+   * Task C). Reached from THREE flows, all handled identically now:
    *  - Create: the wallet is ALREADY persisted (plaintext) by the time this
-   *    screen shows (reached via show -> confirm -> here), so a chosen
-   *    password is applied via the reviewed-SAFE in-place re-encrypt
-   *    (`setWalletPassword` from `useSphereContext()`) — never a second
-   *    `importWallet()`/`Sphere.import()` call, which would be a
-   *    wallet-loss/lockout hazard (it unconditionally `Sphere.clear()`s
-   *    existing storage before rebuilding). See the implementation comment
-   *    for full detail.
-   * Omit `password` to skip.
+   *    screen shows (reached via show -> confirm -> here).
+   *  - Restore-from-mnemonic / plain file import: the wallet is ALREADY
+   *    persisted (plaintext) by `importWallet`/`importFromFile` before this
+   *    screen shows (reached after address selection + nametag).
+   * In every case a chosen password is applied via the reviewed-SAFE
+   * in-place re-encrypt (`setWalletPassword` from `useSphereContext()`) —
+   * NEVER a second `importWallet()`/`Sphere.import()` call, which would be a
+   * wallet-loss/lockout hazard (it unconditionally `Sphere.clear()`s
+   * existing storage before rebuilding). See the implementation comment
+   * for full detail. Omit `password` to skip.
    */
   handleSetPassword: (password?: string) => Promise<void>;
 
@@ -189,16 +188,14 @@ export function useOnboardingFlow(
   const [error, setError] = useState<string | null>(null);
 
   // Block page reload / tab close during wallet creation. "setPassword" is
-  // included here too (#449 / #449 follow-up): it's a step where a
-  // persisting/re-encrypting call is either about to run or in flight — the
-  // restore/import flow's last step before its one-and-only persisting
-  // importWallet() call, and (since #449 follow-up) the create flow's
-  // optional in-place re-encrypt (setWalletPassword) before finalizing.
-  // "mnemonicShow"/"mnemonicConfirm"/"backupDownload" (#449 create-flow
-  // reorder) are also covered: the create flow's wallet is already
-  // persisted (plaintext) by the time these show, so a reload mid-flow
-  // would silently drop the user back to onboarding while a real wallet
-  // sits on disk — same hazard the original guard was written for.
+  // included here too (#449 / #449 follow-up / #449 Task C): by the time any
+  // flow reaches it (create, restore-from-mnemonic, or file import), the
+  // wallet is ALREADY persisted (plaintext) on disk, and this step's
+  // in-place re-encrypt (setWalletPassword) may be about to run or in
+  // flight. "mnemonicShow"/"mnemonicConfirm"/"backupDownload" (#449
+  // create-flow reorder, create flow only) are also covered: a reload
+  // mid-flow would silently drop the user back to onboarding while a real
+  // wallet sits on disk — same hazard the original guard was written for.
   const isProcessingActive =
     step === "processing" ||
     step === "mnemonicShow" ||
@@ -228,15 +225,14 @@ export function useOnboardingFlow(
   const importedSphereRef = useRef<Sphere | null>(null);
   // True when the current flow created a brand-new wallet (vs import/restore).
   const isCreateFlowRef = useRef(false);
-  // #449: holds a validated-but-not-yet-imported restore mnemonic while
-  // `setPassword` step is shown, so the chosen (or skipped) password can be
-  // threaded straight into the ONE `importWallet` call that persists it —
-  // nothing is on disk yet for this mnemonic, so no re-encryption is needed.
-  // Restore/import flow only. Left `null` for the create flow (#449
-  // follow-up: the create flow reaches `setPassword` too now, but via
-  // `doFinalizeWallet`/`setWalletPassword` in-place re-encrypt, never this
-  // ref/`importWallet` path — see handleSetPassword).
-  const pendingRestoreMnemonicRef = useRef<string | null>(null);
+  // #449 Task C: true once an encrypted file's decrypt password has already
+  // been auto-applied as the wallet's at-rest password (handlePasswordSubmit)
+  // — set on a successful `setWalletPassword` there. The "processing
+  // complete" auto-transition below checks this to skip the optional
+  // `setPassword` screen for a wallet that's already protected. Import/file
+  // flow only; always `false` for the create flow and for restore-from-
+  // mnemonic (which always shows the optional screen). Reset in `goToStart`.
+  const passwordAutoAppliedRef = useRef(false);
   // Create flow only (#449 UX refinement): remembers the password chosen on
   // `setPassword` — which now runs BEFORE the backup screen — purely in
   // memory (never persisted as its own secret) so `handleDownloadBackup`,
@@ -248,9 +244,9 @@ export function useOnboardingFlow(
   const createBackupPasswordRef = useRef<string | null>(null);
   // #449: re-entrancy guard for handleSetPassword. SetPasswordScreen doesn't
   // disable its Set/Skip buttons while busy, so a double-click (or a fast
-  // Set-then-Skip) could otherwise fire two overlapping `importWallet()`
-  // calls — the second would re-run `Sphere.import()`, clearing storage the
-  // first call just persisted mid-write.
+  // Set-then-Skip) could otherwise fire two overlapping `setWalletPassword()`
+  // calls against the same in-flight re-encrypt (read → encrypt → write) of
+  // the mnemonic storage key.
   const isPersistingRef = useRef(false);
 
   // Nametag state
@@ -345,6 +341,7 @@ export function useOnboardingFlow(
     importedSphereRef.current = null;
     isCreateFlowRef.current = false;
     createBackupPasswordRef.current = null;
+    passwordAutoAppliedRef.current = false;
     setError(null);
     // #449 no-wallet-loss: entered via the lock-escape → never show the
     // generic StartScreen (its "Create New Wallet" would run against storage
@@ -520,8 +517,38 @@ export function useOnboardingFlow(
         setGeneratedMnemonic(result.mnemonic);
       }
 
-
       if (result.sphere) {
+        // #449 Task C: this file needed `password` to DECRYPT it — apply that
+        // SAME password as the wallet's new at-rest password automatically.
+        // The wallet was just persisted PLAINTEXT regardless of the file's
+        // own encryption: `importFromFile`/`Sphere.importFromLegacyFile` only
+        // ever uses `password` to decrypt the legacy file's contents — it is
+        // never threaded into the new on-disk mnemonic (verified against the
+        // SDK: `baseOptions` passed to the internal `Sphere.import()` call
+        // strips `password` out in every legacy-format branch). Applied via
+        // the SAME reviewed-SAFE in-place re-encrypt as everywhere else
+        // (`setWalletPassword`) — never a second `importWallet`/`Sphere.
+        // import()` call.
+        //
+        // Only meaningful when the import actually recovered a MNEMONIC — a
+        // master-key-only legacy import (.dat/.txt/legacy-JSON with no seed
+        // phrase) has none, and `setWalletPassword`/`reencryptStoredMnemonic`
+        // throws "No wallet mnemonic found" for that case. Caught and skipped
+        // gracefully here (no scary error for an automatic step the user
+        // never asked for) — the wallet simply stays plaintext. If there IS
+        // a mnemonic, this succeeds and the optional `setPassword` screen
+        // shown later (see the "processing complete" auto-transition below)
+        // is skipped entirely — the wallet is already protected.
+        try {
+          await setWalletPassword(password);
+          passwordAutoAppliedRef.current = true;
+        } catch {
+          // No mnemonic to protect (or some other re-encrypt hiccup) — leave
+          // the wallet plaintext and fall through to the normal, optional
+          // setPassword screen. If there really is no mnemonic, a manual
+          // attempt there will (correctly) fail too, but as an ordinary
+          // user-initiated error rather than a silent automatic one.
+        }
         routeAfterImport(result.sphere);
       } else {
         setStep("nametag");
@@ -532,7 +559,7 @@ export function useOnboardingFlow(
     } finally {
       setIsBusy(false);
     }
-  }, [fileContent, selectedFile, importFromFile, routeAfterImport]);
+  }, [fileContent, selectedFile, importFromFile, routeAfterImport, setWalletPassword]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -584,16 +611,35 @@ export function useOnboardingFlow(
     }
 
     setError(null);
+    setIsBusy(true);
 
-    // #449: offer the SAME optional at-rest password as the create flow —
-    // BEFORE the one-and-only `importWallet` call for this mnemonic, so
-    // nothing has been persisted yet and the (optional) password can be
-    // threaded straight into that single call. No re-encryption/re-persist
-    // step is ever needed. `handleSetPassword` performs the actual import
-    // once the user sets or skips a password on `SetPasswordScreen`.
-    pendingRestoreMnemonicRef.current = mnemonic;
-    setStep("setPassword");
-  }, [seedWords]);
+    // #449 Task C: import PLAINTEXT immediately — no password threaded into
+    // this call anymore. The optional at-rest password is now offered near
+    // the END of the flow (after address selection + nametag, same place the
+    // create flow offers it), applied via the in-place `setWalletPassword`
+    // re-encrypt — never a second `importWallet()`/`Sphere.import()` call.
+    // This unifies the restore flow with the create flow and the plain
+    // file-import flow: all three route through `routeAfterImport` and the
+    // shared "processing complete" auto-transition below.
+    setStep("processing");
+    setProcessingTitle("Importing Wallet...");
+    setProcessingCompleteTitle("Import Complete!");
+    setProcessingStep(0);
+    setProcessingTotalSteps(3);
+    setProcessingStatus("Importing wallet...");
+    setIsProcessingComplete(false);
+
+    try {
+      const instance = await importWallet(mnemonic);
+      routeAfterImport(instance);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Invalid recovery phrase";
+      setError(message);
+      setStep("restore");
+    } finally {
+      setIsBusy(false);
+    }
+  }, [seedWords, importWallet, routeAfterImport]);
 
   // Action: Create wallet WITH nametag (or register nametag on imported wallet)
   const handleMintNametag = useCallback(async () => {
@@ -752,17 +798,24 @@ export function useOnboardingFlow(
     finishFinalize();
   }, [sphere, network, finishFinalize]);
 
-  // Auto-transition when processing completes. Create flow ordering (#449
-  // reorder): show -> confirm -> setPassword -> backupDownload -> finalize.
-  // The mnemonic must be SHOWN and re-entry VERIFIED before the optional
-  // password step, so the one password chosen there can still encrypt the
-  // backup-download file shown right after it (see handleSetPassword /
-  // handleDownloadBackup).
+  // Auto-transition when processing completes.
+  //  - Create flow ordering (#449 reorder): show -> confirm -> setPassword ->
+  //    backupDownload -> finalize. The mnemonic must be SHOWN and re-entry
+  //    VERIFIED before the optional password step, so the one password
+  //    chosen there can still encrypt the backup-download file shown right
+  //    after it (see handleSetPassword / handleDownloadBackup).
+  //  - Restore/import flow (#449 Task C): no mnemonic show/confirm/backup
+  //    screens — straight to the SAME optional `setPassword` screen the
+  //    create flow uses, UNLESS an encrypted file's password was already
+  //    auto-applied (handlePasswordSubmit), in which case the wallet is
+  //    already protected and there's nothing to ask.
   useEffect(() => {
     if (isProcessingComplete && step === "processing") {
       const timer = setTimeout(() => {
         if (isCreateFlowRef.current && generatedMnemonic) {
           setStep("mnemonicShow");
+        } else if (!isCreateFlowRef.current && !passwordAutoAppliedRef.current) {
+          setStep("setPassword");
         } else {
           void doFinalizeWallet();
         }
@@ -814,159 +867,95 @@ export function useOnboardingFlow(
     void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
-  // Action: Set/Skip handler for SetPasswordScreen (#449 / #449 follow-up).
-  // Reached from TWO places, each handled by its own branch below:
+  // Action: Set/Skip handler for SetPasswordScreen (#449 / #449 follow-up /
+  // #449 Task C). Reached from THREE places, all handled the SAME way now:
   //
-  //  1. Restore/import-from-mnemonic (handleRestoreWallet sets
-  //     pendingRestoreMnemonicRef right before showing this step). Nothing
-  //     has been persisted for this mnemonic yet, so the chosen (or skipped)
-  //     password threads straight into the ONE importWallet call that
-  //     creates it; no re-encryption/re-persist step is ever needed.
+  //  1. Create flow (handleSkipNametag/handleMintNametag's processing
+  //     auto-transition above, via mnemonicShow -> mnemonicConfirm -> here).
+  //     Ordering: processing → mnemonicShow → mnemonicConfirm → setPassword
+  //     → backupDownload → planCapabilities → wallet. The wallet was ALREADY
+  //     persisted (plaintext) moments earlier by createWallet()/
+  //     createWalletThenRegister() (#448's create-without-nametag step).
   //
-  //  2. Create flow (handleSkipNametag/handleMintNametag's processing
-  //     auto-transition above; no pending restore mnemonic). #449 reorder:
-  //     this now runs AFTER the mnemonic show/confirm screens and BEFORE the
-  //     backup-download screen (ordering: processing → mnemonicShow →
-  //     mnemonicConfirm → setPassword → backupDownload → planCapabilities →
-  //     wallet). The wallet was ALREADY persisted (plaintext) moments
-  //     earlier by createWallet()/createWalletThenRegister() (#448's
-  //     create-without-nametag step) — by the time this screen shows, there
-  //     is a real wallet on disk with a token DB etc. A SECOND
-  //     `importWallet()` call here (re-creating that same wallet from its
-  //     own mnemonic WITH the chosen password) was the #449 CRITICAL
-  //     wallet-loss bug: `importWallet` wraps the SDK's `Sphere.import()`,
-  //     which unconditionally `Sphere.clear()`s any already-persisted wallet
-  //     before rebuilding it. If that rebuild then threw (a network hiccup
-  //     during identity/nametag sync, etc.), storage was left cleared while
-  //     the app kept using the in-memory instance for the rest of the
-  //     session — on next reload the wallet could show unexpectedly LOCKED
-  //     or vanish entirely. It also raced the just-published Nostr nametag
-  //     binding from createWalletThenRegister (#448), risking permanently
-  //     burning it.
+  //  2. Restore-from-mnemonic (handleRestoreWallet) and plain file import
+  //     (handleFileImport/handlePasswordSubmit), reached via the "processing
+  //     complete" auto-transition after address selection + nametag. The
+  //     wallet was ALREADY persisted (plaintext) by importWallet()/
+  //     importFromFile() before this screen ever shows.
   //
-  //     Instead, the create-flow branch applies a chosen password via
-  //     `setWalletPassword` (from `useSphereContext()`) — the same
-  //     reviewed-SAFE in-place mnemonic re-encrypt built for Settings →
-  //     Security: read mnemonic → encrypt → write back to the MNEMONIC key
-  //     ONLY, with read-back verify and restore-on-failure. `Sphere.import`/
-  //     `Sphere.clear` are never called; the token DB and everything else
-  //     already on disk are untouched. On success the password is also
-  //     remembered in `createBackupPasswordRef` (memory-only) so the backup
-  //     screen right after this one can encrypt the exported file with the
-  //     SAME password — see handleDownloadBackup. On failure,
-  //     `setWalletPassword` is itself self-restoring (leaves the existing
-  //     plaintext mnemonic intact), so the wallet is never at risk — but
-  //     unlike Skip, a rejection here does NOT advance: it surfaces the
-  //     error on this screen and lets the user retry or explicitly Skip,
-  //     rather than silently landing them in a wallet they believe is
-  //     password-protected while it's still plaintext (#449 review fix).
+  // In every case there is a real wallet on disk (with a token DB, etc.) by
+  // the time this runs. A SECOND `importWallet()`/`Sphere.import()` call
+  // here (re-creating that same wallet from its own mnemonic WITH the chosen
+  // password) was the #449 CRITICAL wallet-loss bug: `Sphere.import()`
+  // unconditionally `Sphere.clear()`s any already-persisted wallet before
+  // rebuilding it. If that rebuild then threw (a network hiccup during
+  // identity/nametag sync, etc.), storage was left cleared while the app
+  // kept using the in-memory instance for the rest of the session — on next
+  // reload the wallet could show unexpectedly LOCKED or vanish entirely. It
+  // could also race a just-published Nostr nametag binding, risking
+  // permanently burning it.
+  //
+  // Instead, a chosen password is ALWAYS applied via `setWalletPassword`
+  // (from `useSphereContext()`) — the same reviewed-SAFE in-place mnemonic
+  // re-encrypt built for Settings → Security: read mnemonic → encrypt →
+  // write back to the MNEMONIC key ONLY, with read-back verify and
+  // restore-on-failure. `Sphere.import`/`Sphere.clear` are never called; the
+  // token DB and everything else already on disk are untouched. On success
+  // the password is also remembered in `createBackupPasswordRef`
+  // (memory-only) so the create flow's backup screen right after this one
+  // can encrypt the exported file with the SAME password — see
+  // handleDownloadBackup (a no-op for the restore/import flows, which have
+  // no backup-download screen). On failure, `setWalletPassword` is itself
+  // self-restoring (leaves the existing plaintext mnemonic intact), so the
+  // wallet is never at risk — but unlike Skip, a rejection here does NOT
+  // advance: it surfaces the error on this screen and lets the user retry or
+  // explicitly Skip, rather than silently landing them in a wallet they
+  // believe is password-protected while it's still plaintext (#449 review
+  // fix).
+  //
+  // After applying (or skipping) the password: the create flow advances to
+  // the backup-download screen; the restore/import flows have no such
+  // screen and finalize directly.
   const handleSetPassword = useCallback(async (password?: string) => {
-    const restoreMnemonic = pendingRestoreMnemonicRef.current;
-    pendingRestoreMnemonicRef.current = null;
-
-    // Create flow: no pending restore mnemonic — see branch 2 in the
-    // doc-comment above.
-    if (!restoreMnemonic) {
-      // Re-entrancy guard: a double-click on "Set Password", or a fast
-      // Set-then-Skip, must not fire two overlapping setWalletPassword()
-      // calls (reencryptStoredMnemonic's read → encrypt → write cycle is not
-      // safe to run concurrently against the same storage key).
-      if (isPersistingRef.current) return;
-      isPersistingRef.current = true;
-      setIsBusy(true);
-      setError(null);
-      try {
-        if (password) {
-          try {
-            await setWalletPassword(password);
-          } catch (e) {
-            // Self-restoring on failure (see doc-comment above) — the
-            // wallet is never at risk. Surface the failure and stay on this
-            // screen (do NOT advance to backupDownload) so the user can
-            // retry or explicitly Skip.
-            const message = e instanceof Error ? e.message : "Failed to set a wallet password";
-            setError(message);
-            return;
-          }
-          // Remembered ONLY in memory — never persisted as its own secret —
-          // so handleDownloadBackup can encrypt the backup file with this
-          // SAME password.
-          createBackupPasswordRef.current = password;
-        } else {
-          createBackupPasswordRef.current = null;
-        }
-        setStep("backupDownload");
-      } finally {
-        isPersistingRef.current = false;
-        setIsBusy(false);
-      }
-      return;
-    }
-
-    // Restore/import-from-mnemonic flow — see branch 1 in the doc-comment
-    // above. Re-entrancy guard: a double-click on "Set Password", or a fast
-    // Set-then-Skip, must not fire two overlapping importWallet() calls —
-    // the second would re-run Sphere.import() and clear storage the first
-    // call just persisted mid-write.
+    // Re-entrancy guard: a double-click on "Set Password", or a fast
+    // Set-then-Skip, must not fire two overlapping setWalletPassword()
+    // calls (reencryptStoredMnemonic's read → encrypt → write cycle is not
+    // safe to run concurrently against the same storage key).
     if (isPersistingRef.current) return;
     isPersistingRef.current = true;
-
     setIsBusy(true);
     setError(null);
-
-    // Show processing screen during import
-    setStep("processing");
-    setProcessingTitle("Importing Wallet...");
-    setProcessingCompleteTitle("Import Complete!");
-    setProcessingStep(0);
-    setProcessingTotalSteps(3);
-    setProcessingStatus("Importing wallet...");
-    setIsProcessingComplete(false);
-
     try {
-      // Call shape mirrors the pre-#449 direct call exactly when no
-      // password is chosen (`importWallet(mnemonic)`, single argument) —
-      // the SKIP path stays byte-for-byte identical, down to call arity.
-      const instance = password
-        ? await importWallet(restoreMnemonic, { password })
-        : await importWallet(restoreMnemonic);
-
-      // Store in ref so handleMintNametag / handleSkipNametag can access it
-      importedSphereRef.current = instance;
-
-      // Route to next screen after import completes
-      const allAddresses = instance.getAllTrackedAddresses();
-      if (allAddresses.length >= 1) {
-        const addresses: DerivedAddressInfo[] = allAddresses.map(a => ({
-          index: a.index,
-          l3Address: a.directAddress,
-          chainPubkey: a.chainPubkey,
-          path: `m/44'/60'/0'/0/${a.index}`,
-          hasNametag: !!a.nametag,
-          existingNametag: a.nametag,
-          isChange: false,
-          balanceLoading: false,
-          ipnsLoading: false,
-        }));
-        setDerivedAddresses(addresses);
-        setSelectedKeys(new Set(addresses.map(a => addrKey(a.index, false))));
-        setStep("addressSelection");
-      } else if (instance.identity?.nametag) {
-        setProcessingStep(2);
-        setProcessingStatus("Setup complete!");
-        setIsProcessingComplete(true);
+      if (password) {
+        try {
+          await setWalletPassword(password);
+        } catch (e) {
+          // Self-restoring on failure (see doc-comment above) — the
+          // wallet is never at risk. Surface the failure and stay on this
+          // screen (do NOT advance) so the user can retry or explicitly
+          // Skip.
+          const message = e instanceof Error ? e.message : "Failed to set a wallet password";
+          setError(message);
+          return;
+        }
+        // Remembered ONLY in memory — never persisted as its own secret —
+        // so handleDownloadBackup (create flow only) can encrypt the backup
+        // file with this SAME password.
+        createBackupPasswordRef.current = password;
       } else {
-        setStep("nametag");
+        createBackupPasswordRef.current = null;
       }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Invalid recovery phrase";
-      setError(message);
-      setStep("restore");
+      if (isCreateFlowRef.current) {
+        setStep("backupDownload");
+      } else {
+        // Restore/import flow: no backup-download screen — finalize directly.
+        void doFinalizeWallet();
+      }
     } finally {
-      setIsBusy(false);
       isPersistingRef.current = false;
+      setIsBusy(false);
     }
-  }, [importWallet, setWalletPassword]);
+  }, [setWalletPassword, doFinalizeWallet]);
 
   // Action: Continue from the plan-capabilities screen into the wallet
   const handlePlanCapabilitiesContinue = useCallback(() => {

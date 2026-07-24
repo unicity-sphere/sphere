@@ -96,16 +96,16 @@ describe('restore-from-lock guard (#449)', () => {
     fillSeedWords(VALID_MNEMONIC);
     fireEvent.click(screen.getByRole('button', { name: /^restore$/i }));
 
-    // #449: a valid mnemonic now proceeds to the same optional
-    // SetPasswordScreen the create flow offers, BEFORE importWallet is ever
-    // called — nothing has been persisted yet at this point.
-    await waitFor(() => expect(screen.getByRole('button', { name: /^skip$/i })).toBeDefined());
-    expect(screen.queryByText(/invalid recovery phrase/i)).toBeNull();
-    expect(ctx.importWallet).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
-
+    // #449 Task C: a valid mnemonic now imports PLAINTEXT immediately (no
+    // password threaded into the call) — the optional password step (same
+    // SetPasswordScreen the create flow offers) is deferred to the END of
+    // the flow, after address selection/nametag. With this mock returning no
+    // tracked addresses and no nametag, that lands on the nametag screen
+    // next.
     await waitFor(() => expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC));
+    expect(screen.queryByText(/invalid recovery phrase/i)).toBeNull();
+
+    await waitFor(() => expect(screen.getByText(/choose unicity id/i)).toBeDefined());
   });
 
   it('gates both restore options behind an explicit erase-confirmation when entered from the lock screen', () => {
