@@ -260,8 +260,10 @@ export function SphereProvider({
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   // True when an encrypted wallet exists on disk but hasn't been unlocked with
-  // its password this session (SDK DECRYPTION_ERROR on init) — locked, not
-  // broken (#449). Only a real DECRYPTION_ERROR may flip this true.
+  // its password this session — locked, not broken (#449). The SDK signals
+  // this as SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR') on a
+  // passwordless init of an encrypted wallet (see isDecryptionError.ts for the
+  // code-verified detail); only that real signal may flip this true.
   const [isLocked, setIsLocked] = useState(false);
   const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
@@ -538,7 +540,8 @@ export function SphereProvider({
         // Never pass a `password` on this normal load path — an existing
         // plaintext wallet must keep loading exactly as before. If the wallet
         // IS encrypted, this deliberately-passwordless init throws
-        // DECRYPTION_ERROR, which we read as "locked", not a fatal error (#449).
+        // SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR'), which we
+        // read as "locked", not a fatal error (#449) — see isDecryptionError.ts.
         let instance: Sphere;
         try {
           ({ sphere: instance } = await Sphere.init({
@@ -554,9 +557,9 @@ export function SphereProvider({
             if (isStale()) return;
             setIsLocked(true);
             // The wallet is definitely password-protected (that's WHY the
-            // passwordless init just threw DECRYPTION_ERROR) — no need for
-            // the storage round-trip, but reuse the shared setter for a
-            // single source of truth.
+            // passwordless init just threw the decrypt-mnemonic STORAGE_ERROR)
+            // — no need for the storage round-trip, but reuse the shared
+            // setter for a single source of truth.
             void refreshHasWalletPassword(browserProviders.storage);
             return;
           }
@@ -693,8 +696,9 @@ export function SphereProvider({
         // #449 no-wallet-loss guard: Sphere.init({autoGenerate:true}) only
         // creates a fresh wallet when NONE exists on disk — if the storage
         // already holds an encrypted wallet, Sphere.init delegates to
-        // Sphere.load(), which throws DECRYPTION_ERROR when (as here) no
-        // password was supplied. That is a LOCKED, still-recoverable wallet,
+        // Sphere.load(), which throws SphereError('Failed to decrypt
+        // mnemonic', 'STORAGE_ERROR') when (as here) no password was
+        // supplied. That is a LOCKED, still-recoverable wallet,
         // not a broken create — never run the destructive cleanup for it.
         // The onboarding UI's lock-escape routing (CreateWalletFlow's
         // fromLock/goToStart) should prevent "Create New Wallet" from ever
@@ -891,8 +895,9 @@ export function SphereProvider({
 
   // Unlock an encrypted wallet with its password. Re-runs Sphere.init WITH the
   // password (the only place a password is ever passed for an EXISTING
-  // wallet); a wrong password throws DECRYPTION_ERROR, which we let propagate
-  // so the caller (UnlockScreen) can show "wrong password". Reuses the same
+  // wallet); a wrong password throws the same decrypt-mnemonic STORAGE_ERROR
+  // as the cold-start check, which we let propagate so the caller
+  // (UnlockScreen) can show "wrong password" via isDecryptionError. Reuses the same
   // initGenRef/adoptOrDiscardInstance re-entrancy guard as initialize() (#453)
   // so an unlock superseded mid-flight destroys its instance instead of
   // adopting it.
@@ -1046,7 +1051,8 @@ export function SphereProvider({
     // forced back to false by lock()/deleteWallet() (via setSessionPassword
     // (null)) and by the initial state. `!isLocked` is redundant-but-safe:
     // every path that sets isLocked true (lock(), and initialize()'s
-    // DECRYPTION_ERROR classification) also clears/never-set the password.
+    // classifyInitFailure() === 'locked' branch) also clears/never-set the
+    // password.
     enabled: idleLockConfig.enabled && !isLocked,
     onIdle: () => {
       // Tell every other tab to lock too, THEN lock this one. Order doesn't

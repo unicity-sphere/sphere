@@ -61,13 +61,15 @@ vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
       ...actual.Sphere,
       exists: vi.fn(async () => true),
       init: vi.fn(async (opts: Record<string, unknown>) => {
-        // 'encrypted': a passwordless load always throws DECRYPTION_ERROR
-        // (locked); any password unlocks. 'plaintext': always succeeds. The
-        // REAL password verification this file actually exercises happens
+        // 'encrypted': a passwordless load always throws the REAL SDK
+        // decrypt-mnemonic STORAGE_ERROR (@unicitylabs/sphere-sdk@0.12.0,
+        // code-verified — see src/sdk/walletLock/isDecryptionError.ts), read
+        // as "locked"; any password unlocks. 'plaintext': always succeeds.
+        // The REAL password verification this file actually exercises happens
         // inside reencryptStoredMnemonic against the fake storage below, not
         // here — Sphere.init's own credential logic is irrelevant to it.
         if (testState.mode === 'encrypted' && !opts.password) {
-          throw { code: 'DECRYPTION_ERROR' };
+          throw new actual.SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR');
         }
         return { sphere: makeFakeSphere() };
       }),

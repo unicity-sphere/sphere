@@ -26,10 +26,12 @@ export interface SphereContextValue {
   error: Error | null;
 
   /** True when an encrypted wallet exists on disk but hasn't been unlocked
-   *  with its password this session (SDK DECRYPTION_ERROR) — locked, not broken. */
+   *  with its password this session (SDK throws a decrypt-mnemonic
+   *  STORAGE_ERROR — see isDecryptionError.ts) — locked, not broken. */
   isLocked: boolean;
-  /** Unlock the existing encrypted wallet with its password. Throws (DECRYPTION_ERROR)
-   *  on a wrong password — the caller (UnlockScreen) shows "wrong password". */
+  /** Unlock the existing encrypted wallet with its password. Throws the
+   *  decrypt-mnemonic STORAGE_ERROR on a wrong password — the caller
+   *  (UnlockScreen) shows "wrong password" via isDecryptionError. */
   unlock: (password: string) => Promise<void>;
   /** Lock the wallet: destroy the live Sphere instance and require unlock() again. */
   lock: () => Promise<void>;

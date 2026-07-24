@@ -53,7 +53,10 @@ vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
       init: vi.fn(async (opts: Record<string, unknown>) => {
         initSpy.calls.push(opts);
         if (mockState.mode === 'encrypted' && !opts.password) {
-          throw { code: 'DECRYPTION_ERROR' };
+          // The REAL SDK signal (@unicitylabs/sphere-sdk@0.12.0, code-verified)
+          // for an encrypted wallet opened without/with the wrong password —
+          // see src/sdk/walletLock/isDecryptionError.ts.
+          throw new actual.SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR');
         }
         return { sphere: makeFakeSphere() };
       }),
