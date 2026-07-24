@@ -74,6 +74,13 @@ async function driveToMnemonicShow() {
   );
 }
 
+// The confirm step is a 12-word cell grid; pasting the phrase into the first
+// cell fills every cell at once.
+function pasteConfirmPhrase(phrase: string) {
+  const cells = screen.getAllByPlaceholderText('word');
+  fireEvent.paste(cells[0], { clipboardData: { getData: () => phrase } });
+}
+
 beforeEach(() => {
   ctx.importWallet.mockClear();
   ctx.createWallet.mockClear();
@@ -93,7 +100,7 @@ describe('create flow mnemonic confirmation (#449)', () => {
     // Confirm step.
     await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
     expect(screen.queryByText(/protect your wallet/i)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+    pasteConfirmPhrase(MNEMONIC);
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
     // Password step.
@@ -115,9 +122,7 @@ describe('create flow mnemonic confirmation (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
     await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), {
-      target: { value: 'wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong' },
-    });
+    pasteConfirmPhrase('wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong wrong');
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
     await waitFor(() => expect(screen.getByText(/doesn't match/i)).toBeDefined());
@@ -133,14 +138,12 @@ describe('create flow mnemonic confirmation (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
     await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: 'nope nope nope' } });
+    pasteConfirmPhrase('zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo');
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
     await waitFor(() => expect(screen.getByText(/doesn't match/i)).toBeDefined());
 
     // Retry with the correct phrase (also exercises whitespace/case tolerance).
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), {
-      target: { value: `  ${MNEMONIC.toUpperCase()}  ` },
-    });
+    pasteConfirmPhrase(`  ${MNEMONIC.toUpperCase()}  `);
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
     await waitFor(() => expect(screen.getByText(/protect your wallet/i)).toBeDefined());
@@ -164,7 +167,7 @@ describe('create flow mnemonic confirmation (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
     await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+    pasteConfirmPhrase(MNEMONIC);
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
     await waitFor(() => expect(screen.getByText(/protect your wallet/i)).toBeDefined());

@@ -103,9 +103,11 @@ async function driveToSetPasswordScreen() {
   );
   fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
-  // Confirm step — re-enter the correct phrase to advance.
+  // Confirm step — re-enter the correct phrase (12-word grid). Pasting the
+  // whole phrase into the first cell fills every cell.
   await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
-  fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+  const confirmCells = screen.getAllByPlaceholderText('word');
+  fireEvent.paste(confirmCells[0], { clipboardData: { getData: () => MNEMONIC } });
   fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
   await waitFor(

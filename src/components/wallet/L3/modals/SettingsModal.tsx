@@ -102,7 +102,11 @@ export function SettingsModal({
             subtitle={undefined}
             showChevron={false}
             onClick={() => {
-              onClose();
+              // Drill-in: open Backup ON TOP of Settings (which stays mounted
+              // behind) instead of closing Settings at the same time. Closing
+              // Settings here made its slide-out panel cross the Backup panel's
+              // slide-in (both animate from the right) — a jarring "two panels
+              // passing through each other" effect. Closing Backup returns here.
               onBackupWallet();
             }}
           />

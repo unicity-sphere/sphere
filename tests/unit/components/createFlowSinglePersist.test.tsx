@@ -108,8 +108,10 @@ describe('create flow persists the wallet exactly once (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
     // Confirm step: re-entering the correct phrase is required to advance.
+    // The confirm screen is a 12-word cell grid; pasting the phrase into the
+    // first cell fills every cell.
     await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
-    fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+    fireEvent.paste(screen.getAllByPlaceholderText('word')[0], { clipboardData: { getData: () => MNEMONIC } });
     fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
     // Lands on the optional SetPasswordScreen next — still not finalized.

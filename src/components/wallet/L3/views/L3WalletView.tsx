@@ -447,11 +447,6 @@ export function L3WalletView({
         pay={paymentRequestsPay}
         clearProcessed={paymentRequestsClearProcessed}
       />
-      <SeedPhraseModal
-        isOpen={isSeedPhraseOpen}
-        onClose={() => setIsSeedPhraseOpen(false)}
-        seedPhrase={seedPhrase}
-      />
       <TransactionHistoryModal isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} />
 
       {/* New Modals */}
@@ -469,6 +464,15 @@ export function L3WalletView({
         onExportWalletFile={handleExportWalletFile}
         onShowRecoveryPhrase={handleShowSeedPhrase}
         hasMnemonic={hasMnemonic}
+      />
+
+      {/* Rendered AFTER Settings/Backup so, when opened from the Backup
+          drill-in (which keeps Settings mounted behind it), the seed screen
+          stacks ON TOP of them instead of being hidden behind the menu. */}
+      <SeedPhraseModal
+        isOpen={isSeedPhraseOpen}
+        onClose={() => setIsSeedPhraseOpen(false)}
+        seedPhrase={seedPhrase}
       />
 
       <LogoutConfirmModal
