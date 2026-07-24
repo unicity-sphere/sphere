@@ -10,6 +10,7 @@ import {
 } from './ConnectContext';
 import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
+import { setActiveConnectHost } from '../../sdk/connectHostRegistry';
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -31,6 +32,10 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       autoIntentHandlersRef.current.clear();
     }
     connectHostRef.current = host;
+    // Mirror into the module-scoped registry so SphereProvider.lock() — an
+    // ANCESTOR in the tree that can't consume this context — can still reach
+    // the live host to notify it before destroying the Sphere instance (#449).
+    setActiveConnectHost(host);
     forceUpdate((n) => n + 1);
   }, []);
 

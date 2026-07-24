@@ -10,6 +10,10 @@ import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } 
 import { sendWelcomeDM } from './welcomeDM';
 import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
 import { classifyInitFailure } from './walletLock/classifyInitFailure';
+import { useIdleTimer } from './walletLock/useIdleTimer';
+import { decodeLockSettings, autoLockMs, DEFAULT_AUTO_LOCK_MINUTES } from './walletLock/lockSettings';
+import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
+import { getActiveConnectHost } from './connectHostRegistry';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -212,6 +216,32 @@ export function SphereProvider({
     SUBSCRIPTION_ENABLED ? 'provisioning' : 'not-required',
   );
   const sphereRef = useRef<Sphere | null>(null);
+  // Session-only wallet password (#449 Task 8a): held ONLY in memory while the
+  // wallet is unlocked, NEVER persisted anywhere (no localStorage/IndexedDB).
+  // Set on a successful unlock() and on createWallet()/importWallet() when the
+  // caller chose an at-rest password; cleared on lock() and deleteWallet().
+  const passwordRef = useRef<string | null>(null);
+  // Idle-auto-lock config derived from the password, computed ONCE per
+  // setSessionPassword() call rather than on every render: decodeLockSettings
+  // runs a PBKDF2 derivation (100k iterations — see sphere-sdk
+  // core/encryption.ts), deliberately slow, and must not re-run on every
+  // unrelated SphereProvider re-render. CRITICAL invariant: a wallet with NO
+  // password (passwordRef.current falsy) always resolves `enabled: false`
+  // here — see the `null`-password branch below.
+  const [idleLockConfig, setIdleLockConfig] = useState<{ enabled: boolean; timeoutMs: number | null }>({
+    enabled: false,
+    timeoutMs: null,
+  });
+  const setSessionPassword = useCallback((password: string | null) => {
+    passwordRef.current = password;
+    if (!password) {
+      setIdleLockConfig({ enabled: false, timeoutMs: null });
+      return;
+    }
+    const storedBlob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
+    const minutes = storedBlob ? decodeLockSettings(storedBlob, password) : DEFAULT_AUTO_LOCK_MINUTES;
+    setIdleLockConfig({ enabled: true, timeoutMs: autoLockMs(minutes) });
+  }, []);
   // Monotonic init generation: only the LATEST initialize() run may adopt its
   // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
   // toggle, unmount) destroys the instance it built instead of leaking it. See
@@ -557,6 +587,11 @@ export function SphereProvider({
           throw new Error('Failed to generate mnemonic');
         }
 
+        // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock
+        // for a freshly-created wallet the same way unlock() does for an
+        // existing one; a wallet created with NO password stays un-armed.
+        if (options?.password) setSessionPassword(options.password);
+
         // Don't set walletExists/sphere here — let finalizeWallet() handle it
         // so the onboarding flow can show the completion screen first.
         return { mnemonic: generatedMnemonic, sphere: instance };
@@ -582,7 +617,7 @@ export function SphereProvider({
         throw err;
       }
     },
-    [providers, network],
+    [providers, network, setSessionPassword],
   );
 
   const resolveNametag = useCallback(
@@ -630,11 +665,15 @@ export function SphereProvider({
       });
       setInitProgress(null);
 
+      // Memory-only (#449 Task 8a) — never persisted. Same as createWallet():
+      // an import with NO password stays un-armed for idle auto-lock.
+      if (options?.password) setSessionPassword(options.password);
+
       // Don't setSphere/setWalletExists here — the onboarding flow calls
       // finalizeWallet(sphere) after address selection / nametag are done.
       return instance;
     },
-    [providers, network],
+    [providers, network, setSessionPassword],
   );
 
   const importFromFile = useCallback(
@@ -744,10 +783,15 @@ export function SphereProvider({
     setSphere(null);
     setWalletExists(false);
     setError(null);
+    // The deleted wallet's password (if any) must not linger in memory, and —
+    // just as important — must not leave the idle-lock timer armed against a
+    // wallet that no longer exists (it would otherwise fire mid-onboarding and
+    // wrongly gate the onboarding UI behind an unlock screen). See #449.
+    setSessionPassword(null);
 
     // Reinitialize with fresh providers (skip loading spinner — onboarding UI is already visible)
     await initialize(0, true);
-  }, [providers, initialize, queryClient]);
+  }, [providers, initialize, queryClient, setSessionPassword]);
 
   // Unlock an encrypted wallet with its password. Re-runs Sphere.init WITH the
   // password (the only place a password is ever passed for an EXISTING
@@ -774,6 +818,8 @@ export function SphereProvider({
       setSphere(inst);
     });
     if (outcome !== 'adopted') return;
+    // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
+    setSessionPassword(password);
     setIsLocked(false);
 
     // Mirror initialize()'s existing-wallet success branch (review parity, #449):
@@ -797,19 +843,53 @@ export function SphereProvider({
     }).finally(() => {
       setIsDiscoveringAddresses(false);
     });
-  }, [providers, network, setupSubscriptionKey]);
+  }, [providers, network, setupSubscriptionKey, setSessionPassword]);
 
   // Lock the wallet: destroy the live Sphere instance (keys leave memory —
   // a real lock, not just a UI gate) and require unlock() again.
-  // NOTE: notifying connected dApps (ConnectHost.notifyWalletLocked) is wired
-  // in a later task once SphereProvider has access to the live ConnectHost ref.
   const lock = useCallback(async () => {
     initGenRef.current++; // supersede any in-flight init
+    // Notify the connected dApp (if any) BEFORE destroying the instance, so it
+    // gets a clean LOCKED event instead of NOT_CONNECTED errors on its next
+    // request. `getActiveConnectHost()` reads the module-scoped mirror in
+    // connectHostRegistry.ts — SphereProvider is an ANCESTOR of ConnectProvider
+    // in the tree (see main.tsx), so it can't `useConnectContext()` directly;
+    // see that file for why. This was deferred from Task 4 (#449).
+    getActiveConnectHost()?.notifyWalletLocked();
     await sphereRef.current?.destroy();
     sphereRef.current = null;
     setSphere(null);
+    // Memory-only password never survives a lock (#449).
+    setSessionPassword(null);
     setIsLocked(true);
-  }, []);
+  }, [setSessionPassword]);
+
+  useIdleTimer({
+    timeoutMs: idleLockConfig.timeoutMs,
+    // CRITICAL invariant: a wallet with NO password (existing plaintext
+    // wallets, or a fresh create/import where the user skipped the password
+    // step) must NEVER auto-lock — `idleLockConfig.enabled` is only ever set
+    // true inside setSessionPassword()'s truthy-password branch, and is
+    // forced back to false by lock()/deleteWallet() (via setSessionPassword
+    // (null)) and by the initial state. `!isLocked` is redundant-but-safe:
+    // every path that sets isLocked true (lock(), and initialize()'s
+    // DECRYPTION_ERROR classification) also clears/never-set the password.
+    enabled: idleLockConfig.enabled && !isLocked,
+    onIdle: () => {
+      // Tell every other tab to lock too, THEN lock this one (order doesn't
+      // matter for correctness — subscribeLockBroadcast below ignores our own
+      // broadcastLock() since it's a fresh BroadcastChannel instance per call
+      // and this tab isn't subscribed to its own post — but keeping broadcast
+      // first means other tabs start locking sooner).
+      broadcastLock();
+      void lock();
+    },
+  });
+
+  // Cross-tab lock (#449 Task 8a): a lock triggered in ANY tab — idle timeout
+  // or an explicit lock() — must lock this one too, so a decrypted Sphere
+  // instance never stays alive in one tab after another tab locked.
+  useEffect(() => subscribeLockBroadcast(undefined, () => { void lock(); }), [lock]);
 
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
     if (importedSphere) {

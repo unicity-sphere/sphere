@@ -42,6 +42,13 @@ export const STORAGE_KEYS = {
   // Per-wallet aggregator subscription API key (cached; also recoverable
   // from identity via the SGW /auth flow). Cleared on wallet deletion.
   SUBSCRIPTION_API_KEY: 'sphere_subscription_api_key',
+
+  // Idle auto-lock timeout, encrypted at rest with the wallet password
+  // (encodeLockSettings/decodeLockSettings — src/sdk/walletLock/lockSettings.ts)
+  // so cold-storage tampering can't silently disable/shorten it. Written by
+  // the Settings "Security" section (#449, separate task); absent means the
+  // secure default (DEFAULT_AUTO_LOCK_MINUTES).
+  AUTO_LOCK_TIMEOUT: 'sphere_auto_lock_timeout',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
