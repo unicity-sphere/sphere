@@ -200,6 +200,46 @@ async function cleanupOnError(providers: BrowserProviders): Promise<void> {
   await Promise.race([clearDone, new Promise(r => setTimeout(r, 3000))]);
 }
 
+/**
+ * Read the auto-lock timeout currently in effect so it can be carried across
+ * a Set/Change password operation (#449 review fix — correctness). The
+ * persisted blob (STORAGE_KEYS.AUTO_LOCK_TIMEOUT) is encrypted with whatever
+ * password was active BEFORE the change, so decoding it needs THAT password,
+ * not the new one. `oldPassword` is `null` for Set (no session password
+ * exists yet — the wallet was plaintext), in which case there is nothing
+ * decryptable and this simply returns the secure default, same as
+ * decodeLockSettings' own fallback.
+ */
+function readCurrentAutoLockMinutes(oldPassword: string | null): AutoLockValue {
+  if (!oldPassword) return DEFAULT_AUTO_LOCK_MINUTES;
+  const blob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
+  return blob ? decodeLockSettings(blob, oldPassword) : DEFAULT_AUTO_LOCK_MINUTES;
+}
+
+/**
+ * Serialize Set/Change/Remove password operations (#449 review fix —
+ * re-entrancy): reencryptStoredMnemonic does a non-atomic read → write →
+ * read-back-verify cycle against the SAME storage key, so two overlapping
+ * calls (a rapid double-submit / Enter-mash getting past the UI's `busy`
+ * guard) could interleave and stomp on each other. This ref-based mutex is
+ * the actual load-bearing guarantee, independent of any UI guard: it rejects
+ * a second call outright instead of letting it run concurrently.
+ */
+async function withPasswordOpLock(
+  busyRef: { current: boolean },
+  fn: () => Promise<void>,
+): Promise<void> {
+  if (busyRef.current) {
+    throw new Error('A password change is already in progress');
+  }
+  busyRef.current = true;
+  try {
+    await fn();
+  } finally {
+    busyRef.current = false;
+  }
+}
+
 // =============================================================================
 // Provider component
 // =============================================================================
@@ -237,6 +277,9 @@ export function SphereProvider({
   // Set on a successful unlock() and on createWallet()/importWallet() when the
   // caller chose an at-rest password; cleared on lock() and deleteWallet().
   const passwordRef = useRef<string | null>(null);
+  // Re-entrancy guard for setWalletPassword/changeWalletPassword/
+  // removeWalletPassword (#449 review fix) — see withPasswordOpLock above.
+  const passwordOpBusyRef = useRef(false);
   // Idle-auto-lock config derived from the password, computed ONCE per
   // setSessionPassword() call rather than on every render: decodeLockSettings
   // runs a PBKDF2 derivation (100k iterations — see sphere-sdk
@@ -926,35 +969,61 @@ export function SphereProvider({
   // wipe the token DB. This touches ONLY the mnemonic storage key.
   const setWalletPassword = useCallback(async (newPassword: string) => {
     if (!providers) throw new Error('Providers not initialized');
-    await reencryptStoredMnemonic(providers.storage, {
-      currentPassword: passwordRef.current,
-      newPassword,
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      // Read BEFORE re-encrypting: preserve whatever auto-lock timeout is
+      // currently in effect so it survives this password change instead of
+      // silently resetting to the default (#449 review fix). There is no
+      // session password yet on the Set path (passwordRef.current is null),
+      // so this resolves to the secure default unless a stray blob exists.
+      const preservedMinutes = readCurrentAutoLockMinutes(passwordRef.current);
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword: passwordRef.current,
+        newPassword,
+      });
+      // Re-persist the preserved timeout under the NEW password BEFORE
+      // arming the session, so setSessionPassword's own blob read below
+      // decodes correctly on the first try instead of falling back to the
+      // default (order matters here).
+      localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(preservedMinutes, newPassword));
+      setSessionPassword(newPassword); // memory-only; arms idle auto-lock with the preserved value
+      setHasWalletPassword(true);
     });
-    setSessionPassword(newPassword); // memory-only; arms idle auto-lock
-    setHasWalletPassword(true);
   }, [providers, setSessionPassword]);
 
   const changeWalletPassword = useCallback(async (currentPassword: string, newPassword: string) => {
     if (!providers) throw new Error('Providers not initialized');
-    // reencryptStoredMnemonic itself verifies currentPassword (decrypts +
-    // validateMnemonic) and throws "Incorrect current password" on mismatch —
-    // nothing is written unless it matches.
-    await reencryptStoredMnemonic(providers.storage, {
-      currentPassword,
-      newPassword,
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      // Same preserve-across-change fix as setWalletPassword, using the
+      // caller-verified currentPassword to decode the existing blob (#449
+      // review fix).
+      const preservedMinutes = readCurrentAutoLockMinutes(currentPassword);
+      // reencryptStoredMnemonic itself verifies currentPassword (decrypts +
+      // validateMnemonic) and throws "Incorrect current password" on mismatch —
+      // nothing is written unless it matches.
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword,
+        newPassword,
+      });
+      localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(preservedMinutes, newPassword));
+      setSessionPassword(newPassword); // re-arms the idle timer with the preserved value
+      setHasWalletPassword(true);
     });
-    setSessionPassword(newPassword);
-    setHasWalletPassword(true);
   }, [providers, setSessionPassword]);
 
   const removeWalletPassword = useCallback(async (currentPassword: string) => {
     if (!providers) throw new Error('Providers not initialized');
-    await reencryptStoredMnemonic(providers.storage, {
-      currentPassword,
-      newPassword: null,
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword,
+        newPassword: null,
+      });
+      // Deliberately does NOT preserve the auto-lock timeout blob: removing
+      // the password disarms auto-lock entirely (no password left to
+      // encrypt it with), so the stale blob is simply orphaned until a
+      // future Set writes a fresh one.
+      setSessionPassword(null); // memory-only; disarms idle auto-lock
+      setHasWalletPassword(false);
     });
-    setSessionPassword(null); // memory-only; disarms idle auto-lock
-    setHasWalletPassword(false);
   }, [providers, setSessionPassword]);
 
   // Settings → Security auto-lock timeout selector. Only meaningful while a

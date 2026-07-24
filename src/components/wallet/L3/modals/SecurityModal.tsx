@@ -86,6 +86,12 @@ export function SecurityModal({ isOpen, onClose }: SecurityModalProps) {
   }, [newPassword, confirmPassword]);
 
   const handleSet = useCallback(async () => {
+    // Re-entrancy guard (#449 review fix): a rapid double-submit / Enter-mash
+    // must not launch a second concurrent setWalletPassword() call. `busy`
+    // has to be a dependency below for this check to see the LATEST value —
+    // otherwise useCallback would keep returning a stale closure that never
+    // observes busy flipping true.
+    if (busy) return;
     const validationError = validateNewPassword();
     if (validationError) {
       setError(validationError);
@@ -101,9 +107,11 @@ export function SecurityModal({ isOpen, onClose }: SecurityModalProps) {
     } finally {
       setBusy(false);
     }
-  }, [newPassword, validateNewPassword, setWalletPassword, goToMenu]);
+  }, [busy, newPassword, validateNewPassword, setWalletPassword, goToMenu]);
 
   const handleChange = useCallback(async () => {
+    // Re-entrancy guard (#449 review fix) — see handleSet.
+    if (busy) return;
     const validationError = validateNewPassword();
     if (validationError) {
       setError(validationError);
@@ -120,9 +128,11 @@ export function SecurityModal({ isOpen, onClose }: SecurityModalProps) {
     } finally {
       setBusy(false);
     }
-  }, [currentPassword, newPassword, validateNewPassword, changeWalletPassword, goToMenu]);
+  }, [busy, currentPassword, newPassword, validateNewPassword, changeWalletPassword, goToMenu]);
 
   const handleRemove = useCallback(async () => {
+    // Re-entrancy guard (#449 review fix) — see handleSet.
+    if (busy) return;
     if (!currentPassword) {
       setError('Enter your current password');
       return;
@@ -137,7 +147,7 @@ export function SecurityModal({ isOpen, onClose }: SecurityModalProps) {
     } finally {
       setBusy(false);
     }
-  }, [currentPassword, removeWalletPassword, goToMenu]);
+  }, [busy, currentPassword, removeWalletPassword, goToMenu]);
 
   return (
     <WalletScreen isOpen={isOpen} onClose={handleClose}>
