@@ -9,6 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
+import { classifyInitFailure } from './walletLock/classifyInitFailure';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -198,6 +199,10 @@ export function SphereProvider({
   const [isLoading, setIsLoading] = useState(true);
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // True when an encrypted wallet exists on disk but hasn't been unlocked with
+  // its password this session (SDK DECRYPTION_ERROR on init) — locked, not
+  // broken (#449). Only a real DECRYPTION_ERROR may flip this true.
+  const [isLocked, setIsLocked] = useState(false);
   const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
@@ -413,12 +418,28 @@ export function SphereProvider({
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
-        const { sphere: instance } = await Sphere.init({
-          ...browserProviders,
-          network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
-          discoverAddresses: false, // Run separately below for UX
-          onProgress: setInitProgress,
-        });
+        // Never pass a `password` on this normal load path — an existing
+        // plaintext wallet must keep loading exactly as before. If the wallet
+        // IS encrypted, this deliberately-passwordless init throws
+        // DECRYPTION_ERROR, which we read as "locked", not a fatal error (#449).
+        let instance: Sphere;
+        try {
+          ({ sphere: instance } = await Sphere.init({
+            ...browserProviders,
+            network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
+            discoverAddresses: false, // Run separately below for UX
+            onProgress: setInitProgress,
+          }));
+        } catch (initErr) {
+          if (classifyInitFailure(initErr) === 'locked') {
+            // A superseded run's lock signal isn't ours to act on — the
+            // latest run (or unmount) already owns the outcome (#453).
+            if (isStale()) return;
+            setIsLocked(true);
+            return;
+          }
+          throw initErr;
+        }
         // Adopt only if we're still the latest init; otherwise destroy the
         // instance we just built so it can't linger as a zombie (#453).
         const outcome = await adoptOrDiscardInstance(instance, isStale, (inst) => {
@@ -527,6 +548,7 @@ export function SphereProvider({
           network,
           autoGenerate: true,
           nametag: options?.nametag,
+          password: options?.password,
           onProgress: setInitProgress,
         });
         setInitProgress(null);
@@ -590,6 +612,7 @@ export function SphereProvider({
         network,
         mnemonic,
         nametag: options?.nametag,
+        password: options?.password,
         onProgress: setInitProgress,
       });
       setInitProgress(null);
@@ -713,6 +736,42 @@ export function SphereProvider({
     await initialize(0, true);
   }, [providers, initialize, queryClient]);
 
+  // Unlock an encrypted wallet with its password. Re-runs Sphere.init WITH the
+  // password (the only place a password is ever passed for an EXISTING
+  // wallet); a wrong password throws DECRYPTION_ERROR, which we let propagate
+  // so the caller (UnlockScreen) can show "wrong password". Reuses the same
+  // initGenRef/adoptOrDiscardInstance re-entrancy guard as initialize() (#453)
+  // so an unlock superseded mid-flight destroys its instance instead of
+  // adopting it.
+  const unlock = useCallback(async (password: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    const gen = ++initGenRef.current;
+    const { sphere: instance } = await Sphere.init({
+      ...providers,
+      network,
+      password,
+      discoverAddresses: false,
+    });
+    const outcome = await adoptOrDiscardInstance(instance, () => gen !== initGenRef.current, (inst) => {
+      setupIpfsSync(inst, providers);
+      sphereRef.current = inst;
+      setSphere(inst);
+    });
+    if (outcome === 'adopted') setIsLocked(false);
+  }, [providers, network]);
+
+  // Lock the wallet: destroy the live Sphere instance (keys leave memory —
+  // a real lock, not just a UI gate) and require unlock() again.
+  // NOTE: notifying connected dApps (ConnectHost.notifyWalletLocked) is wired
+  // in a later task once SphereProvider has access to the live ConnectHost ref.
+  const lock = useCallback(async () => {
+    initGenRef.current++; // supersede any in-flight init
+    await sphereRef.current?.destroy();
+    sphereRef.current = null;
+    setSphere(null);
+    setIsLocked(true);
+  }, []);
+
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
     if (importedSphere) {
       if (providers) setupIpfsSync(importedSphere, providers);
@@ -775,6 +834,9 @@ export function SphereProvider({
     isInitialized: !!sphere,
     walletExists,
     error,
+    isLocked,
+    unlock,
+    lock,
     isDiscoveringAddresses,
     initProgress,
     resolveNametag,

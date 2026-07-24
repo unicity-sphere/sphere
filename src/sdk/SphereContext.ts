@@ -24,6 +24,15 @@ export interface SphereContextValue {
   walletExists: boolean;
   error: Error | null;
 
+  /** True when an encrypted wallet exists on disk but hasn't been unlocked
+   *  with its password this session (SDK DECRYPTION_ERROR) — locked, not broken. */
+  isLocked: boolean;
+  /** Unlock the existing encrypted wallet with its password. Throws (DECRYPTION_ERROR)
+   *  on a wrong password — the caller (UnlockScreen) shows "wrong password". */
+  unlock: (password: string) => Promise<void>;
+  /** Lock the wallet: destroy the live Sphere instance and require unlock() again. */
+  lock: () => Promise<void>;
+
   /** True while background address discovery is running (post-init) */
   isDiscoveringAddresses: boolean;
 
@@ -71,10 +80,12 @@ export interface SphereContextValue {
 
 export interface CreateWalletOptions {
   nametag?: string;
+  password?: string;
 }
 
 export interface ImportWalletOptions {
   nametag?: string;
+  password?: string;
 }
 
 export interface ImportFromFileOptions {
