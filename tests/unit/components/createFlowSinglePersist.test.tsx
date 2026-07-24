@@ -13,15 +13,18 @@
  * also raced the just-published Nostr nametag binding from
  * createWalletThenRegister (#448), risking permanently burning it.
  *
- * The #449 follow-up brought SetPasswordScreen BACK into the create flow
- * (ordering: mnemonicBackup → setPassword → planCapabilities → wallet), but
- * applies a chosen password via the reviewed-SAFE in-place re-encrypt
- * (`setWalletPassword`, not `importWallet`) — see
- * tests/unit/components/createFlowPassword.test.tsx for that path. This test
- * keeps guarding the ORIGINAL regression: the create flow still persists its
- * (plaintext) wallet exactly ONCE via `createWallet()`, and Skipping the new
- * password step still never calls `importWallet` — the SDK call that would
- * `Sphere.clear()` the wallet `createWallet()` just persisted.
+ * The #449 follow-up brought SetPasswordScreen BACK into the create flow, and
+ * a later UX refinement reordered it to ask BEFORE the backup screen
+ * (ordering: processing → setPassword → mnemonicBackup → planCapabilities →
+ * wallet — so the one chosen password can also encrypt the downloaded
+ * backup file). Either way, a chosen password is applied via the
+ * reviewed-SAFE in-place re-encrypt (`setWalletPassword`, not
+ * `importWallet`) — see tests/unit/components/createFlowPassword.test.tsx
+ * for that path. This test keeps guarding the ORIGINAL regression: the
+ * create flow still persists its (plaintext) wallet exactly ONCE via
+ * `createWallet()`, and Skipping the password step still never calls
+ * `importWallet` — the SDK call that would `Sphere.clear()` the wallet
+ * `createWallet()` just persisted.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -90,20 +93,23 @@ describe('create flow persists the wallet exactly once (#449)', () => {
     // createWallet() persists the (plaintext) wallet exactly once.
     await waitFor(() => expect(ctx.createWallet).toHaveBeenCalledTimes(1));
 
-    // Processing screen auto-transitions to the mnemonic backup screen.
+    // Processing screen auto-transitions straight to the optional
+    // SetPasswordScreen (UX refinement: ask BEFORE the backup screen) — it
+    // must NOT finalize directly.
     await waitFor(
-      () => expect(screen.getByRole('button', { name: /saved my recovery phrase/i })).toBeDefined(),
+      () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
       { timeout: 3000 },
     );
-
-    // Confirming the backup now leads to the optional SetPasswordScreen
-    // (#449 follow-up) — it must NOT finalize directly anymore.
-    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
-    await waitFor(() => expect(screen.getByText(/protect your wallet/i)).toBeDefined());
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
 
     // Skip the optional password.
     fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
+
+    // Lands on the mnemonic-backup screen next — still not finalized.
+    await waitFor(() => expect(screen.getByRole('button', { name: /saved my recovery phrase/i })).toBeDefined());
+    expect(ctx.finalizeWallet).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
 
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1), { timeout: 3000 });
 

@@ -2,6 +2,12 @@
  * MnemonicBackupScreen - Shows recovery phrase after wallet creation
  * Allows user to copy, download backup, and confirm before entering wallet
  * Layout matches sphere-extension's MnemonicBackupScreen for consistency
+ *
+ * #449 UX refinement: this screen now runs AFTER the optional setPassword
+ * step, so there's no separate backup-file password input here anymore
+ * (that was the #450 field) — the download reuses whichever wallet password
+ * was just chosen (or none, if skipped). `encrypted` tells the caller which
+ * happened, purely to drive this screen's own label/copy.
  */
 import { motion } from "framer-motion";
 import { ShieldAlert, Copy, Check, Download } from "lucide-react";
@@ -9,17 +15,21 @@ import { useState, useCallback } from "react";
 
 interface MnemonicBackupScreenProps {
   mnemonic: string;
-  onDownloadBackup: (password?: string) => void;
+  /** True when a wallet password was set on the preceding setPassword step —
+   *  the SAME password encrypts this download; false means it will be
+   *  plaintext (password step skipped). */
+  encrypted: boolean;
+  onDownloadBackup: () => void;
   onConfirm: () => void;
 }
 
 export function MnemonicBackupScreen({
   mnemonic,
+  encrypted,
   onDownloadBackup,
   onConfirm,
 }: MnemonicBackupScreenProps) {
   const [copied, setCopied] = useState(false);
-  const [backupPassword, setBackupPassword] = useState("");
   const words = mnemonic.split(" ");
 
   const handleCopy = useCallback(async () => {
@@ -106,31 +116,21 @@ export function MnemonicBackupScreen({
         )}
       </button>
 
-      {/* Optional backup-file encryption password */}
-      <input
-        type="password"
-        value={backupPassword}
-        onChange={(e) => setBackupPassword(e.target.value)}
-        placeholder="Backup file password (optional)"
-        aria-label="Backup file password (optional)"
-        autoComplete="new-password"
-        className="w-full mb-2 px-4 py-2.5 text-sm rounded-xl bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/10 text-neutral-900 dark:text-white placeholder:text-neutral-400 focus:outline-none focus:border-brand-orange/60"
-      />
-
-      {/* Download backup button */}
+      {/* Download backup button — reuses the wallet password from the
+          preceding setPassword step; no separate password entry here. */}
       <button
-        onClick={() => onDownloadBackup(backupPassword || undefined)}
+        onClick={onDownloadBackup}
         className="flex items-center justify-center gap-2 w-full mb-5 px-4 py-2.5 text-sm text-neutral-600 dark:text-[#ffe2cc] border border-neutral-200 dark:border-white/15 hover:bg-neutral-100 dark:hover:bg-white/6 transition-colors rounded-xl"
       >
         <Download className="w-4 h-4" />
-        <span>{backupPassword ? "Download Encrypted Backup" : "Download Backup File"}</span>
+        <span>{encrypted ? "Download Encrypted Backup" : "Download Backup File"}</span>
       </button>
 
       {/* Warning notice */}
       <div className="mb-5 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
         <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-          {backupPassword
-            ? "The backup file is encrypted with this password — you'll need it to restore. Keep both safe. Anyone with your recovery phrase can access your funds."
+          {encrypted
+            ? "This backup file is encrypted with your wallet password — you'll need it to restore. Anyone with your recovery phrase can still access your funds, so keep it safe too."
             : "Without a password the backup file contains your recovery phrase in plain text. Anyone with it can access your wallet and funds — set a password or store it securely."}
         </p>
       </div>

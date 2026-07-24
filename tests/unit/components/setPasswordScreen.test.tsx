@@ -35,4 +35,8 @@ describe('SetPasswordScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: /skip/i }));
     expect(onSkip).toHaveBeenCalled();
   });
+  it('renders an external error (e.g. a failed setWalletPassword) without needing local validation to trigger it', () => {
+    render(<SetPasswordScreen onSet={vi.fn()} onSkip={vi.fn()} error="Failed to set a wallet password" />);
+    expect(screen.getByText('Failed to set a wallet password')).toBeDefined();
+  });
 });

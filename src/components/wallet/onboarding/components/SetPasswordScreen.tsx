@@ -27,25 +27,39 @@ interface SetPasswordScreenProps {
    *  this screen has no other affordance stopping a double-click / a fast
    *  Set-then-Skip from firing two overlapping persist calls). */
   isBusy?: boolean;
+  /**
+   * External failure surfaced by the caller (e.g. `setWalletPassword`
+   * rejecting) — distinct from this screen's own local validation errors
+   * (mismatch / too-short). Without this the caller had no way to report a
+   * failed persist, so the UI would silently advance the user into what
+   * they'd believe was a password-protected wallet while it stayed
+   * plaintext (#449 review fix — see `handleSetPassword`).
+   */
+  error?: string | null;
 }
 
-export function SetPasswordScreen({ onSet, onSkip, isBusy = false }: SetPasswordScreenProps) {
+export function SetPasswordScreen({ onSet, onSkip, isBusy = false, error: externalError = null }: SetPasswordScreenProps) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const handleSet = useCallback(() => {
     if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      setValidationError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords don't match");
+      setValidationError("Passwords don't match");
       return;
     }
-    setError(null);
+    setValidationError(null);
     onSet(password);
   }, [password, confirmPassword, onSet]);
+
+  // Local validation takes priority (it's about what's currently typed);
+  // otherwise surface the caller's error (a failed persist against what was
+  // already submitted).
+  const error = validationError ?? externalError;
 
   return (
     <motion.div

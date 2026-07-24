@@ -72,6 +72,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
     isProcessingComplete,
     handleMnemonicBackupComplete,
     handleDownloadBackup,
+    backupEncrypted,
     handleSetPassword,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
@@ -250,6 +251,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
         {step === "mnemonicBackup" && generatedMnemonic && (
           <MnemonicBackupScreen
             mnemonic={generatedMnemonic}
+            encrypted={backupEncrypted}
             onDownloadBackup={handleDownloadBackup}
             onConfirm={handleMnemonicBackupComplete}
           />
@@ -258,6 +260,7 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
         {step === "setPassword" && (
           <SetPasswordScreen
             isBusy={isBusy}
+            error={error}
             onSet={(password) => void handleSetPassword(password)}
             onSkip={() => void handleSetPassword()}
           />
