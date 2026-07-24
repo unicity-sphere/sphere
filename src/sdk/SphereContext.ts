@@ -3,6 +3,7 @@ import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import type { WalletApiProviderExtras } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
+import type { AutoLockValue } from './walletLock/lockSettings';
 
 /**
  * The app's provider bundle: the browser base, plus — when the asset path
@@ -32,6 +33,38 @@ export interface SphereContextValue {
   unlock: (password: string) => Promise<void>;
   /** Lock the wallet: destroy the live Sphere instance and require unlock() again. */
   lock: () => Promise<void>;
+
+  /**
+   * Settings → Security (#449): whether the wallet CURRENTLY has an at-rest
+   * password (any wallet — including plaintext create-flow wallets that never
+   * set one). Drives the Set vs Change/Remove UI. Derived from the session
+   * password held in memory, OR (when no session password exists yet, e.g. a
+   * cold-start locked wallet) whether the on-disk mnemonic fails to validate
+   * as plaintext BIP39.
+   */
+  hasWalletPassword: boolean;
+  /**
+   * Set an at-rest password on a wallet that doesn't have one yet (including
+   * existing plaintext wallets). In-place mnemonic re-encryption ONLY — never
+   * Sphere.import()/Sphere.clear() (would wipe the token DB). Arms idle
+   * auto-lock on success.
+   */
+  setWalletPassword: (newPassword: string) => Promise<void>;
+  /**
+   * Change the wallet's at-rest password. Verifies `currentPassword` first —
+   * throws (and changes nothing) on a mismatch.
+   */
+  changeWalletPassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  /**
+   * Remove the wallet's at-rest password, returning it to a plaintext
+   * mnemonic. Verifies `currentPassword` first. Disarms idle auto-lock.
+   */
+  removeWalletPassword: (currentPassword: string) => Promise<void>;
+
+  /** Current auto-lock timeout selection (Settings → Security). Only meaningful while a password is set. */
+  autoLockMinutes: AutoLockValue;
+  /** Set the auto-lock timeout; persists an encrypted blob and re-arms the idle timer. No-op without a session password. */
+  setAutoLockTimeout: (value: AutoLockValue) => void;
 
   /** True while background address discovery is running (post-init) */
   isDiscoveringAddresses: boolean;

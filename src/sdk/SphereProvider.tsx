@@ -6,13 +6,29 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
+import {
+  Sphere,
+  TokenRegistry,
+  NETWORKS,
+  logger,
+  isSphereError,
+  getPublicKey,
+  STORAGE_KEYS_GLOBAL,
+  validateMnemonic,
+} from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
 import { classifyInitFailure } from './walletLock/classifyInitFailure';
 import { useIdleTimer } from './walletLock/useIdleTimer';
-import { decodeLockSettings, autoLockMs, DEFAULT_AUTO_LOCK_MINUTES } from './walletLock/lockSettings';
+import {
+  decodeLockSettings,
+  encodeLockSettings,
+  autoLockMs,
+  DEFAULT_AUTO_LOCK_MINUTES,
+  type AutoLockValue,
+} from './walletLock/lockSettings';
 import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
+import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
 import { getActiveConnectHost } from './connectHostRegistry';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
@@ -232,15 +248,43 @@ export function SphereProvider({
     enabled: false,
     timeoutMs: null,
   });
+  // Settings → Security (#449 Task 8b): whether the wallet CURRENTLY has an
+  // at-rest password. True the instant a session password is held
+  // (passwordRef), OR — for the cold-start/locked case where no session
+  // password exists yet — when the on-disk mnemonic itself isn't a valid
+  // plaintext mnemonic (i.e. it's the SDK's encrypted form). Kept as its own
+  // state (not derived inline) because the storage check is async.
+  const [hasWalletPassword, setHasWalletPassword] = useState(false);
+  // Auto-lock timeout shown/edited in Settings → Security. Only meaningful
+  // while a session password is held (the stored blob is encrypted with it);
+  // reset to the secure default whenever there is no password.
+  const [autoLockMinutes, setAutoLockMinutesState] = useState<AutoLockValue>(DEFAULT_AUTO_LOCK_MINUTES);
   const setSessionPassword = useCallback((password: string | null) => {
     passwordRef.current = password;
     if (!password) {
       setIdleLockConfig({ enabled: false, timeoutMs: null });
+      setAutoLockMinutesState(DEFAULT_AUTO_LOCK_MINUTES);
       return;
     }
     const storedBlob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
     const minutes = storedBlob ? decodeLockSettings(storedBlob, password) : DEFAULT_AUTO_LOCK_MINUTES;
     setIdleLockConfig({ enabled: true, timeoutMs: autoLockMs(minutes) });
+    setAutoLockMinutesState(minutes);
+  }, []);
+  // Recompute hasWalletPassword from the on-disk mnemonic — used at cold
+  // start (initialize()) where no session password exists yet to short-circuit
+  // on. A truthy passwordRef always wins without touching storage.
+  const refreshHasWalletPassword = useCallback(async (storage: { get(key: string): Promise<string | null> }) => {
+    if (passwordRef.current) {
+      setHasWalletPassword(true);
+      return;
+    }
+    try {
+      const stored = await storage.get(STORAGE_KEYS_GLOBAL.MNEMONIC);
+      setHasWalletPassword(!!stored && !validateMnemonic(stored));
+    } catch {
+      setHasWalletPassword(false);
+    }
   }, []);
   // Monotonic init generation: only the LATEST initialize() run may adopt its
   // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
@@ -466,6 +510,11 @@ export function SphereProvider({
             // latest run (or unmount) already owns the outcome (#453).
             if (isStale()) return;
             setIsLocked(true);
+            // The wallet is definitely password-protected (that's WHY the
+            // passwordless init just threw DECRYPTION_ERROR) — no need for
+            // the storage round-trip, but reuse the shared setter for a
+            // single source of truth.
+            void refreshHasWalletPassword(browserProviders.storage);
             return;
           }
           throw initErr;
@@ -479,6 +528,7 @@ export function SphereProvider({
         });
         if (outcome === 'discarded') return;
         setInitProgress(null);
+        void refreshHasWalletPassword(browserProviders.storage);
 
         // Readiness for the send gate: 'ready' iff this oracle was built WITH a
         // subscription key. With no key yet we provision below and stay
@@ -551,7 +601,7 @@ export function SphereProvider({
         setIsLoading(false);
       }
     }
-  }, [network, setupSubscriptionKey]);
+  }, [network, setupSubscriptionKey, refreshHasWalletPassword]);
 
   useEffect(() => {
     initialize();
@@ -788,6 +838,9 @@ export function SphereProvider({
     // wallet that no longer exists (it would otherwise fire mid-onboarding and
     // wrongly gate the onboarding UI behind an unlock screen). See #449.
     setSessionPassword(null);
+    // The deleted wallet's on-disk password state is gone with it — a fresh
+    // onboarding starts with no password until the user (re-)sets one.
+    setHasWalletPassword(false);
 
     // Reinitialize with fresh providers (skip loading spinner — onboarding UI is already visible)
     await initialize(0, true);
@@ -821,6 +874,8 @@ export function SphereProvider({
     // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
     setSessionPassword(password);
     setIsLocked(false);
+    // A successful unlock proves the wallet has a password (that's WHY it was locked).
+    setHasWalletPassword(true);
 
     // Mirror initialize()'s existing-wallet success branch (review parity, #449):
     // the destroyed instance took its `identity:changed` reconcile listener with
@@ -862,6 +917,55 @@ export function SphereProvider({
     // Memory-only password never survives a lock (#449).
     setSessionPassword(null);
     setIsLocked(true);
+  }, [setSessionPassword]);
+
+  // Settings → Security (#449 Task 8b): set/change/remove the wallet's at-rest
+  // password via the VERIFIED-SAFE in-place mnemonic re-encryption
+  // (reencryptStoredMnemonic — src/sdk/walletLock/reencryptMnemonic.ts).
+  // CRITICAL: never call Sphere.import()/Sphere.clear() to do this — those
+  // wipe the token DB. This touches ONLY the mnemonic storage key.
+  const setWalletPassword = useCallback(async (newPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    await reencryptStoredMnemonic(providers.storage, {
+      currentPassword: passwordRef.current,
+      newPassword,
+    });
+    setSessionPassword(newPassword); // memory-only; arms idle auto-lock
+    setHasWalletPassword(true);
+  }, [providers, setSessionPassword]);
+
+  const changeWalletPassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    // reencryptStoredMnemonic itself verifies currentPassword (decrypts +
+    // validateMnemonic) and throws "Incorrect current password" on mismatch —
+    // nothing is written unless it matches.
+    await reencryptStoredMnemonic(providers.storage, {
+      currentPassword,
+      newPassword,
+    });
+    setSessionPassword(newPassword);
+    setHasWalletPassword(true);
+  }, [providers, setSessionPassword]);
+
+  const removeWalletPassword = useCallback(async (currentPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    await reencryptStoredMnemonic(providers.storage, {
+      currentPassword,
+      newPassword: null,
+    });
+    setSessionPassword(null); // memory-only; disarms idle auto-lock
+    setHasWalletPassword(false);
+  }, [providers, setSessionPassword]);
+
+  // Settings → Security auto-lock timeout selector. Only meaningful while a
+  // session password is held (the persisted blob is encrypted with it) — a
+  // no-op without one, since there's nothing to arm.
+  const setAutoLockTimeout = useCallback((value: AutoLockValue) => {
+    const password = passwordRef.current;
+    if (!password) return;
+    localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(value, password));
+    // Re-read the (now-updated) blob and re-arm the idle timer with it.
+    setSessionPassword(password);
   }, [setSessionPassword]);
 
   useIdleTimer({
@@ -911,6 +1015,11 @@ export function SphereProvider({
     // successful restore and the shell gate would keep showing the lock
     // screen instead of the freshly-restored wallet.
     setIsLocked(false);
+    // Reflect whatever createWallet()/importWallet() decided: they already
+    // called setSessionPassword() (passwordRef) iff the user chose a password
+    // during onboarding/import — mirror that into hasWalletPassword now that
+    // the wallet is live in Settings.
+    setHasWalletPassword(!!passwordRef.current);
     // The onboarding oracle was built KEYLESS. Wire the subscription key onto this
     // live instance exactly like initialize() does for an existing wallet: resolve
     // / provision it + apply via setOracleApiKey (no full re-init), attach the
@@ -968,6 +1077,12 @@ export function SphereProvider({
     isLocked,
     unlock,
     lock,
+    hasWalletPassword,
+    setWalletPassword,
+    changeWalletPassword,
+    removeWalletPassword,
+    autoLockMinutes,
+    setAutoLockTimeout,
     isDiscoveringAddresses,
     initProgress,
     resolveNametag,

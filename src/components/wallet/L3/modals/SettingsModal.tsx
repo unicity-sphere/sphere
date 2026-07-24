@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';
 import { AddressManagerModal } from './AddressManagerModal';
 import { ConnectedSitesModal } from './ConnectedSitesModal';
 import { SubscriptionModal } from './SubscriptionModal';
+import { SecurityModal } from './SecurityModal';
 import { useUpgrade } from '../../../upgrade';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
+import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 
 interface SettingsModalProps {
@@ -28,7 +30,9 @@ export function SettingsModal({
   const [isAddressManagerOpen, setIsAddressManagerOpen] = useState(false);
   const [isConnectedSitesOpen, setIsConnectedSitesOpen] = useState(false);
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
+  const [isSecurityOpen, setIsSecurityOpen] = useState(false);
   const { openUpgrade } = useUpgrade();
+  const { hasWalletPassword } = useSphereContext();
 
   // Show the active address's current plan in the row subtitle, e.g. "Free plan".
   const util = useUtilization();
@@ -81,6 +85,17 @@ export function SettingsModal({
           )}
 
           <MenuButton
+            icon={ShieldCheck}
+            color="orange"
+            label="Security"
+            subtitle={hasWalletPassword ? 'Password set' : 'Set a password, auto-lock'}
+            onClick={() => {
+              onClose();
+              setIsSecurityOpen(true);
+            }}
+          />
+
+          <MenuButton
             icon={Download}
             color="green"
             label="Backup Wallet"
@@ -124,6 +139,11 @@ export function SettingsModal({
         isOpen={isSubscriptionOpen}
         onClose={() => setIsSubscriptionOpen(false)}
         onUpgrade={() => { setIsSubscriptionOpen(false); openUpgrade('settings'); }}
+      />
+
+      <SecurityModal
+        isOpen={isSecurityOpen}
+        onClose={() => setIsSecurityOpen(false)}
       />
     </>
   );
