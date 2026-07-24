@@ -71,7 +71,9 @@ export function BackupWalletModal({
   };
 
   return (
-    <WalletScreen isOpen={isOpen} onClose={onClose}>
+    // z-20: this screen drills in ON TOP of Settings / Logout (z-10), which stay
+    // mounted behind it — a slide-in over a static parent, no crossing panels.
+    <WalletScreen isOpen={isOpen} onClose={onClose} className="!z-20">
       <ModalHeader variant="screen" title="Backup Wallet" onClose={onClose} />
       <div className="flex-1 flex flex-col justify-center px-6 pb-8">
         <div className="flex flex-col items-center text-center mb-8">
@@ -134,7 +136,8 @@ export function BackupWalletModal({
               subtitle="Download encrypted JSON file"
               showChevron={false}
               onClick={() => {
-                onClose();
+                // Keep this screen mounted (z-20) so the export screen (z-30)
+                // slides in on top instead of crossing a slide-out.
                 onExportWalletFile();
               }}
             />
@@ -147,7 +150,8 @@ export function BackupWalletModal({
               showChevron={false}
               disabled={!hasMnemonic}
               onClick={() => {
-                onClose();
+                // Keep this screen mounted (z-20) so the seed screen (z-30)
+                // slides in on top instead of crossing a slide-out.
                 onShowRecoveryPhrase();
               }}
             />
