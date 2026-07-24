@@ -3,16 +3,14 @@
  * (#449, #449 follow-up)
  *
  * Shown AFTER the seed-backup screen in the create flow, and after the
- * mnemonic is entered/known in the import/restore flow. Purely a form —
+ * addresses are selected in the import/restore flow. Purely a form —
  * validation only (match + min length). The caller (useOnboardingFlow's
- * `handleSetPassword`) decides how the chosen password is applied:
- *  - Restore/import flow: into the wallet's initial `importWallet(mnemonic,
- *    { password })` call — a fresh wallet, nothing persisted yet.
- *  - Create flow: the wallet is ALREADY persisted (plaintext) by this point,
- *    so the password is applied via the reviewed-SAFE in-place mnemonic
- *    re-encrypt (`setWalletPassword` from `useSphereContext()`) — never a
- *    second `importWallet`/`Sphere.import()` call, which would wipe the
- *    token DB. See `handleSetPassword`'s doc-comment for the full history.
+ * `handleSetPassword`) applies the chosen password the SAME way in both
+ * flows: the wallet is ALREADY persisted (plaintext) by this point, so the
+ * password is applied via the reviewed-SAFE in-place mnemonic re-encrypt
+ * (`setWalletPassword` from `useSphereContext()`) — never a second
+ * `importWallet`/`Sphere.import()` call, which would wipe the token DB.
+ * See `handleSetPassword`'s doc-comment for the full history.
  */
 import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
