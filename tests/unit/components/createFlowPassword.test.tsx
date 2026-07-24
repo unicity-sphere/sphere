@@ -1,21 +1,24 @@
 /**
- * #449 UX refinement: the CREATE onboarding flow now asks for the optional
- * at-rest password BEFORE the mnemonic-backup screen (not after) — new
- * ordering: processing → setPassword → mnemonicBackup → planCapabilities →
- * wallet. The ONE password chosen here also encrypts the downloaded backup
- * file (the separate #450 backup-file password input is gone).
+ * #449 create-flow reorder: show -> confirm -> password -> download. The
+ * CREATE onboarding flow now displays the recovery phrase, makes the user
+ * re-enter it to VERIFY the backup (ConfirmMnemonicScreen), THEN asks for
+ * the optional at-rest password, and only THEN offers the backup-file
+ * download — new ordering: processing → mnemonicShow → mnemonicConfirm →
+ * setPassword → backupDownload → planCapabilities → wallet. The ONE password
+ * chosen on setPassword also encrypts the downloaded backup file.
  *
  * This is safe (unlike the original #449 bug — see
  * createFlowSinglePersist.test.tsx) because the wallet is ALREADY persisted
- * (plaintext) by createWallet() before this screen shows, and a chosen
- * password is applied via the reviewed-SAFE in-place re-encrypt
+ * (plaintext) by createWallet() before any of these screens show, and a
+ * chosen password is applied via the reviewed-SAFE in-place re-encrypt
  * (`setWalletPassword`, which wraps `reencryptStoredMnemonic`) — never a
  * second `importWallet()`/`Sphere.import()` call.
  *
  * Covers:
- *  - setPassword shows right after processing, BEFORE the backup screen
+ *  - setPassword shows only AFTER mnemonicShow + mnemonicConfirm, and BEFORE
+ *    the backup-download screen
  *  - choosing a password calls setWalletPassword (never importWallet), then
- *    advances to the backup screen — not finalized yet
+ *    advances to the backup-download screen — not finalized yet
  *  - the SAME password threads into the downloaded backup file
  *  - skipping leaves the backup file plaintext and still finalizes
  *  - a setWalletPassword rejection surfaces an error and does NOT advance
@@ -33,6 +36,9 @@ vi.mock('../../../src/config/subscription', async (orig) => ({
   ...(await orig<typeof import('../../../src/config/subscription')>()),
   SUBSCRIPTION_ENABLED: false,
 }));
+
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const ctx = vi.hoisted(() => {
   const exportToJSON = vi.fn((opts: unknown) => ({ opts }));
@@ -78,8 +84,8 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-/** Drives the create flow (skip-nametag) up to the new setPassword screen —
- *  now the FIRST post-processing step, right before the backup screen. */
+/** Drives the create flow (skip-nametag) all the way through the mnemonic
+ *  show + confirm screens up to the new setPassword screen. */
 async function driveToSetPasswordScreen() {
   render(<CreateWalletFlow />, { wrapper: Wrapper });
 
@@ -89,6 +95,18 @@ async function driveToSetPasswordScreen() {
   fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
 
   await waitFor(() => expect(ctx.createWallet).toHaveBeenCalledTimes(1));
+
+  // Show step first.
+  await waitFor(
+    () => expect(screen.getByText(/back up recovery phrase/i)).toBeDefined(),
+    { timeout: 3000 },
+  );
+  fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+
+  // Confirm step — re-enter the correct phrase to advance.
+  await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
+  fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+  fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
 
   await waitFor(
     () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
@@ -105,16 +123,16 @@ beforeEach(() => {
   ctx.exportToJSON.mockClear();
 });
 
-describe('create flow optional password step (#449 UX refinement: ask BEFORE backup)', () => {
-  it('shows setPassword right after processing completes, before the backup screen', async () => {
+describe('create flow ordering: show -> confirm -> password -> download (#449)', () => {
+  it('shows setPassword only after mnemonicShow + mnemonicConfirm, before the backup-download screen', async () => {
     await driveToSetPasswordScreen();
 
     expect(screen.getByText(/protect your wallet/i)).toBeDefined();
-    expect(screen.queryByText(/back up recovery phrase/i)).toBeNull();
+    expect(screen.queryByText(/download wallet backup/i)).toBeNull();
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
   });
 
-  it('choosing a password calls setWalletPassword (never importWallet), advances to the backup screen (not finalized), and the SAME password encrypts the downloaded backup', async () => {
+  it('choosing a password calls setWalletPassword (never importWallet), advances to the backup-download screen (not finalized), and the SAME password encrypts the downloaded backup', async () => {
     await driveToSetPasswordScreen();
 
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'my-secret-1' } });
@@ -123,8 +141,8 @@ describe('create flow optional password step (#449 UX refinement: ask BEFORE bac
 
     await waitFor(() => expect(ctx.setWalletPassword).toHaveBeenCalledWith('my-secret-1'));
 
-    // Advances to the mnemonic-backup screen next — NOT finalized yet.
-    await waitFor(() => expect(screen.getByText(/back up recovery phrase/i)).toBeDefined());
+    // Advances to the backup-download screen next — NOT finalized yet.
+    await waitFor(() => expect(screen.getByText(/download wallet backup/i)).toBeDefined());
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
     expect(ctx.importWallet).not.toHaveBeenCalled();
 
@@ -137,8 +155,8 @@ describe('create flow optional password step (#449 UX refinement: ask BEFORE bac
       expect.objectContaining({ password: 'my-secret-1' }),
     );
 
-    // Confirming the backup finalizes.
-    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+    // Continuing from the download screen finalizes.
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1));
     expect(ctx.createWallet).toHaveBeenCalledTimes(1);
   });
@@ -148,14 +166,14 @@ describe('create flow optional password step (#449 UX refinement: ask BEFORE bac
 
     fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
 
-    await waitFor(() => expect(screen.getByText(/back up recovery phrase/i)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/download wallet backup/i)).toBeDefined());
     const downloadButton = screen.getByRole('button', { name: /^download backup file$/i });
     fireEvent.click(downloadButton);
     expect(ctx.exportToJSON).toHaveBeenCalledWith(
       expect.objectContaining({ password: undefined }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1));
 
     expect(ctx.setWalletPassword).not.toHaveBeenCalled();
@@ -179,14 +197,14 @@ describe('create flow optional password step (#449 UX refinement: ask BEFORE bac
     // advance to a plaintext wallet believing it's protected.
     await waitFor(() => expect(screen.getByText(/re-encrypt failed/i)).toBeDefined());
     expect(screen.getByText(/protect your wallet/i)).toBeDefined();
-    expect(screen.queryByText(/back up recovery phrase/i)).toBeNull();
+    expect(screen.queryByText(/download wallet backup/i)).toBeNull();
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
     expect(ctx.importWallet).not.toHaveBeenCalled();
 
     // The user can still Skip from here — never stuck, never wiped.
     fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
-    await waitFor(() => expect(screen.getByText(/back up recovery phrase/i)).toBeDefined());
-    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+    await waitFor(() => expect(screen.getByText(/download wallet backup/i)).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1));
   });
 });

@@ -1,23 +1,24 @@
 /**
  * #449 CRITICAL no-wallet-loss regression (guard kept green through the #449
- * follow-up that re-introduced SetPasswordScreen in the create flow): the
- * create flow used to route through SetPasswordScreen (after the
- * mnemonic-backup screen) and, if the user chose a password, run a SECOND
- * `importWallet()` call on the wallet `createWallet()` had already persisted
- * moments earlier. `importWallet` wraps the SDK's `Sphere.import()`, which
- * unconditionally `Sphere.clear()`s any already-persisted wallet before
- * rebuilding it — if that rebuild then failed (a network hiccup during
- * identity/nametag sync, etc.), storage was left cleared while the app kept
- * using the in-memory instance for the rest of the session, so on next
- * reload the wallet could show unexpectedly LOCKED or vanish entirely. It
- * also raced the just-published Nostr nametag binding from
- * createWalletThenRegister (#448), risking permanently burning it.
+ * follow-up that re-introduced SetPasswordScreen in the create flow, and the
+ * later reorder that inserted a real mnemonic show/confirm verification
+ * before it): the create flow used to route through SetPasswordScreen and,
+ * if the user chose a password, run a SECOND `importWallet()` call on the
+ * wallet `createWallet()` had already persisted moments earlier.
+ * `importWallet` wraps the SDK's `Sphere.import()`, which unconditionally
+ * `Sphere.clear()`s any already-persisted wallet before rebuilding it — if
+ * that rebuild then failed (a network hiccup during identity/nametag sync,
+ * etc.), storage was left cleared while the app kept using the in-memory
+ * instance for the rest of the session, so on next reload the wallet could
+ * show unexpectedly LOCKED or vanish entirely. It also raced the
+ * just-published Nostr nametag binding from createWalletThenRegister (#448),
+ * risking permanently burning it.
  *
  * The #449 follow-up brought SetPasswordScreen BACK into the create flow, and
- * a later UX refinement reordered it to ask BEFORE the backup screen
- * (ordering: processing → setPassword → mnemonicBackup → planCapabilities →
- * wallet — so the one chosen password can also encrypt the downloaded
- * backup file). Either way, a chosen password is applied via the
+ * a later reorder (show -> confirm -> password -> download) inserted a real
+ * mnemonic re-entry verification (ConfirmMnemonicScreen) before it, so the
+ * one chosen password can still encrypt the downloaded backup file shown
+ * right after it. Either way, a chosen password is applied via the
  * reviewed-SAFE in-place re-encrypt (`setWalletPassword`, not
  * `importWallet`) — see tests/unit/components/createFlowPassword.test.tsx
  * for that path. This test keeps guarding the ORIGINAL regression: the
@@ -79,6 +80,9 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+const MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
 describe('create flow persists the wallet exactly once (#449)', () => {
   it('never calls importWallet; createWallet() is the ONLY persisting call, and skipping the password step finalizes with no re-encrypt', async () => {
     render(<CreateWalletFlow />, { wrapper: Wrapper });
@@ -93,9 +97,22 @@ describe('create flow persists the wallet exactly once (#449)', () => {
     // createWallet() persists the (plaintext) wallet exactly once.
     await waitFor(() => expect(ctx.createWallet).toHaveBeenCalledTimes(1));
 
-    // Processing screen auto-transitions straight to the optional
-    // SetPasswordScreen (UX refinement: ask BEFORE the backup screen) — it
-    // must NOT finalize directly.
+    // Processing screen auto-transitions to the mnemonic SHOW screen first
+    // (ordering: show → confirm → setPassword → backupDownload → finalize)
+    // — it must NOT finalize directly.
+    await waitFor(
+      () => expect(screen.getByText(/back up recovery phrase/i)).toBeDefined(),
+      { timeout: 3000 },
+    );
+    expect(ctx.finalizeWallet).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+
+    // Confirm step: re-entering the correct phrase is required to advance.
+    await waitFor(() => expect(screen.getByText(/confirm recovery phrase/i)).toBeDefined());
+    fireEvent.change(screen.getByLabelText(/recovery phrase/i), { target: { value: MNEMONIC } });
+    fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }));
+
+    // Lands on the optional SetPasswordScreen next — still not finalized.
     await waitFor(
       () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
       { timeout: 3000 },
@@ -105,11 +122,11 @@ describe('create flow persists the wallet exactly once (#449)', () => {
     // Skip the optional password.
     fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
 
-    // Lands on the mnemonic-backup screen next — still not finalized.
-    await waitFor(() => expect(screen.getByRole('button', { name: /saved my recovery phrase/i })).toBeDefined());
+    // Lands on the backup-download screen next — still not finalized.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^continue$/i })).toBeDefined());
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
 
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1), { timeout: 3000 });
 

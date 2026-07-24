@@ -30,8 +30,10 @@ export type OnboardingStep =
   | "addressSelection"
   | "nametag"
   | "processing"
-  | "mnemonicBackup"
+  | "mnemonicShow"
+  | "mnemonicConfirm"
   | "setPassword"
+  | "backupDownload"
   | "planCapabilities";
 
 export interface UseOnboardingFlowReturn {
@@ -65,13 +67,30 @@ export interface UseOnboardingFlowReturn {
   processingCompleteTitle: string;
   isProcessingComplete: boolean;
   handleCompleteOnboarding: () => Promise<void>;
-  handleMnemonicBackupComplete: () => void;
+  /**
+   * Advances from the mnemonic SHOW step to the mnemonic CONFIRM step
+   * (#449 create-flow reorder: show -> confirm -> password -> download).
+   */
+  handleMnemonicShowContinue: () => void;
+  /**
+   * Verifies the re-entered recovery phrase against `generatedMnemonic`
+   * (both sides normalized: trim / collapse whitespace / lowercase). On a
+   * match, advances to `setPassword`; on a mismatch, surfaces an inline
+   * `error` and stays on the confirm step — never advances on a wrong
+   * phrase.
+   */
+  handleConfirmMnemonic: (entered: string) => void;
+  /** Returns from the mnemonic CONFIRM step back to the SHOW step. */
+  handleMnemonicConfirmBack: () => void;
+  /** Finalizes the wallet after the backup-download step. */
+  handleBackupDownloadComplete: () => void;
   handleDownloadBackup: () => Promise<void>;
   /**
    * True once a wallet password was set in this create flow's `setPassword`
-   * step (which now runs BEFORE the backup screen). The SAME password is
-   * what `handleDownloadBackup` threads into the exported backup file, so
-   * this also tells `MnemonicBackupScreen` which label/copy to show.
+   * step (which now runs BEFORE the backup-download screen). The SAME
+   * password is what `handleDownloadBackup` threads into the exported backup
+   * file, so this also tells `BackupDownloadScreen` which label/copy to
+   * show.
    */
   backupEncrypted: boolean;
   /**
@@ -81,10 +100,11 @@ export interface UseOnboardingFlowReturn {
    *    mnemonic, so the chosen (or skipped) password threads straight into
    *    the ONE `importWallet` call that creates it.
    *  - Create: the wallet is ALREADY persisted (plaintext) by the time this
-   *    screen shows, so a chosen password is applied via the reviewed-SAFE
-   *    in-place re-encrypt (`setWalletPassword` from `useSphereContext()`) —
-   *    never a second `importWallet()`/`Sphere.import()` call, which would be
-   *    a wallet-loss/lockout hazard (it unconditionally `Sphere.clear()`s
+   *    screen shows (reached via show -> confirm -> here), so a chosen
+   *    password is applied via the reviewed-SAFE in-place re-encrypt
+   *    (`setWalletPassword` from `useSphereContext()`) — never a second
+   *    `importWallet()`/`Sphere.import()` call, which would be a
+   *    wallet-loss/lockout hazard (it unconditionally `Sphere.clear()`s
    *    existing storage before rebuilding). See the implementation comment
    *    for full detail.
    * Omit `password` to skip.
@@ -174,7 +194,17 @@ export function useOnboardingFlow(
   // restore/import flow's last step before its one-and-only persisting
   // importWallet() call, and (since #449 follow-up) the create flow's
   // optional in-place re-encrypt (setWalletPassword) before finalizing.
-  const isProcessingActive = step === "processing" || step === "mnemonicBackup" || step === "setPassword";
+  // "mnemonicShow"/"mnemonicConfirm"/"backupDownload" (#449 create-flow
+  // reorder) are also covered: the create flow's wallet is already
+  // persisted (plaintext) by the time these show, so a reload mid-flow
+  // would silently drop the user back to onboarding while a real wallet
+  // sits on disk — same hazard the original guard was written for.
+  const isProcessingActive =
+    step === "processing" ||
+    step === "mnemonicShow" ||
+    step === "mnemonicConfirm" ||
+    step === "setPassword" ||
+    step === "backupDownload";
   useEffect(() => {
     if (!isProcessingActive) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -723,14 +753,16 @@ export function useOnboardingFlow(
   }, [sphere, network, finishFinalize]);
 
   // Auto-transition when processing completes. Create flow ordering (#449
-  // UX refinement): setPassword now runs BEFORE mnemonicBackup, so the one
-  // password chosen there can also encrypt the backup file shown right
-  // after it (see handleSetPassword / handleDownloadBackup).
+  // reorder): show -> confirm -> setPassword -> backupDownload -> finalize.
+  // The mnemonic must be SHOWN and re-entry VERIFIED before the optional
+  // password step, so the one password chosen there can still encrypt the
+  // backup-download file shown right after it (see handleSetPassword /
+  // handleDownloadBackup).
   useEffect(() => {
     if (isProcessingComplete && step === "processing") {
       const timer = setTimeout(() => {
         if (isCreateFlowRef.current && generatedMnemonic) {
-          setStep("setPassword");
+          setStep("mnemonicShow");
         } else {
           void doFinalizeWallet();
         }
@@ -744,13 +776,41 @@ export function useOnboardingFlow(
     void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
-  // Action: Confirm mnemonic backup (called after user saves recovery phrase
-  // and optionally downloads the backup file). #449 UX refinement: this is
-  // now the LAST create-flow step — setPassword already ran right after
-  // processing, BEFORE this screen (ordering: processing → setPassword →
-  // mnemonicBackup → planCapabilities → wallet) — so confirming here just
-  // finalizes.
-  const handleMnemonicBackupComplete = useCallback(() => {
+  // Action: advance from the mnemonic SHOW step to the mnemonic CONFIRM step
+  // (#449 create-flow reorder: processing → mnemonicShow → mnemonicConfirm →
+  // setPassword → backupDownload → planCapabilities → wallet).
+  const handleMnemonicShowContinue = useCallback(() => {
+    setError(null);
+    setStep("mnemonicConfirm");
+  }, []);
+
+  // Action: verify the re-entered recovery phrase (#449 real backup
+  // verification). Both sides are normalized — trimmed, internal whitespace
+  // collapsed to single spaces, lowercased — before comparison, so stray
+  // spacing/casing from the textarea doesn't cause a false mismatch. Only an
+  // EXACT match (post-normalization) advances to the optional password step;
+  // a mismatch surfaces an inline error and does NOT advance, so a user who
+  // mistyped (or never actually wrote the phrase down) can't proceed
+  // believing they have a working backup.
+  const handleConfirmMnemonic = useCallback((entered: string) => {
+    const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!generatedMnemonic || normalize(entered) !== normalize(generatedMnemonic)) {
+      setError("Recovery phrase doesn't match. Please check the words and try again.");
+      return;
+    }
+    setError(null);
+    setStep("setPassword");
+  }, [generatedMnemonic]);
+
+  // Action: back out of the CONFIRM step to re-view the phrase on SHOW.
+  const handleMnemonicConfirmBack = useCallback(() => {
+    setError(null);
+    setStep("mnemonicShow");
+  }, []);
+
+  // Action: finalize after the backup-download step (the LAST create-flow
+  // step — setPassword already ran right before it).
+  const handleBackupDownloadComplete = useCallback(() => {
     void doFinalizeWallet();
   }, [doFinalizeWallet]);
 
@@ -764,9 +824,10 @@ export function useOnboardingFlow(
   //     creates it; no re-encryption/re-persist step is ever needed.
   //
   //  2. Create flow (handleSkipNametag/handleMintNametag's processing
-  //     auto-transition above; no pending restore mnemonic). #449 UX
-  //     refinement: this now runs BEFORE the backup screen (ordering:
-  //     processing → setPassword → mnemonicBackup → planCapabilities →
+  //     auto-transition above; no pending restore mnemonic). #449 reorder:
+  //     this now runs AFTER the mnemonic show/confirm screens and BEFORE the
+  //     backup-download screen (ordering: processing → mnemonicShow →
+  //     mnemonicConfirm → setPassword → backupDownload → planCapabilities →
   //     wallet). The wallet was ALREADY persisted (plaintext) moments
   //     earlier by createWallet()/createWalletThenRegister() (#448's
   //     create-without-nametag step) — by the time this screen shows, there
@@ -821,7 +882,7 @@ export function useOnboardingFlow(
           } catch (e) {
             // Self-restoring on failure (see doc-comment above) — the
             // wallet is never at risk. Surface the failure and stay on this
-            // screen (do NOT advance to mnemonicBackup) so the user can
+            // screen (do NOT advance to backupDownload) so the user can
             // retry or explicitly Skip.
             const message = e instanceof Error ? e.message : "Failed to set a wallet password";
             setError(message);
@@ -834,7 +895,7 @@ export function useOnboardingFlow(
         } else {
           createBackupPasswordRef.current = null;
         }
-        setStep("mnemonicBackup");
+        setStep("backupDownload");
       } finally {
         isPersistingRef.current = false;
         setIsBusy(false);
@@ -1093,7 +1154,10 @@ export function useOnboardingFlow(
     processingCompleteTitle,
     isProcessingComplete,
     handleCompleteOnboarding,
-    handleMnemonicBackupComplete,
+    handleMnemonicShowContinue,
+    handleConfirmMnemonic,
+    handleMnemonicConfirmBack,
+    handleBackupDownloadComplete,
     handleDownloadBackup,
     backupEncrypted: createBackupPasswordRef.current !== null,
     handleSetPassword,

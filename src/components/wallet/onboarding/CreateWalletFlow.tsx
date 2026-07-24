@@ -17,7 +17,9 @@ import {
   AddressSelectionScreen,
   NametagScreen,
   ProcessingScreen,
-  MnemonicBackupScreen,
+  MnemonicShowScreen,
+  ConfirmMnemonicScreen,
+  BackupDownloadScreen,
   SetPasswordScreen,
   PlanCapabilitiesScreen,
 } from "./components";
@@ -70,7 +72,10 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
     processingTitle,
     processingCompleteTitle,
     isProcessingComplete,
-    handleMnemonicBackupComplete,
+    handleMnemonicShowContinue,
+    handleConfirmMnemonic,
+    handleMnemonicConfirmBack,
+    handleBackupDownloadComplete,
     handleDownloadBackup,
     backupEncrypted,
     handleSetPassword,
@@ -117,7 +122,12 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
   // Block navigation clicks outside wallet panel during critical steps.
   // Sets pointer-events:none on body, re-enables on wallet panel and on
   // fixed/absolute modals (z-100) so Connect intents still work.
-  const isLocked = step === "processing" || step === "mnemonicBackup" || step === "setPassword";
+  const isLocked =
+    step === "processing" ||
+    step === "mnemonicShow" ||
+    step === "mnemonicConfirm" ||
+    step === "setPassword" ||
+    step === "backupDownload";
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -248,12 +258,18 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
           />
         )}
 
-        {step === "mnemonicBackup" && generatedMnemonic && (
-          <MnemonicBackupScreen
+        {step === "mnemonicShow" && generatedMnemonic && (
+          <MnemonicShowScreen
             mnemonic={generatedMnemonic}
-            encrypted={backupEncrypted}
-            onDownloadBackup={handleDownloadBackup}
-            onConfirm={handleMnemonicBackupComplete}
+            onContinue={handleMnemonicShowContinue}
+          />
+        )}
+
+        {step === "mnemonicConfirm" && (
+          <ConfirmMnemonicScreen
+            error={error}
+            onSubmit={handleConfirmMnemonic}
+            onBack={handleMnemonicConfirmBack}
           />
         )}
 
@@ -263,6 +279,14 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
             error={error}
             onSet={(password) => void handleSetPassword(password)}
             onSkip={() => void handleSetPassword()}
+          />
+        )}
+
+        {step === "backupDownload" && (
+          <BackupDownloadScreen
+            encrypted={backupEncrypted}
+            onDownloadBackup={handleDownloadBackup}
+            onContinue={handleBackupDownloadComplete}
           />
         )}
 
