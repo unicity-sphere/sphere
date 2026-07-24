@@ -23,7 +23,8 @@ export function useIdleTimer(opts: {
     const channelName = opts.channelName ?? 'sphere-wallet-activity';
 
     let timer: ReturnType<typeof setTimeout>;
-    let lastBroadcast = 0;
+    // -Infinity so the very first activity is never throttle-gated (see #449 review).
+    let lastBroadcast = -Infinity;
     const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(channelName) : null;
 
     const arm = () => {
