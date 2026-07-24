@@ -12,3 +12,4 @@ export { NametagScreen, type NametagAvailability } from "./NametagScreen";
 export { ProcessingScreen } from "./ProcessingScreen";
 export { MnemonicBackupScreen } from "./MnemonicBackupScreen";
 export { PlanCapabilitiesScreen } from "./PlanCapabilitiesScreen";
+export { UnlockScreen } from "./UnlockScreen";

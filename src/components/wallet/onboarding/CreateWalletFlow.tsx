@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useSphereContext } from "../../../sdk/hooks/core/useSphere";
-import { useOnboardingFlow } from "./hooks/useOnboardingFlow";
+import { useOnboardingFlow, type OnboardingStep } from "./hooks/useOnboardingFlow";
 
 // Import screen components
 import {
@@ -23,7 +23,7 @@ import {
 
 export type { OnboardingStep } from "./hooks/useOnboardingFlow";
 
-export function CreateWalletFlow() {
+export function CreateWalletFlow({ initialStep }: { initialStep?: OnboardingStep } = {}) {
   const { initProgress } = useSphereContext();
   const progressMessage = initProgress?.message ?? null;
 
@@ -96,7 +96,7 @@ export function CreateWalletFlow() {
     // Wallet context
     identity,
     nametag,
-  } = useOnboardingFlow();
+  } = useOnboardingFlow(initialStep);
 
   // Block navigation clicks outside wallet panel during critical steps.
   // Sets pointer-events:none on body, re-enables on wallet panel and on

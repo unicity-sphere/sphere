@@ -806,6 +806,12 @@ export function SphereProvider({
       sendWelcomeDM(importedSphere);
     }
     setWalletExists(true);
+    // Clear a stale lock flag: finalizeWallet() is also the exit of the
+    // UnlockScreen's "forgot password → restore from recovery phrase" path
+    // (#449). Without this, isLocked would stay true forever after a
+    // successful restore and the shell gate would keep showing the lock
+    // screen instead of the freshly-restored wallet.
+    setIsLocked(false);
     // The onboarding oracle was built KEYLESS. Wire the subscription key onto this
     // live instance exactly like initialize() does for an existing wallet: resolve
     // / provision it + apply via setOracleApiKey (no full re-init), attach the

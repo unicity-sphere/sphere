@@ -105,15 +105,18 @@ export interface UseOnboardingFlowReturn {
   generatedMnemonic: string | null;
 }
 
-export function useOnboardingFlow(): UseOnboardingFlowReturn {
+export function useOnboardingFlow(initialStep?: OnboardingStep): UseOnboardingFlowReturn {
   const queryClient = useQueryClient();
   const { sphere, network, createWallet, resolveNametag, importWallet, importFromFile, finalizeWallet, walletExists, initProgress } = useSphereContext();
 
   // Step management — start at "nametag" only if wallet is fully finalized but missing nametag
   // (e.g. page refresh after wallet creation without nametag).
   // During import flow, walletExists is false (deferred to finalizeWallet) so we always start at "start".
+  // `initialStep` (e.g. "restoreMethod") lets a caller drop the user straight
+  // into a specific screen — used by the UnlockScreen "forgot password" escape
+  // (#449) so it doesn't have to re-click through the start screen.
   const [step, setStep] = useState<OnboardingStep>(
-    sphere && walletExists && !sphere.identity?.nametag ? "nametag" : "start"
+    initialStep ?? (sphere && walletExists && !sphere.identity?.nametag ? "nametag" : "start")
   );
 
   // Common state
