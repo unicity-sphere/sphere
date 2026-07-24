@@ -1,14 +1,18 @@
 /**
- * SetPasswordScreen - optional at-rest password step for onboarding + import (#449)
+ * SetPasswordScreen - optional at-rest password step for onboarding + import
+ * (#449, #449 follow-up)
  *
  * Shown AFTER the seed-backup screen in the create flow, and after the
  * mnemonic is entered/known in the import/restore flow. Purely a form —
- * validation only (match + min length). The caller decides how the chosen
- * password is applied; the ONLY safe application of a password here is into
- * the wallet's initial `createWallet({ password })` / `importWallet(mnemonic,
- * { password })` call (a fresh wallet, nothing to lose) — never an in-place
- * re-encrypt of an already-persisted wallet (that's the Settings "set
- * password" flow on an existing wallet, a separate task).
+ * validation only (match + min length). The caller (useOnboardingFlow's
+ * `handleSetPassword`) decides how the chosen password is applied:
+ *  - Restore/import flow: into the wallet's initial `importWallet(mnemonic,
+ *    { password })` call — a fresh wallet, nothing persisted yet.
+ *  - Create flow: the wallet is ALREADY persisted (plaintext) by this point,
+ *    so the password is applied via the reviewed-SAFE in-place mnemonic
+ *    re-encrypt (`setWalletPassword` from `useSphereContext()`) — never a
+ *    second `importWallet`/`Sphere.import()` call, which would wipe the
+ *    token DB. See `handleSetPassword`'s doc-comment for the full history.
  */
 import { useState, useCallback } from "react";
 import { motion } from "framer-motion";

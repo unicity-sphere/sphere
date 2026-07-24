@@ -1,23 +1,27 @@
 /**
- * #449 CRITICAL no-wallet-loss regression: the create flow used to route
- * through SetPasswordScreen (after the mnemonic-backup screen) and, if the
- * user chose a password, run a SECOND `importWallet()` call on the wallet
- * `createWallet()` had already persisted moments earlier. `importWallet`
- * wraps the SDK's `Sphere.import()`, which unconditionally `Sphere.clear()`s
- * any already-persisted wallet before rebuilding it — if that rebuild then
- * failed (a network hiccup during identity/nametag sync, etc.), storage was
- * left cleared while the app kept using the in-memory instance for the rest
- * of the session, so on next reload the wallet could show unexpectedly
- * LOCKED or vanish entirely. It also raced the just-published Nostr nametag
- * binding from createWalletThenRegister (#448), risking permanently burning
- * it.
+ * #449 CRITICAL no-wallet-loss regression (guard kept green through the #449
+ * follow-up that re-introduced SetPasswordScreen in the create flow): the
+ * create flow used to route through SetPasswordScreen (after the
+ * mnemonic-backup screen) and, if the user chose a password, run a SECOND
+ * `importWallet()` call on the wallet `createWallet()` had already persisted
+ * moments earlier. `importWallet` wraps the SDK's `Sphere.import()`, which
+ * unconditionally `Sphere.clear()`s any already-persisted wallet before
+ * rebuilding it — if that rebuild then failed (a network hiccup during
+ * identity/nametag sync, etc.), storage was left cleared while the app kept
+ * using the in-memory instance for the rest of the session, so on next
+ * reload the wallet could show unexpectedly LOCKED or vanish entirely. It
+ * also raced the just-published Nostr nametag binding from
+ * createWalletThenRegister (#448), risking permanently burning it.
  *
- * Fixed by removing the create flow's use of SetPasswordScreen entirely: the
- * create flow now persists its (plaintext) wallet exactly ONCE, via
- * `createWallet()`, and finalizes straight from the mnemonic-backup screen.
- * This test asserts `importWallet` is never invoked anywhere in the
- * skip-nametag create path, `createWallet` runs exactly once, and the
- * SetPasswordScreen ("Protect Your Wallet") never appears in that flow.
+ * The #449 follow-up brought SetPasswordScreen BACK into the create flow
+ * (ordering: mnemonicBackup → setPassword → planCapabilities → wallet), but
+ * applies a chosen password via the reviewed-SAFE in-place re-encrypt
+ * (`setWalletPassword`, not `importWallet`) — see
+ * tests/unit/components/createFlowPassword.test.tsx for that path. This test
+ * keeps guarding the ORIGINAL regression: the create flow still persists its
+ * (plaintext) wallet exactly ONCE via `createWallet()`, and Skipping the new
+ * password step still never calls `importWallet` — the SDK call that would
+ * `Sphere.clear()` the wallet `createWallet()` just persisted.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -45,6 +49,7 @@ const ctx = vi.hoisted(() => ({
   finalizeWallet: vi.fn(),
   resolveNametag: vi.fn(async () => null),
   importFromFile: vi.fn(),
+  setWalletPassword: vi.fn(async () => {}),
 }));
 
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
@@ -58,6 +63,7 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
     finalizeWallet: ctx.finalizeWallet,
     walletExists: false,
     initProgress: null,
+    setWalletPassword: ctx.setWalletPassword,
   }),
 }));
 
@@ -71,7 +77,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 }
 
 describe('create flow persists the wallet exactly once (#449)', () => {
-  it('never calls importWallet; createWallet() is the ONLY persisting call and the backup screen finalizes directly', async () => {
+  it('never calls importWallet; createWallet() is the ONLY persisting call, and skipping the password step finalizes with no re-encrypt', async () => {
     render(<CreateWalletFlow />, { wrapper: Wrapper });
 
     // Start → "Create New Wallet"
@@ -90,19 +96,23 @@ describe('create flow persists the wallet exactly once (#449)', () => {
       { timeout: 3000 },
     );
 
-    // The create flow must NOT offer a SetPasswordScreen anywhere.
-    expect(screen.queryByText(/protect your wallet/i)).toBeNull();
-
-    // Confirming the backup finalizes directly — no intervening setPassword step.
+    // Confirming the backup now leads to the optional SetPasswordScreen
+    // (#449 follow-up) — it must NOT finalize directly anymore.
     fireEvent.click(screen.getByRole('button', { name: /saved my recovery phrase/i }));
+    await waitFor(() => expect(screen.getByText(/protect your wallet/i)).toBeDefined());
+    expect(ctx.finalizeWallet).not.toHaveBeenCalled();
+
+    // Skip the optional password.
+    fireEvent.click(screen.getByRole('button', { name: /^skip$/i }));
 
     await waitFor(() => expect(ctx.finalizeWallet).toHaveBeenCalledTimes(1), { timeout: 3000 });
 
     // The critical assertion: importWallet — the SDK call that would
     // Sphere.clear() the wallet createWallet() just persisted — is never
     // invoked anywhere in this flow, and createWallet ran exactly once.
+    // Skipping the password step must also never call setWalletPassword.
     expect(ctx.importWallet).not.toHaveBeenCalled();
     expect(ctx.createWallet).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/protect your wallet/i)).toBeNull();
+    expect(ctx.setWalletPassword).not.toHaveBeenCalled();
   });
 });
