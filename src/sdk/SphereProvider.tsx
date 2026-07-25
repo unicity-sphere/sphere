@@ -30,7 +30,7 @@ import {
 } from './walletLock/lockSettings';
 import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
 import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
-import { getActiveConnectHost } from './connectHostRegistry';
+import { forEachConnectHost } from './connectHostRegistry';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -337,6 +337,12 @@ export function SphereProvider({
   // toggle, unmount) destroys the instance it built instead of leaking it. See
   // #453 and adoptOrDiscardInstance.
   const initGenRef = useRef(0);
+  // Exactly-once guard for lock(). broadcastLock() now fires from INSIDE lock(),
+  // and a same-name BroadcastChannel receives its own tab's postMessage, so the
+  // cross-tab subscription re-enters lock() in the triggering tab; without this
+  // ref that re-entry broadcasts again, unboundedly. Cleared by every path that
+  // brings a live Sphere back (unlock, finalizeWallet).
+  const lockedRef = useRef(false);
   // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
   // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
   //   load or a live address switch) may apply its key + flip status; stale
@@ -922,6 +928,7 @@ export function SphereProvider({
     if (outcome !== 'adopted') return;
     // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
     setSessionPassword(password);
+    lockedRef.current = false;
     setIsLocked(false);
     // A successful unlock proves the wallet has a password (that's WHY it was locked).
     setHasWalletPassword(true);
@@ -952,14 +959,30 @@ export function SphereProvider({
   // Lock the wallet: destroy the live Sphere instance (keys leave memory —
   // a real lock, not just a UI gate) and require unlock() again.
   const lock = useCallback(async () => {
+    // Exactly-once. Required now that broadcastLock() lives INSIDE lock(): a
+    // same-name BroadcastChannel receives its own tab's postMessage, so the
+    // subscription below re-enters lock(), which would broadcast again — an
+    // unbounded loop. A ref, not `isLocked`, because the state update is async
+    // and the loopback arrives in the same tick.
+    if (lockedRef.current) return;
+    lockedRef.current = true;
     initGenRef.current++; // supersede any in-flight init
-    // Notify the connected dApp (if any) BEFORE destroying the instance, so it
-    // gets a clean LOCKED event instead of NOT_CONNECTED errors on its next
-    // request. `getActiveConnectHost()` reads the module-scoped mirror in
+    // Notify EVERY connected dApp BEFORE destroying the instance, so each gets a
+    // clean LOCKED event instead of NOT_CONNECTED errors on its next request.
+    // `forEachConnectHost` reads the module-scoped registry in
     // connectHostRegistry.ts — SphereProvider is an ANCESTOR of ConnectProvider
     // in the tree (see main.tsx), so it can't `useConnectContext()` directly;
     // see that file for why. This was deferred from Task 4 (#449).
-    getActiveConnectHost()?.notifyWalletLocked();
+    //
+    // A fan-out, not a single slot: DesktopLayout keeps every open tab mounted,
+    // so a wallet with three framed dApps has three live hosts and notifying only
+    // the last-registered one leaves the other two talking to a wallet they
+    // believe is unlocked.
+    forEachConnectHost((host) => host.notifyWalletLocked());
+    // Cross-tab, and from EVERY lock path rather than only the idle timer: the
+    // Connect popup is a separate window with its own SphereProvider, so a manual
+    // "Lock Wallet" used to leave it serving RPCs from a fully unlocked Sphere.
+    broadcastLock();
     await sphereRef.current?.destroy();
     sphereRef.current = null;
     setSphere(null);
@@ -1076,18 +1099,10 @@ export function SphereProvider({
     // password.
     enabled: idleLockConfig.enabled && !isLocked,
     onIdle: () => {
-      // Tell every other tab to lock too, THEN lock this one. Order doesn't
-      // matter for correctness, but NOTE: a same-name BroadcastChannel DOES
-      // receive its own tab's postMessage (it's a fresh instance per call,
-      // but same-tab loopback still happens) — so subscribeLockBroadcast
-      // below will ALSO fire for this tab's own broadcastLock(), meaning
-      // lock() can run twice here in the triggering tab. That's safe only
-      // because lock() and notifyWalletLocked() are intentionally idempotent
-      // (destroying an already-null sphereRef, re-notifying an already-locked
-      // dApp, etc. are all harmless no-ops/re-sends) — do not remove those
-      // guards. Keeping broadcast first just means other tabs start locking
-      // sooner.
-      broadcastLock();
+      // lock() broadcasts for us now — from EVERY lock path, not just this one.
+      // A same-name BroadcastChannel receives its own tab's postMessage, so the
+      // subscription below re-enters lock() in this tab too; lock()'s
+      // exactly-once ref is what makes that a no-op instead of a loop.
       void lock();
     },
   });
@@ -1110,6 +1125,7 @@ export function SphereProvider({
     // (#449). Without this, isLocked would stay true forever after a
     // successful restore and the shell gate would keep showing the lock
     // screen instead of the freshly-restored wallet.
+    lockedRef.current = false;
     setIsLocked(false);
     // Reflect whatever createWallet()/importWallet() decided: they already
     // called setSessionPassword() (passwordRef) iff the user chose a password

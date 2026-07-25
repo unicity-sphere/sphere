@@ -10,7 +10,7 @@ import {
 } from './ConnectContext';
 import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
-import { setActiveConnectHost } from '../../sdk/connectHostRegistry';
+import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -26,16 +26,22 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   // Auto-approve handlers scoped to a specific ConnectHost instance
   const autoIntentHandlersRef = useRef<Map<string, { host: ConnectHost; handler: AutoHandler }>>(new Map());
 
-  const setConnectHost = useCallback((host: ConnectHost | null) => {
+  const setConnectHost = useCallback((host: ConnectHost | null, origin?: string) => {
     // Clear auto-approve handlers when host changes (URL switch, disconnect, etc.)
     if (host !== connectHostRef.current) {
       autoIntentHandlersRef.current.clear();
     }
-    connectHostRef.current = host;
     // Mirror into the module-scoped registry so SphereProvider.lock() — an
     // ANCESTOR in the tree that can't consume this context — can still reach
-    // the live host to notify it before destroying the Sphere instance (#449).
-    setActiveConnectHost(host);
+    // EVERY live host to notify it before destroying the Sphere instance (#449).
+    // Unregistration is scoped to the host being dropped: DesktopLayout keeps every
+    // tab mounted, so a blanket clear here would evict a live neighbour's host.
+    if (host) {
+      registerConnectHost(host, { origin: origin ?? '' });
+    } else if (connectHostRef.current) {
+      unregisterConnectHost(connectHostRef.current);
+    }
+    connectHostRef.current = host;
     forceUpdate((n) => n + 1);
   }, []);
 

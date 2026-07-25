@@ -61,7 +61,10 @@ export interface ConnectContextValue {
   connectHost: ConnectHost | null;
 
   /** Set the ConnectHost reference */
-  setConnectHost: (host: ConnectHost | null) => void;
+  /** Register (or, with `null`, unregister) this surface's live ConnectHost.
+   *  `origin` is the wallet-verified origin the host serves — never the
+   *  dApp-claimed `session.dapp.url`. */
+  setConnectHost: (host: ConnectHost | null, origin?: string) => void;
 
   /** Register an auto-approve handler for an intent action (bypasses modal) */
   registerAutoIntent: (

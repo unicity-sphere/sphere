@@ -155,7 +155,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       onIntent: (action, params) => requestIntentRef.current(action, params),
     });
     hostRef.current = host;
-    setConnectHost(host);
+    setConnectHost(host, origin);
 
     // Signal to iframe that host is ready (iframe may already be loaded or still loading)
     try {
