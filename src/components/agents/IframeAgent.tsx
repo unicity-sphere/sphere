@@ -34,7 +34,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   const transportRef = useRef<PostMessageTransport | null>(null);
   const initializedRef = useRef(false);
   const { sphere } = useSphereContext();
-  const { requestApproval, requestIntent, setConnectHost } = useConnectContext();
+  const { requestApproval, requestIntent, attachHost, releaseHost } = useConnectContext();
 
   const hasUrlOptions = agent.iframeUrls && agent.iframeUrls.length > 1;
 
@@ -80,13 +80,17 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   }, []);
 
   const cleanup = useCallback(() => {
-    hostRef.current?.destroy();
+    const host = hostRef.current;
+    // Release BEFORE destroy: the registry must never hold a host whose
+    // transport is already gone — SphereProvider.lock() fans setLocked() over
+    // every entry (graceful lock §8.4).
+    if (host) releaseHost(host);
+    host?.destroy();
     hostRef.current = null;
-    setConnectHost(null);
     transportRef.current?.destroy();
     transportRef.current = null;
     initializedRef.current = false;
-  }, [setConnectHost]);
+  }, [releaseHost]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -117,6 +121,10 @@ export function IframeAgent({ agent }: IframeAgentProps) {
 
     const host = new ConnectHost({
       sphere: sphereRef.current,
+      // The only trustworthy origin the host has — session.dapp.url is
+      // dApp-claimed metadata (audit fix #452). Optional in the SDK; we always
+      // have it here, so the wallet's badge can name the app honestly.
+      origin,
       transport,
       // Reject dApps built against sphere-sdk < 0.12 (incompatible Connect/token contract).
       minSdkVersion: CONNECT_MIN_SDK_VERSION,
@@ -135,7 +143,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
 
         // First time — show approval modal via ConnectProvider (anchor trust to
         // the transport-verified origin, not the dApp-supplied metadata).
-        const result = await requestApprovalRef.current(dapp, perms, origin);
+        const result = await requestApprovalRef.current(hostRef.current!, dapp, perms, origin);
         if (result.approved) {
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
@@ -151,10 +159,11 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       onDisconnect: () => {
         revokeApprovedOrigin(origin);
       },
-      onIntent: (action, params) => requestIntentRef.current(action, params),
+      onIntent: (action, params) =>
+        requestIntentRef.current(hostRef.current!, origin, action, params),
     });
     hostRef.current = host;
-    setConnectHost(host, origin);
+    attachHost(host, origin);
 
     // Signal to iframe that host is ready (iframe may already be loaded or still loading)
     try {

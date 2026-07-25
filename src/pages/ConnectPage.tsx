@@ -21,7 +21,7 @@ export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
   const { sphere, isLoading, isLocked } = useSphereContext();
-  const { requestApproval, requestIntent, setConnectHost } = useConnectContext();
+  const { requestApproval, requestIntent, attachHost, releaseHost } = useConnectContext();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
@@ -62,20 +62,27 @@ export function ConnectPage() {
   }, [sphere, isLoading, isLocked]);
 
   // Logout (SPA navigation) or page unload (refresh/close) — both DESTROY the
-  // session; neither is a lock. revokeSession() now pushes wallet:disconnected,
-  // so the dApp stops believing it is connected instead of finding out at its
-  // next 4001.
+  // session; neither is a lock. revokeSession() pushes wallet:disconnected, so
+  // the dApp stops believing it is connected instead of finding out at its next
+  // 4001. The host is ALSO released: ConnectPage never removed itself, and with
+  // a registry collection every unloaded popup would leak a dead host that
+  // SphereProvider.lock() then calls setLocked() on (graceful lock §8.4).
   useEffect(() => {
-    const revoke = () => hostRef.current?.revokeSession();
-    // SPA logout — dispatched by SphereProvider.deleteWallet before destroy
-    window.addEventListener('sphere:wallet-logout', revoke);
-    // Page refresh or close
-    window.addEventListener('beforeunload', revoke);
-    return () => {
-      window.removeEventListener('sphere:wallet-logout', revoke);
-      window.removeEventListener('beforeunload', revoke);
+    const teardown = () => {
+      const host = hostRef.current;
+      if (!host) return;
+      host.revokeSession();
+      releaseHost(host);
     };
-  }, []);
+    // SPA logout — dispatched by SphereProvider.deleteWallet before destroy
+    window.addEventListener('sphere:wallet-logout', teardown);
+    // Page refresh or close
+    window.addEventListener('beforeunload', teardown);
+    return () => {
+      window.removeEventListener('sphere:wallet-logout', teardown);
+      window.removeEventListener('beforeunload', teardown);
+    };
+  }, [releaseHost]);
 
   useEffect(() => {
     if (!sphereReady) return;
@@ -103,6 +110,8 @@ export function ConnectPage() {
 
     const host = new ConnectHost({
       sphere: currentSphere,
+      // The transport-verified origin — never the dApp-claimed dapp.url.
+      origin,
       transport,
       // Reject dApps built against sphere-sdk < 0.12 (incompatible Connect/token contract).
       minSdkVersion: CONNECT_MIN_SDK_VERSION,
@@ -121,7 +130,7 @@ export function ConnectPage() {
         }
 
         // First time — show approval modal (anchor trust to the verified origin).
-        const result = await requestApprovalRef.current(dapp, perms, origin);
+        const result = await requestApprovalRef.current(hostRef.current!, dapp, perms, origin);
         if (result.approved) {
           setConnectedDapp(dapp.name);
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
@@ -144,10 +153,10 @@ export function ConnectPage() {
         setConnectedDapp(null);
       },
       onIntent: (action, params) =>
-        requestIntentRef.current(action, params),
+        requestIntentRef.current(hostRef.current!, origin, action, params),
     });
     hostRef.current = host;
-    setConnectHost(host, origin);
+    attachHost(host, origin);
 
     setStatus('ready');
 

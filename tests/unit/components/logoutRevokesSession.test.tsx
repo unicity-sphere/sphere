@@ -53,7 +53,9 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
   useConnectContext: () => ({
     requestApproval: vi.fn(),
     requestIntent: vi.fn(),
-    setConnectHost: vi.fn(),
+    noteLockedRequest: vi.fn(),
+    attachHost: vi.fn(),
+    releaseHost: vi.fn(),
   }),
 }));
 
