@@ -559,16 +559,22 @@ export function SphereProvider({
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
-        // Never pass a `password` on this normal load path — an existing
-        // plaintext wallet must keep loading exactly as before. If the wallet
-        // IS encrypted, this deliberately-passwordless init throws
-        // SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR'), which we
-        // read as "locked", not a fatal error (#449) — see isDecryptionError.ts.
+        // Password policy on this path:
+        //  - COLD load (no session password held): pass none. An existing
+        //    plaintext wallet must keep loading exactly as before; an encrypted
+        //    one is MEANT to throw SphereError('Failed to decrypt mnemonic',
+        //    'STORAGE_ERROR'), which we read as "locked", not a fatal error
+        //    (#449) — see isDecryptionError.ts.
+        //  - RE-INIT while unlocked (toggleIpfs(), the exported `reinitialize`):
+        //    carry passwordRef.current. Omitting it relocked a wallet the user
+        //    had just unlocked — one click in permanent chrome (graceful lock
+        //    §8.5).
         let instance: Sphere;
         try {
           ({ sphere: instance } = await Sphere.init({
             ...browserProviders,
             network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
+            ...(passwordRef.current ? { password: passwordRef.current } : {}),
             discoverAddresses: false, // Run separately below for UX
             onProgress: setInitProgress,
           }));
