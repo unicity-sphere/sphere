@@ -25,6 +25,14 @@ import { useSphereContext } from '../../sdk/hooks/core/useSphere';
  */
 const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
 
+/**
+ * Clicks are swallowed for this long after the intent modal's contents change.
+ * Every intent modal shares button geometry, so a swap under a stationary cursor
+ * is clickjacking without an iframe — and a FIFO queue makes the moment
+ * predictable (graceful lock §8.4).
+ */
+const INTENT_SETTLE_MS = 500;
+
 interface ConnectProviderProps {
   children: ReactNode;
 }
@@ -108,6 +116,22 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       syncHeads();
     }
   }, [isLocked, settleIntentsWhere, syncHeads]);
+
+  const [intentInteractive, setIntentInteractive] = useState(false);
+
+  useEffect(() => {
+    if (!pendingIntent) {
+      setIntentInteractive(false);
+      return;
+    }
+    setIntentInteractive(false);
+    const timer = setTimeout(() => setIntentInteractive(true), INTENT_SETTLE_MS);
+    return () => clearTimeout(timer);
+    // Keyed on the intent IDENTITY, not the object: the queue head object is
+    // re-read on every sync, and depending on the object would restart the
+    // window forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingIntent?.id]);
 
   const releaseHost = useCallback(
     (host: ConnectHost) => {
@@ -233,7 +257,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     noteLockedRequest,
     pendingApproval,
     pendingIntent,
-    intentInteractive: true,
+    intentInteractive,
     approveConnection,
     denyConnection,
     resolveIntent,
@@ -248,6 +272,13 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       {children}
       <ConnectionApprovalModal />
       <ConnectIntentHandler />
+      {pendingIntent && !intentInteractive && (
+        <div
+          data-testid="intent-settle-shield"
+          aria-hidden="true"
+          className="fixed inset-0 z-101 cursor-progress"
+        />
+      )}
     </ConnectContext.Provider>
   );
 }
