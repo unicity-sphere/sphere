@@ -32,7 +32,7 @@ describe('UnlockScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: /unlock/i }));
     await waitFor(() => expect(screen.getByText(/could not unlock/i)).toBeDefined());
   });
-  it('offers restore-from-recovery-phrase', () => {
+  it('offers restore-from-recovery-phrase when the caller supplies onRestore', () => {
     const onRestore = vi.fn();
     render(<UnlockScreen onRestore={onRestore} />);
     fireEvent.click(screen.getByText(/recovery phrase/i));

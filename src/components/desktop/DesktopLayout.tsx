@@ -191,6 +191,10 @@ export function DesktopLayout() {
                 walletOpen ? 'translate-x-0' : 'translate-x-full'
               }`}
             >
+              {/* Mobile off-canvas instance. Deliberately never autofocuses the
+                  unlock field: both instances are mounted at once and React
+                  cannot know which breakpoint is live, so only the desktop one
+                  claims focus (graceful lock §8.3). */}
               <WalletPanel />
             </div>
           </div>
@@ -203,7 +207,7 @@ export function DesktopLayout() {
             }`}
           >
             <div className="w-88 xl:w-104 h-full">
-              <WalletPanel />
+              <WalletPanel autoFocusUnlock={walletOpen} />
             </div>
           </div>
         </div>

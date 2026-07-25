@@ -6,11 +6,41 @@
  */
 import { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Lock, KeyRound } from 'lucide-react';
+import { Lock, KeyRound, Globe, AlertTriangle } from 'lucide-react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isDecryptionError } from '../../../../sdk/walletLock/isDecryptionError';
+import { classifyAgentOrigin } from '../../../../config/agentOrigins';
 
-export function UnlockScreen({ onRestore }: { onRestore: () => void }) {
+export function UnlockScreen({
+  onRestore,
+  autoFocus = false,
+  origin,
+}: {
+  /**
+   * "Forgot password → restore from recovery phrase". OPTIONAL: when omitted the
+   * link is not rendered at all. Restoring installs a DIFFERENT seed behind
+   * origin-keyed approvals, so it must not be reachable from a surface that was
+   * reached because a dApp's activity lit the locked-request badge (graceful lock
+   * §8.3). The panel path passes it and gates it behind CreateWalletFlow's
+   * `fromLock` erase acknowledgement.
+   */
+  onRestore?: () => void;
+  /**
+   * Focus the password field on mount. Defaults FALSE: this component is mounted
+   * inside the wallet panel shell, which is `w-0 overflow-hidden` /
+   * `translate-x-full` when closed — mounted but invisible — so an unconditional
+   * autoFocus pulled the caret out of a cross-origin iframe while the attacker
+   * owned every visible pixel. Only a caller that KNOWS its surface is on screen
+   * passes true.
+   */
+  autoFocus?: boolean;
+  /**
+   * Transport-verified origin of the app whose blocked requests brought the user
+   * here. Undefined for the cold-start gate — nobody asked; the user came here
+   * themselves. NEVER the dApp-claimed `dapp.url`.
+   */
+  origin?: string;
+}) {
   const { unlock } = useSphereContext();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -54,10 +84,33 @@ export function UnlockScreen({ onRestore }: { onRestore: () => void }) {
           Enter your password to unlock your wallet.
         </p>
       </div>
+      {origin && (
+        <div
+          data-testid="unlock-origin"
+          className="w-full flex items-start gap-2 p-3 rounded-xl bg-neutral-100 dark:bg-white/4 text-left"
+        >
+          <Globe className="w-4 h-4 mt-0.5 shrink-0 text-neutral-500" />
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wide text-neutral-400">Requested by (verified)</div>
+            <div className="font-mono text-xs text-neutral-900 dark:text-white break-all">{origin}</div>
+          </div>
+        </div>
+      )}
+      {origin && classifyAgentOrigin(origin) !== 'trusted' && (
+        <div
+          data-testid="unlock-origin-warning"
+          className="w-full flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 text-left"
+        >
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="text-xs">
+            Sphere can't vouch for this site. Only unlock if you were expecting it to use your wallet.
+          </div>
+        </div>
+      )}
       <input
         type="password"
         aria-label="Password"
-        autoFocus
+        autoFocus={autoFocus}
         autoComplete="current-password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
@@ -80,13 +133,15 @@ export function UnlockScreen({ onRestore }: { onRestore: () => void }) {
       >
         {busy ? 'Unlocking…' : 'Unlock'}
       </motion.button>
-      <button
-        onClick={onRestore}
-        className="flex items-center justify-center gap-1.5 text-xs text-neutral-500 dark:text-[rgba(255,255,255,0.45)] hover:text-orange-500 dark:hover:text-brand-orange transition-colors"
-      >
-        <KeyRound className="w-3.5 h-3.5" />
-        Forgot password? Restore from recovery phrase
-      </button>
+      {onRestore && (
+        <button
+          onClick={onRestore}
+          className="flex items-center justify-center gap-1.5 text-xs text-neutral-500 dark:text-[rgba(255,255,255,0.45)] hover:text-orange-500 dark:hover:text-brand-orange transition-colors"
+        >
+          <KeyRound className="w-3.5 h-3.5" />
+          Forgot password? Restore from recovery phrase
+        </button>
+      )}
     </motion.div>
   );
 }

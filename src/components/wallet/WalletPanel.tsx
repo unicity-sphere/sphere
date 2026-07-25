@@ -13,7 +13,7 @@ import { UnlockScreen } from './onboarding/components/UnlockScreen';
 
 const PANEL_SHELL = "bg-white dark:bg-modal-bg/50 backdrop-blur-xl overflow-hidden h-full relative lg:border-l lg:border-neutral-100 dark:lg:border-brand-orange-border flex flex-col rounded-2xl";
 
-export function WalletPanel() {
+export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boolean }) {
   const [showBalances, setShowBalances] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isRequestsOpen, setIsRequestsOpen] = useState(false);
@@ -151,7 +151,7 @@ export function WalletPanel() {
               onExitToUnlock={() => setRestoreFromLock(false)}
             />
           ) : (
-            <UnlockScreen onRestore={() => setRestoreFromLock(true)} />
+            <UnlockScreen autoFocus={autoFocusUnlock} onRestore={() => setRestoreFromLock(true)} />
           )}
         </div>
       </div>
