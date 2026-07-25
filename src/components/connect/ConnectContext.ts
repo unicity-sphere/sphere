@@ -1,8 +1,20 @@
 import { createContext, useContext } from 'react';
-import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
-import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
+import type {
+  ConnectHost,
+  DAppMetadata,
+  LockedRequestContext,
+  PermissionScope,
+} from '@unicitylabs/sphere-sdk/connect';
 
 export interface PendingApproval {
+  /** Monotonic id — approvals queue, so entries need identity. */
+  id: number;
+  /**
+   * The host that asked. All pending state is keyed by host: DesktopLayout keeps
+   * every open tab mounted, so several hosts can be asking at once and a single
+   * global slot silently dropped one of them (graceful lock §8.4).
+   */
+  host: ConnectHost;
   dapp: DAppMetadata;
   permissions: PermissionScope[];
   /**
@@ -16,61 +28,73 @@ export interface PendingApproval {
 }
 
 export interface PendingIntent {
+  id: number;
+  host: ConnectHost;
+  /** Transport-verified origin of the dApp that sent the intent. Never dapp.url. */
+  origin: string;
   action: string;
   params: Record<string, unknown>;
   resolve: (result: { result?: unknown; error?: { code: number; message: string } }) => void;
 }
 
+export type AutoIntentHandler = (
+  action: string,
+  params: Record<string, unknown>,
+) => Promise<{ result?: unknown; error?: { code: number; message: string } } | null>;
+
 export interface ConnectContextValue {
-  /**
-   * Called by the ConnectHost host (IframeAgent / ConnectPage) when a dApp
-   * requests connection. `origin` is the transport-verified origin — pass the
-   * value the transport pins (never `dapp.url`).
-   */
+  /** Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection. */
   requestApproval: (
+    host: ConnectHost,
     dapp: DAppMetadata,
     permissions: PermissionScope[],
     origin: string,
   ) => Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>;
 
-  /** Called by IframeAgent's ConnectHost when a dApp sends an intent */
+  /** Called by a ConnectHost when a dApp sends an intent. Queued FIFO per wallet. */
   requestIntent: (
+    host: ConnectHost,
+    origin: string,
     action: string,
     params: Record<string, unknown>,
   ) => Promise<{ result?: unknown; error?: { code: number; message: string } }>;
 
-  /** Current pending approval (for modal rendering) */
+  /**
+   * NOTIFY-ONLY: a host has just answered WALLET_LOCKED (4009). The host has
+   * ALREADY answered and never waits for this.
+   *
+   * THIS MUST NEVER RAISE A CREDENTIAL SURFACE. A dApp request may trigger a
+   * CONSENT prompt; it may never trigger a password field (graceful lock §3.3).
+   * The only permitted reaction is a PASSIVE badge in permanent chrome; the
+   * password field appears only after a human clicks it. Volume is bounded by
+   * the host's own rate limiter — there is no coalescing, no cooldown and no cap
+   * here by design.
+   */
+  noteLockedRequest: (origin: string, ctx: LockedRequestContext) => void;
+
+  /** Head of the approval queue (for modal rendering). */
   pendingApproval: PendingApproval | null;
-
-  /** Current pending intent (for intent handler rendering) */
+  /** Head of the intent queue (for modal rendering). */
   pendingIntent: PendingIntent | null;
+  /**
+   * False for a short settle window after the intent modal's contents change.
+   * All intent modals share button geometry, so a swap under a stationary cursor
+   * is clickjacking without an iframe (graceful lock §8.4).
+   */
+  intentInteractive: boolean;
 
-  /** Approve the pending connection */
   approveConnection: (grantedPermissions: PermissionScope[]) => void;
-
-  /** Deny the pending connection */
   denyConnection: () => void;
-
-  /** Resolve the pending intent with a result */
   resolveIntent: (result: unknown) => void;
-
-  /** Reject the pending intent with an error */
   rejectIntent: (code: number, message: string) => void;
 
-  /** Reference to the ConnectHost instance for auto-approve management */
-  connectHost: ConnectHost | null;
+  /** Register a live host with its transport-verified origin. Paired with releaseHost(). */
+  attachHost: (host: ConnectHost, origin: string) => void;
+  /** Remove a host (tab closed, url switched, popup unloaded) and settle its pending work. */
+  releaseHost: (host: ConnectHost) => void;
 
-  /** Set the ConnectHost reference */
-  /** Register (or, with `null`, unregister) this surface's live ConnectHost.
-   *  `origin` is the wallet-verified origin the host serves — never the
-   *  dApp-claimed `session.dapp.url`. */
-  setConnectHost: (host: ConnectHost | null, origin?: string) => void;
-
-  /** Register an auto-approve handler for an intent action (bypasses modal) */
-  registerAutoIntent: (
-    action: string,
-    handler: (action: string, params: Record<string, unknown>) => Promise<{ result?: unknown; error?: { code: number; message: string } } | null>,
-  ) => void;
+  /** Register an auto-approve handler for an intent action, scoped to ONE host. */
+  registerAutoIntent: (host: ConnectHost, action: string, handler: AutoIntentHandler) => void;
 }
 
 export const ConnectContext = createContext<ConnectContextValue | null>(null);

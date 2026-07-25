@@ -1,9 +1,14 @@
 import { useState, useCallback, useRef, type ReactNode } from 'react';
-import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
-import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
+import type {
+  ConnectHost,
+  DAppMetadata,
+  LockedRequestContext,
+  PermissionScope,
+} from '@unicitylabs/sphere-sdk/connect';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import {
   ConnectContext,
+  type AutoIntentHandler,
   type PendingApproval,
   type PendingIntent,
   type ConnectContextValue,
@@ -17,118 +22,194 @@ interface ConnectProviderProps {
 }
 
 export function ConnectProvider({ children }: ConnectProviderProps) {
+  // Queues live in refs and are MIRRORED into state for rendering. Settling an
+  // entry calls its `resolve` — a side effect that must never run inside a
+  // setState updater, which React StrictMode double-invokes.
+  const approvalQueueRef = useRef<PendingApproval[]>([]);
+  const intentQueueRef = useRef<PendingIntent[]>([]);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [pendingIntent, setPendingIntent] = useState<PendingIntent | null>(null);
-  const connectHostRef = useRef<ConnectHost | null>(null);
-  const [, forceUpdate] = useState(0);
+  const nextIdRef = useRef(0);
 
-  type AutoHandler = (action: string, params: Record<string, unknown>) => Promise<{ result?: unknown; error?: { code: number; message: string } } | null>;
-  // Auto-approve handlers scoped to a specific ConnectHost instance
-  const autoIntentHandlersRef = useRef<Map<string, { host: ConnectHost; handler: AutoHandler }>>(new Map());
+  // Auto-approve handlers, scoped to the host that granted them. Keyed by host
+  // FIRST: keying by action alone let a grant made in one tab answer another
+  // host's intent.
+  const autoIntentHandlersRef = useRef<Map<ConnectHost, Map<string, AutoIntentHandler>>>(new Map());
 
-  const setConnectHost = useCallback((host: ConnectHost | null, origin?: string) => {
-    // Clear auto-approve handlers when host changes (URL switch, disconnect, etc.)
-    if (host !== connectHostRef.current) {
-      autoIntentHandlersRef.current.clear();
-    }
-    // Mirror into the module-scoped registry so SphereProvider.lock() — an
-    // ANCESTOR in the tree that can't consume this context — can still reach
-    // EVERY live host to notify it before destroying the Sphere instance (#449).
-    // Unregistration is scoped to the host being dropped: DesktopLayout keeps every
-    // tab mounted, so a blanket clear here would evict a live neighbour's host.
-    if (host) {
-      registerConnectHost(host, { origin: origin ?? '' });
-    } else if (connectHostRef.current) {
-      unregisterConnectHost(connectHostRef.current);
-    }
-    connectHostRef.current = host;
-    forceUpdate((n) => n + 1);
+  const syncHeads = useCallback(() => {
+    setPendingApproval(approvalQueueRef.current[0] ?? null);
+    setPendingIntent(intentQueueRef.current[0] ?? null);
   }, []);
 
-  const requestApproval = useCallback(
-    (dapp: DAppMetadata, permissions: PermissionScope[], origin: string) => {
-      return new Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>((resolve) => {
-        setPendingApproval({ dapp, permissions, origin, resolve });
-      });
+  const attachHost = useCallback((host: ConnectHost, origin: string) => {
+    registerConnectHost(host, { origin });
+  }, []);
+
+  const settleIntent = useCallback(
+    (id: number, result: { result?: unknown; error?: { code: number; message: string } }) => {
+      const index = intentQueueRef.current.findIndex((entry) => entry.id === id);
+      if (index === -1) return; // already settled — never resolve the same intent twice
+      const [entry] = intentQueueRef.current.splice(index, 1);
+      entry!.resolve(result);
+      syncHeads();
     },
-    [],
+    [syncHeads],
+  );
+
+  const settleApproval = useCallback(
+    (id: number, result: { approved: boolean; grantedPermissions: PermissionScope[] }) => {
+      const index = approvalQueueRef.current.findIndex((entry) => entry.id === id);
+      if (index === -1) return;
+      const [entry] = approvalQueueRef.current.splice(index, 1);
+      entry!.resolve(result);
+      syncHeads();
+    },
+    [syncHeads],
+  );
+
+  /** Settle every queued intent matching `match` (all of them when it returns true). */
+  const settleIntentsWhere = useCallback(
+    (match: (entry: PendingIntent) => boolean, error: { code: number; message: string }) => {
+      const doomed = intentQueueRef.current.filter(match);
+      if (doomed.length === 0) return;
+      intentQueueRef.current = intentQueueRef.current.filter((entry) => !match(entry));
+      for (const entry of doomed) entry.resolve({ error });
+      syncHeads();
+    },
+    [syncHeads],
+  );
+
+  const releaseHost = useCallback(
+    (host: ConnectHost) => {
+      unregisterConnectHost(host);
+      autoIntentHandlersRef.current.delete(host);
+      // Anything this host is still awaiting must be settled: `await onIntent()`
+      // inside a host that is going away would otherwise never return, and the
+      // dApp would sit on a dead promise until the host's own deadline fires.
+      settleIntentsWhere((entry) => entry.host === host, {
+        code: ERROR_CODES.INTENT_CANCELLED,
+        message: 'Wallet view closed',
+      });
+      const doomedApprovals = approvalQueueRef.current.filter((entry) => entry.host === host);
+      if (doomedApprovals.length > 0) {
+        approvalQueueRef.current = approvalQueueRef.current.filter((entry) => entry.host !== host);
+        for (const entry of doomedApprovals) {
+          entry.resolve({ approved: false, grantedPermissions: [] });
+        }
+        syncHeads();
+      }
+    },
+    [settleIntentsWhere, syncHeads],
+  );
+
+  const requestApproval = useCallback(
+    (host: ConnectHost, dapp: DAppMetadata, permissions: PermissionScope[], origin: string) =>
+      new Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>((resolve) => {
+        const id = ++nextIdRef.current;
+        approvalQueueRef.current.push({ id, host, dapp, permissions, origin, resolve });
+        syncHeads();
+      }),
+    [syncHeads],
   );
 
   const registerAutoIntent = useCallback(
-    (
-      action: string,
-      handler: AutoHandler,
-    ) => {
-      const host = connectHostRef.current;
-      if (!host) return;
-      autoIntentHandlersRef.current.set(action, { host, handler });
+    (host: ConnectHost, action: string, handler: AutoIntentHandler) => {
+      const perHost = autoIntentHandlersRef.current.get(host) ?? new Map<string, AutoIntentHandler>();
+      perHost.set(action, handler);
+      autoIntentHandlersRef.current.set(host, perHost);
     },
     [],
   );
 
   const requestIntent = useCallback(
-    async (action: string, params: Record<string, unknown>): Promise<{ result?: unknown; error?: { code: number; message: string } }> => {
-      // Check auto-approve handlers — only if registered by the current host
-      const entry = autoIntentHandlersRef.current.get(action);
-      if (entry && entry.host === connectHostRef.current) {
+    async (
+      host: ConnectHost,
+      origin: string,
+      action: string,
+      params: Record<string, unknown>,
+    ): Promise<{ result?: unknown; error?: { code: number; message: string } }> => {
+      // Auto-approve handlers — only the ones THIS host granted.
+      const handler = autoIntentHandlersRef.current.get(host)?.get(action);
+      if (handler) {
         try {
-          const handled = await entry.handler(action, params);
+          const handled = await handler(action, params);
           // A null result means the handler declined (e.g. a DM to a recipient
           // other than the one the user approved) — fall through to the modal.
           if (handled) return handled;
         } catch (err) {
-          return { error: { code: ERROR_CODES.INTERNAL_ERROR, message: err instanceof Error ? err.message : 'Auto-approve handler failed' } };
+          return {
+            error: {
+              code: ERROR_CODES.INTERNAL_ERROR,
+              message: err instanceof Error ? err.message : 'Auto-approve handler failed',
+            },
+          };
         }
       }
 
-      // Otherwise show modal
-      return new Promise<{ result?: unknown; error?: { code: number; message: string } }>((resolve) => {
-        setPendingIntent({ action, params, resolve });
+      // Otherwise queue for the modal. FIFO, never a single overwritten slot: a
+      // second requestIntent used to replace the state and lose the previous
+      // `resolve` forever, leaving `await onIntent(...)` unsettled.
+      return new Promise((resolve) => {
+        const id = ++nextIdRef.current;
+        intentQueueRef.current.push({ id, host, origin, action, params, resolve });
+        syncHeads();
       });
     },
-    [],
+    [syncHeads],
   );
+
+  const noteLockedRequest = useCallback((origin: string, ctx: LockedRequestContext) => {
+    // The passive attention surface lands in Task 13 (graceful lock §8.3). It
+    // must never raise a credential surface — see ConnectContext. Both arguments
+    // are voided rather than underscored so the real signature is already in
+    // place and `@typescript-eslint/no-unused-vars` (args: 'after-used') stays
+    // quiet on the trailing one.
+    void origin;
+    void ctx;
+  }, []);
 
   const approveConnection = useCallback(
     (grantedPermissions: PermissionScope[]) => {
-      pendingApproval?.resolve({ approved: true, grantedPermissions });
-      setPendingApproval(null);
+      const head = approvalQueueRef.current[0];
+      if (head) settleApproval(head.id, { approved: true, grantedPermissions });
     },
-    [pendingApproval],
+    [settleApproval],
   );
 
   const denyConnection = useCallback(() => {
-    pendingApproval?.resolve({ approved: false, grantedPermissions: [] });
-    setPendingApproval(null);
-  }, [pendingApproval]);
+    const head = approvalQueueRef.current[0];
+    if (head) settleApproval(head.id, { approved: false, grantedPermissions: [] });
+  }, [settleApproval]);
 
   const resolveIntent = useCallback(
     (result: unknown) => {
-      pendingIntent?.resolve({ result });
-      setPendingIntent(null);
+      const head = intentQueueRef.current[0];
+      if (head) settleIntent(head.id, { result });
     },
-    [pendingIntent],
+    [settleIntent],
   );
 
   const rejectIntent = useCallback(
     (code: number, message: string) => {
-      pendingIntent?.resolve({ error: { code, message } });
-      setPendingIntent(null);
+      const head = intentQueueRef.current[0];
+      if (head) settleIntent(head.id, { error: { code, message } });
     },
-    [pendingIntent],
+    [settleIntent],
   );
 
   const value: ConnectContextValue = {
     requestApproval,
     requestIntent,
+    noteLockedRequest,
     pendingApproval,
     pendingIntent,
+    intentInteractive: true,
     approveConnection,
     denyConnection,
     resolveIntent,
     rejectIntent,
-    connectHost: connectHostRef.current,
-    setConnectHost,
+    attachHost,
+    releaseHost,
     registerAutoIntent,
   };
 

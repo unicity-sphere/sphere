@@ -159,7 +159,7 @@ export function ConnectIntentHandler() {
         if (autoApproveDM && sphere) {
           const sphereRef = sphere;
           const approvedTo = to;
-          registerAutoIntent('dm', async (_action, intentParams) => {
+          registerAutoIntent(pendingIntent.host, 'dm', async (_action, intentParams) => {
             const nextTo = intentParams.to;
             const nextMessage = intentParams.message;
             // Auto-approval is scoped to the recipient the user approved. A DM to
