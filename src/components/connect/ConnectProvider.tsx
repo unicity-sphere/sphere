@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type {
   ConnectHost,
   DAppMetadata,
@@ -16,6 +16,14 @@ import {
 import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
+import { useSphereContext } from '../../sdk/hooks/core/useSphere';
+
+/**
+ * Recommended refusal text for WALLET_LOCKED, matching what the host sends. It
+ * is NOT a wire contract (spec §2.2.11) — every consumer discriminates on the
+ * 4009 code. Nothing may depend on this string being byte-identical anywhere.
+ */
+const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -78,6 +86,28 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     },
     [syncHeads],
   );
+
+  const { isLocked } = useSphereContext();
+
+  // A lock landed. Settle everything Connect is holding with the SAME code the
+  // host answers new requests with, and unmount the intent modal: its approve
+  // button would operate on a Sphere the provider has already destroyed, and its
+  // `resolve` would sit unsettled behind the lock screen until the host's own
+  // deadline fired. A pending connection approval is denied — a locked wallet
+  // cannot consent to anything (graceful lock §8.4).
+  useEffect(() => {
+    if (!isLocked) return;
+    settleIntentsWhere(() => true, {
+      code: ERROR_CODES.WALLET_LOCKED,
+      message: WALLET_LOCKED_MESSAGE,
+    });
+    const doomed = approvalQueueRef.current;
+    if (doomed.length > 0) {
+      approvalQueueRef.current = [];
+      for (const entry of doomed) entry.resolve({ approved: false, grantedPermissions: [] });
+      syncHeads();
+    }
+  }, [isLocked, settleIntentsWhere, syncHeads]);
 
   const releaseHost = useCallback(
     (host: ConnectHost) => {
