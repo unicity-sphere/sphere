@@ -17,6 +17,7 @@ import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
+import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBadge';
 
 /**
  * Recommended refusal text for WALLET_LOCKED, matching what the host sends. It
@@ -117,6 +118,36 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     }
   }, [isLocked, settleIntentsWhere, syncHeads]);
 
+  // Locked-request tally, per verified origin, in first-seen order. There is no
+  // cap, no coalescing and no cooldown BY DESIGN: the host's own checkRateLimit()
+  // already bounds how often onLockedRequest can fire, and a passive badge has
+  // nothing to abuse (graceful lock §8.3).
+  const [lockedRequests, setLockedRequests] = useState<{ total: number; origins: string[] }>(
+    { total: 0, origins: [] },
+  );
+
+  const noteLockedRequest = useCallback((origin: string, ctx: LockedRequestContext) => {
+    // A refused HANDSHAKE is not counted. While locked every handshake is forced
+    // silent, and an origin WITHOUT an approval gets today's empty refusal — so
+    // counting it would light a badge naming an origin that holds no approval,
+    // leaking the lock to it and putting an unvetted name in the wallet's chrome.
+    if (ctx.kind === 'handshake') return;
+    const label = origin || '';
+    setLockedRequests((prev) => ({
+      total: prev.total + 1,
+      origins: label && !prev.origins.includes(label) ? [...prev.origins, label] : prev.origins,
+    }));
+  }, []);
+
+  // The wallet came back — the tally is history. Returning `prev` unchanged when
+  // it is already empty is load-bearing: a fresh object every render would loop.
+  useEffect(() => {
+    if (isLocked) return;
+    setLockedRequests((prev) => (prev.total === 0 ? prev : { total: 0, origins: [] }));
+  }, [isLocked]);
+
+  const lockedRequestCounts: LockedRequestCounts = lockedRequests;
+
   const [intentInteractive, setIntentInteractive] = useState(false);
 
   useEffect(() => {
@@ -212,16 +243,6 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [syncHeads],
   );
 
-  const noteLockedRequest = useCallback((origin: string, ctx: LockedRequestContext) => {
-    // The passive attention surface lands in Task 13 (graceful lock §8.3). It
-    // must never raise a credential surface — see ConnectContext. Both arguments
-    // are voided rather than underscored so the real signature is already in
-    // place and `@typescript-eslint/no-unused-vars` (args: 'after-used') stays
-    // quiet on the trailing one.
-    void origin;
-    void ctx;
-  }, []);
-
   const approveConnection = useCallback(
     (grantedPermissions: PermissionScope[]) => {
       const head = approvalQueueRef.current[0];
@@ -279,6 +300,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
           className="fixed inset-0 z-101 cursor-progress"
         />
       )}
+      <LockedRequestBadge counts={lockedRequestCounts} />
     </ConnectContext.Provider>
   );
 }
