@@ -49,6 +49,13 @@ export const STORAGE_KEYS = {
   // the Settings "Security" section (#449, separate task); absent means the
   // secure default (DEFAULT_AUTO_LOCK_MINUTES).
   AUTO_LOCK_TIMEOUT: 'sphere_auto_lock_timeout',
+
+  // Timestamp of the most recent wallet lock, in any tab. Read on mount /
+  // pageshow / visibilitychange so a tab that never re-runs initialize() — a
+  // bfcache restore, or a hidden tab that missed the lock BroadcastChannel
+  // message — cannot come back holding a decrypted Sphere. Carries no secret,
+  // only a timestamp (graceful lock §8.4).
+  LOCK_EPOCH: 'sphere_lock_epoch',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';
