@@ -17,7 +17,13 @@ const sphereMock = vi.hoisted(() => ({
 const hostMock = vi.hoisted(() => ({
   order: [] as string[],
   session: { id: 'session-1', active: true } as unknown,
-  instance: null as null | Record<string, ReturnType<typeof vi.fn>>,
+  // Typed as the verbs the assertions actually reach, so `tsc -p
+  // tsconfig.test.json` can see they are callable.
+  instance: null as null | {
+    getSession: () => unknown;
+    revokeSession: ReturnType<typeof vi.fn>;
+    setLocked: ReturnType<typeof vi.fn>;
+  },
 }));
 
 vi.mock('@unicitylabs/sphere-sdk/connect', () => ({

@@ -676,7 +676,7 @@ export function SphereProvider({
         setIsLoading(false);
       }
     }
-  }, [network, setupSubscriptionKey, refreshHasWalletPassword]);
+  }, [network, setupSubscriptionKey, refreshHasWalletPassword, markSessionStart]);
 
   useEffect(() => {
     initialize();
@@ -980,7 +980,7 @@ export function SphereProvider({
     }).finally(() => {
       setIsDiscoveringAddresses(false);
     });
-  }, [providers, network, setupSubscriptionKey, setSessionPassword]);
+  }, [providers, network, setupSubscriptionKey, setSessionPassword, markSessionStart]);
 
   // Lock the wallet: destroy the live Sphere instance (keys leave memory — a
   // real lock, not just a UI gate) and require unlock() again. The dApp SESSION
@@ -1226,7 +1226,7 @@ export function SphereProvider({
     // re-key listener AND the provisioning retry — see #420 review.)
     const inst = importedSphere ?? sphereRef.current;
     if (inst) setupSubscriptionKey(inst, undefined);
-  }, [providers, setupSubscriptionKey]);
+  }, [providers, setupSubscriptionKey, markSessionStart]);
 
   const toggleIpfs = useCallback(() => {
     const next = !isIpfsEnabled();

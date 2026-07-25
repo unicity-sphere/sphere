@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "test:e2e": "playwright test"
   },
   "dependencies": {
