@@ -30,6 +30,7 @@ import {
 } from './walletLock/lockSettings';
 import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
 import { broadcastLogout, subscribeLogoutBroadcast } from './walletLock/logoutBroadcast';
+import { markLockEpoch, clearLockEpoch, isLockPending } from './walletLock/lockEpoch';
 import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
 import { forEachConnectHost } from './connectHostRegistry';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
@@ -347,6 +348,16 @@ export function SphereProvider({
   // lock() has observable side effects (one wire event per host, and a
   // queryClient.clear()).
   const lockingRef = useRef(false);
+  // When this tab's CURRENT decrypted session started. Compared against the
+  // persisted lock epoch on resume — a bfcached tab never re-runs initialize()
+  // and never sees the lock BroadcastChannel message it slept through.
+  const sessionStartedAtRef = useRef<number | null>(null);
+
+  // Marks a usable Sphere as live in this tab and drops any stale lock marker.
+  const markSessionStart = useCallback(() => {
+    sessionStartedAtRef.current = Date.now();
+    clearLockEpoch();
+  }, []);
   // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
   // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
   //   load or a live address switch) may apply its key + flip status; stale
@@ -582,6 +593,7 @@ export function SphereProvider({
           setupIpfsSync(inst, browserProviders);
           sphereRef.current = inst;
           setSphere(inst);
+          markSessionStart();
         });
         if (outcome === 'discarded') return;
         setInitProgress(null);
@@ -932,6 +944,7 @@ export function SphereProvider({
       setupIpfsSync(inst, providers);
       sphereRef.current = inst;
       setSphere(inst);
+      markSessionStart();
     });
     if (outcome !== 'adopted') return;
     // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
@@ -1003,6 +1016,10 @@ export function SphereProvider({
       queryClient.clear();
       // Memory-only password never survives a lock (#449).
       setSessionPassword(null);
+      // Persist the lock so a bfcached / hidden tab that never re-runs
+      // initialize() can catch up on resume (graceful lock §8.4).
+      markLockEpoch();
+      sessionStartedAtRef.current = null;
       setIsLocked(true);
     } finally {
       lockingRef.current = false;
@@ -1156,7 +1173,27 @@ export function SphereProvider({
   // instance never stays alive in one tab after another tab locked.
   useEffect(() => subscribeLockBroadcast(undefined, () => { void lock(); }), [lock]);
 
+  // Resume gate: a tab restored from the bfcache resumes with its decrypted
+  // Sphere intact and never re-runs initialize(); a hidden tab may simply have
+  // missed the lock BroadcastChannel message. Both must lock themselves if a
+  // lock is on record newer than this tab's session. `pageshow` and
+  // `visibilitychange` can both fire for one resume — lock() is idempotent.
+  useEffect(() => {
+    const check = () => {
+      if (!sphereRef.current) return;
+      if (isLockPending(sessionStartedAtRef.current)) void lock();
+    };
+    check();
+    window.addEventListener('pageshow', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      window.removeEventListener('pageshow', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [lock]);
+
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
+    markSessionStart();
     if (importedSphere) {
       if (providers) setupIpfsSync(importedSphere, providers);
       sphereRef.current = importedSphere;
