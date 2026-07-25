@@ -69,15 +69,14 @@ export function IframeAgent({ agent }: IframeAgentProps) {
     }
   }, [sphere]);
 
-  // Notify dApp on logout
+  // Logout / wallet deleted — NOT a lock. The session must be DESTROYED: a lock
+  // now preserves it, so keeping the lock verb here would leave the dApp with a
+  // live session and its granted permissions across a logout, which the next
+  // onboarded wallet inherits via updateSphere(). See graceful lock §8.1.
   useEffect(() => {
-    const notifyLocked = () => {
-      if (hostRef.current) {
-        hostRef.current.notifyWalletLocked();
-      }
-    };
-    window.addEventListener('sphere:wallet-logout', notifyLocked);
-    return () => window.removeEventListener('sphere:wallet-logout', notifyLocked);
+    const revoke = () => hostRef.current?.revokeSession();
+    window.addEventListener('sphere:wallet-logout', revoke);
+    return () => window.removeEventListener('sphere:wallet-logout', revoke);
   }, []);
 
   const cleanup = useCallback(() => {

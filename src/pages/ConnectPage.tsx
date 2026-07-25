@@ -20,7 +20,7 @@ type RejectionInfo = { dappName: string; code: number; message: string; data: Re
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
-  const { sphere, isLoading } = useSphereContext();
+  const { sphere, isLoading, isLocked } = useSphereContext();
   const { requestApproval, requestIntent, setConnectHost } = useConnectContext();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
@@ -46,30 +46,34 @@ export function ConnectPage() {
   // Since this is a popup page, browser GC handles cleanup when the window closes.
   const initializedRef = useRef(false);
 
-  // When user switches address — notify the connected dApp.
-  // When sphere becomes null (wallet deleted/logged out) — notify locked.
+  // Address switch, lock, and non-lock loss of Sphere. A LOCK preserves the
+  // session: the host answers WALLET_LOCKED (4009) until updateSphere() re-arms
+  // it. A generic init failure (sphere === null while isLocked === false) is a
+  // DEAD END — unlocking cannot cure it — so it is setUnavailable(), which
+  // revokes the session and pushes wallet:disconnected instead of promising an
+  // unlock that will never help (graceful lock §8.2).
   useEffect(() => {
     if (sphere && hostRef.current) {
       hostRef.current.updateSphere(sphere);
     } else if (!sphere && !isLoading && hostRef.current) {
-      hostRef.current.notifyWalletLocked();
+      if (isLocked) hostRef.current.setLocked();
+      else hostRef.current.setUnavailable();
     }
-  }, [sphere, isLoading]);
+  }, [sphere, isLoading, isLocked]);
 
-  // Notify dApp on logout (SPA navigation) or page unload (refresh/close)
+  // Logout (SPA navigation) or page unload (refresh/close) — both DESTROY the
+  // session; neither is a lock. revokeSession() now pushes wallet:disconnected,
+  // so the dApp stops believing it is connected instead of finding out at its
+  // next 4001.
   useEffect(() => {
-    const notifyLocked = () => {
-      if (hostRef.current) {
-        hostRef.current.notifyWalletLocked();
-      }
-    };
+    const revoke = () => hostRef.current?.revokeSession();
     // SPA logout — dispatched by SphereProvider.deleteWallet before destroy
-    window.addEventListener('sphere:wallet-logout', notifyLocked);
+    window.addEventListener('sphere:wallet-logout', revoke);
     // Page refresh or close
-    window.addEventListener('beforeunload', notifyLocked);
+    window.addEventListener('beforeunload', revoke);
     return () => {
-      window.removeEventListener('sphere:wallet-logout', notifyLocked);
-      window.removeEventListener('beforeunload', notifyLocked);
+      window.removeEventListener('sphere:wallet-logout', revoke);
+      window.removeEventListener('beforeunload', revoke);
     };
   }, []);
 

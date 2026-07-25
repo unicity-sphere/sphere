@@ -14,7 +14,11 @@ const { ConnectHostMock } = vi.hoisted(() => ({
     return {
       destroy: vi.fn(),
       updateSphere: vi.fn(),
-      notifyWalletLocked: vi.fn(),
+      setLocked: vi.fn(),
+      setUnavailable: vi.fn(),
+      revokeSession: vi.fn(),
+      getSession: vi.fn(() => null),
+      getState: vi.fn(() => ({ walletState: 'live', session: null })),
     };
   }),
 }));

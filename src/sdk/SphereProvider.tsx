@@ -29,6 +29,7 @@ import {
   type AutoLockValue,
 } from './walletLock/lockSettings';
 import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
+import { broadcastLogout, subscribeLogoutBroadcast } from './walletLock/logoutBroadcast';
 import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
 import { forEachConnectHost } from './connectHostRegistry';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
@@ -828,6 +829,10 @@ export function SphereProvider({
   const deleteWallet = useCallback(async () => {
     // Notify connected dApps before destroying — ConnectPage/IframeAgent listen for this
     window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
+    // And every OTHER tab: this function wipes IndexedDB and localStorage but
+    // never reloads, so a neighbouring tab would keep operating a live
+    // decrypted Sphere over a wiped database (graceful lock §8.1).
+    broadcastLogout();
 
     // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
     // calls walletApi.logout() on address switch, not on destroy — without
@@ -1119,6 +1124,32 @@ export function SphereProvider({
       void lock();
     },
   });
+
+  // Another tab deleted the wallet. This one is still holding a live decrypted
+  // Sphere over storage that no longer exists — and, now that a Connect session
+  // survives a lock, is still serving dApps from it. Tear the instance down and
+  // re-init against the (now empty) storage. Deliberately does NOT repeat the
+  // destructive work: the originating tab already wiped IndexedDB/localStorage.
+  const handleRemoteLogout = useCallback(async () => {
+    if (!sphereRef.current) return;
+    // The same in-window signal deleteWallet() fires, so every ConnectHost in
+    // THIS tab revokes its session (logout ≠ lock).
+    window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
+    initGenRef.current++;
+    await sphereRef.current.destroy();
+    sphereRef.current = null;
+    setSphere(null);
+    setWalletExists(false);
+    queryClient.clear();
+    setSessionPassword(null);
+    setHasWalletPassword(false);
+    await initialize(0, true);
+  }, [initialize, queryClient, setSessionPassword]);
+
+  useEffect(
+    () => subscribeLogoutBroadcast(undefined, () => { void handleRemoteLogout(); }),
+    [handleRemoteLogout],
+  );
 
   // Cross-tab lock (#449 Task 8a): a lock triggered in ANY tab — idle timeout
   // or an explicit lock() — must lock this one too, so a decrypted Sphere
