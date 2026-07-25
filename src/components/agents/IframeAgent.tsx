@@ -33,8 +33,9 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const initializedRef = useRef(false);
-  const { sphere } = useSphereContext();
-  const { requestApproval, requestIntent, attachHost, releaseHost } = useConnectContext();
+  // Aliased: `isLoading` is already this component's iframe-spinner state (:29).
+  const { sphere, isLoading: walletLoading, isLocked, walletExists } = useSphereContext();
+  const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
 
   const hasUrlOptions = agent.iframeUrls && agent.iframeUrls.length > 1;
 
@@ -58,16 +59,53 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   requestApprovalRef.current = requestApproval;
   const requestIntentRef = useRef(requestIntent);
   requestIntentRef.current = requestIntent;
+  const noteLockedRequestRef = useRef(noteLockedRequest);
+  noteLockedRequestRef.current = noteLockedRequest;
 
-  // Track sphere availability so the effect re-runs when sphere loads
-  const sphereReady = !!sphere;
+  /**
+   * Whether a host may exist at all. A LOCKED wallet still gets one: the host is
+   * built with `sphere: null, initialWalletState: 'locked'`, so the framed dApp
+   * receives HOST_READY and a typed WALLET_LOCKED (4009) instead of a handshake
+   * that silently times out. `walletLoading` gates it because `sphere === null` means
+   * "locked" only once the provider has settled — building a locked host mid-load
+   * would refuse the first handshake of a wallet that is about to come up
+   * unlocked. No wallet at all (onboarding) → no host, as today.
+   */
+  const canHost = !walletLoading && (!!sphere || (walletExists && isLocked));
 
-  // When user switches address — notify the connected dApp
+  // Lock, unlock, address switch, and a non-lock loss of Sphere — the host
+  // OUTLIVES all four. On a lock it keeps its session and answers WALLET_LOCKED
+  // (4009) until updateSphere() re-arms it.
   useEffect(() => {
-    if (sphere && hostRef.current) {
-      hostRef.current.updateSphere(sphere);
+    const host = hostRef.current;
+    if (!host) return;
+    if (sphere) {
+      // A host with NO session is one the dApp cannot resume into: after a wallet
+      // reload during a lock, the dApp's resume handshake carries a sessionId this
+      // fresh host has never seen and the SDK refuses it. Nothing else would ever
+      // prompt the dApp to handshake again, so re-announce HOST_READY on the
+      // re-arm. A host that KEPT its session must not get one — the dApp is still
+      // connected and would re-handshake for nothing.
+      const needsRehandshake = host.getSession() === null;
+      host.updateSphere(sphere);
+      if (needsRehandshake) {
+        try {
+          iframeRef.current?.contentWindow?.postMessage(
+            { type: HOST_READY_TYPE },
+            new URL(activeUrl).origin,
+          );
+        } catch { /* cross-origin or iframe gone — the dApp can still click Connect */ }
+      }
+    } else if (!walletLoading) {
+      // The branch that did not exist: without it an idle auto-lock never reached
+      // an iframe agent and the host kept serving from a destroyed Sphere. A LOCK
+      // is curable by unlocking; a generic init failure (isLocked === false) is a
+      // DEAD END, so it is setUnavailable(), which revokes the session and pushes
+      // wallet:disconnected instead of promising an unlock that cannot help.
+      if (isLocked) host.setLocked();
+      else host.setUnavailable();
     }
-  }, [sphere]);
+  }, [sphere, walletLoading, isLocked, activeUrl]);
 
   // Logout / wallet deleted — NOT a lock. The session must be DESTROYED: a lock
   // now preserves it, so keeping the lock verb here would leave the dApp with a
@@ -92,9 +130,23 @@ export function IframeAgent({ agent }: IframeAgentProps) {
     initializedRef.current = false;
   }, [releaseHost]);
 
+  // Teardown. Its cleanup is the ONLY place the host and transport are destroyed
+  // on a dep change, and it is keyed on activeUrl/reloadKey ONLY — a lock must
+  // NOT tear the host down, because the Connect session survives one now and the
+  // dApp keeps its approval (graceful lock §8.2).
+  //
+  // `cleanup` is reached through a ref rather than listed as a dep ON PURPOSE:
+  // it closes over `releaseHost`, so any consumer that hands us a fresh callback
+  // identity per render would re-run this effect and destroy a live host —
+  // exactly the failure this task exists to prevent. Navigation is the only
+  // thing allowed to tear a host down.
+  const cleanupRef = useRef(cleanup);
+  cleanupRef.current = cleanup;
+  useEffect(() => () => cleanupRef.current(), [activeUrl, reloadKey]);
+
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe || !sphereRef.current || !activeUrl) return;
+    if (!iframe || !canHost || !activeUrl) return;
     // Prevent StrictMode double-init
     if (initializedRef.current) return;
 
@@ -121,6 +173,9 @@ export function IframeAgent({ agent }: IframeAgentProps) {
 
     const host = new ConnectHost({
       sphere: sphereRef.current,
+      // A host built while the wallet is locked must SAY so: starting 'live' with
+      // a null Sphere dereferences null on the first request.
+      initialWalletState: sphereRef.current ? 'live' : 'locked',
       // The only trustworthy origin the host has — session.dapp.url is
       // dApp-claimed metadata (audit fix #452). Optional in the SDK; we always
       // have it here, so the wallet's badge can name the app honestly.
@@ -159,6 +214,12 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       onDisconnect: () => {
         revokeApprovedOrigin(origin);
       },
+      // NOTIFY-ONLY. The host has ALREADY answered WALLET_LOCKED (4009) and never
+      // waits for us. This must NEVER raise a credential surface: it only feeds a
+      // passive badge in permanent chrome, and the password field appears solely
+      // after a human clicks it (graceful lock §8.3). Pass the origin WE verified,
+      // not ctx.origin, even though the host echoes the same value back.
+      onLockedRequest: (ctx) => noteLockedRequestRef.current(origin, ctx),
       onIntent: (action, params) =>
         requestIntentRef.current(hostRef.current!, origin, action, params),
     });
@@ -170,11 +231,10 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       iframe.contentWindow?.postMessage({ type: HOST_READY_TYPE }, origin);
     } catch { /* cross-origin or iframe not ready yet — handled by onLoad below */ }
 
-    return () => {
-      cleanup();
-    };
+    // No cleanup here on purpose: teardown belongs to the effect above, which is
+    // keyed on activeUrl/reloadKey only, so a lock cannot destroy this host.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUrl, sphereReady, reloadKey]);
+  }, [activeUrl, canHost, reloadKey]);
 
   const handleUrlSwitch = (url: string) => {
     if (url === activeUrl) return;
