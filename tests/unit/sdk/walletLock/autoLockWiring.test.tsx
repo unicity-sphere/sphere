@@ -95,7 +95,7 @@ vi.mock('@unicitylabs/sphere-sdk/impl/browser', async (importOriginal) => {
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { SphereProvider } from '../../../../src/sdk/SphereProvider';
 import { useSphereContext } from '../../../../src/sdk/hooks/core/useSphere';
-import { setActiveConnectHost } from '../../../../src/sdk/connectHostRegistry';
+import { registerConnectHost, clearConnectHosts } from '../../../../src/sdk/connectHostRegistry';
 
 function Wrapper({ children }: { children: ReactNode }) {
   const [qc] = useState(
@@ -148,7 +148,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  setActiveConnectHost(null);
+  clearConnectHosts();
   // TokenRegistry is a process-wide singleton that starts a background
   // refresh timer on configure() — reset it so it doesn't leak into (or slow
   // down) other test files.
@@ -168,7 +168,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('sphere').textContent).toBe('null');
 
     const fakeHost = { notifyWalletLocked: vi.fn() };
-    setActiveConnectHost(fakeHost as unknown as ConnectHost);
+    registerConnectHost(fakeHost as unknown as ConnectHost, { origin: 'https://lock.test' });
 
     // Fake timers from here on — the idle timer's setTimeout must be armed by
     // unlock()'s setSessionPassword(password) call, and we need to fast-forward
@@ -209,7 +209,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('locked').textContent).toBe('false');
 
     const fakeHost = { notifyWalletLocked: vi.fn() };
-    setActiveConnectHost(fakeHost as unknown as ConnectHost);
+    registerConnectHost(fakeHost as unknown as ConnectHost, { origin: 'https://lock.test' });
 
     vi.useFakeTimers();
     // Ten times the longest configurable auto-lock option (30 min) — if the
@@ -228,4 +228,53 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(initSpy.calls.length).toBeGreaterThan(0);
     expect(initSpy.calls.every((c) => c.password === undefined)).toBe(true);
   });
+
+  it('a MANUAL lock fans out to every host and crosses tabs, exactly once', async () => {
+    mockState.mode = 'encrypted';
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId('locked').textContent).toBe('true'));
+
+    // Two framed dApps: DesktopLayout keeps every tab mounted, so a wallet with
+    // two open agent tabs really does have two live hosts. A single-slot registry
+    // reached only the last one.
+    const hostA = { notifyWalletLocked: vi.fn() };
+    const hostB = { notifyWalletLocked: vi.fn() };
+    registerConnectHost(hostA as unknown as ConnectHost, { origin: 'https://a.test' });
+    registerConnectHost(hostB as unknown as ConnectHost, { origin: 'https://b.test' });
+
+    // Watch the cross-tab channel: the Connect popup is a separate window with its
+    // own SphereProvider, and before this the manual lock never reached it.
+    const posted: unknown[] = [];
+    const channel = new BroadcastChannel('sphere-wallet-lock');
+    channel.onmessage = (e) => { posted.push((e as MessageEvent).data); };
+
+    await act(async () => {
+      await ctx!.unlock('correct horse battery staple');
+    });
+    expect(screen.getByTestId('sphere').textContent).toBe('present');
+
+    await act(async () => {
+      await ctx!.lock();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(screen.getByTestId('locked').textContent).toBe('true');
+    expect(screen.getByTestId('sphere').textContent).toBe('null');
+    // BOTH hosts, not just the last registered one.
+    expect(hostA.notifyWalletLocked).toHaveBeenCalledTimes(1);
+    expect(hostB.notifyWalletLocked).toHaveBeenCalledTimes(1);
+    // And the manual path broadcast, which it never used to do.
+    expect(posted.length).toBeGreaterThan(0);
+
+    // Exactly-once: the same-tab loopback re-enters lock(), and without the guard
+    // that re-entry would broadcast again, unboundedly.
+    await act(async () => {
+      await ctx!.lock();
+    });
+    expect(hostA.notifyWalletLocked).toHaveBeenCalledTimes(1);
+
+    channel.close();
+  });
+
 });

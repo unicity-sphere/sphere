@@ -143,7 +143,7 @@ export function ConnectPage() {
         requestIntentRef.current(action, params),
     });
     hostRef.current = host;
-    setConnectHost(host);
+    setConnectHost(host, origin);
 
     setStatus('ready');
 
