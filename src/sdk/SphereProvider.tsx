@@ -337,12 +337,15 @@ export function SphereProvider({
   // toggle, unmount) destroys the instance it built instead of leaking it. See
   // #453 and adoptOrDiscardInstance.
   const initGenRef = useRef(0);
-  // Exactly-once guard for lock(). broadcastLock() now fires from INSIDE lock(),
+  // Re-entrancy guard for lock(). broadcastLock() now fires from INSIDE lock(),
   // and a same-name BroadcastChannel receives its own tab's postMessage, so the
   // cross-tab subscription re-enters lock() in the triggering tab; without this
-  // ref that re-entry broadcasts again, unboundedly. Cleared by every path that
-  // brings a live Sphere back (unlock, finalizeWallet).
-  const lockedRef = useRef(false);
+  // ref that re-entry broadcasts again, unboundedly. A manual lock racing a
+  // cross-tab lock does the same. Combined with the `sphereRef.current === null`
+  // check inside lock(), this makes a lock exactly-once — which matters now that
+  // lock() has observable side effects (one wire event per host, and a
+  // queryClient.clear()).
+  const lockingRef = useRef(false);
   // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
   // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
   //   load or a live address switch) may apply its key + flip status; stale
@@ -928,7 +931,6 @@ export function SphereProvider({
     if (outcome !== 'adopted') return;
     // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
     setSessionPassword(password);
-    lockedRef.current = false;
     setIsLocked(false);
     // A successful unlock proves the wallet has a password (that's WHY it was locked).
     setHasWalletPassword(true);
@@ -956,40 +958,51 @@ export function SphereProvider({
     });
   }, [providers, network, setupSubscriptionKey, setSessionPassword]);
 
-  // Lock the wallet: destroy the live Sphere instance (keys leave memory —
-  // a real lock, not just a UI gate) and require unlock() again.
+  // Lock the wallet: destroy the live Sphere instance (keys leave memory — a
+  // real lock, not just a UI gate) and require unlock() again. The dApp SESSION
+  // SURVIVES: hosts are told with setLocked(), which preserves the session and
+  // answers every subsequent request WALLET_LOCKED (4009) until updateSphere()
+  // re-arms them. For a logout use revokeSession() instead; for a non-lock loss
+  // of Sphere, setUnavailable().
   const lock = useCallback(async () => {
-    // Exactly-once. Required now that broadcastLock() lives INSIDE lock(): a
-    // same-name BroadcastChannel receives its own tab's postMessage, so the
-    // subscription below re-enters lock(), which would broadcast again — an
-    // unbounded loop. A ref, not `isLocked`, because the state update is async
-    // and the loopback arrives in the same tick.
-    if (lockedRef.current) return;
-    lockedRef.current = true;
-    initGenRef.current++; // supersede any in-flight init
-    // Notify EVERY connected dApp BEFORE destroying the instance, so each gets a
-    // clean LOCKED event instead of NOT_CONNECTED errors on its next request.
-    // `forEachConnectHost` reads the module-scoped registry in
-    // connectHostRegistry.ts — SphereProvider is an ANCESTOR of ConnectProvider
-    // in the tree (see main.tsx), so it can't `useConnectContext()` directly;
-    // see that file for why. This was deferred from Task 4 (#449).
-    //
-    // A fan-out, not a single slot: DesktopLayout keeps every open tab mounted,
-    // so a wallet with three framed dApps has three live hosts and notifying only
-    // the last-registered one leaves the other two talking to a wallet they
-    // believe is unlocked.
-    forEachConnectHost((host) => host.notifyWalletLocked());
-    // Cross-tab, and from EVERY lock path rather than only the idle timer: the
-    // Connect popup is a separate window with its own SphereProvider, so a manual
-    // "Lock Wallet" used to leave it serving RPCs from a fully unlocked Sphere.
-    broadcastLock();
-    await sphereRef.current?.destroy();
-    sphereRef.current = null;
-    setSphere(null);
-    // Memory-only password never survives a lock (#449).
-    setSessionPassword(null);
-    setIsLocked(true);
-  }, [setSessionPassword]);
+    // Idempotent — see lockingRef. Also a no-op when there is nothing live to
+    // lock (already locked, or Sphere never came up).
+    if (lockingRef.current || sphereRef.current === null) return;
+    lockingRef.current = true;
+    try {
+      initGenRef.current++; // supersede any in-flight init
+      // EVERY lock path broadcasts (PR #456): the Connect popup is a separate
+      // window with its own SphereProvider, so a manual "Lock Wallet" that did
+      // not broadcast left it serving RPCs from a fully unlocked Sphere. The
+      // loopback this creates terminates on the guard above.
+      broadcastLock();
+      // Tell every live host BEFORE destroying the instance (ordering
+      // contract). ConnectHost drops its Sphere reference inside setLocked()
+      // and settles anything already in flight with 4009 — calling destroy()
+      // first would leave those requests reading a dead instance (-32603, or
+      // `undefined` returned AS SUCCESS from sphere_getIdentity).
+      //
+      // A fan-out, not a single slot: DesktopLayout keeps every open tab
+      // mounted, so a wallet with three framed dApps has three live hosts, and
+      // locking only the last-registered one leaves the other two talking to a
+      // wallet they believe is unlocked. `forEachConnectHost` reads the
+      // module-scoped registry in connectHostRegistry.ts — SphereProvider is an
+      // ANCESTOR of ConnectProvider in the tree (see main.tsx), so it can't
+      // `useConnectContext()` directly; see that file for why.
+      forEachConnectHost((host) => host.setLocked());
+      await sphereRef.current?.destroy();
+      sphereRef.current = null;
+      setSphere(null);
+      // Cached balances, history and DMs must not stay readable behind the lock
+      // screen (deleteWallet already does this).
+      queryClient.clear();
+      // Memory-only password never survives a lock (#449).
+      setSessionPassword(null);
+      setIsLocked(true);
+    } finally {
+      lockingRef.current = false;
+    }
+  }, [queryClient, setSessionPassword]);
 
   // Settings → Security (#449 Task 8b): set/change/remove the wallet's at-rest
   // password via the VERIFIED-SAFE in-place mnemonic re-encryption
@@ -1125,7 +1138,6 @@ export function SphereProvider({
     // (#449). Without this, isLocked would stay true forever after a
     // successful restore and the shell gate would keep showing the lock
     // screen instead of the freshly-restored wallet.
-    lockedRef.current = false;
     setIsLocked(false);
     // Reflect whatever createWallet()/importWallet() decided: they already
     // called setSessionPassword() (passwordRef) iff the user chose a password

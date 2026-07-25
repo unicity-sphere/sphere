@@ -1,5 +1,17 @@
 import { useEffect, useRef } from 'react';
 
+/**
+ * Activity that rearms the idle timer. STRICT by policy (graceful lock §8.5):
+ * `message` is deliberately ABSENT. Traffic from a framed dApp arrives as a
+ * window `message` event, and counting it would let an embedded page hold the
+ * wallet unlocked forever by polling. The cost — a user working inside a
+ * cross-origin agent tab looks idle, because DOM events there do not bubble to
+ * the wallet window — is acceptable only because a lock no longer drops the
+ * dApp connection: the host answers WALLET_LOCKED (4009) and the wallet lights
+ * a passive badge. An explicit SDK activity ping on user gesture is the
+ * follow-up; do not "fix" surprise auto-locks by adding `message` here —
+ * tests/unit/sdk/walletLock/idlePolicyStrict.test.tsx guards it.
+ */
 const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'] as const;
 const THROTTLE_MS = 1000;
 

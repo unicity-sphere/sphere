@@ -6,7 +6,7 @@
  * Covers the two load-bearing behaviors:
  *  - A wallet unlocked WITH a password arms the idle timer (idleLockConfig
  *    goes enabled), and an idle timeout actually locks the wallet AND
- *    notifies the registered ConnectHost via notifyWalletLocked().
+ *    tells every registered ConnectHost setLocked() (session-preserving).
  *  - A wallet that never had a password (this session) — the plaintext
  *    regression, from the OTHER side of the invariant — never arms the idle
  *    timer, no matter how long the user is "idle" for.
@@ -167,7 +167,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('loading').textContent).toBe('false');
     expect(screen.getByTestId('sphere').textContent).toBe('null');
 
-    const fakeHost = { notifyWalletLocked: vi.fn() };
+    const fakeHost = { setLocked: vi.fn(), revokeSession: vi.fn() };
     registerConnectHost(fakeHost as unknown as ConnectHost, { origin: 'https://lock.test' });
 
     // Fake timers from here on — the idle timer's setTimeout must be armed by
@@ -181,7 +181,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     // Unlock succeeded: the wallet is live and no longer locked.
     expect(screen.getByTestId('locked').textContent).toBe('false');
     expect(screen.getByTestId('sphere').textContent).toBe('present');
-    expect(fakeHost.notifyWalletLocked).not.toHaveBeenCalled();
+    expect(fakeHost.setLocked).not.toHaveBeenCalled();
 
     // Default auto-lock timeout (no stored settings blob → DEFAULT_AUTO_LOCK_MINUTES,
     // 15 minutes — src/sdk/walletLock/lockSettings.ts) — advance just past it.
@@ -194,10 +194,10 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('sphere').textContent).toBe('null');
     // At least once — the same-tab BroadcastChannel loopback (see the onIdle
     // comment in SphereProvider.tsx) can legitimately drive lock() a second
-    // time in this very tab; lock()/notifyWalletLocked() are idempotent, so
+    // time in this very tab; lock() is exactly-once, so
     // this test asserts the load-bearing fact (the dApp WAS told) rather than
     // an exact call count that depends on that loopback timing.
-    expect(fakeHost.notifyWalletLocked).toHaveBeenCalled();
+    expect(fakeHost.setLocked).toHaveBeenCalledTimes(1);
   });
 
   it('a wallet with NO password never arms auto-lock, even far past any timeout', async () => {
@@ -208,7 +208,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('sphere').textContent).toBe('present');
     expect(screen.getByTestId('locked').textContent).toBe('false');
 
-    const fakeHost = { notifyWalletLocked: vi.fn() };
+    const fakeHost = { setLocked: vi.fn(), revokeSession: vi.fn() };
     registerConnectHost(fakeHost as unknown as ConnectHost, { origin: 'https://lock.test' });
 
     vi.useFakeTimers();
@@ -221,7 +221,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
 
     expect(screen.getByTestId('locked').textContent).toBe('false');
     expect(screen.getByTestId('sphere').textContent).toBe('present');
-    expect(fakeHost.notifyWalletLocked).not.toHaveBeenCalled();
+    expect(fakeHost.setLocked).not.toHaveBeenCalled();
 
     // The existing-wallet load path must still never have passed a password —
     // this is a plaintext wallet throughout (mirrors plaintextWalletLoads.test.tsx).
@@ -238,8 +238,8 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     // Two framed dApps: DesktopLayout keeps every tab mounted, so a wallet with
     // two open agent tabs really does have two live hosts. A single-slot registry
     // reached only the last one.
-    const hostA = { notifyWalletLocked: vi.fn() };
-    const hostB = { notifyWalletLocked: vi.fn() };
+    const hostA = { setLocked: vi.fn(), revokeSession: vi.fn() };
+    const hostB = { setLocked: vi.fn(), revokeSession: vi.fn() };
     registerConnectHost(hostA as unknown as ConnectHost, { origin: 'https://a.test' });
     registerConnectHost(hostB as unknown as ConnectHost, { origin: 'https://b.test' });
 
@@ -262,8 +262,8 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     expect(screen.getByTestId('locked').textContent).toBe('true');
     expect(screen.getByTestId('sphere').textContent).toBe('null');
     // BOTH hosts, not just the last registered one.
-    expect(hostA.notifyWalletLocked).toHaveBeenCalledTimes(1);
-    expect(hostB.notifyWalletLocked).toHaveBeenCalledTimes(1);
+    expect(hostA.setLocked).toHaveBeenCalledTimes(1);
+    expect(hostB.setLocked).toHaveBeenCalledTimes(1);
     // And the manual path broadcast, which it never used to do.
     expect(posted.length).toBeGreaterThan(0);
 
@@ -272,7 +272,7 @@ describe('idle auto-lock wiring (#449 Task 8a)', () => {
     await act(async () => {
       await ctx!.lock();
     });
-    expect(hostA.notifyWalletLocked).toHaveBeenCalledTimes(1);
+    expect(hostA.setLocked).toHaveBeenCalledTimes(1);
 
     channel.close();
   });
