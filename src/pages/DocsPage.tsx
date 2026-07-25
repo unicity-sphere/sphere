@@ -1386,10 +1386,44 @@ const result = await client.intent('send', {
 // deliveryPending=true means the spend is FINAL on-chain but the recipient's
 // delivery is queued and retries automatically — never re-send it.
 
-// Handle wallet logout — user signed out or switched wallets
+// The wallet locked. The SESSION IS STILL ALIVE — do NOT disconnect, do NOT
+// clear your saved session, do NOT re-handshake. Requests are answered
+// WALLET_LOCKED (4009) until the wallet is unlocked. The wallet shows its own
+// passive "requests blocked — Unlock" badge; nothing you do can raise its
+// password field, and you should not try.
 client.on(WALLET_EVENTS.LOCKED, () => {
-  // Show connect UI, clear any saved session
+  setWalletLocked(true);   // show a banner, keep everything else
 });
+
+// The wallet was unlocked — the SAME session continues. No re-handshake, no
+// re-approval, and no re-subscribe: the host re-arms your event streams BEFORE
+// it sends this. The payload carries the wallet's identity at unlock time, and it
+// is NOT guaranteed to be the wallet you connected with — the lock screen's
+// "Forgot password → restore from recovery phrase" installs a different seed.
+// Compare before you retry anything.
+client.on(WALLET_EVENTS.UNLOCKED, ({ identity }) => {
+  if (identity?.chainPubkey !== connectedPubkey) {
+    // A different wallet came back — treat it as a new connection.
+    disconnect();
+    return;
+  }
+  setWalletLocked(false);
+  retryLastQuery();        // queries only — NEVER auto-resume an intent
+});
+
+// The session is GONE (logout, wallet deleted, you called disconnect, the session
+// expired, or a different seed was restored behind the lock screen). THIS is the
+// teardown signal — clear your session and re-handshake to continue. Unlocking
+// does not cure it.
+client.on(WALLET_EVENTS.DISCONNECTED, () => {
+  clearSession();
+  showConnectButton();
+});
+
+// An OLD wallet (Connect 2.0) never sends wallet:unlocked, so do not wait for one.
+if (client.walletProtocol === '2.0') {
+  // Legacy behaviour: a lock ends the session. Reconnect on wallet:locked.
+}
 
 // Handle wallet address switch
 client.on(WALLET_EVENTS.IDENTITY_CHANGED, (newIdentity) => {
