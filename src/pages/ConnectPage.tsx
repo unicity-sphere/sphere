@@ -20,8 +20,8 @@ type RejectionInfo = { dappName: string; code: number; message: string; data: Re
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
-  const { sphere, isLoading, isLocked } = useSphereContext();
-  const { requestApproval, requestIntent, attachHost, releaseHost } = useConnectContext();
+  const { sphere, isLoading, isLocked, walletExists } = useSphereContext();
+  const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
@@ -36,9 +36,14 @@ export function ConnectPage() {
   requestApprovalRef.current = requestApproval;
   const requestIntentRef = useRef(requestIntent);
   requestIntentRef.current = requestIntent;
+  const noteLockedRequestRef = useRef(noteLockedRequest);
+  noteLockedRequestRef.current = noteLockedRequest;
 
-  // Track whether sphere has been available at least once
-  const sphereReady = !isLoading && !!sphere;
+  // A host is built even for a LOCKED wallet: with `sphere: null,
+  // initialWalletState: 'locked'` the dApp gets HOST_READY and a typed
+  // WALLET_LOCKED (4009) instead of a handshake that silently times out
+  // (graceful lock §8.2).
+  const canHost = !isLoading && (!!sphere || (walletExists && isLocked));
 
   // Prevent StrictMode double-mount from destroying the host.
   // In dev, React runs: mount → cleanup → mount. The cleanup would destroy host1,
@@ -85,7 +90,7 @@ export function ConnectPage() {
   }, [releaseHost]);
 
   useEffect(() => {
-    if (!sphereReady) return;
+    if (!canHost) return;
     // Already initialized (incl. StrictMode second mount) — skip
     if (initializedRef.current) return;
 
@@ -101,7 +106,7 @@ export function ConnectPage() {
     }
 
     initializedRef.current = true;
-    const currentSphere = sphereRef.current!;
+    const currentSphere = sphereRef.current;
 
     const transport = PostMessageTransport.forHost(window.opener as Window, {
       allowedOrigins: [origin],
@@ -110,6 +115,7 @@ export function ConnectPage() {
 
     const host = new ConnectHost({
       sphere: currentSphere,
+      initialWalletState: currentSphere ? 'live' : 'locked',
       // The transport-verified origin — never the dApp-claimed dapp.url.
       origin,
       transport,
@@ -152,6 +158,11 @@ export function ConnectPage() {
         revokeApprovedOrigin(origin);
         setConnectedDapp(null);
       },
+      // NOTIFY-ONLY: the host has ALREADY answered WALLET_LOCKED (4009) and never
+      // waits for us. It must NEVER raise a credential surface — it only feeds the
+      // passive badge, and the password field appears solely after a human clicks
+      // it (graceful lock §8.3).
+      onLockedRequest: (ctx) => noteLockedRequestRef.current(origin, ctx),
       onIntent: (action, params) =>
         requestIntentRef.current(hostRef.current!, origin, action, params),
     });
@@ -178,7 +189,7 @@ export function ConnectPage() {
     // No cleanup — popup page is GC'd when window closes.
     // Returning a cleanup would break StrictMode (destroy host on first unmount).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sphereReady, origin]);
+  }, [canHost, origin]);
 
   return (
     <div className="h-screen bg-linear-to-br from-gray-50 to-gray-100 dark:from-neutral-950 dark:to-neutral-900 flex flex-col">
@@ -186,9 +197,23 @@ export function ConnectPage() {
       {status === 'ready' && (
         <div className="shrink-0 mx-3 mt-3 bg-white dark:bg-neutral-800 rounded-2xl border border-gray-200 dark:border-neutral-700 p-3 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-sm font-medium text-gray-700 dark:text-neutral-300">
-              {connectedDapp ? `Connected to ${connectedDapp}` : 'Ready for connections'}
+            {/* A lock no longer disconnects the dApp — but a pulsing green
+                "Connected" while every request is answered 4009 is a lie. */}
+            <div
+              data-testid="connect-status-dot"
+              className={`w-2 h-2 rounded-full ${isLocked ? 'bg-amber-500' : 'bg-green-500 animate-pulse'}`}
+            />
+            <span
+              data-testid="connect-status-text"
+              className="text-sm font-medium text-gray-700 dark:text-neutral-300"
+            >
+              {isLocked
+                ? connectedDapp
+                  ? `Wallet locked — ${connectedDapp} stays connected`
+                  : 'Wallet locked'
+                : connectedDapp
+                  ? `Connected to ${connectedDapp}`
+                  : 'Ready for connections'}
             </span>
           </div>
           {origin && (
