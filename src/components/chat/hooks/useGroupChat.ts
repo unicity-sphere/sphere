@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type { GroupData, GroupMessageData, GroupMemberData, CreateGroupOptions } from '@unicitylabs/sphere-sdk';
 import { GroupVisibility } from '@unicitylabs/sphere-sdk';
+import { getDraft, setDraft, clearDraft } from '../draftStore';
 import { useServices } from '../../../contexts/useServices';
 import { useSphereContext } from '../../../sdk/hooks/core/useSphere';
 import { useIdentity } from '../../../sdk/hooks/core/useIdentity';
@@ -102,9 +103,22 @@ export const useGroupChat = (): UseGroupChatReturn => {
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
   const KEYS = useMemo(() => groupChatKeys(addressId), [addressId]);
   const [selectedGroup, setSelectedGroup] = useState<GroupData | null>(null);
-  const [messageInput, setMessageInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [messageLimit, setMessageLimit] = useState(20);
+  // The composer draft lives OUTSIDE this hook's state so it survives an unmount — the
+  // locked-wallet blocker unmounts this whole section, and a lock is not something the user
+  // chose. See draftStore.ts.
+  const selectedGroupId = selectedGroup?.id ?? null;
+  const [draftTick, setDraftTick] = useState(0);
+  const messageInput = getDraft('group', selectedGroupId);
+  const setMessageInput = useCallback(
+    (value: string) => {
+      setDraft('group', selectedGroupId, value);
+      setDraftTick((n) => n + 1); // the store is not reactive; nudge a render
+    },
+    [selectedGroupId],
+  );
+  void draftTick;
   // Address-scoped selected group key
   const selectedGroupKey = `${STORAGE_KEYS.CHAT_SELECTED_GROUP}_${addressId}`;
 
@@ -374,7 +388,7 @@ export const useGroupChat = (): UseGroupChatReturn => {
       return true;
     },
     onSuccess: () => {
-      setMessageInput('');
+      clearDraft('group', selectedGroupId);
       queryClient.invalidateQueries({
         queryKey: KEYS.messages(selectedGroup?.id || ''),
       });

@@ -159,7 +159,10 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
 
     const host = makeFakeHost('A');
     attach(host, 'https://a.example');
-    const clearSpy = vi.spyOn(queryClient, 'clear');
+    // lock() no longer uses clear(): that also wiped the UI-state caches React Query doubles
+    // as (open desktop tabs, walletOpen), leaving the Wallet button dead after an auto-lock.
+    // It removes every NON-UI query instead — see src/config/uiQueryKeys.ts.
+    const clearSpy = vi.spyOn(queryClient, 'removeQueries');
 
     await act(async () => { await ctx!.lock(); await ctx!.lock(); });
 
@@ -176,6 +179,31 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
 
     await act(async () => { await ctx!.lock(); });
 
+    expect(queryClient.getQueryData(['balance'])).toBeUndefined();
+  });
+
+  it('PRESERVES the UI-state caches, so the lock does not kill the Wallet button', async () => {
+    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
+
+    // React Query doubles as this app's UI store. DesktopLayout consumes no Sphere hook, so a
+    // lock never re-renders it: removing these left its observer bound to a discarded Query and
+    // the next setWalletOpen(true) wrote to an instance nobody reads — the Wallet button,
+    // fullscreen and Escape all dead until a reload, and with them the "Unlock Wallet" button
+    // the locked screens offer.
+    queryClient.setQueryData(['desktop', 'state'], { walletOpen: true, tabs: ['dm'] });
+    queryClient.setQueryData(['ui', 'state'], { theme: 'dark' });
+    queryClient.setQueryData(['desktop-order'], ['dm', 'group-chat']);
+    queryClient.setQueryData(['installed-projects'], ['a']);
+    queryClient.setQueryData(['balance'], { total: '1000' });
+
+    await act(async () => { await ctx!.lock(); });
+
+    expect(queryClient.getQueryData(['desktop', 'state'])).toEqual({ walletOpen: true, tabs: ['dm'] });
+    expect(queryClient.getQueryData(['ui', 'state'])).toEqual({ theme: 'dark' });
+    expect(queryClient.getQueryData(['desktop-order'])).toEqual(['dm', 'group-chat']);
+    expect(queryClient.getQueryData(['installed-projects'])).toEqual(['a']);
+    // …while wallet data still goes.
     expect(queryClient.getQueryData(['balance'])).toBeUndefined();
   });
 

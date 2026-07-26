@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { getDraft, setDraft, clearDraft } from '../draftStore';
 import { useSphereContext } from '../../../sdk/hooks/core/useSphere';
 import { useIdentity } from '../../../sdk/hooks/core/useIdentity';
 import { useActiveTabId } from '../../../hooks/useDesktopState';
@@ -71,7 +72,20 @@ export const useChat = (): UseChatReturn => {
   const addressId = directAddress ? buildAddressId(directAddress) : 'default';
 
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
-  const [messageInput, setMessageInput] = useState('');
+  // The composer draft lives OUTSIDE this hook's state: the reset effect below fires whenever
+  // the identity query goes away — which a lock does — and the locked-wallet blocker unmounts
+  // this section outright. Neither is the user choosing to abandon what they typed.
+  const [draftTick, setDraftTick] = useState(0);
+  const draftPeer = selectedConversation?.peerPubkey ?? null;
+  const messageInput = getDraft('dm', draftPeer);
+  const setMessageInput = useCallback(
+    (value: string) => {
+      setDraft('dm', draftPeer, value);
+      setDraftTick((n) => n + 1); // the store is not reactive; nudge a render
+    },
+    [draftPeer],
+  );
+  void draftTick;
   const [searchQuery, setSearchQuery] = useState('');
   const [isRecipientTyping, setIsRecipientTyping] = useState(false);
   const [messageLimit, setMessageLimit] = useState(20);
@@ -89,7 +103,6 @@ export const useChat = (): UseChatReturn => {
   // Reset UI state when address changes
   useEffect(() => {
     setSelectedConversation(null);
-    setMessageInput('');
     setSearchQuery('');
     setIsRecipientTyping(false);
     setMessageLimit(20);
@@ -238,7 +251,7 @@ export const useChat = (): UseChatReturn => {
       return true;
     },
     onSuccess: () => {
-      setMessageInput('');
+      clearDraft('dm', draftPeer);
       queryClient.invalidateQueries({ queryKey: CHAT_KEYS.all });
     },
   });

@@ -33,6 +33,7 @@ import { broadcastLogout, subscribeLogoutBroadcast } from './walletLock/logoutBr
 import { markLockEpoch, clearLockEpoch, isLockPending } from './walletLock/lockEpoch';
 import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
 import { forEachConnectHost } from './connectHostRegistry';
+import { isUiOnlyQuery } from '../config/uiQueryKeys';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -1017,9 +1018,16 @@ export function SphereProvider({
       await sphereRef.current?.destroy();
       sphereRef.current = null;
       setSphere(null);
-      // Cached balances, history and DMs must not stay readable behind the lock
-      // screen (deleteWallet already does this).
-      queryClient.clear();
+      // Cached balances, history and DMs must not stay readable behind the lock screen.
+      //
+      // NOT queryClient.clear(): React Query also holds this app's UI state (open desktop
+      // tabs, whether the wallet panel is out, app order). DesktopLayout consumes no Sphere
+      // hook, so a lock never re-renders it — wiping ['desktop','state'] left its observer
+      // bound to a discarded Query and the next setWalletOpen(true) wrote to an instance
+      // nobody reads, killing the Wallet button, fullscreen and Escape until a reload. That
+      // also killed the "Unlock Wallet" button the locked screens offer. See uiQueryKeys.ts.
+      queryClient.removeQueries({ predicate: (q) => !isUiOnlyQuery(q) });
+      queryClient.getMutationCache().clear();
       // Memory-only password never survives a lock (#449).
       setSessionPassword(null);
       // Persist the lock so a bfcached / hidden tab that never re-runs
