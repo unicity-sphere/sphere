@@ -256,19 +256,15 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     if (head) settleApproval(head.id, { approved: false, grantedPermissions: [] });
   }, [settleApproval]);
 
+  // BY ID, never by queue position. settleIntent() already no-ops on an id that is gone, so a
+  // late callback from a modal whose intent was settled some other way is harmless.
   const resolveIntent = useCallback(
-    (result: unknown) => {
-      const head = intentQueueRef.current[0];
-      if (head) settleIntent(head.id, { result });
-    },
+    (id: number, result: unknown) => settleIntent(id, { result }),
     [settleIntent],
   );
 
   const rejectIntent = useCallback(
-    (code: number, message: string) => {
-      const head = intentQueueRef.current[0];
-      if (head) settleIntent(head.id, { error: { code, message } });
-    },
+    (id: number, code: number, message: string) => settleIntent(id, { error: { code, message } }),
     [settleIntent],
   );
 

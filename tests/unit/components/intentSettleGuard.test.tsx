@@ -69,7 +69,7 @@ describe('intent settle-time guard', () => {
     act(() => { vi.advanceTimersByTime(500); });
     expect(screen.getByTestId('interactive').textContent).toBe('true');
 
-    act(() => ctx!.resolveIntent({ ok: true }));
+    act(() => ctx!.resolveIntent(ctx!.pendingIntent!.id, { ok: true }));
 
     // The modal contents just swapped under the cursor — shielded again.
     expect(screen.getByTestId('intent-settle-shield')).toBeDefined();

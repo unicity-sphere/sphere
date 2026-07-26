@@ -85,8 +85,13 @@ export interface ConnectContextValue {
 
   approveConnection: (grantedPermissions: PermissionScope[]) => void;
   denyConnection: () => void;
-  resolveIntent: (result: unknown) => void;
-  rejectIntent: (code: number, message: string) => void;
+  /**
+   * Settle a specific queued intent. The ID IS REQUIRED — settling "the head" was correct only
+   * while there was one slot. With a FIFO queue the head advances while a modal's async work is
+   * still in flight, so a completed transfer's result would land on a DIFFERENT dApp's intent.
+   */
+  resolveIntent: (id: number, result: unknown) => void;
+  rejectIntent: (id: number, code: number, message: string) => void;
 
   /** Register a live host with its transport-verified origin. Paired with releaseHost(). */
   attachHost: (host: ConnectHost, origin: string) => void;

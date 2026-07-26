@@ -71,11 +71,11 @@ describe('ConnectProvider intent queue', () => {
     // FIFO: the first intent is on screen, the second waits.
     expect(screen.getByTestId('head').textContent).toBe('send');
 
-    act(() => ctx!.resolveIntent({ ok: 1 }));
+    act(() => ctx!.resolveIntent(ctx!.pendingIntent!.id, { ok: 1 }));
     await waitFor(() => expect(first).toEqual({ result: { ok: 1 } }));
     expect(screen.getByTestId('head').textContent).toBe('dm');
 
-    act(() => ctx!.rejectIntent(ERROR_CODES.USER_REJECTED, 'User cancelled'));
+    act(() => ctx!.rejectIntent(ctx!.pendingIntent!.id, ERROR_CODES.USER_REJECTED, 'User cancelled'));
     await waitFor(() =>
       expect(second).toEqual({ error: { code: ERROR_CODES.USER_REJECTED, message: 'User cancelled' } }),
     );
@@ -158,5 +158,33 @@ describe('ConnectProvider intent queue', () => {
     act(() => { void ctx!.requestIntent(hostB, 'https://b.example', 'dm', { to: 'x' }); });
     expect(auto).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('head').textContent).toBe('dm');
+  });
+});
+
+describe('settling an intent is keyed by ID, never by queue position', () => {
+  it('delivers a late result to the intent it belongs to, not to whatever is now the head', async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+
+    let alice: unknown;
+    let bob: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'send', { to: 'alice' }).then((r) => { alice = r; });
+      void ctx!.requestIntent(hostA, 'https://a.example', 'send', { to: 'bob' }).then((r) => { bob = r; });
+    });
+
+    // The modal rendered for ALICE captured her id. The head then advances, because she was
+    // settled some other way while her transfer was still in flight.
+    const aliceId = ctx!.pendingIntent!.id;
+    act(() => ctx!.rejectIntent(aliceId, ERROR_CODES.USER_REJECTED, 'declined'));
+    await waitFor(() => expect(alice).toEqual({ error: { code: ERROR_CODES.USER_REJECTED, message: 'declined' } }));
+
+    // Alice's transfer now resolves. Settling "the head" would hand HER success to BOB — the
+    // dApp would be told bob's payment was delivered when nothing was ever sent to bob.
+    act(() => ctx!.resolveIntent(aliceId, { success: true, transferId: 'alice-tx' }));
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('send'));
+
+    // Bob is untouched and still waiting for his own decision.
+    expect(bob).toBeUndefined();
   });
 });
