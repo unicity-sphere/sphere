@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
@@ -39,10 +39,38 @@ export function ConnectPage() {
   const noteLockedRequestRef = useRef(noteLockedRequest);
   noteLockedRequestRef.current = noteLockedRequest;
 
-  // A host is built even for a LOCKED wallet: with `sphere: null,
-  // initialWalletState: 'locked'` the dApp gets HOST_READY and a typed
-  // WALLET_LOCKED (4009) instead of a handshake that silently times out
-  // (graceful lock §8.2).
+  /**
+   * Post HOST_READY to the dApp that opened this popup. The ONLY place this page announces.
+   *
+   * HOST_READY means "a host that can COMPLETE a handshake is listening" — it is the dApp's
+   * trigger to send one. It is therefore emitted at each moment the host BECOMES able to
+   * serve: at construction when the wallet is already unlocked, and on the locked -> live
+   * re-arm below. Never from a host that would refuse.
+   */
+  const announceHostReady = useCallback(() => {
+    const opener = window.opener as Window | null;
+    if (!opener || !origin) return;
+    try {
+      opener.postMessage({ type: HOST_READY_TYPE }, origin);
+    } catch {
+      try {
+        opener.postMessage({ type: HOST_READY_TYPE }, '*');
+      } catch { /* ignore */ }
+    }
+  }, [origin]);
+
+  // A host is built even for a LOCKED wallet — but NOT because a locked host can answer a
+  // typed WALLET_LOCKED (4009) to a handshake. It cannot: gate() never returns REFUSE_LOCKED
+  // for the 'handshake' kind (host-state.ts), so a handshake never sees 4009. A popup that
+  // COLD-STARTS locked is built with `sphere: null`, so its snapshot is EMPTY_WALLET_SNAPSHOT
+  // and the SDK's step-0 check refuses EVERY handshake it receives — a resume and an
+  // already-approved origin included — with an errorless empty response the dApp can only
+  // render as "Connection rejected by wallet". That refusal deliberately reveals nothing
+  // about the wallet and stays exactly as it is.
+  //
+  // The host exists while locked so that (a) onLockedRequest can feed the passive badge and
+  // (b) it is the SAME object across the unlock, which updateSphere() re-arms in place. What
+  // must never happen is announcing HOST_READY from it.
   const canHost = !isLoading && (!!sphere || (walletExists && isLocked));
 
   // Prevent StrictMode double-mount from destroying the host.
@@ -58,13 +86,25 @@ export function ConnectPage() {
   // revokes the session and pushes wallet:disconnected instead of promising an
   // unlock that will never help (graceful lock §8.2).
   useEffect(() => {
-    if (sphere && hostRef.current) {
-      hostRef.current.updateSphere(sphere);
-    } else if (!sphere && !isLoading && hostRef.current) {
-      if (isLocked) hostRef.current.setLocked();
-      else hostRef.current.setUnavailable();
+    const host = hostRef.current;
+    if (!host) return;
+    if (sphere) {
+      // Sample BEFORE updateSphere(): its identity-mismatch and expiry guards call
+      // revokeSession() internally, so a sample taken afterwards would report "sessionless"
+      // for EVERY re-arm and would tell a still-connected dApp to throw its transport away.
+      const needsHandshake = host.getSession() === null;
+      host.updateSphere(sphere);
+      // The locked -> live edge. A host with NO session is one no dApp can be talking to
+      // yet: it cold-started locked and therefore never announced, so the dApp that opened
+      // this popup is still waiting for a HOST_READY that would otherwise never come.
+      // Nothing else would ever prompt it to handshake. A host that KEPT its session must
+      // NOT be announced — that dApp is still connected and gets wallet:unlocked instead.
+      if (needsHandshake) announceHostReady();
+    } else if (!isLoading) {
+      if (isLocked) host.setLocked();
+      else host.setUnavailable();
     }
-  }, [sphere, isLoading, isLocked]);
+  }, [sphere, isLoading, isLocked, announceHostReady]);
 
   // Logout (SPA navigation) or page unload (refresh/close) — both DESTROY the
   // session; neither is a lock. revokeSession() pushes wallet:disconnected, so
@@ -171,20 +211,12 @@ export function ConnectPage() {
 
     setStatus('ready');
 
-    // Signal to dApp that host is ready
-    try {
-      (window.opener as Window).postMessage(
-        { type: HOST_READY_TYPE },
-        origin,
-      );
-    } catch {
-      try {
-        (window.opener as Window).postMessage(
-          { type: HOST_READY_TYPE },
-          '*',
-        );
-      } catch { /* ignore */ }
-    }
+    // Announce ONLY if this host was built live. A host built behind the lock screen
+    // refuses every handshake it receives, so announcing from it burns the dApp's readiness
+    // wait on a guaranteed refusal — which is exactly the reported bug. When the wallet is
+    // locked the announcement is deferred to the re-arm effect above, which fires the
+    // moment a human unlocks.
+    if (currentSphere) announceHostReady();
 
     // No cleanup — popup page is GC'd when window closes.
     // Returning a cleanup would break StrictMode (destroy host on first unmount).
