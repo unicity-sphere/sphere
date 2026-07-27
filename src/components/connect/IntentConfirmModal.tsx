@@ -47,8 +47,18 @@ export function IntentConfirmModal({
   onCancel,
 }: IntentConfirmModalProps) {
   return (
-    <BaseModal isOpen={true} onClose={onCancel}>
-      <ModalHeader title={title} icon={icon} onClose={onCancel} />
+    // While `busy` the operation is IN FLIGHT — for a send that means the transfer is already
+    // on the wire. Every escape hatch must be closed, not just the Cancel button: the header X
+    // and the backdrop used to stay live, and reporting "user cancelled" for a spend that is
+    // already submitted tells the dApp nothing happened. It then re-offers the payment, and the
+    // user pays twice.
+    <BaseModal isOpen={true} onClose={busy ? () => {} : onCancel}>
+      <ModalHeader
+        title={title}
+        icon={icon}
+        onClose={onCancel}
+        closeDisabled={busy}
+      />
 
       <div className="px-6 py-5 flex-1 flex flex-col justify-center">
         {children}

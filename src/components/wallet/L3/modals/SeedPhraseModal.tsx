@@ -33,7 +33,7 @@ export function SeedPhraseModal({ isOpen, onClose, seedPhrase }: SeedPhraseModal
   };
 
   return (
-    <WalletScreen isOpen={isOpen} onClose={onClose}>
+    <WalletScreen isOpen={isOpen} onClose={onClose} className="!z-30">
       <ModalHeader variant="screen" title="Recovery Phrase" onClose={onClose} />
 
       {/* Content */}

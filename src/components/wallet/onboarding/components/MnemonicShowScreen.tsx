@@ -1,25 +1,31 @@
 /**
- * MnemonicBackupScreen - Shows recovery phrase after wallet creation
- * Allows user to copy, download backup, and confirm before entering wallet
- * Layout matches sphere-extension's MnemonicBackupScreen for consistency
+ * MnemonicShowScreen - shows the recovery phrase after wallet creation
+ * Allows the user to copy the phrase. Layout matches sphere-extension's
+ * original MnemonicBackupScreen for consistency.
+ *
+ * #449 create-flow reorder: show -> confirm -> password -> download. Renamed
+ * from MnemonicBackupScreen and stripped of the download button — the backup
+ * file download now lives on BackupDownloadScreen, AFTER the optional
+ * password step, so it can reuse whichever password the user just chose (see
+ * useOnboardingFlow's createBackupPasswordRef / handleDownloadBackup).
+ * "Continue" here advances to ConfirmMnemonicScreen, which makes the user
+ * re-type the phrase and verifies it matches before the flow proceeds — the
+ * real backup verification this screen alone can't provide.
  */
 import { motion } from "framer-motion";
-import { ShieldAlert, Copy, Check, Download } from "lucide-react";
+import { ShieldAlert, Copy, Check } from "lucide-react";
 import { useState, useCallback } from "react";
 
-interface MnemonicBackupScreenProps {
+interface MnemonicShowScreenProps {
   mnemonic: string;
-  onDownloadBackup: (password?: string) => void;
-  onConfirm: () => void;
+  onContinue: () => void;
 }
 
-export function MnemonicBackupScreen({
+export function MnemonicShowScreen({
   mnemonic,
-  onDownloadBackup,
-  onConfirm,
-}: MnemonicBackupScreenProps) {
+  onContinue,
+}: MnemonicShowScreenProps) {
   const [copied, setCopied] = useState(false);
-  const [backupPassword, setBackupPassword] = useState("");
   const words = mnemonic.split(" ");
 
   const handleCopy = useCallback(async () => {
@@ -43,7 +49,7 @@ export function MnemonicBackupScreen({
 
   return (
     <motion.div
-      key="mnemonicBackup"
+      key="mnemonicShow"
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.1 }}
@@ -65,7 +71,8 @@ export function MnemonicBackupScreen({
         Write down these 12 words in order and keep them safe.{" "}
         <span className="text-brand-orange font-semibold">
           This is the only way to recover your wallet.
-        </span>
+        </span>{" "}
+        You'll be asked to re-enter them next to confirm.
       </p>
 
       {/* Mnemonic word grid */}
@@ -106,38 +113,10 @@ export function MnemonicBackupScreen({
         )}
       </button>
 
-      {/* Optional backup-file encryption password */}
-      <input
-        type="password"
-        value={backupPassword}
-        onChange={(e) => setBackupPassword(e.target.value)}
-        placeholder="Backup file password (optional)"
-        aria-label="Backup file password (optional)"
-        autoComplete="new-password"
-        className="w-full mb-2 px-4 py-2.5 text-sm rounded-xl bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/10 text-neutral-900 dark:text-white placeholder:text-neutral-400 focus:outline-none focus:border-brand-orange/60"
-      />
-
-      {/* Download backup button */}
+      {/* Continue button — advances to the re-entry confirmation step, NOT
+          finalize (that's ConfirmMnemonicScreen's job next). */}
       <button
-        onClick={() => onDownloadBackup(backupPassword || undefined)}
-        className="flex items-center justify-center gap-2 w-full mb-5 px-4 py-2.5 text-sm text-neutral-600 dark:text-[#ffe2cc] border border-neutral-200 dark:border-white/15 hover:bg-neutral-100 dark:hover:bg-white/6 transition-colors rounded-xl"
-      >
-        <Download className="w-4 h-4" />
-        <span>{backupPassword ? "Download Encrypted Backup" : "Download Backup File"}</span>
-      </button>
-
-      {/* Warning notice */}
-      <div className="mb-5 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
-        <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-          {backupPassword
-            ? "The backup file is encrypted with this password — you'll need it to restore. Keep both safe. Anyone with your recovery phrase can access your funds."
-            : "Without a password the backup file contains your recovery phrase in plain text. Anyone with it can access your wallet and funds — set a password or store it securely."}
-        </p>
-      </div>
-
-      {/* Confirm button */}
-      <button
-        onClick={onConfirm}
+        onClick={onContinue}
         className="relative w-full py-3.5 px-5 rounded-xl bg-linear-to-r from-brand-orange to-brand-orange-dark text-white text-sm font-bold shadow-xl shadow-brand-orange/25 flex items-center justify-center gap-2 overflow-hidden group"
       >
         <div className="absolute inset-0 bg-linear-to-r from-brand-orange to-brand-orange-dark opacity-0 group-hover:opacity-100 transition-opacity" />

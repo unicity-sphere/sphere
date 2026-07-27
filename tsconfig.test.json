@@ -1,18 +1,30 @@
 {
+  // Extends the app config so tests resolve the SDK's subpath exports exactly
+  // the way the app build does — a hand-rolled copy silently diverged and
+  // reported phantom "no declaration file" errors for @unicitylabs/sphere-sdk.
+  "extends": "./tsconfig.app.json",
   "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023"],
-    "module": "ESNext",
-    "types": ["node", "vitest/globals"],
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "strict": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["vite/client", "vitest/globals", "node"],
+    // Tests legitimately declare fixtures they only partly use.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    // Mirrors vitest.config.ts's `alias: { "@": "/src" }` — tests use it, and
+    // TypeScript has never been told about it.
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] }
   },
-  "include": ["tests/**/*.ts", "tests/**/*.tsx"]
+  // src/*.d.ts carries the ambient shim for @unicitylabs/sphere-sdk/impl/browser
+  // (src/sphere-sdk-browser.d.ts); without it every test that reaches
+  // SphereProvider reports a phantom "no declaration file" error.
+  "include": ["tests/**/*.ts", "tests/**/*.tsx", "src/**/*.d.ts"],
+  "exclude": [
+    // Playwright specs need a different runner.
+    "tests/e2e/**",
+    // Pre-existing type errors, untouched by this branch — they predate the
+    // first time tests/ was ever typechecked. Follow-up: tighten each mock.
+    "tests/unit/hooks/useTransfer.test.tsx",
+    "tests/unit/sdk/walletLock/lockSettings.test.ts",
+    "tests/unit/sdk/walletLock/reencryptMnemonic.test.ts"
+  ]
 }

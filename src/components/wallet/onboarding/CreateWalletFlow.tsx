@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useSphereContext } from "../../../sdk/hooks/core/useSphere";
-import { useOnboardingFlow } from "./hooks/useOnboardingFlow";
+import { useOnboardingFlow, type OnboardingStep } from "./hooks/useOnboardingFlow";
 
 // Import screen components
 import {
@@ -17,13 +17,29 @@ import {
   AddressSelectionScreen,
   NametagScreen,
   ProcessingScreen,
-  MnemonicBackupScreen,
+  MnemonicShowScreen,
+  ConfirmMnemonicScreen,
+  BackupDownloadScreen,
+  SetPasswordScreen,
   PlanCapabilitiesScreen,
 } from "./components";
 
 export type { OnboardingStep } from "./hooks/useOnboardingFlow";
 
-export function CreateWalletFlow() {
+interface CreateWalletFlowProps {
+  initialStep?: OnboardingStep;
+  /**
+   * True when entered via the UnlockScreen "forgot password" lock-escape
+   * (#449) — a real, locked wallet sits on disk. Requires the restore path
+   * to show an explicit erase-confirmation and never fall through to the
+   * generic StartScreen's "Create New Wallet".
+   */
+  fromLock?: boolean;
+  /** Called instead of showing the "start" step when `fromLock` is true (exits back to UnlockScreen). */
+  onExitToUnlock?: () => void;
+}
+
+export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: CreateWalletFlowProps = {}) {
   const { initProgress } = useSphereContext();
   const progressMessage = initProgress?.message ?? null;
 
@@ -56,8 +72,13 @@ export function CreateWalletFlow() {
     processingTitle,
     processingCompleteTitle,
     isProcessingComplete,
-    handleMnemonicBackupComplete,
+    handleMnemonicShowContinue,
+    handleConfirmMnemonic,
+    handleMnemonicConfirmBack,
+    handleBackupDownloadComplete,
     handleDownloadBackup,
+    backupEncrypted,
+    handleSetPassword,
 
     // Subscription plan-capabilities state (post-finalize provisioning)
     planName,
@@ -96,12 +117,17 @@ export function CreateWalletFlow() {
     // Wallet context
     identity,
     nametag,
-  } = useOnboardingFlow();
+  } = useOnboardingFlow(initialStep, { fromLock, onExitToUnlock });
 
   // Block navigation clicks outside wallet panel during critical steps.
   // Sets pointer-events:none on body, re-enables on wallet panel and on
   // fixed/absolute modals (z-100) so Connect intents still work.
-  const isLocked = step === "processing" || step === "mnemonicBackup";
+  const isLocked =
+    step === "processing" ||
+    step === "mnemonicShow" ||
+    step === "mnemonicConfirm" ||
+    step === "setPassword" ||
+    step === "backupDownload";
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -147,6 +173,7 @@ export function CreateWalletFlow() {
           <RestoreMethodScreen
             isBusy={isBusy}
             error={error}
+            fromLock={fromLock}
             onSelectMnemonic={() => setStep("restore")}
             onSelectFile={() => setStep("importFile")}
             onBack={goToStart}
@@ -231,11 +258,35 @@ export function CreateWalletFlow() {
           />
         )}
 
-        {step === "mnemonicBackup" && generatedMnemonic && (
-          <MnemonicBackupScreen
+        {step === "mnemonicShow" && generatedMnemonic && (
+          <MnemonicShowScreen
             mnemonic={generatedMnemonic}
+            onContinue={handleMnemonicShowContinue}
+          />
+        )}
+
+        {step === "mnemonicConfirm" && (
+          <ConfirmMnemonicScreen
+            error={error}
+            onSubmit={handleConfirmMnemonic}
+            onBack={handleMnemonicConfirmBack}
+          />
+        )}
+
+        {step === "setPassword" && (
+          <SetPasswordScreen
+            isBusy={isBusy}
+            error={error}
+            onSet={(password) => void handleSetPassword(password)}
+            onSkip={() => void handleSetPassword()}
+          />
+        )}
+
+        {step === "backupDownload" && (
+          <BackupDownloadScreen
+            encrypted={backupEncrypted}
             onDownloadBackup={handleDownloadBackup}
-            onConfirm={handleMnemonicBackupComplete}
+            onContinue={handleBackupDownloadComplete}
           />
         )}
 

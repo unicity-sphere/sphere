@@ -6,9 +6,40 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
+import {
+  Sphere,
+  TokenRegistry,
+  NETWORKS,
+  logger,
+  isSphereError,
+  getPublicKey,
+  STORAGE_KEYS_GLOBAL,
+  validateMnemonic,
+  decryptMnemonic,
+} from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
 import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
+import { classifyInitFailure } from './walletLock/classifyInitFailure';
+import { useIdleTimer } from './walletLock/useIdleTimer';
+import {
+  decodeLockSettings,
+  encodeLockSettings,
+  autoLockMs,
+  DEFAULT_AUTO_LOCK_MINUTES,
+  type AutoLockValue,
+} from './walletLock/lockSettings';
+import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
+import { broadcastLogout, subscribeLogoutBroadcast } from './walletLock/logoutBroadcast';
+import { markLockEpoch, clearLockEpoch, isLockPending } from './walletLock/lockEpoch';
+import {
+  savePersistedUnlock,
+  loadPersistedUnlock,
+  clearPersistedUnlock,
+  touchPersistedUnlock,
+} from './walletLock/persistedUnlock';
+import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
+import { forEachConnectHost } from './connectHostRegistry';
+import { isUiOnlyQuery } from '../config/uiQueryKeys';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -33,6 +64,9 @@ import { validatePastedKey } from './subscription/keyCheck';
 import { isPaidPlan } from './subscription/usage';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
+
+/** How often user activity may refresh the remembered unlock's expiry. */
+const PERSIST_TOUCH_INTERVAL_MS = 60_000;
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -179,6 +213,46 @@ async function cleanupOnError(providers: BrowserProviders): Promise<void> {
   await Promise.race([clearDone, new Promise(r => setTimeout(r, 3000))]);
 }
 
+/**
+ * Read the auto-lock timeout currently in effect so it can be carried across
+ * a Set/Change password operation (#449 review fix — correctness). The
+ * persisted blob (STORAGE_KEYS.AUTO_LOCK_TIMEOUT) is encrypted with whatever
+ * password was active BEFORE the change, so decoding it needs THAT password,
+ * not the new one. `oldPassword` is `null` for Set (no session password
+ * exists yet — the wallet was plaintext), in which case there is nothing
+ * decryptable and this simply returns the secure default, same as
+ * decodeLockSettings' own fallback.
+ */
+function readCurrentAutoLockMinutes(oldPassword: string | null): AutoLockValue {
+  if (!oldPassword) return DEFAULT_AUTO_LOCK_MINUTES;
+  const blob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
+  return blob ? decodeLockSettings(blob, oldPassword) : DEFAULT_AUTO_LOCK_MINUTES;
+}
+
+/**
+ * Serialize Set/Change/Remove password operations (#449 review fix —
+ * re-entrancy): reencryptStoredMnemonic does a non-atomic read → write →
+ * read-back-verify cycle against the SAME storage key, so two overlapping
+ * calls (a rapid double-submit / Enter-mash getting past the UI's `busy`
+ * guard) could interleave and stomp on each other. This ref-based mutex is
+ * the actual load-bearing guarantee, independent of any UI guard: it rejects
+ * a second call outright instead of letting it run concurrently.
+ */
+async function withPasswordOpLock(
+  busyRef: { current: boolean },
+  fn: () => Promise<void>,
+): Promise<void> {
+  if (busyRef.current) {
+    throw new Error('A password change is already in progress');
+  }
+  busyRef.current = true;
+  try {
+    await fn();
+  } finally {
+    busyRef.current = false;
+  }
+}
+
 // =============================================================================
 // Provider component
 // =============================================================================
@@ -198,6 +272,12 @@ export function SphereProvider({
   const [isLoading, setIsLoading] = useState(true);
   const [walletExists, setWalletExists] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // True when an encrypted wallet exists on disk but hasn't been unlocked with
+  // its password this session — locked, not broken (#449). The SDK signals
+  // this as SphereError('Failed to decrypt mnemonic', 'STORAGE_ERROR') on a
+  // passwordless init of an encrypted wallet (see isDecryptionError.ts for the
+  // code-verified detail); only that real signal may flip this true.
+  const [isLocked, setIsLocked] = useState(false);
   const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
@@ -207,11 +287,101 @@ export function SphereProvider({
     SUBSCRIPTION_ENABLED ? 'provisioning' : 'not-required',
   );
   const sphereRef = useRef<Sphere | null>(null);
+  // Session-only wallet password (#449 Task 8a): held ONLY in memory while the
+  // wallet is unlocked, NEVER persisted anywhere (no localStorage/IndexedDB).
+  // Set on a successful unlock() and on createWallet()/importWallet() when the
+  // caller chose an at-rest password; cleared on lock() and deleteWallet().
+  const passwordRef = useRef<string | null>(null);
+  // Re-entrancy guard for setWalletPassword/changeWalletPassword/
+  // removeWalletPassword (#449 review fix) — see withPasswordOpLock above.
+  const passwordOpBusyRef = useRef(false);
+  // Idle-auto-lock config derived from the password, computed ONCE per
+  // setSessionPassword() call rather than on every render: decodeLockSettings
+  // runs a PBKDF2 derivation (100k iterations — see sphere-sdk
+  // core/encryption.ts), deliberately slow, and must not re-run on every
+  // unrelated SphereProvider re-render. CRITICAL invariant: a wallet with NO
+  // password (passwordRef.current falsy) always resolves `enabled: false`
+  // here — see the `null`-password branch below.
+  // Mirrored into a ref because unlock() reads it in the same tick it is set — the state
+  // variable there is still the pre-unlock value.
+  const idleLockConfigRef = useRef<{ enabled: boolean; timeoutMs: number | null }>({
+    enabled: false,
+    timeoutMs: null,
+  });
+  const [idleLockConfig, setIdleLockConfig] = useState<{ enabled: boolean; timeoutMs: number | null }>({
+    enabled: false,
+    timeoutMs: null,
+  });
+  // Settings → Security (#449 Task 8b): whether the wallet CURRENTLY has an
+  // at-rest password. True the instant a session password is held
+  // (passwordRef), OR — for the cold-start/locked case where no session
+  // password exists yet — when the on-disk mnemonic itself isn't a valid
+  // plaintext mnemonic (i.e. it's the SDK's encrypted form). Kept as its own
+  // state (not derived inline) because the storage check is async.
+  const [hasWalletPassword, setHasWalletPassword] = useState(false);
+  // Auto-lock timeout shown/edited in Settings → Security. Only meaningful
+  // while a session password is held (the stored blob is encrypted with it);
+  // reset to the secure default whenever there is no password.
+  const [autoLockMinutes, setAutoLockMinutesState] = useState<AutoLockValue>(DEFAULT_AUTO_LOCK_MINUTES);
+  const setSessionPassword = useCallback((password: string | null) => {
+    passwordRef.current = password;
+    if (!password) {
+      idleLockConfigRef.current = { enabled: false, timeoutMs: null };
+    setIdleLockConfig({ enabled: false, timeoutMs: null });
+      setAutoLockMinutesState(DEFAULT_AUTO_LOCK_MINUTES);
+      return;
+    }
+    const storedBlob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
+    const minutes = storedBlob ? decodeLockSettings(storedBlob, password) : DEFAULT_AUTO_LOCK_MINUTES;
+    idleLockConfigRef.current = { enabled: true, timeoutMs: autoLockMs(minutes) };
+    setIdleLockConfig({ enabled: true, timeoutMs: autoLockMs(minutes) });
+    setAutoLockMinutesState(minutes);
+  }, []);
+  // Recompute hasWalletPassword from the on-disk mnemonic — used at cold
+  // start (initialize()) where no session password exists yet to short-circuit
+  // on. A truthy passwordRef always wins without touching storage.
+  const refreshHasWalletPassword = useCallback(async (storage: { get(key: string): Promise<string | null> }) => {
+    if (passwordRef.current) {
+      setHasWalletPassword(true);
+      return;
+    }
+    try {
+      const stored = await storage.get(STORAGE_KEYS_GLOBAL.MNEMONIC);
+      setHasWalletPassword(!!stored && !validateMnemonic(stored));
+    } catch {
+      setHasWalletPassword(false);
+    }
+  }, []);
   // Monotonic init generation: only the LATEST initialize() run may adopt its
   // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
   // toggle, unmount) destroys the instance it built instead of leaking it. See
   // #453 and adoptOrDiscardInstance.
   const initGenRef = useRef(0);
+  // Re-entrancy guard for lock(). broadcastLock() now fires from INSIDE lock(),
+  // and a same-name BroadcastChannel receives its own tab's postMessage, so the
+  // cross-tab subscription re-enters lock() in the triggering tab; without this
+  // ref that re-entry broadcasts again, unboundedly. A manual lock racing a
+  // cross-tab lock does the same. Combined with the `sphereRef.current === null`
+  // check inside lock(), this makes a lock exactly-once — which matters now that
+  // lock() has observable side effects (one wire event per host, and a
+  // queryClient.clear()).
+  const lockingRef = useRef(false);
+  // When this tab's CURRENT decrypted session started. Compared against the
+  // persisted lock epoch on resume — a bfcached tab never re-runs initialize()
+  // and never sees the lock BroadcastChannel message it slept through.
+  const sessionStartedAtRef = useRef<number | null>(null);
+  // Mirrors isLocked for lock()'s idempotency guard: lock() is a useCallback captured by the
+  // cross-tab subscription and the idle timer, so reading the state variable there would read
+  // whatever it was when the callback was created.
+  const isLockedRef = useRef(false);
+  /** Rate-limits the persisted-unlock timestamp write; see the idle timer's onActivity. */
+  const lastTouchRef = useRef(0);
+
+  // Marks a usable Sphere as live in this tab and drops any stale lock marker.
+  const markSessionStart = useCallback(() => {
+    sessionStartedAtRef.current = Date.now();
+    clearLockEpoch();
+  }, []);
   // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
   // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
   //   load or a live address switch) may apply its key + flip status; stale
@@ -413,21 +583,60 @@ export function SphereProvider({
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
-        const { sphere: instance } = await Sphere.init({
-          ...browserProviders,
-          network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
-          discoverAddresses: false, // Run separately below for UX
-          onProgress: setInitProgress,
-        });
+        // A remembered unlock, if one is still within its idle window. Reading it here — before
+        // the deliberately passwordless attempt below — is what makes a reload not re-lock the
+        // wallet. A plaintext wallet never wrote one, so it is unaffected.
+        if (!passwordRef.current) {
+          const remembered = await loadPersistedUnlock();
+          if (isStale()) return;
+          if (remembered) setSessionPassword(remembered);
+        }
+        // Password policy on this path:
+        //  - COLD load (no session password held): pass none. An existing
+        //    plaintext wallet must keep loading exactly as before; an encrypted
+        //    one is MEANT to throw SphereError('Failed to decrypt mnemonic',
+        //    'STORAGE_ERROR'), which we read as "locked", not a fatal error
+        //    (#449) — see isDecryptionError.ts.
+        //  - RE-INIT while unlocked (toggleIpfs(), the exported `reinitialize`):
+        //    carry passwordRef.current. Omitting it relocked a wallet the user
+        //    had just unlocked — one click in permanent chrome (graceful lock
+        //    §8.5).
+        let instance: Sphere;
+        try {
+          ({ sphere: instance } = await Sphere.init({
+            ...browserProviders,
+            network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
+            ...(passwordRef.current ? { password: passwordRef.current } : {}),
+            discoverAddresses: false, // Run separately below for UX
+            onProgress: setInitProgress,
+          }));
+        } catch (initErr) {
+          if (classifyInitFailure(initErr) === 'locked') {
+            // A superseded run's lock signal isn't ours to act on — the
+            // latest run (or unmount) already owns the outcome (#453).
+            if (isStale()) return;
+            setIsLocked(true);
+            isLockedRef.current = true;
+            // The wallet is definitely password-protected (that's WHY the
+            // passwordless init just threw the decrypt-mnemonic STORAGE_ERROR)
+            // — no need for the storage round-trip, but reuse the shared
+            // setter for a single source of truth.
+            void refreshHasWalletPassword(browserProviders.storage);
+            return;
+          }
+          throw initErr;
+        }
         // Adopt only if we're still the latest init; otherwise destroy the
         // instance we just built so it can't linger as a zombie (#453).
         const outcome = await adoptOrDiscardInstance(instance, isStale, (inst) => {
           setupIpfsSync(inst, browserProviders);
           sphereRef.current = inst;
           setSphere(inst);
+          markSessionStart();
         });
         if (outcome === 'discarded') return;
         setInitProgress(null);
+        void refreshHasWalletPassword(browserProviders.storage);
 
         // Readiness for the send gate: 'ready' iff this oracle was built WITH a
         // subscription key. With no key yet we provision below and stay
@@ -500,7 +709,7 @@ export function SphereProvider({
         setIsLoading(false);
       }
     }
-  }, [network, setupSubscriptionKey]);
+  }, [network, setupSubscriptionKey, refreshHasWalletPassword, markSessionStart]);
 
   useEffect(() => {
     initialize();
@@ -527,6 +736,7 @@ export function SphereProvider({
           network,
           autoGenerate: true,
           nametag: options?.nametag,
+          password: options?.password,
           onProgress: setInitProgress,
         });
         setInitProgress(null);
@@ -535,11 +745,30 @@ export function SphereProvider({
           throw new Error('Failed to generate mnemonic');
         }
 
+        // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock
+        // for a freshly-created wallet the same way unlock() does for an
+        // existing one; a wallet created with NO password stays un-armed.
+        if (options?.password) setSessionPassword(options.password);
+
         // Don't set walletExists/sphere here — let finalizeWallet() handle it
         // so the onboarding flow can show the completion screen first.
         return { mnemonic: generatedMnemonic, sphere: instance };
       } catch (err) {
         setInitProgress(null);
+        // #449 no-wallet-loss guard: Sphere.init({autoGenerate:true}) only
+        // creates a fresh wallet when NONE exists on disk — if the storage
+        // already holds an encrypted wallet, Sphere.init delegates to
+        // Sphere.load(), which throws SphereError('Failed to decrypt
+        // mnemonic', 'STORAGE_ERROR') when (as here) no password was
+        // supplied. That is a LOCKED, still-recoverable wallet,
+        // not a broken create — never run the destructive cleanup for it.
+        // The onboarding UI's lock-escape routing (CreateWalletFlow's
+        // fromLock/goToStart) should prevent "Create New Wallet" from ever
+        // being reachable while such a wallet is present; this is the last
+        // line of defense against a stray/future path reaching it anyway.
+        if (classifyInitFailure(err) === 'locked') {
+          throw err;
+        }
         await cleanupOnError(providers);
         sphereRef.current = null;
         setSphere(null);
@@ -547,7 +776,7 @@ export function SphereProvider({
         throw err;
       }
     },
-    [providers, network],
+    [providers, network, setSessionPassword],
   );
 
   const resolveNametag = useCallback(
@@ -590,15 +819,20 @@ export function SphereProvider({
         network,
         mnemonic,
         nametag: options?.nametag,
+        password: options?.password,
         onProgress: setInitProgress,
       });
       setInitProgress(null);
+
+      // Memory-only (#449 Task 8a) — never persisted. Same as createWallet():
+      // an import with NO password stays un-armed for idle auto-lock.
+      if (options?.password) setSessionPassword(options.password);
 
       // Don't setSphere/setWalletExists here — the onboarding flow calls
       // finalizeWallet(sphere) after address selection / nametag are done.
       return instance;
     },
-    [providers, network],
+    [providers, network, setSessionPassword],
   );
 
   const importFromFile = useCallback(
@@ -646,6 +880,12 @@ export function SphereProvider({
   const deleteWallet = useCallback(async () => {
     // Notify connected dApps before destroying — ConnectPage/IframeAgent listen for this
     window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
+    // And every OTHER tab: this function wipes IndexedDB and localStorage but
+    // never reloads, so a neighbouring tab would keep operating a live
+    // decrypted Sphere over a wiped database (graceful lock §8.1).
+    broadcastLogout();
+    // The remembered unlock belongs to a wallet that no longer exists.
+    void clearPersistedUnlock();
 
     // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
     // calls walletApi.logout() on address switch, not on destroy — without
@@ -708,12 +948,328 @@ export function SphereProvider({
     setSphere(null);
     setWalletExists(false);
     setError(null);
+    // The deleted wallet's password (if any) must not linger in memory, and —
+    // just as important — must not leave the idle-lock timer armed against a
+    // wallet that no longer exists (it would otherwise fire mid-onboarding and
+    // wrongly gate the onboarding UI behind an unlock screen). See #449.
+    setSessionPassword(null);
+    // The deleted wallet's on-disk password state is gone with it — a fresh
+    // onboarding starts with no password until the user (re-)sets one.
+    setHasWalletPassword(false);
 
     // Reinitialize with fresh providers (skip loading spinner — onboarding UI is already visible)
     await initialize(0, true);
-  }, [providers, initialize, queryClient]);
+  }, [providers, initialize, queryClient, setSessionPassword]);
+
+  // Unlock an encrypted wallet with its password. Re-runs Sphere.init WITH the
+  // password (the only place a password is ever passed for an EXISTING
+  // wallet); a wrong password throws the same decrypt-mnemonic STORAGE_ERROR
+  // as the cold-start check, which we let propagate so the caller
+  // (UnlockScreen) can show "wrong password" via isDecryptionError. Reuses the same
+  // initGenRef/adoptOrDiscardInstance re-entrancy guard as initialize() (#453)
+  // so an unlock superseded mid-flight destroys its instance instead of
+  // adopting it.
+  const unlock = useCallback(async (password: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    const gen = ++initGenRef.current;
+    // Snapshot the resolved oracle key exactly like initialize() does, for the
+    // post-adopt subscription-key wiring below.
+    const oracleApiKey = getActiveOracleApiKey();
+    const { sphere: instance } = await Sphere.init({
+      ...providers,
+      network,
+      password,
+      discoverAddresses: false,
+    });
+    const outcome = await adoptOrDiscardInstance(instance, () => gen !== initGenRef.current, (inst) => {
+      setupIpfsSync(inst, providers);
+      sphereRef.current = inst;
+      setSphere(inst);
+      markSessionStart();
+    });
+    if (outcome !== 'adopted') return;
+    // Powers idle auto-lock. Held in memory here; separately REMEMBERED below so a page reload
+    // does not demand it again — the remembered copy is encrypted under a non-extractable key
+    // and expires with the idle timeout (walletLock/persistedUnlock.ts).
+    setSessionPassword(password);
+    setIsLocked(false);
+    isLockedRef.current = false;
+    // Remember the unlock, bounded by this wallet's own auto-lock timeout. Read AFTER
+    // setSessionPassword, which is what decodes the encrypted lock settings.
+    void savePersistedUnlock(password, idleLockConfigRef.current.timeoutMs);
+    // A successful unlock proves the wallet has a password (that's WHY it was locked).
+    setHasWalletPassword(true);
+
+    // Mirror initialize()'s existing-wallet success branch (review parity, #449):
+    // the destroyed instance took its `identity:changed` reconcile listener with
+    // it, so without re-attaching it here a post-unlock address switch would
+    // silently stop reconciling the per-wallet subscription key. Deliberately
+    // does NOT call sendWelcomeDM — a re-unlock must not re-welcome the user.
+    setSubscriptionKeyStatus(
+      !SUBSCRIPTION_ENABLED ? 'not-required' : oracleApiKey ? 'ready' : 'provisioning',
+    );
+    setupSubscriptionKey(instance, oracleApiKey);
+
+    // Run address discovery in background after wallet is visible, same as initialize().
+    setIsDiscoveringAddresses(true);
+    instance.discoverAddresses({ autoTrack: true }).then(result => {
+      if (result.addresses.length > 0) {
+        logger.debug('SphereProvider', `Discovered ${result.addresses.length} address(es)`);
+      }
+    }).catch(err => {
+      logger.warn('SphereProvider', 'Address discovery failed', err);
+    }).finally(() => {
+      setIsDiscoveringAddresses(false);
+    });
+  }, [providers, network, setupSubscriptionKey, setSessionPassword, markSessionStart]);
+
+  // Lock the wallet: destroy the live Sphere instance (keys leave memory — a
+  // real lock, not just a UI gate) and require unlock() again. The dApp SESSION
+  // SURVIVES: hosts are told with setLocked(), which preserves the session and
+  // answers every subsequent request WALLET_LOCKED (4009) until updateSphere()
+  // re-arms them. For a logout use revokeSession() instead; for a non-lock loss
+  // of Sphere, setUnavailable().
+  const lock = useCallback(async () => {
+    // Idempotent — see lockingRef.
+    //
+    // `sphereRef.current === null` is NOT a reason to bail. That is exactly the state a re-init
+    // leaves behind (toggleIpfs, reinitialize), and a cross-tab lock arriving in that window
+    // used to do nothing at all: the tab stayed unlocked, its hosts kept reporting 'live', the
+    // lock epoch was never written, and the in-flight init went on to adopt a fully usable
+    // Sphere. Bumping initGenRef below is what supersedes that init, so the lock must run.
+    //
+    // Only an already-locked tab has nothing to do.
+    if (lockingRef.current) return;
+    if (sphereRef.current === null && isLockedRef.current) return;
+    lockingRef.current = true;
+    try {
+      initGenRef.current++; // supersede any in-flight init
+      // EVERY lock path broadcasts (PR #456): the Connect popup is a separate
+      // window with its own SphereProvider, so a manual "Lock Wallet" that did
+      // not broadcast left it serving RPCs from a fully unlocked Sphere. The
+      // loopback this creates terminates on the guard above.
+      broadcastLock();
+      // Tell every live host BEFORE destroying the instance (ordering
+      // contract). ConnectHost drops its Sphere reference inside setLocked()
+      // and settles anything already in flight with 4009 — calling destroy()
+      // first would leave those requests reading a dead instance (-32603, or
+      // `undefined` returned AS SUCCESS from sphere_getIdentity).
+      //
+      // A fan-out, not a single slot: DesktopLayout keeps every open tab
+      // mounted, so a wallet with three framed dApps has three live hosts, and
+      // locking only the last-registered one leaves the other two talking to a
+      // wallet they believe is unlocked. `forEachConnectHost` reads the
+      // module-scoped registry in connectHostRegistry.ts — SphereProvider is an
+      // ANCESTOR of ConnectProvider in the tree (see main.tsx), so it can't
+      // `useConnectContext()` directly; see that file for why.
+      forEachConnectHost((host) => host.setLocked());
+      await sphereRef.current?.destroy();
+      sphereRef.current = null;
+      setSphere(null);
+      // Cached balances, history and DMs must not stay readable behind the lock screen.
+      //
+      // NOT queryClient.clear(): React Query also holds this app's UI state (open desktop
+      // tabs, whether the wallet panel is out, app order). DesktopLayout consumes no Sphere
+      // hook, so a lock never re-renders it — wiping ['desktop','state'] left its observer
+      // bound to a discarded Query and the next setWalletOpen(true) wrote to an instance
+      // nobody reads, killing the Wallet button, fullscreen and Escape until a reload. That
+      // also killed the "Unlock Wallet" button the locked screens offer. See uiQueryKeys.ts.
+      queryClient.removeQueries({ predicate: (q) => !isUiOnlyQuery(q) });
+      queryClient.getMutationCache().clear();
+      // Memory-only password never survives a lock (#449).
+      setSessionPassword(null);
+      // Persist the lock so a bfcached / hidden tab that never re-runs
+      // initialize() can catch up on resume (graceful lock §8.4).
+      markLockEpoch();
+      sessionStartedAtRef.current = null;
+      // A lock means "ask me again": every lock path forgets the remembered unlock, so the
+      // idle timer, a manual lock and a cross-tab lock all really do lock.
+      void clearPersistedUnlock();
+      setIsLocked(true);
+      isLockedRef.current = true;
+    } finally {
+      lockingRef.current = false;
+    }
+  }, [queryClient, setSessionPassword]);
+
+  // Settings → Security (#449 Task 8b): set/change/remove the wallet's at-rest
+  // password via the VERIFIED-SAFE in-place mnemonic re-encryption
+  // (reencryptStoredMnemonic — src/sdk/walletLock/reencryptMnemonic.ts).
+  // CRITICAL: never call Sphere.import()/Sphere.clear() to do this — those
+  // wipe the token DB. This touches ONLY the mnemonic storage key.
+  const setWalletPassword = useCallback(async (newPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      // Read BEFORE re-encrypting: preserve whatever auto-lock timeout is
+      // currently in effect so it survives this password change instead of
+      // silently resetting to the default (#449 review fix). There is no
+      // session password yet on the Set path (passwordRef.current is null),
+      // so this resolves to the secure default unless a stray blob exists.
+      const preservedMinutes = readCurrentAutoLockMinutes(passwordRef.current);
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword: passwordRef.current,
+        newPassword,
+      });
+      // Re-persist the preserved timeout under the NEW password BEFORE
+      // arming the session, so setSessionPassword's own blob read below
+      // decodes correctly on the first try instead of falling back to the
+      // default (order matters here).
+      localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(preservedMinutes, newPassword));
+      setSessionPassword(newPassword); // memory-only; arms idle auto-lock with the preserved value
+      setHasWalletPassword(true);
+    });
+  }, [providers, setSessionPassword]);
+
+  const changeWalletPassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      // Same preserve-across-change fix as setWalletPassword, using the
+      // caller-verified currentPassword to decode the existing blob (#449
+      // review fix).
+      const preservedMinutes = readCurrentAutoLockMinutes(currentPassword);
+      // reencryptStoredMnemonic itself verifies currentPassword (decrypts +
+      // validateMnemonic) and throws "Incorrect current password" on mismatch —
+      // nothing is written unless it matches.
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword,
+        newPassword,
+      });
+      localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(preservedMinutes, newPassword));
+      setSessionPassword(newPassword); // re-arms the idle timer with the preserved value
+      setHasWalletPassword(true);
+    });
+  }, [providers, setSessionPassword]);
+
+  const removeWalletPassword = useCallback(async (currentPassword: string) => {
+    if (!providers) throw new Error('Providers not initialized');
+    await withPasswordOpLock(passwordOpBusyRef, async () => {
+      await reencryptStoredMnemonic(providers.storage, {
+        currentPassword,
+        newPassword: null,
+      });
+      // Deliberately does NOT preserve the auto-lock timeout blob: removing
+      // the password disarms auto-lock entirely (no password left to
+      // encrypt it with), so the stale blob is simply orphaned until a
+      // future Set writes a fresh one.
+      setSessionPassword(null); // memory-only; disarms idle auto-lock
+      setHasWalletPassword(false);
+    });
+  }, [providers, setSessionPassword]);
+
+  // In-wallet backup gate (#449): read-only password check used by
+  // BackupWalletModal before it reveals "Export Wallet File" / "Show
+  // Recovery Phrase" (both expose the seed). Deliberately independent of
+  // passwordRef/setSessionPassword — this must work purely by re-deriving
+  // from on-disk storage, never mutates anything, and never persists the
+  // candidate password anywhere. Any failure (missing providers, no stored
+  // mnemonic, wrong password, corrupt blob) resolves false — never throws to
+  // the caller.
+  const verifyWalletPassword = useCallback(async (password: string): Promise<boolean> => {
+    if (!providers) return false;
+    try {
+      const stored = await providers.storage.get(STORAGE_KEYS_GLOBAL.MNEMONIC);
+      if (!stored) return false;
+      const decrypted = decryptMnemonic(stored, password);
+      return validateMnemonic(decrypted);
+    } catch {
+      return false;
+    }
+  }, [providers]);
+
+  // Settings → Security auto-lock timeout selector. Only meaningful while a
+  // session password is held (the persisted blob is encrypted with it) — a
+  // no-op without one, since there's nothing to arm.
+  const setAutoLockTimeout = useCallback((value: AutoLockValue) => {
+    const password = passwordRef.current;
+    if (!password) return;
+    localStorage.setItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT, encodeLockSettings(value, password));
+    // Re-read the (now-updated) blob and re-arm the idle timer with it.
+    setSessionPassword(password);
+  }, [setSessionPassword]);
+
+  useIdleTimer({
+    timeoutMs: idleLockConfig.timeoutMs,
+    // CRITICAL invariant: a wallet with NO password (existing plaintext
+    // wallets, or a fresh create/import where the user skipped the password
+    // step) must NEVER auto-lock — `idleLockConfig.enabled` is only ever set
+    // true inside setSessionPassword()'s truthy-password branch, and is
+    // forced back to false by lock()/deleteWallet() (via setSessionPassword
+    // (null)) and by the initial state. `!isLocked` is redundant-but-safe:
+    // every path that sets isLocked true (lock(), and initialize()'s
+    // classifyInitFailure() === 'locked' branch) also clears/never-set the
+    // password.
+    enabled: idleLockConfig.enabled && !isLocked,
+    // The remembered unlock expires from the last ACTIVITY, not from the unlock, so half an
+    // hour of work followed by a reload does not demand the password again. Throttled by
+    // useIdleTimer's own activity throttle; a write per rearm is far too often, hence the gate.
+    onActivity: () => {
+      const now = Date.now();
+      if (now - lastTouchRef.current < PERSIST_TOUCH_INTERVAL_MS) return;
+      lastTouchRef.current = now;
+      void touchPersistedUnlock();
+    },
+    onIdle: () => {
+      // lock() broadcasts for us now — from EVERY lock path, not just this one.
+      // A same-name BroadcastChannel receives its own tab's postMessage, so the
+      // subscription below re-enters lock() in this tab too; lock()'s
+      // exactly-once ref is what makes that a no-op instead of a loop.
+      void lock();
+    },
+  });
+
+  // Another tab deleted the wallet. This one is still holding a live decrypted
+  // Sphere over storage that no longer exists — and, now that a Connect session
+  // survives a lock, is still serving dApps from it. Tear the instance down and
+  // re-init against the (now empty) storage. Deliberately does NOT repeat the
+  // destructive work: the originating tab already wiped IndexedDB/localStorage.
+  const handleRemoteLogout = useCallback(async () => {
+    if (!sphereRef.current) return;
+    // The same in-window signal deleteWallet() fires, so every ConnectHost in
+    // THIS tab revokes its session (logout ≠ lock).
+    window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
+    void clearPersistedUnlock();
+    initGenRef.current++;
+    await sphereRef.current.destroy();
+    sphereRef.current = null;
+    setSphere(null);
+    setWalletExists(false);
+    queryClient.clear();
+    setSessionPassword(null);
+    setHasWalletPassword(false);
+    await initialize(0, true);
+  }, [initialize, queryClient, setSessionPassword]);
+
+  useEffect(
+    () => subscribeLogoutBroadcast(undefined, () => { void handleRemoteLogout(); }),
+    [handleRemoteLogout],
+  );
+
+  // Cross-tab lock (#449 Task 8a): a lock triggered in ANY tab — idle timeout
+  // or an explicit lock() — must lock this one too, so a decrypted Sphere
+  // instance never stays alive in one tab after another tab locked.
+  useEffect(() => subscribeLockBroadcast(undefined, () => { void lock(); }), [lock]);
+
+  // Resume gate: a tab restored from the bfcache resumes with its decrypted
+  // Sphere intact and never re-runs initialize(); a hidden tab may simply have
+  // missed the lock BroadcastChannel message. Both must lock themselves if a
+  // lock is on record newer than this tab's session. `pageshow` and
+  // `visibilitychange` can both fire for one resume — lock() is idempotent.
+  useEffect(() => {
+    const check = () => {
+      if (!sphereRef.current) return;
+      if (isLockPending(sessionStartedAtRef.current)) void lock();
+    };
+    check();
+    window.addEventListener('pageshow', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      window.removeEventListener('pageshow', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [lock]);
 
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
+    markSessionStart();
     if (importedSphere) {
       if (providers) setupIpfsSync(importedSphere, providers);
       sphereRef.current = importedSphere;
@@ -721,6 +1277,18 @@ export function SphereProvider({
       sendWelcomeDM(importedSphere);
     }
     setWalletExists(true);
+    // Clear a stale lock flag: finalizeWallet() is also the exit of the
+    // UnlockScreen's "forgot password → restore from recovery phrase" path
+    // (#449). Without this, isLocked would stay true forever after a
+    // successful restore and the shell gate would keep showing the lock
+    // screen instead of the freshly-restored wallet.
+    setIsLocked(false);
+    isLockedRef.current = false;
+    // Reflect whatever createWallet()/importWallet() decided: they already
+    // called setSessionPassword() (passwordRef) iff the user chose a password
+    // during onboarding/import — mirror that into hasWalletPassword now that
+    // the wallet is live in Settings.
+    setHasWalletPassword(!!passwordRef.current);
     // The onboarding oracle was built KEYLESS. Wire the subscription key onto this
     // live instance exactly like initialize() does for an existing wallet: resolve
     // / provision it + apply via setOracleApiKey (no full re-init), attach the
@@ -729,7 +1297,7 @@ export function SphereProvider({
     // re-key listener AND the provisioning retry — see #420 review.)
     const inst = importedSphere ?? sphereRef.current;
     if (inst) setupSubscriptionKey(inst, undefined);
-  }, [providers, setupSubscriptionKey]);
+  }, [providers, setupSubscriptionKey, markSessionStart]);
 
   const toggleIpfs = useCallback(() => {
     const next = !isIpfsEnabled();
@@ -775,6 +1343,16 @@ export function SphereProvider({
     isInitialized: !!sphere,
     walletExists,
     error,
+    isLocked,
+    unlock,
+    lock,
+    hasWalletPassword,
+    setWalletPassword,
+    changeWalletPassword,
+    removeWalletPassword,
+    verifyWalletPassword,
+    autoLockMinutes,
+    setAutoLockTimeout,
     isDiscoveringAddresses,
     initProgress,
     resolveNametag,

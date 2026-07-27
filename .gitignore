@@ -45,3 +45,6 @@ docs/RECOMMENDED_TEST_CASES.md
 docs/TESTING_ROADMAP.md
 docs/TEST_*.md
 MAINNET-RISK-REGISTER.md
+
+# Local-only design docs: specs and plans never ship in the repo.
+docs/superpowers/

@@ -9,10 +9,11 @@ import { RegisterNametagModal } from './shared/components/RegisterNametagModal';
 import { NewAddressModal } from './shared/modals/NewAddressModal';
 import { AddressSelector } from './shared/components';
 import { CreateWalletFlow } from './onboarding/CreateWalletFlow';
+import { UnlockScreen } from './onboarding/components/UnlockScreen';
 
 const PANEL_SHELL = "bg-white dark:bg-modal-bg/50 backdrop-blur-xl overflow-hidden h-full relative lg:border-l lg:border-neutral-100 dark:lg:border-brand-orange-border flex flex-col rounded-2xl";
 
-export function WalletPanel() {
+export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boolean }) {
   const [showBalances, setShowBalances] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isRequestsOpen, setIsRequestsOpen] = useState(false);
@@ -21,9 +22,14 @@ export function WalletPanel() {
   // #413: derive-address flow — hosted at panel level (like RegisterNametagModal)
   // so the slide-in screen paints above the wallet content in DOM order.
   const [isNewAddressOpen, setIsNewAddressOpen] = useState(false);
+  // #449: once the user picks "forgot password → restore from recovery
+  // phrase" on the UnlockScreen, drop them straight into onboarding's restore
+  // flow instead of the unlock prompt. Reset when the wallet unlocks/restores
+  // (isLocked flips false) so a future lock starts fresh at the unlock screen.
+  const [restoreFromLock, setRestoreFromLock] = useState(false);
   const { isLoading: isWalletLoading, walletExists, error: walletError } = useWalletStatus();
   const { identity, nametag, isLoading: isLoadingIdentity } = useIdentity();
-  const { initProgress } = useSphereContext();
+  const { initProgress, isLocked } = useSphereContext();
   const { pendingCount, requests, reject, pay, clearProcessed } = useIncomingPaymentRequests();
   const { setFullscreen } = useUIState();
 
@@ -51,6 +57,12 @@ export function WalletPanel() {
     }
     prevPendingCountRef.current = pendingCount;
   }, [pendingCount, requests.length, setFullscreen]);
+
+  // Reset the "restore from lock" escape once the wallet is no longer locked
+  // (unlocked with the correct password, or a restore just finalized it).
+  useEffect(() => {
+    if (!isLocked) setRestoreFromLock(false);
+  }, [isLocked]);
 
   // Initialization error (e.g. IndexedDB timeout after retry)
   if (walletError) {
@@ -116,6 +128,30 @@ export function WalletPanel() {
             >
               {initProgress.message}
             </motion.p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Encrypted wallet exists on disk but hasn't been unlocked this session
+  // (#449). Gate on `isLocked` ONLY — an existing plaintext wallet always has
+  // isLocked === false and must never see this screen (no-wallet-loss
+  // constraint). Checked before the `!walletExists` branch below purely for
+  // clarity; SphereProvider only ever sets isLocked true while walletExists
+  // is already true, so the two branches never actually compete.
+  if (isLocked) {
+    return (
+      <div className={PANEL_SHELL} data-wallet-panel>
+        <div className="flex-1 relative overflow-y-auto flex items-center justify-center">
+          {restoreFromLock ? (
+            <CreateWalletFlow
+              initialStep="restoreMethod"
+              fromLock
+              onExitToUnlock={() => setRestoreFromLock(false)}
+            />
+          ) : (
+            <UnlockScreen autoFocus={autoFocusUnlock} onRestore={() => setRestoreFromLock(true)} />
           )}
         </div>
       </div>

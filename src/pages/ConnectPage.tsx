@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
@@ -20,8 +20,8 @@ type RejectionInfo = { dappName: string; code: number; message: string; data: Re
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
-  const { sphere, isLoading } = useSphereContext();
-  const { requestApproval, requestIntent, setConnectHost } = useConnectContext();
+  const { sphere, isLoading, isLocked, walletExists } = useSphereContext();
+  const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
@@ -36,9 +36,42 @@ export function ConnectPage() {
   requestApprovalRef.current = requestApproval;
   const requestIntentRef = useRef(requestIntent);
   requestIntentRef.current = requestIntent;
+  const noteLockedRequestRef = useRef(noteLockedRequest);
+  noteLockedRequestRef.current = noteLockedRequest;
 
-  // Track whether sphere has been available at least once
-  const sphereReady = !isLoading && !!sphere;
+  /**
+   * Post HOST_READY to the dApp that opened this popup. The ONLY place this page announces.
+   *
+   * HOST_READY means "a host that can COMPLETE a handshake is listening" — it is the dApp's
+   * trigger to send one. It is therefore emitted at each moment the host BECOMES able to
+   * serve: at construction when the wallet is already unlocked, and on the locked -> live
+   * re-arm below. Never from a host that would refuse.
+   */
+  const announceHostReady = useCallback(() => {
+    const opener = window.opener as Window | null;
+    if (!opener || !origin) return;
+    try {
+      opener.postMessage({ type: HOST_READY_TYPE }, origin);
+    } catch {
+      try {
+        opener.postMessage({ type: HOST_READY_TYPE }, '*');
+      } catch { /* ignore */ }
+    }
+  }, [origin]);
+
+  // A host is built even for a LOCKED wallet — but NOT because a locked host can answer a
+  // typed WALLET_LOCKED (4009) to a handshake. It cannot: gate() never returns REFUSE_LOCKED
+  // for the 'handshake' kind (host-state.ts), so a handshake never sees 4009. A popup that
+  // COLD-STARTS locked is built with `sphere: null`, so its snapshot is EMPTY_WALLET_SNAPSHOT
+  // and the SDK's step-0 check refuses EVERY handshake it receives — a resume and an
+  // already-approved origin included — with an errorless empty response the dApp can only
+  // render as "Connection rejected by wallet". That refusal deliberately reveals nothing
+  // about the wallet and stays exactly as it is.
+  //
+  // The host exists while locked so that (a) onLockedRequest can feed the passive badge and
+  // (b) it is the SAME object across the unlock, which updateSphere() re-arms in place. What
+  // must never happen is announcing HOST_READY from it.
+  const canHost = !isLoading && (!!sphere || (walletExists && isLocked));
 
   // Prevent StrictMode double-mount from destroying the host.
   // In dev, React runs: mount → cleanup → mount. The cleanup would destroy host1,
@@ -46,35 +79,58 @@ export function ConnectPage() {
   // Since this is a popup page, browser GC handles cleanup when the window closes.
   const initializedRef = useRef(false);
 
-  // When user switches address — notify the connected dApp.
-  // When sphere becomes null (wallet deleted/logged out) — notify locked.
+  // Address switch, lock, and non-lock loss of Sphere. A LOCK preserves the
+  // session: the host answers WALLET_LOCKED (4009) until updateSphere() re-arms
+  // it. A generic init failure (sphere === null while isLocked === false) is a
+  // DEAD END — unlocking cannot cure it — so it is setUnavailable(), which
+  // revokes the session and pushes wallet:disconnected instead of promising an
+  // unlock that will never help (graceful lock §8.2).
   useEffect(() => {
-    if (sphere && hostRef.current) {
-      hostRef.current.updateSphere(sphere);
-    } else if (!sphere && !isLoading && hostRef.current) {
-      hostRef.current.notifyWalletLocked();
+    const host = hostRef.current;
+    if (!host) return;
+    if (sphere) {
+      // Sample BEFORE updateSphere(): its identity-mismatch and expiry guards call
+      // revokeSession() internally, so a sample taken afterwards would report "sessionless"
+      // for EVERY re-arm and would tell a still-connected dApp to throw its transport away.
+      const needsHandshake = host.getSession() === null;
+      host.updateSphere(sphere);
+      // The locked -> live edge. A host with NO session is one no dApp can be talking to
+      // yet: it cold-started locked and therefore never announced, so the dApp that opened
+      // this popup is still waiting for a HOST_READY that would otherwise never come.
+      // Nothing else would ever prompt it to handshake. A host that KEPT its session must
+      // NOT be announced — that dApp is still connected and gets wallet:unlocked instead.
+      if (needsHandshake) announceHostReady();
+    } else if (!isLoading) {
+      if (isLocked) host.setLocked();
+      else host.setUnavailable();
     }
-  }, [sphere, isLoading]);
+  }, [sphere, isLoading, isLocked, announceHostReady]);
 
-  // Notify dApp on logout (SPA navigation) or page unload (refresh/close)
+  // Logout (SPA navigation) or page unload (refresh/close) — both DESTROY the
+  // session; neither is a lock. revokeSession() pushes wallet:disconnected, so
+  // the dApp stops believing it is connected instead of finding out at its next
+  // 4001. The host is ALSO released: ConnectPage never removed itself, and with
+  // a registry collection every unloaded popup would leak a dead host that
+  // SphereProvider.lock() then calls setLocked() on (graceful lock §8.4).
   useEffect(() => {
-    const notifyLocked = () => {
-      if (hostRef.current) {
-        hostRef.current.notifyWalletLocked();
-      }
+    const teardown = () => {
+      const host = hostRef.current;
+      if (!host) return;
+      host.revokeSession();
+      releaseHost(host);
     };
     // SPA logout — dispatched by SphereProvider.deleteWallet before destroy
-    window.addEventListener('sphere:wallet-logout', notifyLocked);
+    window.addEventListener('sphere:wallet-logout', teardown);
     // Page refresh or close
-    window.addEventListener('beforeunload', notifyLocked);
+    window.addEventListener('beforeunload', teardown);
     return () => {
-      window.removeEventListener('sphere:wallet-logout', notifyLocked);
-      window.removeEventListener('beforeunload', notifyLocked);
+      window.removeEventListener('sphere:wallet-logout', teardown);
+      window.removeEventListener('beforeunload', teardown);
     };
-  }, []);
+  }, [releaseHost]);
 
   useEffect(() => {
-    if (!sphereReady) return;
+    if (!canHost) return;
     // Already initialized (incl. StrictMode second mount) — skip
     if (initializedRef.current) return;
 
@@ -90,7 +146,7 @@ export function ConnectPage() {
     }
 
     initializedRef.current = true;
-    const currentSphere = sphereRef.current!;
+    const currentSphere = sphereRef.current;
 
     const transport = PostMessageTransport.forHost(window.opener as Window, {
       allowedOrigins: [origin],
@@ -99,6 +155,9 @@ export function ConnectPage() {
 
     const host = new ConnectHost({
       sphere: currentSphere,
+      initialWalletState: currentSphere ? 'live' : 'locked',
+      // The transport-verified origin — never the dApp-claimed dapp.url.
+      origin,
       transport,
       // Reject dApps built against sphere-sdk < 0.12 (incompatible Connect/token contract).
       minSdkVersion: CONNECT_MIN_SDK_VERSION,
@@ -117,7 +176,7 @@ export function ConnectPage() {
         }
 
         // First time — show approval modal (anchor trust to the verified origin).
-        const result = await requestApprovalRef.current(dapp, perms, origin);
+        const result = await requestApprovalRef.current(hostRef.current!, dapp, perms, origin);
         if (result.approved) {
           setConnectedDapp(dapp.name);
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
@@ -139,33 +198,30 @@ export function ConnectPage() {
         revokeApprovedOrigin(origin);
         setConnectedDapp(null);
       },
+      // NOTIFY-ONLY: the host has ALREADY answered WALLET_LOCKED (4009) and never
+      // waits for us. It must NEVER raise a credential surface — it only feeds the
+      // passive badge, and the password field appears solely after a human clicks
+      // it (graceful lock §8.3).
+      onLockedRequest: (ctx) => noteLockedRequestRef.current(origin, ctx),
       onIntent: (action, params) =>
-        requestIntentRef.current(action, params),
+        requestIntentRef.current(hostRef.current!, origin, action, params),
     });
     hostRef.current = host;
-    setConnectHost(host);
+    attachHost(host, origin);
 
     setStatus('ready');
 
-    // Signal to dApp that host is ready
-    try {
-      (window.opener as Window).postMessage(
-        { type: HOST_READY_TYPE },
-        origin,
-      );
-    } catch {
-      try {
-        (window.opener as Window).postMessage(
-          { type: HOST_READY_TYPE },
-          '*',
-        );
-      } catch { /* ignore */ }
-    }
+    // Announce ONLY if this host was built live. A host built behind the lock screen
+    // refuses every handshake it receives, so announcing from it burns the dApp's readiness
+    // wait on a guaranteed refusal — which is exactly the reported bug. When the wallet is
+    // locked the announcement is deferred to the re-arm effect above, which fires the
+    // moment a human unlocks.
+    if (currentSphere) announceHostReady();
 
     // No cleanup — popup page is GC'd when window closes.
     // Returning a cleanup would break StrictMode (destroy host on first unmount).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sphereReady, origin]);
+  }, [canHost, origin]);
 
   return (
     <div className="h-screen bg-linear-to-br from-gray-50 to-gray-100 dark:from-neutral-950 dark:to-neutral-900 flex flex-col">
@@ -173,9 +229,23 @@ export function ConnectPage() {
       {status === 'ready' && (
         <div className="shrink-0 mx-3 mt-3 bg-white dark:bg-neutral-800 rounded-2xl border border-gray-200 dark:border-neutral-700 p-3 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-sm font-medium text-gray-700 dark:text-neutral-300">
-              {connectedDapp ? `Connected to ${connectedDapp}` : 'Ready for connections'}
+            {/* A lock no longer disconnects the dApp — but a pulsing green
+                "Connected" while every request is answered 4009 is a lie. */}
+            <div
+              data-testid="connect-status-dot"
+              className={`w-2 h-2 rounded-full ${isLocked ? 'bg-amber-500' : 'bg-green-500 animate-pulse'}`}
+            />
+            <span
+              data-testid="connect-status-text"
+              className="text-sm font-medium text-gray-700 dark:text-neutral-300"
+            >
+              {isLocked
+                ? connectedDapp
+                  ? `Wallet locked — ${connectedDapp} stays connected`
+                  : 'Wallet locked'
+                : connectedDapp
+                  ? `Connected to ${connectedDapp}`
+                  : 'Ready for connections'}
             </span>
           </div>
           {origin && (
@@ -194,7 +264,7 @@ export function ConnectPage() {
 
       {/* Wallet panel — fills remaining space */}
       <div className="flex-1 min-h-0 p-3">
-        <WalletPanel />
+        <WalletPanel autoFocusUnlock />
       </div>
 
       {rejection && (

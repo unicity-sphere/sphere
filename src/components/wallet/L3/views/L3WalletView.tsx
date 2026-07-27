@@ -280,7 +280,9 @@ export function L3WalletView({
 
   // Handle backup and logout
   const handleBackupAndLogout = () => {
-    setIsLogoutConfirmOpen(false);
+    // Keep the logout confirm mounted (z-10) behind the Backup screen (z-20) so
+    // Backup slides in cleanly on top instead of crossing the logout panel's
+    // slide-out. Closing Backup returns to the logout confirm.
     setIsBackupOpen(true);
   };
 
@@ -447,11 +449,6 @@ export function L3WalletView({
         pay={paymentRequestsPay}
         clearProcessed={paymentRequestsClearProcessed}
       />
-      <SeedPhraseModal
-        isOpen={isSeedPhraseOpen}
-        onClose={() => setIsSeedPhraseOpen(false)}
-        seedPhrase={seedPhrase}
-      />
       <TransactionHistoryModal isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} />
 
       {/* New Modals */}
@@ -469,6 +466,15 @@ export function L3WalletView({
         onExportWalletFile={handleExportWalletFile}
         onShowRecoveryPhrase={handleShowSeedPhrase}
         hasMnemonic={hasMnemonic}
+      />
+
+      {/* Rendered AFTER Settings/Backup so, when opened from the Backup
+          drill-in (which keeps Settings mounted behind it), the seed screen
+          stacks ON TOP of them instead of being hidden behind the menu. */}
+      <SeedPhraseModal
+        isOpen={isSeedPhraseOpen}
+        onClose={() => setIsSeedPhraseOpen(false)}
+        seedPhrase={seedPhrase}
       />
 
       <LogoutConfirmModal
@@ -546,7 +552,7 @@ function SaveWalletModal({ show, onConfirm, onCancel, hasMnemonic, defaultFilena
   };
 
   return (
-    <WalletScreen isOpen={show} onClose={onCancel}>
+    <WalletScreen isOpen={show} onClose={onCancel} className="!z-30">
       <ModalHeader variant="screen" title="Backup Wallet" onClose={onCancel} />
       <div className="px-6 py-8 flex flex-col flex-1 overflow-y-auto">
         <div className="flex flex-col items-center text-center mb-6">

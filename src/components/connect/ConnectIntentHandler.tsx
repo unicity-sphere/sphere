@@ -87,19 +87,23 @@ export function ConnectIntentHandler() {
   useEffect(() => {
     if (!pendingIntent) return;
     const error = validateIntent(pendingIntent.action, pendingIntent.params);
-    if (error) rejectIntent(error.code, error.message);
+    if (error) rejectIntent(pendingIntent.id, error.code, error.message);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIntent]);
 
   if (!pendingIntent) return null;
 
+  // Captured HERE, so every callback below settles the intent this render belongs to. The
+  // queue head advances while a modal's async work is in flight, so reading the head at
+  // callback time delivered a completed transfer's result against a different dApp's intent.
+  const intentId = pendingIntent.id;
   const { action, params } = pendingIntent;
 
   // Malformed / unsupported intents are rejected by the effect above — render nothing.
   if (validateIntent(action, params)) return null;
 
   const handleClose = () => {
-    rejectIntent(ERROR_CODES.USER_REJECTED, 'User cancelled');
+    rejectIntent(intentId, ERROR_CODES.USER_REJECTED, 'User cancelled');
   };
 
   // --- Send Intent: confirm-only (amount fixed, base units, approve/reject) ---
@@ -115,14 +119,14 @@ export function ConnectIntentHandler() {
         // the send with wallet history. transferId is omitted on the synthetic
         // pending results (#631/#665) — those carry an empty id by design.
         onResolve={(result) =>
-          resolveIntent({
+          resolveIntent(intentId, {
             success: true,
             ...(result.id ? { transferId: result.id } : {}),
             status: result.status,
             deliveryPending: result.deliveryPending ?? false,
           })
         }
-        onReject={(message) => rejectIntent(ERROR_CODES.TRANSFER_FAILED, message)}
+        onReject={(message) => rejectIntent(intentId, ERROR_CODES.TRANSFER_FAILED, message)}
         onCancel={handleClose}
       />
     );
@@ -136,8 +140,8 @@ export function ConnectIntentHandler() {
         amount={String(params.amount)}
         coinId={params.coinId as string}
         message={params.message as string | undefined}
-        onResolve={(requestId) => resolveIntent({ success: true, requestId })}
-        onReject={(message) => rejectIntent(ERROR_CODES.INTERNAL_ERROR, message)}
+        onResolve={(requestId) => resolveIntent(intentId, { success: true, requestId })}
+        onReject={(message) => rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, message)}
         onCancel={handleClose}
       />
     );
@@ -159,7 +163,7 @@ export function ConnectIntentHandler() {
         if (autoApproveDM && sphere) {
           const sphereRef = sphere;
           const approvedTo = to;
-          registerAutoIntent('dm', async (_action, intentParams) => {
+          registerAutoIntent(pendingIntent.host, 'dm', async (_action, intentParams) => {
             const nextTo = intentParams.to;
             const nextMessage = intentParams.message;
             // Auto-approval is scoped to the recipient the user approved. A DM to
@@ -183,7 +187,7 @@ export function ConnectIntentHandler() {
           });
         }
 
-        resolveIntent({ sent: true, messageId: dm.id, timestamp: dm.timestamp });
+        resolveIntent(intentId, { sent: true, messageId: dm.id, timestamp: dm.timestamp });
       } catch (err) {
         setDmError(getErrorMessage(err));
       }
@@ -255,7 +259,7 @@ export function ConnectIntentHandler() {
       try {
         const signature = sphere.signMessage(message);
         const identity = sphere.identity;
-        resolveIntent({ signature, publicKey: identity?.chainPubkey });
+        resolveIntent(intentId, { signature, publicKey: identity?.chainPubkey });
       } catch (err) {
         setSignError(getErrorMessage(err));
       }
@@ -309,24 +313,24 @@ export function ConnectIntentHandler() {
       }
       // Validate params before touching the engine (fail fast with INVALID_PARAMS).
       if (typeof coinId !== 'string' || !/^([0-9a-f]{2})+$/.test(coinId)) {
-        rejectIntent(ERROR_CODES.INVALID_PARAMS, 'coinId must be lowercase even-length hex');
+        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'coinId must be lowercase even-length hex');
         return;
       }
       let amountBig: bigint;
       try {
         amountBig = BigInt(amount);
       } catch {
-        rejectIntent(ERROR_CODES.INVALID_PARAMS, 'amount must be an integer string');
+        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'amount must be an integer string');
         return;
       }
       if (amountBig <= 0n) {
-        rejectIntent(ERROR_CODES.INVALID_PARAMS, 'amount must be greater than zero');
+        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'amount must be greater than zero');
         return;
       }
       // Mint is a certification_request — refuse until the subscription key is on
       // the oracle (else it 401s in the provisioning window). Reject gracefully.
       if (!subscriptionKeyReady) {
-        rejectIntent(ERROR_CODES.INTERNAL_ERROR, 'Subscription is still being set up — try again in a moment');
+        rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, 'Subscription is still being set up — try again in a moment');
         return;
       }
 
@@ -334,9 +338,9 @@ export function ConnectIntentHandler() {
       try {
         const result = await sphere.payments.mintFungibleToken(coinId, amountBig);
         if (result.success) {
-          resolveIntent({ tokenId: result.tokenId, coinId, amount });
+          resolveIntent(intentId, { tokenId: result.tokenId, coinId, amount });
         } else {
-          rejectIntent(ERROR_CODES.INTERNAL_ERROR, result.error);
+          rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, result.error);
         }
       } catch (err) {
         setMintError(getErrorMessage(err));
@@ -415,7 +419,7 @@ export function ConnectIntentHandler() {
       setIsReceiving(true);
       try {
         const { transfers } = await sphere.payments.receive();
-        resolveIntent({ transfers });
+        resolveIntent(intentId, { transfers });
       } catch (err) {
         setReceiveError(getErrorMessage(err));
       } finally {
