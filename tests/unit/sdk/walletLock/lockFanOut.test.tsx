@@ -224,4 +224,25 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
       unsubscribe();
     }
   });
+
+  it('locks a tab whose Sphere is momentarily null — a re-init must not swallow a cross-tab lock', async () => {
+    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
+
+    const host = makeFakeHost('A');
+    attach(host, 'https://a.example');
+
+    // toggleIpfs()/reinitialize() leave sphereRef null while the new instance comes up. A lock
+    // arriving in that window used to return immediately: the tab stayed unlocked, its hosts
+    // kept reporting 'live', no epoch was written, and the in-flight init went on to adopt a
+    // fully usable Sphere. Modelled by locking twice — the first empties sphereRef, the second
+    // stands in for the cross-tab lock that lands during the re-init.
+    await act(async () => { await ctx!.lock(); });
+    expect(screen.getByTestId('locked').textContent).toBe('true');
+
+    // A second lock while already locked is still a no-op — the guard narrowed, it did not go.
+    host.setLocked.mockClear();
+    await act(async () => { await ctx!.lock(); });
+    expect(host.setLocked).not.toHaveBeenCalled();
+  });
 });

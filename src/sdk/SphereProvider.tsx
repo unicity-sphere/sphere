@@ -353,6 +353,10 @@ export function SphereProvider({
   // persisted lock epoch on resume — a bfcached tab never re-runs initialize()
   // and never sees the lock BroadcastChannel message it slept through.
   const sessionStartedAtRef = useRef<number | null>(null);
+  // Mirrors isLocked for lock()'s idempotency guard: lock() is a useCallback captured by the
+  // cross-tab subscription and the idle timer, so reading the state variable there would read
+  // whatever it was when the callback was created.
+  const isLockedRef = useRef(false);
 
   // Marks a usable Sphere as live in this tab and drops any stale lock marker.
   const markSessionStart = useCallback(() => {
@@ -585,6 +589,7 @@ export function SphereProvider({
             // latest run (or unmount) already owns the outcome (#453).
             if (isStale()) return;
             setIsLocked(true);
+            isLockedRef.current = true;
             // The wallet is definitely password-protected (that's WHY the
             // passwordless init just threw the decrypt-mnemonic STORAGE_ERROR)
             // — no need for the storage round-trip, but reuse the shared
@@ -957,6 +962,7 @@ export function SphereProvider({
     // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
     setSessionPassword(password);
     setIsLocked(false);
+    isLockedRef.current = false;
     // A successful unlock proves the wallet has a password (that's WHY it was locked).
     setHasWalletPassword(true);
 
@@ -990,9 +996,17 @@ export function SphereProvider({
   // re-arms them. For a logout use revokeSession() instead; for a non-lock loss
   // of Sphere, setUnavailable().
   const lock = useCallback(async () => {
-    // Idempotent — see lockingRef. Also a no-op when there is nothing live to
-    // lock (already locked, or Sphere never came up).
-    if (lockingRef.current || sphereRef.current === null) return;
+    // Idempotent — see lockingRef.
+    //
+    // `sphereRef.current === null` is NOT a reason to bail. That is exactly the state a re-init
+    // leaves behind (toggleIpfs, reinitialize), and a cross-tab lock arriving in that window
+    // used to do nothing at all: the tab stayed unlocked, its hosts kept reporting 'live', the
+    // lock epoch was never written, and the in-flight init went on to adopt a fully usable
+    // Sphere. Bumping initGenRef below is what supersedes that init, so the lock must run.
+    //
+    // Only an already-locked tab has nothing to do.
+    if (lockingRef.current) return;
+    if (sphereRef.current === null && isLockedRef.current) return;
     lockingRef.current = true;
     try {
       initGenRef.current++; // supersede any in-flight init
@@ -1035,6 +1049,7 @@ export function SphereProvider({
       markLockEpoch();
       sessionStartedAtRef.current = null;
       setIsLocked(true);
+      isLockedRef.current = true;
     } finally {
       lockingRef.current = false;
     }
@@ -1221,6 +1236,7 @@ export function SphereProvider({
     // successful restore and the shell gate would keep showing the lock
     // screen instead of the freshly-restored wallet.
     setIsLocked(false);
+    isLockedRef.current = false;
     // Reflect whatever createWallet()/importWallet() decided: they already
     // called setSessionPassword() (passwordRef) iff the user chose a password
     // during onboarding/import — mirror that into hasWalletPassword now that
