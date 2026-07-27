@@ -31,6 +31,12 @@ import {
 import { broadcastLock, subscribeLockBroadcast } from './walletLock/lockBroadcast';
 import { broadcastLogout, subscribeLogoutBroadcast } from './walletLock/logoutBroadcast';
 import { markLockEpoch, clearLockEpoch, isLockPending } from './walletLock/lockEpoch';
+import {
+  savePersistedUnlock,
+  loadPersistedUnlock,
+  clearPersistedUnlock,
+  touchPersistedUnlock,
+} from './walletLock/persistedUnlock';
 import { reencryptStoredMnemonic } from './walletLock/reencryptMnemonic';
 import { forEachConnectHost } from './connectHostRegistry';
 import { isUiOnlyQuery } from '../config/uiQueryKeys';
@@ -58,6 +64,9 @@ import { validatePastedKey } from './subscription/keyCheck';
 import { isPaidPlan } from './subscription/usage';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import { provisionOrRecoverKey, getUtilization } from '../services/subscriptionApi';
+
+/** How often user activity may refresh the remembered unlock's expiry. */
+const PERSIST_TOUCH_INTERVAL_MS = 60_000;
 
 const COINGECKO_BASE_URL = import.meta.env.DEV
   ? '/coingecko'
@@ -293,6 +302,12 @@ export function SphereProvider({
   // unrelated SphereProvider re-render. CRITICAL invariant: a wallet with NO
   // password (passwordRef.current falsy) always resolves `enabled: false`
   // here — see the `null`-password branch below.
+  // Mirrored into a ref because unlock() reads it in the same tick it is set — the state
+  // variable there is still the pre-unlock value.
+  const idleLockConfigRef = useRef<{ enabled: boolean; timeoutMs: number | null }>({
+    enabled: false,
+    timeoutMs: null,
+  });
   const [idleLockConfig, setIdleLockConfig] = useState<{ enabled: boolean; timeoutMs: number | null }>({
     enabled: false,
     timeoutMs: null,
@@ -311,12 +326,14 @@ export function SphereProvider({
   const setSessionPassword = useCallback((password: string | null) => {
     passwordRef.current = password;
     if (!password) {
-      setIdleLockConfig({ enabled: false, timeoutMs: null });
+      idleLockConfigRef.current = { enabled: false, timeoutMs: null };
+    setIdleLockConfig({ enabled: false, timeoutMs: null });
       setAutoLockMinutesState(DEFAULT_AUTO_LOCK_MINUTES);
       return;
     }
     const storedBlob = localStorage.getItem(STORAGE_KEYS.AUTO_LOCK_TIMEOUT);
     const minutes = storedBlob ? decodeLockSettings(storedBlob, password) : DEFAULT_AUTO_LOCK_MINUTES;
+    idleLockConfigRef.current = { enabled: true, timeoutMs: autoLockMs(minutes) };
     setIdleLockConfig({ enabled: true, timeoutMs: autoLockMs(minutes) });
     setAutoLockMinutesState(minutes);
   }, []);
@@ -357,6 +374,8 @@ export function SphereProvider({
   // cross-tab subscription and the idle timer, so reading the state variable there would read
   // whatever it was when the callback was created.
   const isLockedRef = useRef(false);
+  /** Rate-limits the persisted-unlock timestamp write; see the idle timer's onActivity. */
+  const lastTouchRef = useRef(0);
 
   // Marks a usable Sphere as live in this tab and drops any stale lock marker.
   const markSessionStart = useCallback(() => {
@@ -564,6 +583,14 @@ export function SphereProvider({
 
       if (exists) {
         setInitProgress({ step: 'initializing', message: 'Loading wallet...' });
+        // A remembered unlock, if one is still within its idle window. Reading it here — before
+        // the deliberately passwordless attempt below — is what makes a reload not re-lock the
+        // wallet. A plaintext wallet never wrote one, so it is unaffected.
+        if (!passwordRef.current) {
+          const remembered = await loadPersistedUnlock();
+          if (isStale()) return;
+          if (remembered) setSessionPassword(remembered);
+        }
         // Password policy on this path:
         //  - COLD load (no session password held): pass none. An existing
         //    plaintext wallet must keep loading exactly as before; an encrypted
@@ -857,6 +884,8 @@ export function SphereProvider({
     // never reloads, so a neighbouring tab would keep operating a live
     // decrypted Sphere over a wiped database (graceful lock §8.1).
     broadcastLogout();
+    // The remembered unlock belongs to a wallet that no longer exists.
+    void clearPersistedUnlock();
 
     // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
     // calls walletApi.logout() on address switch, not on destroy — without
@@ -959,10 +988,15 @@ export function SphereProvider({
       markSessionStart();
     });
     if (outcome !== 'adopted') return;
-    // Memory-only (#449 Task 8a) — never persisted. Powers idle auto-lock.
+    // Powers idle auto-lock. Held in memory here; separately REMEMBERED below so a page reload
+    // does not demand it again — the remembered copy is encrypted under a non-extractable key
+    // and expires with the idle timeout (walletLock/persistedUnlock.ts).
     setSessionPassword(password);
     setIsLocked(false);
     isLockedRef.current = false;
+    // Remember the unlock, bounded by this wallet's own auto-lock timeout. Read AFTER
+    // setSessionPassword, which is what decodes the encrypted lock settings.
+    void savePersistedUnlock(password, idleLockConfigRef.current.timeoutMs);
     // A successful unlock proves the wallet has a password (that's WHY it was locked).
     setHasWalletPassword(true);
 
@@ -1048,6 +1082,9 @@ export function SphereProvider({
       // initialize() can catch up on resume (graceful lock §8.4).
       markLockEpoch();
       sessionStartedAtRef.current = null;
+      // A lock means "ask me again": every lock path forgets the remembered unlock, so the
+      // idle timer, a manual lock and a cross-tab lock all really do lock.
+      void clearPersistedUnlock();
       setIsLocked(true);
       isLockedRef.current = true;
     } finally {
@@ -1162,6 +1199,15 @@ export function SphereProvider({
     // classifyInitFailure() === 'locked' branch) also clears/never-set the
     // password.
     enabled: idleLockConfig.enabled && !isLocked,
+    // The remembered unlock expires from the last ACTIVITY, not from the unlock, so half an
+    // hour of work followed by a reload does not demand the password again. Throttled by
+    // useIdleTimer's own activity throttle; a write per rearm is far too often, hence the gate.
+    onActivity: () => {
+      const now = Date.now();
+      if (now - lastTouchRef.current < PERSIST_TOUCH_INTERVAL_MS) return;
+      lastTouchRef.current = now;
+      void touchPersistedUnlock();
+    },
     onIdle: () => {
       // lock() broadcasts for us now — from EVERY lock path, not just this one.
       // A same-name BroadcastChannel receives its own tab's postMessage, so the
@@ -1181,6 +1227,7 @@ export function SphereProvider({
     // The same in-window signal deleteWallet() fires, so every ConnectHost in
     // THIS tab revokes its session (logout ≠ lock).
     window.dispatchEvent(new CustomEvent('sphere:wallet-logout'));
+    void clearPersistedUnlock();
     initGenRef.current++;
     await sphereRef.current.destroy();
     sphereRef.current = null;

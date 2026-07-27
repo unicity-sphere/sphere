@@ -24,10 +24,18 @@ export function useIdleTimer(opts: {
   timeoutMs: number | null;
   enabled: boolean;
   onIdle: () => void;
+  /**
+   * Fired on every observed activity, local or from another tab. Used to refresh the remembered
+   * unlock's expiry so a long working session is not cut short by a reload — throttle inside the
+   * callback, this fires as often as the user moves.
+   */
+  onActivity?: () => void;
   channelName?: string;
 }): void {
   const onIdleRef = useRef(opts.onIdle);
   onIdleRef.current = opts.onIdle;
+  const onActivityRef = useRef(opts.onActivity);
+  onActivityRef.current = opts.onActivity;
 
   useEffect(() => {
     if (!opts.enabled || opts.timeoutMs == null) return;
@@ -46,6 +54,7 @@ export function useIdleTimer(opts: {
     // Local activity: rearm + tell other tabs (throttled).
     const onLocalActivity = () => {
       arm();
+      onActivityRef.current?.();
       const now = performance.now();
       if (channel && now - lastBroadcast > THROTTLE_MS) {
         lastBroadcast = now;
@@ -53,7 +62,10 @@ export function useIdleTimer(opts: {
       }
     };
     // Remote activity (another tab): rearm only, don't rebroadcast.
-    if (channel) channel.onmessage = () => arm();
+    if (channel) channel.onmessage = () => {
+      arm();
+      onActivityRef.current?.();
+    };
 
     ACTIVITY_EVENTS.forEach((e) => window.addEventListener(e, onLocalActivity, { passive: true }));
     arm();
