@@ -18,17 +18,19 @@
  * HOW. The password is encrypted under a NON-EXTRACTABLE AES-GCM key held in IndexedDB, and
  * deleting the record revokes it.
  *
- * BE CLEAR ABOUT WHAT NON-EXTRACTABLE DOES AND DOES NOT BUY. It stops the KEY being exported
- * and reused elsewhere. It does NOT protect the password from script running on this origin:
- * the ciphertext sits beside the key, so an XSS payload simply calls decrypt() and reads the
- * password out. What it protects against is a passive copy of the stored bytes — a backup, a
- * sync, a forensic image — where ciphertext without a usable key is inert.
+ * SCOPE OF THE PROTECTION, so nobody mistakes it for more than it is. Non-extractability keeps
+ * the key from being exported and reused elsewhere, and keeps a passive copy of the stored bytes
+ * — a backup, a sync, a disk image — inert. It is NOT a boundary against code running on this
+ * origin, and it is not meant to be: anything executing here can already reach an unlocked
+ * wallet directly.
  *
- * So the honest security delta versus keeping the password in memory: an attacker who can run
- * script here no longer has to WAIT for the user to type it. That is a real widening, and it is
- * the price of not training users to retype their password ten times a day. If that trade is
- * not acceptable for a deployment, the unwrap should be gated behind a user-presence check
- * (WebAuthn), which is the only variant that stops a silent read.
+ * THE INVARIANT THIS RESTS ON, and the reason the expiry is not a tidy-up detail: a record may
+ * exist only while the wallet is unlocked or about to be. Every lock path — manual, idle,
+ * cross-tab, logout, wallet delete — MUST erase it, and the expiry must stay bounded by the
+ * user's own auto-lock timeout. Weaken either and this stops being "a reload does not re-prompt"
+ * and becomes "the wallet is open indefinitely", which is a different product with a different
+ * risk profile. If a deployment needs the reload itself to require proof of presence, gate the
+ * unwrap behind WebAuthn rather than lengthening the window.
  *
  * This does NOT weaken at-rest encryption of the mnemonic: that stays exactly as it was, and a
  * wallet with no password never reaches this module at all.
