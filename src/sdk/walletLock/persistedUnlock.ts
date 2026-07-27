@@ -15,10 +15,20 @@
  * the origin within the same idle window can spend. Before this, disk access yielded nothing
  * usable. The expiry check below is what bounds that, which is why it is not optional.
  *
- * HOW. The password is encrypted under a NON-EXTRACTABLE AES-GCM key held in IndexedDB. A
- * script on this origin can ask the browser to decrypt with that key but cannot read the key
- * out and carry it elsewhere, and deleting the record revokes it. The password itself is never
- * written anywhere in the clear.
+ * HOW. The password is encrypted under a NON-EXTRACTABLE AES-GCM key held in IndexedDB, and
+ * deleting the record revokes it.
+ *
+ * BE CLEAR ABOUT WHAT NON-EXTRACTABLE DOES AND DOES NOT BUY. It stops the KEY being exported
+ * and reused elsewhere. It does NOT protect the password from script running on this origin:
+ * the ciphertext sits beside the key, so an XSS payload simply calls decrypt() and reads the
+ * password out. What it protects against is a passive copy of the stored bytes — a backup, a
+ * sync, a forensic image — where ciphertext without a usable key is inert.
+ *
+ * So the honest security delta versus keeping the password in memory: an attacker who can run
+ * script here no longer has to WAIT for the user to type it. That is a real widening, and it is
+ * the price of not training users to retype their password ten times a day. If that trade is
+ * not acceptable for a deployment, the unwrap should be gated behind a user-presence check
+ * (WebAuthn), which is the only variant that stops a silent read.
  *
  * This does NOT weaken at-rest encryption of the mnemonic: that stays exactly as it was, and a
  * wallet with no password never reaches this module at all.
