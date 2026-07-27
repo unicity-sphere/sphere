@@ -1,10 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Loader2, Globe, ExternalLink, RotateCw } from 'lucide-react';
+import { Loader2, Globe, ExternalLink, RotateCw, ShieldAlert } from 'lucide-react';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
 import type { AgentConfig } from '../../config/activities';
 import { CONNECT_MIN_SDK_VERSION } from '../../config/connect';
+import {
+  isWalletOwnOrigin,
+  AGENT_IFRAME_SANDBOX,
+  AGENT_IFRAME_ALLOW,
+} from '../../config/agentOrigins';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../connect/ConnectContext';
 import { describeConnectRejection } from '../connect/rejectionMessage';
@@ -32,6 +37,19 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   const { requestApproval, requestIntent, setConnectHost } = useConnectContext();
 
   const hasUrlOptions = agent.iframeUrls && agent.iframeUrls.length > 1;
+
+  // Trust boundary: a frame on the wallet's OWN origin, with allow-same-origin,
+  // could execute as the wallet and reach the parent DOM. Refuse to frame it or
+  // attach a Connect host — this URL only ever arrives from an untrusted source
+  // (e.g. a deep link in a DM). See config/agentOrigins.ts.
+  const framedOrigin = (() => {
+    try {
+      return new URL(activeUrl).origin;
+    } catch {
+      return null;
+    }
+  })();
+  const isSelfOrigin = framedOrigin !== null && isWalletOwnOrigin(framedOrigin);
 
   // Stable refs to avoid effect re-runs
   const sphereRef = useRef(sphere);
@@ -85,6 +103,12 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       return;
     }
 
+    // Never bridge the wallet to its own origin (see isSelfOrigin above).
+    if (isWalletOwnOrigin(origin)) {
+      console.warn('[Connect] Refusing to attach a Connect host to the wallet own origin:', origin);
+      return;
+    }
+
     initializedRef.current = true;
 
     const transport = PostMessageTransport.forHost(iframe, {
@@ -110,8 +134,9 @@ export function IframeAgent({ agent }: IframeAgentProps) {
           return { approved: false, grantedPermissions: [] };
         }
 
-        // First time — show approval modal via ConnectProvider
-        const result = await requestApprovalRef.current(dapp, perms);
+        // First time — show approval modal via ConnectProvider (anchor trust to
+        // the transport-verified origin, not the dApp-supplied metadata).
+        const result = await requestApprovalRef.current(dapp, perms, origin);
         if (result.approved) {
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
@@ -155,6 +180,33 @@ export function IframeAgent({ agent }: IframeAgentProps) {
     displayHost = new URL(activeUrl).host;
   } catch {
     displayHost = activeUrl;
+  }
+
+  if (isSelfOrigin) {
+    return (
+      <div
+        data-testid="agent-self-origin-blocked"
+        className="h-full min-h-0 flex flex-col items-center justify-center gap-3 p-6 text-center"
+      >
+        <ShieldAlert className="w-10 h-10 text-orange-500" />
+        <div className="font-semibold text-neutral-900 dark:text-white">
+          This page can't be opened as an agent
+        </div>
+        <p className="max-w-sm text-sm text-neutral-500 dark:text-neutral-400">
+          It points at Sphere's own address, so opening it here would give an untrusted page
+          access to your wallet. Open it in a normal browser tab instead.
+        </p>
+        <a
+          href={activeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-orange-600 dark:text-orange-400 rounded-lg hover:bg-orange-500/10 transition-colors"
+        >
+          <ExternalLink className="w-4 h-4" />
+          Open in new tab
+        </a>
+      </div>
+    );
   }
 
   return (
@@ -242,8 +294,8 @@ export function IframeAgent({ agent }: IframeAgentProps) {
               setTimeout(sendReady, 300);
             }
           }}
-          allow="clipboard-write"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          allow={AGENT_IFRAME_ALLOW}
+          sandbox={AGENT_IFRAME_SANDBOX}
         />
       </div>
     </div>

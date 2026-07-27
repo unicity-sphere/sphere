@@ -116,8 +116,8 @@ export function ConnectPage() {
           return { approved: false, grantedPermissions: [] };
         }
 
-        // First time — show approval modal
-        const result = await requestApprovalRef.current(dapp, perms);
+        // First time — show approval modal (anchor trust to the verified origin).
+        const result = await requestApprovalRef.current(dapp, perms, origin);
         if (result.approved) {
           setConnectedDapp(dapp.name);
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);

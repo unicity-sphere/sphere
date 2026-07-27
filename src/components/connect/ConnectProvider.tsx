@@ -35,9 +35,9 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   }, []);
 
   const requestApproval = useCallback(
-    (dapp: DAppMetadata, permissions: PermissionScope[]) => {
+    (dapp: DAppMetadata, permissions: PermissionScope[], origin: string) => {
       return new Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>((resolve) => {
-        setPendingApproval({ dapp, permissions, resolve });
+        setPendingApproval({ dapp, permissions, origin, resolve });
       });
     },
     [],

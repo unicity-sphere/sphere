@@ -8,6 +8,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { Sphere, TokenRegistry, NETWORKS, logger, isSphereError, getPublicKey } from '@unicitylabs/sphere-sdk';
 import { sendWelcomeDM } from './welcomeDM';
+import { adoptOrDiscardInstance } from './adoptOrDiscardInstance';
 import type { InitProgress, NetworkType } from '@unicitylabs/sphere-sdk';
 import { getErrorMessage } from './errors';
 import {
@@ -206,6 +207,11 @@ export function SphereProvider({
     SUBSCRIPTION_ENABLED ? 'provisioning' : 'not-required',
   );
   const sphereRef = useRef<Sphere | null>(null);
+  // Monotonic init generation: only the LATEST initialize() run may adopt its
+  // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
+  // toggle, unmount) destroys the instance it built instead of leaking it. See
+  // #453 and adoptOrDiscardInstance.
+  const initGenRef = useRef(0);
   // Subscription-key reconcile bookkeeping (SUBSCRIPTION_ENABLED only):
   // - subKeyGenRef: monotonic generation so only the LATEST reconcile (initial
   //   load or a live address switch) may apply its key + flip status; stale
@@ -368,12 +374,18 @@ export function SphereProvider({
   );
 
   const initialize = useCallback(async (attempt = 0, skipLoading = false) => {
+    // Claim this generation; any later initialize() (or the unmount cleanup)
+    // supersedes us. Checked after every await so a stale run stops touching
+    // state and, crucially, never adopts the instance it built.
+    const gen = ++initGenRef.current;
+    const isStale = () => gen !== initGenRef.current;
     try {
       // Destroy previous instance to release IndexedDB connections
       if (sphereRef.current) {
         await sphereRef.current.destroy();
         sphereRef.current = null;
       }
+      if (isStale()) return;
 
       if (!skipLoading) setIsLoading(true);
       setError(null);
@@ -396,6 +408,7 @@ export function SphereProvider({
       });
 
       const exists = await Sphere.exists(browserProviders.storage);
+      if (isStale()) return;
       setWalletExists(exists);
 
       if (exists) {
@@ -406,10 +419,15 @@ export function SphereProvider({
           discoverAddresses: false, // Run separately below for UX
           onProgress: setInitProgress,
         });
-        setupIpfsSync(instance, browserProviders);
+        // Adopt only if we're still the latest init; otherwise destroy the
+        // instance we just built so it can't linger as a zombie (#453).
+        const outcome = await adoptOrDiscardInstance(instance, isStale, (inst) => {
+          setupIpfsSync(inst, browserProviders);
+          sphereRef.current = inst;
+          setSphere(inst);
+        });
+        if (outcome === 'discarded') return;
         setInitProgress(null);
-        sphereRef.current = instance;
-        setSphere(instance);
 
         // Readiness for the send gate: 'ready' iff this oracle was built WITH a
         // subscription key. With no key yet we provision below and stay
@@ -454,12 +472,17 @@ export function SphereProvider({
         // Pre-connect transport for nametag lookups during onboarding
         const transport = browserProviders.transport;
         await transport.connect();
+        if (isStale()) return;
         transport.setIdentity({
           privateKey: '0000000000000000000000000000000000000000000000000000000000000001',
           chainPubkey: '000000000000000000000000000000000000000000000000000000000000000000',
         });
       }
     } catch (err) {
+      // A superseded run's failure is not the user's problem — a newer init
+      // owns the outcome. Don't surface its error or retry.
+      if (isStale()) return;
+
       // IndexedDB may be temporarily blocked after database deletion.
       // Retry once after a short delay before giving up.
       if (isSphereError(err) && err.code === 'STORAGE_ERROR' && attempt < 1) {
@@ -471,15 +494,22 @@ export function SphereProvider({
       logger.error('SphereProvider', 'Initialization failed', err);
       setError(err instanceof Error ? err : new Error(getErrorMessage(err)));
     } finally {
-      setInitProgress(null);
-      setIsLoading(false);
+      // Only the latest run owns the shared loading/progress UI.
+      if (!isStale()) {
+        setInitProgress(null);
+        setIsLoading(false);
+      }
     }
   }, [network, setupSubscriptionKey]);
 
   useEffect(() => {
     initialize();
     return () => {
-      // Cleanup on unmount
+      // Supersede any in-flight init so it destroys its instance instead of
+      // adopting it after unmount, then tear down the live one. Reading the
+      // LIVE ref values at cleanup time is intentional here (not a snapshot).
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      initGenRef.current++;
       sphereRef.current?.destroy();
       sphereRef.current = null;
     };

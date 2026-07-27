@@ -9,6 +9,8 @@ import type { LegacyFileType } from "@unicitylabs/sphere-sdk";
 import { useSphereContext } from "../../../../sdk/hooks/core/useSphere";
 import { SPHERE_KEYS } from "../../../../sdk/queryKeys";
 import { addrKey } from "../components/addrKey";
+import { createWalletThenRegister } from "./createWalletThenRegister";
+import { buildWalletBackup } from "./buildWalletBackup";
 import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
 import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
@@ -63,7 +65,7 @@ export interface UseOnboardingFlowReturn {
   isProcessingComplete: boolean;
   handleCompleteOnboarding: () => Promise<void>;
   handleMnemonicBackupComplete: () => void;
-  handleDownloadBackup: () => Promise<void>;
+  handleDownloadBackup: (password?: string) => Promise<void>;
 
   // Subscription plan-capabilities state (post-finalize provisioning)
   planName: string | null;
@@ -540,13 +542,23 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
         setProcessingStatus("Setup complete!");
         setIsProcessingComplete(true);
       } else {
-        // Create flow — create wallet with nametag
-        setProcessingStatus("Creating wallet and registering Unicity ID...");
-        const result = await createWallet({ nametag: cleanTag });
-        setGeneratedMnemonic(result.mnemonic);
-        importedSphereRef.current = result.sphere;
-        isCreateFlowRef.current = true;
-          setProcessingStep(2);
+        // Create flow — create the wallet WITHOUT a nametag first (no Nostr
+        // binding is published, so a failure here can safely wipe storage), then
+        // register the nametag as a separate step. A registration failure never
+        // re-runs createWallet and never wipes the wallet, so the key survives
+        // and the nametag can't be burned (#448).
+        setProcessingStatus("Creating wallet...");
+        await createWalletThenRegister({
+          createWallet,
+          nametag: cleanTag,
+          onWalletCreated: (result) => {
+            setGeneratedMnemonic(result.mnemonic);
+            importedSphereRef.current = result.sphere;
+            isCreateFlowRef.current = true;
+            setProcessingStatus("Registering Unicity ID...");
+          },
+        });
+        setProcessingStep(2);
         setProcessingStatus("Setup complete!");
         setIsProcessingComplete(true);
       }
@@ -678,16 +690,13 @@ export function useOnboardingFlow(): UseOnboardingFlowReturn {
     finishFinalize();
   }, [finishFinalize]);
 
-  // Action: Download wallet backup file
-  const handleDownloadBackup = useCallback(async () => {
+  // Action: Download wallet backup file. Optional password encrypts the file
+  // (like the in-wallet "Save Wallet"); the filename never leaks the handle (#450).
+  const handleDownloadBackup = useCallback(async (password?: string) => {
     const activeSphere = importedSphereRef.current ?? sphere;
     if (!activeSphere) return;
-    const jsonData = activeSphere.exportToJSON({ includeMnemonic: true });
-    const nametag = activeSphere.identity?.nametag?.replace(/^@/, "");
-    const fileName = nametag
-      ? `${nametag}.json`
-      : "sphere_wallet_backup.json";
-    const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json" });
+    const { fileName, json } = buildWalletBackup(activeSphere, password);
+    const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

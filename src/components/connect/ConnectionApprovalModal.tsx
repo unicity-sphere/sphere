@@ -1,9 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Plug, Shield } from 'lucide-react';
+import { Plug, Shield, Globe, AlertTriangle } from 'lucide-react';
 import { PERMISSION_SCOPES } from '@unicitylabs/sphere-sdk/connect';
 import type { PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
+import { classifyAgentOrigin } from '../../config/agentOrigins';
 import { useConnectContext } from './ConnectContext';
+
+function hostOf(value: string): string | null {
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
+}
 
 const PERMISSION_LABELS: Record<string, string> = {
   [PERMISSION_SCOPES.IDENTITY_READ]: 'View identity',
@@ -38,7 +47,17 @@ export function ConnectionApprovalModal() {
 
   if (!pendingApproval) return null;
 
-  const { dapp, permissions } = pendingApproval;
+  const { dapp, permissions, origin } = pendingApproval;
+
+  // Trust is anchored to the transport-verified origin, never to dApp-supplied
+  // metadata. `untrusted` (anything not on the curated allowlist) gets a plain
+  // warning; a reported-url host that disagrees with the verified origin is a
+  // spoofing signal and gets its own callout.
+  const isTrusted = classifyAgentOrigin(origin) === 'trusted';
+  const reportedHost = hostOf(dapp.url);
+  const verifiedHost = hostOf(origin);
+  const hostMismatch =
+    reportedHost !== null && verifiedHost !== null && reportedHost !== verifiedHost;
 
   const togglePermission = (perm: PermissionScope) => {
     if (perm === PERMISSION_SCOPES.IDENTITY_READ) return; // always granted
@@ -67,24 +86,63 @@ export function ConnectionApprovalModal() {
     <BaseModal isOpen={true} onClose={handleDeny}>
       <ModalHeader
         title="Connect dApp"
-        subtitle={dapp.url}
+        subtitle={verifiedHost ?? origin}
         icon={Plug}
         onClose={handleDeny}
       />
 
       <div className="relative z-10 px-6 py-5 overflow-y-auto flex-1">
-        {/* dApp info */}
-        <div className="flex items-center gap-3 mb-5 p-3 bg-neutral-50 dark:bg-white/4 rounded-xl">
+        {/* Trust anchor: the transport-verified origin (not dApp-supplied). */}
+        <div
+          data-testid="connect-verified-origin"
+          className="flex items-center gap-3 mb-3 p-3 bg-neutral-50 dark:bg-white/4 rounded-xl"
+        >
+          <Globe className="w-5 h-5 text-neutral-500 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wide text-neutral-400">Site (verified)</div>
+            <div className="font-mono text-sm text-neutral-900 dark:text-white break-all">{origin}</div>
+          </div>
+        </div>
+
+        {/* dApp-reported metadata — untrusted decoration, clearly labelled. */}
+        <div className="flex items-center gap-3 mb-3 p-3 rounded-xl border border-neutral-200/70 dark:border-white/8">
           {dapp.icon && (
-            <img src={dapp.icon} alt="" className="w-10 h-10 rounded-lg" />
+            <img src={dapp.icon} alt="" className="w-8 h-8 rounded-lg shrink-0" />
           )}
-          <div>
-            <div className="font-semibold text-neutral-900 dark:text-white">{dapp.name}</div>
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wide text-neutral-400">Site says its name is</div>
+            <div className="font-medium text-neutral-700 dark:text-white/80 truncate">{dapp.name}</div>
             {dapp.description && (
-              <div className="text-xs text-neutral-500 dark:text-white/45">{dapp.description}</div>
+              <div className="text-xs text-neutral-500 dark:text-white/45 truncate">{dapp.description}</div>
             )}
           </div>
         </div>
+
+        {hostMismatch && (
+          <div
+            data-testid="connect-origin-mismatch"
+            className="flex items-start gap-2 mb-3 p-3 rounded-xl bg-red-500/10 text-red-700 dark:text-red-300"
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="text-xs">
+              This site claims to be <span className="font-mono">{reportedHost}</span> but is actually
+              loaded from <span className="font-mono">{verifiedHost}</span>. Do not connect unless you
+              trust it.
+            </div>
+          </div>
+        )}
+
+        {!isTrusted && !hostMismatch && (
+          <div
+            data-testid="connect-origin-warning"
+            className="flex items-start gap-2 mb-3 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300"
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="text-xs">
+              Sphere can't verify this site. Only connect if you trust the address above.
+            </div>
+          </div>
+        )}
 
         {/* Permissions */}
         <div className="flex items-center gap-2 mb-3">
