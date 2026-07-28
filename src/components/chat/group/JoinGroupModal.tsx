@@ -1,3 +1,4 @@
+import { parseGroupInvite } from '../../../utils/groupInviteLink';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Hash, Lock, Users, RefreshCw, Loader2, Link } from 'lucide-react';
@@ -43,18 +44,6 @@ export function JoinGroupModal({
         g.description?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  // Parse invite link format: groupId/inviteCode
-  const parseInviteLink = (link: string): { groupId: string; code: string } | null => {
-    const trimmed = link.trim();
-    const slashIndex = trimmed.indexOf('/');
-    if (slashIndex === -1 || slashIndex === 0 || slashIndex === trimmed.length - 1) {
-      return null;
-    }
-    return {
-      groupId: trimmed.substring(0, slashIndex),
-      code: trimmed.substring(slashIndex + 1),
-    };
-  };
 
   const handleJoin = async () => {
     if (!selectedGroupId) return;
@@ -80,7 +69,7 @@ export function JoinGroupModal({
   };
 
   const handleJoinWithInvite = async () => {
-    const parsed = parseInviteLink(inviteLink);
+    const parsed = parseGroupInvite(inviteLink);
     if (!parsed) {
       setError('Invalid invite link format. Expected: groupId/inviteCode');
       return;
