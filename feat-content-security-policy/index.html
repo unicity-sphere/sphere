@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/sphere/feat-content-security-policy/Union.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <title>Unicity Agent Sphere</title>
+    <!-- Splash screen fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Pre-React boot work: SPA path restore and the theme class. In a file, not
+         inline, so script-src can be 'self' — a CSP cannot tell our inline script
+         from an injected one. Classic script: runs before the module bundle. -->
+    <script src="/sphere/feat-content-security-policy/boot.js"></script>
+    <!-- Runtime-swappable public config for build-once/promote-many Docker
+         images (window.__SPHERE_RUNTIME_CONFIG__). Classic script: executes
+         before the module bundle below. Rewritten at container start by
+         deploy/runtime-config.sh; dev/Pages ship the empty default. -->
+    <script src="/sphere/feat-content-security-policy/runtime-config.js"></script>
+    <script type="module" crossorigin src="/sphere/feat-content-security-policy/assets/index-DeA2TfHu.js"></script>
+    <link rel="stylesheet" crossorigin href="/sphere/feat-content-security-policy/assets/index-Di0Wi7rl.css">
+  </head>
+  <body style="margin: 0;">
+    <div id="root"></div>
+  </body>
+</html>
