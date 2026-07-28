@@ -74,16 +74,15 @@ if (SENTRY_DSN) {
       // (SPHERE-M/1G) — until then these are unactionable lifecycle noise.
       'The database connection is closing',
     ],
-    // Errors thrown by injected extension scripts (other wallets) and the GA
-    // tag are not ours. blob: is safe to deny wholesale — first-party code
-    // never executes from blob: URLs (createObjectURL is only used for backup
-    // file downloads); extensions injecting code via blob: do (SPHERE-1F).
+    // Errors thrown by injected extension scripts (other wallets) are not ours.
+    // blob: is safe to deny wholesale — first-party code never executes from
+    // blob: URLs (createObjectURL is only used for backup file downloads);
+    // extensions injecting code via blob: do (SPHERE-1F).
     denyUrls: [
       /^chrome-extension:\/\//,
       /^moz-extension:\/\//,
       /^safari-(?:web-)?extension:\/\//,
       /^blob:/,
-      /googletagmanager\.com/,
     ],
   });
 }
