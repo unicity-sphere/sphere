@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { lazy, Suspense, useEffect } from 'react';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { IntroPage } from './pages/IntroPage';
 import { HomePage } from './pages/HomePage';
@@ -7,6 +7,7 @@ import { AgentPage } from './pages/AgentPage';
 import { ConnectPage } from './pages/ConnectPage';
 import { DesktopShell } from './components/desktop/DesktopShell';
 import { useSphereEvents } from './sdk';
+import { trackPageView } from './services/telemetry';
 
 // Retry wrapper: auto-reload page once on chunk load failure (stale deployment)
 function lazyWithRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
@@ -65,7 +66,18 @@ export function AppRoutes() {
   );
 }
 
+/**
+ * Page views, sent to our own backend rather than to a third-party tag on this origin.
+ * Keyed on pathname only: the search string is deliberately not a dependency, because
+ * it must never travel and re-firing on a param change would send nothing new anyway.
+ */
+function usePageViewTelemetry(): void {
+  const { pathname } = useLocation();
+  useEffect(() => { trackPageView(pathname); }, [pathname]);
+}
+
 export default function App() {
   useSphereEvents();
+  usePageViewTelemetry();
   return <AppRoutes />;
 }
