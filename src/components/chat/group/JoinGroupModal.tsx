@@ -71,7 +71,7 @@ export function JoinGroupModal({
   const handleJoinWithInvite = async () => {
     const parsed = parseGroupInvite(inviteLink);
     if (!parsed) {
-      setError('Invalid invite link format. Expected: groupId/inviteCode');
+      setError('Could not read that invite. Paste the full invite link, or groupId/inviteCode.');
       return;
     }
 
@@ -295,7 +295,7 @@ export function JoinGroupModal({
                       type="text"
                       value={inviteLink}
                       onChange={(e) => { setInviteLink(e.target.value); setError(null); }}
-                      placeholder="groupId/inviteCode"
+                      placeholder="Paste invite link or groupId/inviteCode"
                       className="w-full px-3 py-2.5 bg-neutral-100 dark:bg-white/6 text-neutral-900 dark:text-white placeholder-neutral-400 rounded-xl text-sm border border-neutral-200 dark:border-white/8 focus:outline-none focus:border-orange-500 transition-colors font-mono"
                     />
                     <p className="mt-1.5 text-xs text-neutral-400">

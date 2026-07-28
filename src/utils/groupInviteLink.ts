@@ -42,16 +42,41 @@ export function buildGroupInviteLink(
 }
 
 /**
- * Split a `groupId/inviteCode` value. Splits on the FIRST slash only — invite codes are
- * opaque and may contain one.
+ * Accepts either a `groupId/inviteCode` value or a full invite URL.
+ *
+ * Both, because the app asks for both: the copy button puts a URL on the
+ * clipboard while the manual field is labelled "invite link", so pasting that
+ * URL is the obvious move — and taking only the bare form rejected a link the
+ * app itself had just produced.
+ *
+ * A URL is recognised by parsing, not by string sniffing, and one WITHOUT a
+ * `join` value is rejected outright: falling through to the slash split would
+ * read "https:" as a group id, which is a confident wrong answer rather than a
+ * refusal the user can act on.
+ *
+ * The bare form splits on the FIRST slash only — invite codes are opaque and
+ * may contain one.
  */
 export function parseGroupInvite(value: string): GroupInvite | null {
   const trimmed = value.trim();
-  const slash = trimmed.indexOf('/');
-  if (slash <= 0 || slash === trimmed.length - 1) return null;
+  if (!trimmed) return null;
+
+  let candidate = trimmed;
+  try {
+    // Throws for anything that is not an absolute URL, which is the bare form.
+    const url = new URL(trimmed);
+    const join = url.searchParams.get('join');
+    if (!join) return null;
+    candidate = join.trim();
+  } catch {
+    // Not a URL — treat as the bare groupId/code form.
+  }
+
+  const slash = candidate.indexOf('/');
+  if (slash <= 0 || slash === candidate.length - 1) return null;
   return {
-    groupId: trimmed.slice(0, slash),
-    code: trimmed.slice(slash + 1),
+    groupId: candidate.slice(0, slash),
+    code: candidate.slice(slash + 1),
   };
 }
 

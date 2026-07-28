@@ -80,3 +80,47 @@ describe('build and parse are inverse', () => {
     }
   });
 });
+
+/**
+ * The copy button puts a full URL on the clipboard, and the manual field is
+ * labelled "invite link" — so pasting that URL there is the obvious move. It
+ * used to fail: the parser split on the first slash and read "https:" as the
+ * group id, rejecting a link the app itself had just produced.
+ */
+describe('parseGroupInvite — pasted invite URL', () => {
+  it('accepts the exact URL the copy button produces', () => {
+    const url = buildGroupInviteLink({ groupId: GROUP, code: CODE }, ORIGIN, '/');
+    expect(parseGroupInvite(url)).toEqual({ groupId: GROUP, code: CODE });
+  });
+
+  it('accepts a URL served from a sub-path deployment', () => {
+    const url = buildGroupInviteLink({ groupId: GROUP, code: CODE }, ORIGIN, '/preview/pr-1/');
+    expect(parseGroupInvite(url)).toEqual({ groupId: GROUP, code: CODE });
+  });
+
+  it('keeps codes with URL-significant characters intact through a paste', () => {
+    const invite = { groupId: GROUP, code: 'a&b#c=d/e' };
+    const url = buildGroupInviteLink(invite, ORIGIN, '/');
+    expect(parseGroupInvite(url)).toEqual(invite);
+  });
+
+  it('still accepts the bare groupId/code form', () => {
+    expect(parseGroupInvite(`${GROUP}/${CODE}`)).toEqual({ groupId: GROUP, code: CODE });
+  });
+
+  it('rejects a URL that carries no invite rather than parsing its path', () => {
+    // Splitting "https://host/agents/group-chat" on the first slash yields
+    // "https:" as a group id — a confident, wrong answer.
+    expect(parseGroupInvite(`${ORIGIN}/agents/group-chat`)).toBeNull();
+    expect(parseGroupInvite(`${ORIGIN}/`)).toBeNull();
+  });
+
+  it('rejects a URL whose join value is itself malformed', () => {
+    expect(parseGroupInvite(`${ORIGIN}/agents/group-chat?join=nogroup`)).toBeNull();
+  });
+
+  it('tolerates whitespace around a pasted URL', () => {
+    const url = buildGroupInviteLink({ groupId: GROUP, code: CODE }, ORIGIN, '/');
+    expect(parseGroupInvite(`  ${url}  `)).toEqual({ groupId: GROUP, code: CODE });
+  });
+});
