@@ -203,7 +203,7 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
 
   cat > "$HEADERS_CONF" <<EOF
 # Generated at container start by sphere-runtime-config — do not edit.
-add_header $CSP_HEADER "default-src 'self'; base-uri 'self'; object-src 'none'; worker-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; frame-src https: http://localhost:* http://127.0.0.1:*; connect-src $CONNECT; upgrade-insecure-requests" always;
+add_header $CSP_HEADER "default-src 'self'; base-uri 'self'; object-src 'none'; worker-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; frame-src https: http://localhost:* http://127.0.0.1:*; connect-src $CONNECT; upgrade-insecure-requests" always;
 add_header X-Frame-Options "DENY" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;

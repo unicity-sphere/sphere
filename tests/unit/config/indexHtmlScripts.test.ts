@@ -82,10 +82,11 @@ describe('index.html script origins', () => {
     expect(bundle).toBeGreaterThan(boot);
   });
 
-  it('has exactly the Google Fonts pair as its only cross-origin links', () => {
-    // A tripwire, not a pin: self-hosting the fonts is a separate change, and when it
-    // lands this expectation becomes an empty array.
+  it('links to no third-party origin either', () => {
+    // Fonts are self-hosted via sphere-ui >= 0.1.35, so nothing in this document
+    // should reach outside our own origin — not a script, not a stylesheet, not a
+    // preconnect hint. That is what makes font-src 'self' possible.
     const hosts = [...new Set(linkHrefs().map(hostOf).filter((h): h is string => h !== null))];
-    expect(hosts.sort()).toEqual(['fonts.googleapis.com', 'fonts.gstatic.com']);
+    expect(hosts).toEqual([]);
   });
 });

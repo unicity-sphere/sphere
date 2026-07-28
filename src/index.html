@@ -6,10 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0a0a0a" />
     <title>Unicity Agent Sphere</title>
-    <!-- Splash screen fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Fonts are self-hosted via @unicitylabs/sphere-ui (>= 0.1.35), which now
+         ships the woff2 files instead of a remote @import. These links were also
+         never the whole story: sphere-ui's stylesheet made its own request to
+         Google and, being emitted later, won the cascade. -->
     <!-- Pre-React boot work: SPA path restore and the theme class. In a file, not
          inline, so script-src can be 'self' — a CSP cannot tell our inline script
          from an injected one. Classic script: runs before the module bundle. -->
