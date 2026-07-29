@@ -1,3 +1,4 @@
+import { parseGroupInvite } from '../../../utils/groupInviteLink';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Hash, Lock, Users, RefreshCw, Loader2, Link } from 'lucide-react';
@@ -43,18 +44,6 @@ export function JoinGroupModal({
         g.description?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  // Parse invite link format: groupId/inviteCode
-  const parseInviteLink = (link: string): { groupId: string; code: string } | null => {
-    const trimmed = link.trim();
-    const slashIndex = trimmed.indexOf('/');
-    if (slashIndex === -1 || slashIndex === 0 || slashIndex === trimmed.length - 1) {
-      return null;
-    }
-    return {
-      groupId: trimmed.substring(0, slashIndex),
-      code: trimmed.substring(slashIndex + 1),
-    };
-  };
 
   const handleJoin = async () => {
     if (!selectedGroupId) return;
@@ -80,9 +69,9 @@ export function JoinGroupModal({
   };
 
   const handleJoinWithInvite = async () => {
-    const parsed = parseInviteLink(inviteLink);
+    const parsed = parseGroupInvite(inviteLink);
     if (!parsed) {
-      setError('Invalid invite link format. Expected: groupId/inviteCode');
+      setError('Could not read that invite. Paste the full invite link, or groupId/inviteCode.');
       return;
     }
 
@@ -306,7 +295,7 @@ export function JoinGroupModal({
                       type="text"
                       value={inviteLink}
                       onChange={(e) => { setInviteLink(e.target.value); setError(null); }}
-                      placeholder="groupId/inviteCode"
+                      placeholder="Paste invite link or groupId/inviteCode"
                       className="w-full px-3 py-2.5 bg-neutral-100 dark:bg-white/6 text-neutral-900 dark:text-white placeholder-neutral-400 rounded-xl text-sm border border-neutral-200 dark:border-white/8 focus:outline-none focus:border-orange-500 transition-colors font-mono"
                     />
                     <p className="mt-1.5 text-xs text-neutral-400">

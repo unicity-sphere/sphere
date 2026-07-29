@@ -4,6 +4,7 @@ import { Hash, Lock, Pin, MoreVertical, LogOut, Trash2, Link, Loader2 } from 'lu
 import { useState, useRef, useEffect } from 'react';
 import type { GroupData } from '@unicitylabs/sphere-sdk';
 import { GroupVisibility } from '@unicitylabs/sphere-sdk';
+import { buildGroupInviteLink } from '../../../utils/groupInviteLink';
 import { showToast } from '../../ui/toast-utils';
 import { getGroupDisplayName, getGroupFormattedLastMessageTime, isPinnedGroup } from '../utils/groupChatHelpers';
 
@@ -132,8 +133,7 @@ export const GroupItem = memo(function GroupItem({
                       e.stopPropagation();
                       const code = await onCreateInvite(group.id);
                       if (code) {
-                        // Copy to clipboard - format: #/agents/group-chat?join=groupId/inviteCode
-                        const inviteUrl = `${window.location.origin}${window.location.pathname}#/agents/group-chat?join=${group.id}/${code}`;
+                        const inviteUrl = buildGroupInviteLink({ groupId: group.id, code });
                         navigator.clipboard.writeText(inviteUrl);
                         showToast('Invite link copied to clipboard', 'success');
                       }
