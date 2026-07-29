@@ -12,3 +12,7 @@
 # Entrypoint for ssl-manager stage + runtime config substitution (both images)
 !deploy/entrypoint.sh
 !deploy/runtime-config.sh
+# nginx server config + security headers (COPYed in the runtime stage). The
+# whitelist above starts with `*`, so without these the COPY fails outright.
+!deploy/nginx.conf
+!deploy/security-headers.conf

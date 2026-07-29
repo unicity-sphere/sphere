@@ -121,30 +121,26 @@ server {
     ssl_stapling_verify on;
 
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
+    include /etc/nginx/sphere-security-headers.conf;
 
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
     location = /index.html {
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "SAMEORIGIN" always;
+        include /etc/nginx/sphere-security-headers.conf;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
     location /assets/ {
         expires 1y;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "SAMEORIGIN" always;
+        include /etc/nginx/sphere-security-headers.conf;
         add_header Cache-Control "public, immutable";
     }
     location / {
         try_files \$uri \$uri/ /index.html;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "SAMEORIGIN" always;
+        include /etc/nginx/sphere-security-headers.conf;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 }
@@ -161,14 +157,21 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
+    # This branch shipped NO security headers at all, so a failed certificate
+    # acquisition silently dropped every one of them. Repeated per location because
+    # nginx discards inherited add_header from any level that declares its own.
+    include /etc/nginx/sphere-security-headers.conf;
+
     # runtime-config.js carries per-environment flags rewritten at container
     # start; heuristic caching would pin stale flag values across env flips
     # (the other server blocks get this via their no-cache location /).
     location = /runtime-config.js {
+        include /etc/nginx/sphere-security-headers.conf;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
     location / {
         try_files \$uri \$uri/ /index.html;
+        include /etc/nginx/sphere-security-headers.conf;
     }
 }
 NGINX

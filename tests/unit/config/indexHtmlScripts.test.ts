@@ -63,10 +63,30 @@ describe('index.html script origins', () => {
     expect(bundle).toBeGreaterThan(runtime);
   });
 
-  it('has exactly the Google Fonts pair as its only cross-origin links', () => {
-    // A tripwire, not a pin: self-hosting the fonts is a separate change, and when it
-    // lands this expectation becomes an empty array.
+  it('has no inline script at all, which is what lets script-src be self', () => {
+    // A CSP cannot distinguish our inline block from an injected one, so allowing
+    // 'unsafe-inline' would make the policy meaningless on an origin holding a seed.
+    // Both former inline blocks live in public/boot.js.
+    const inline = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
+      .filter(([, attrs, body]) => !/\bsrc=/.test(attrs) && body.trim() !== '');
+    expect(inline).toEqual([]);
+  });
+
+  it('loads boot.js before the module bundle', () => {
+    // boot.js applies the theme class and restores the SPA path; both must happen
+    // before React reads the URL or paints.
+    const sources = scriptSources();
+    const boot = sources.findIndex((s) => s.includes('boot.js'));
+    const bundle = sources.findIndex((s) => s.includes('main.tsx'));
+    expect(boot).toBeGreaterThanOrEqual(0);
+    expect(bundle).toBeGreaterThan(boot);
+  });
+
+  it('links to no third-party origin either', () => {
+    // Fonts are self-hosted via sphere-ui >= 0.1.35, so nothing in this document
+    // should reach outside our own origin — not a script, not a stylesheet, not a
+    // preconnect hint. That is what makes font-src 'self' possible.
     const hosts = [...new Set(linkHrefs().map(hostOf).filter((h): h is string => h !== null))];
-    expect(hosts.sort()).toEqual(['fonts.googleapis.com', 'fonts.gstatic.com']);
+    expect(hosts).toEqual([]);
   });
 });

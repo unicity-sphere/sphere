@@ -47,26 +47,13 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # fail-closed check in this script keeps a misconfigured task def from serving.
 COPY deploy/runtime-config.sh /docker-entrypoint.d/40-sphere-runtime-config.sh
 RUN chmod +x /docker-entrypoint.d/40-sphere-runtime-config.sh
-# NOTE: this echo collapses to a SINGLE line of nginx config (Dockerfile line
-# continuations), so never put an nginx `#` comment inside it — it would
-# comment out the rest of the config.
-RUN echo 'server { \
-    listen 80; \
-    server_name _; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    gzip on; \
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript; \
-    location = /index.html { \
-        add_header Cache-Control "no-cache, no-store, must-revalidate"; \
-    } \
-    location /assets/ { \
-        expires 1y; \
-        add_header Cache-Control "public, immutable"; \
-    } \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-        add_header Cache-Control "no-cache, no-store, must-revalidate"; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Real files rather than a `RUN echo '…'`. The old form wrapped the config in a
+# single-quoted shell string, and every CSP keyword source ('self', 'none') uses that
+# same delimiter — the shell would strip the quotes and ship `script-src self`, a
+# valid-but-matches-nothing policy that passes `nginx -t` and blanks the page.
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+# Baked default; runtime-config.sh rewrites it from the container env before nginx
+# starts. Must NOT live under conf.d/ — stock nginx.conf includes conf.d/*.conf at
+# http level, where these add_header directives would sit at the wrong level.
+COPY deploy/security-headers.conf /etc/nginx/sphere-security-headers.conf
 EXPOSE 80
