@@ -161,3 +161,54 @@ done
 find "$WEBROOT" -type f -name '*.js' -exec sed -i -f "$SED_SCRIPT" {} \;
 
 log "applied runtime config to JS assets in $WEBROOT"
+
+# ── Content-Security-Policy ──────────────────────────────────────────────────
+# Regenerated here rather than baked, because connect-src carries per-environment
+# backend origins and this image is built once and promoted unchanged.
+#
+# The file COPYed at build time holds `.invalid` placeholders (RFC 2606, can never
+# resolve), so if this block does not run the failure mode is a blocked-and-reported
+# request rather than a silent bypass.
+#
+# nginx has not started yet — the stock entrypoint runs /docker-entrypoint.d hooks
+# first — so rewriting an included conf file here is safe and needs no reload.
+HEADERS_CONF="${SPHERE_HEADERS_CONF:-/etc/nginx/sphere-security-headers.conf}"
+
+if [ -w "$(dirname "$HEADERS_CONF")" ]; then
+  # Origin (scheme://host[:port]) of a URL — CSP matches origins, not paths, and a
+  # trailing path in a source expression silently narrows the match.
+  origin_of() {
+    printf '%s' "$1" | sed -n 's|^\(https\{0,1\}://[^/]*\).*|\1|p'
+  }
+
+  CONNECT="'self'"
+  for u in "${SPHERE_API_URL-}" "${WALLET_API_URL-}" "${AGGREGATOR_URL-}" \
+           "${SUBSCRIPTION_API_URL-}" "${TRUSTBASE_URL-}"; do
+    o=$(origin_of "$u")
+    [ -n "$o" ] && CONNECT="$CONNECT $o"
+  done
+
+  # Fixed destinations the SDK reaches regardless of environment: Nostr relays over
+  # websocket, the price feed, IPFS, the market API, and Sentry's ingest host.
+  CONNECT="$CONNECT wss://relay.unicity.network wss://sphere-relay.unicity.network"
+  CONNECT="$CONNECT wss://nostr-relay.testnet.unicity.network"
+  CONNECT="$CONNECT wss://relay.damus.io wss://relay.nostr.band wss://nos.lol"
+  CONNECT="$CONNECT https://api.coingecko.com https://market-api.unicity.network"
+  CONNECT="$CONNECT https://unicity-ipfs1.dyndns.org"
+  CONNECT="$CONNECT https://o4511695062237184.ingest.de.sentry.io"
+
+  # Report-Only until staging reports are clean. Flip the header NAME to enforce —
+  # nothing else about the policy changes.
+  CSP_HEADER="${SPHERE_CSP_HEADER_NAME:-Content-Security-Policy-Report-Only}"
+
+  cat > "$HEADERS_CONF" <<EOF
+# Generated at container start by sphere-runtime-config — do not edit.
+add_header $CSP_HEADER "default-src 'self'; base-uri 'self'; object-src 'none'; worker-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; frame-src https: http://localhost:* http://127.0.0.1:*; connect-src $CONNECT; upgrade-insecure-requests" always;
+add_header X-Frame-Options "DENY" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+EOF
+  log "wrote $HEADERS_CONF ($CSP_HEADER)"
+else
+  log "WARNING: $(dirname "$HEADERS_CONF") not writable — keeping the baked policy with .invalid placeholders"
+fi
