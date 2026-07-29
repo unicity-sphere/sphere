@@ -1,5 +1,5 @@
 import { parseGroupInvite } from '../../../utils/groupInviteLink';
-import { useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Hash, Lock, Users, RefreshCw, Loader2, Link } from 'lucide-react';
 import type { GroupData } from '@unicitylabs/sphere-sdk';
@@ -28,6 +28,8 @@ export function JoinGroupModal({
   onJoin,
   initialInviteLink,
 }: JoinGroupModalProps) {
+  /** Whether the current press began on the backdrop rather than in the panel. */
+  const pressedOnBackdrop = useRef(false);
   const [activeTab, setActiveTab] = useState<TabType>(initialInviteLink ? 'invite' : 'browse');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -119,7 +121,16 @@ export function JoinGroupModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
-          onClick={onClose}
+          // Close only if the press both started and ended on the backdrop:
+          // selecting text in the panel and releasing outside it dispatches a
+          // click here, on their common ancestor, which a bare onClick would
+          // treat as a dismissal.
+          onMouseDown={(e) => { pressedOnBackdrop.current = e.target === e.currentTarget; }}
+          onMouseUp={(e) => {
+            const close = pressedOnBackdrop.current && e.target === e.currentTarget;
+            pressedOnBackdrop.current = false;
+            if (close) onClose();
+          }}
         >
           <motion.div
             initial={{ scale: 0.95, opacity: 0 }}

@@ -80,8 +80,12 @@ export async function ensureJwt(sphere: Sphere): Promise<string> {
         throw new Error('Wallet identity unavailable');
       }
 
+      // X-Client on both legs of the handshake: this pair runs before any JWT
+      // exists, so it can't go through authFetch, and without the header the
+      // backend attributes the sign-in to nobody.
       const challengeRes = await fetch(
         `${API_BASE}/api/auth/challenge?address=${encodeURIComponent(identity.directAddress)}&pubkey=${identity.chainPubkey}`,
+        { headers: { 'x-client': 'sphere' } },
       );
       if (!challengeRes.ok) throw new Error(`Challenge failed: ${challengeRes.status}`);
       const { nonce, challenge } = (await challengeRes.json()) as AuthChallenge;
@@ -90,7 +94,7 @@ export async function ensureJwt(sphere: Sphere): Promise<string> {
 
       const verifyRes = await fetch(`${API_BASE}/api/auth/verify`, {
         method:  'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-client': 'sphere' },
         body:    JSON.stringify({
           directAddress: identity.directAddress,
           chainPubkey:   identity.chainPubkey,
