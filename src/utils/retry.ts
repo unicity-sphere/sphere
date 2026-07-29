@@ -38,7 +38,7 @@ export interface RetryOptions {
  *
  * // With custom retry logic
  * const result = await retryWithBackoff(
- *   () => ipnsPublish(cid),
+ *   () => publish(payload),
  *   {
  *     maxRetries: 3,
  *     baseDelay: 2000,
@@ -101,22 +101,6 @@ export async function retryWithBackoff<T>(
 }
 
 /**
- * Default retry options for IPFS/IPNS operations
- * These operations can be slow due to DHT lookups
- */
-export const IPFS_RETRY_OPTIONS: RetryOptions = {
-  maxRetries: 3,
-  baseDelay: 2000,
-  maxDelay: 30000,
-  jitter: 0.2,
-  onRetry: (error, attempt, delay) => {
-    console.warn(
-      `📦 IPFS operation retry ${attempt} in ${Math.round(delay)}ms: ${error.message}`
-    );
-  },
-};
-
-/**
  * Default retry options for network requests
  */
 export const NETWORK_RETRY_OPTIONS: RetryOptions = {
@@ -142,8 +126,8 @@ export const NETWORK_RETRY_OPTIONS: RetryOptions = {
  *
  * @example
  * ```typescript
- * const ipfsRetry = createRetryWrapper(IPFS_RETRY_OPTIONS);
- * const result = await ipfsRetry(() => ipnsPublish(cid));
+ * const netRetry = createRetryWrapper(NETWORK_RETRY_OPTIONS);
+ * const result = await netRetry(() => fetchThing());
  * ```
  */
 export function createRetryWrapper(defaultOptions: RetryOptions) {

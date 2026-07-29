@@ -107,26 +107,6 @@ if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).logger = logger;
 }
 
-function isIpfsEnabled(): boolean {
-  const stored = localStorage.getItem(STORAGE_KEYS.IPFS_ENABLED);
-  return stored !== 'false'; // enabled by default
-}
-
-function getIpfsConfig() {
-  // wallet-api mode: server inventory custody — a second token-storage
-  // mirror (IPFS) has undefined ownership-handoff/tombstone semantics, so
-  // token sync is forced off (the toggle is hidden too).
-  if (isWalletApiEnabled()) return {};
-  if (!isIpfsEnabled()) return {};
-  return {
-    tokenSync: {
-      ipfs: {
-        enabled: true,
-      },
-    },
-  };
-}
-
 // =============================================================================
 // Shared helpers (pure functions, no React state)
 // =============================================================================
@@ -135,16 +115,6 @@ function getIpfsConfig() {
 async function disconnectTransport(providers: BrowserProviders): Promise<void> {
   if (providers.transport.isConnected()) {
     await providers.transport.disconnect();
-  }
-}
-
-/** Add IPFS storage provider and trigger initial sync (fire-and-forget) */
-function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
-  if (isWalletApiEnabled()) return; // see getIpfsConfig()
-  if (providers.ipfsTokenStorage) {
-    instance.addTokenStorageProvider(providers.ipfsTokenStorage)
-      .then(() => instance.sync())
-      .catch(err => logger.warn('SphereProvider', 'IPFS sync failed', err));
   }
 }
 
@@ -174,7 +144,6 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
     market: true,
-    ...getIpfsConfig(),
   });
 
   const engineOverride = getEngineOverride();
@@ -278,7 +247,6 @@ export function SphereProvider({
   // passwordless init of an encrypted wallet (see isDecryptionError.ts for the
   // code-verified detail); only that real signal may flip this true.
   const [isLocked, setIsLocked] = useState(false);
-  const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
   // Readiness of the subscription key on the live oracle — gates the send path
@@ -353,7 +321,7 @@ export function SphereProvider({
     }
   }, []);
   // Monotonic init generation: only the LATEST initialize() run may adopt its
-  // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
+  // Sphere; a run superseded mid-flight (StrictMode double-mount, network
   // toggle, unmount) destroys the instance it built instead of leaking it. See
   // #453 and adoptOrDiscardInstance.
   const initGenRef = useRef(0);
@@ -597,7 +565,7 @@ export function SphereProvider({
         //    one is MEANT to throw SphereError('Failed to decrypt mnemonic',
         //    'STORAGE_ERROR'), which we read as "locked", not a fatal error
         //    (#449) — see isDecryptionError.ts.
-        //  - RE-INIT while unlocked (toggleIpfs(), the exported `reinitialize`):
+        //  - RE-INIT while unlocked (the exported `reinitialize`):
         //    carry passwordRef.current. Omitting it relocked a wallet the user
         //    had just unlocked — one click in permanent chrome (graceful lock
         //    §8.5).
@@ -629,7 +597,6 @@ export function SphereProvider({
         // Adopt only if we're still the latest init; otherwise destroy the
         // instance we just built so it can't linger as a zombie (#453).
         const outcome = await adoptOrDiscardInstance(instance, isStale, (inst) => {
-          setupIpfsSync(inst, browserProviders);
           sphereRef.current = inst;
           setSphere(inst);
           markSessionStart();
@@ -982,7 +949,6 @@ export function SphereProvider({
       discoverAddresses: false,
     });
     const outcome = await adoptOrDiscardInstance(instance, () => gen !== initGenRef.current, (inst) => {
-      setupIpfsSync(inst, providers);
       sphereRef.current = inst;
       setSphere(inst);
       markSessionStart();
@@ -1033,7 +999,7 @@ export function SphereProvider({
     // Idempotent — see lockingRef.
     //
     // `sphereRef.current === null` is NOT a reason to bail. That is exactly the state a re-init
-    // leaves behind (toggleIpfs, reinitialize), and a cross-tab lock arriving in that window
+    // leaves behind (reinitialize), and a cross-tab lock arriving in that window
     // used to do nothing at all: the tab stayed unlocked, its hosts kept reporting 'live', the
     // lock epoch was never written, and the in-flight init went on to adopt a fully usable
     // Sphere. Bumping initGenRef below is what supersedes that init, so the lock must run.
@@ -1271,7 +1237,6 @@ export function SphereProvider({
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
     markSessionStart();
     if (importedSphere) {
-      if (providers) setupIpfsSync(importedSphere, providers);
       sphereRef.current = importedSphere;
       setSphere(importedSphere);
       sendWelcomeDM(importedSphere);
@@ -1298,14 +1263,6 @@ export function SphereProvider({
     const inst = importedSphere ?? sphereRef.current;
     if (inst) setupSubscriptionKey(inst, undefined);
   }, [providers, setupSubscriptionKey, markSessionStart]);
-
-  const toggleIpfs = useCallback(() => {
-    const next = !isIpfsEnabled();
-    localStorage.setItem(STORAGE_KEYS.IPFS_ENABLED, String(next));
-    setIpfsEnabled(next);
-    // Reinitialize so the new IPFS setting takes effect
-    initialize();
-  }, [initialize]);
 
   const applySubscriptionKey = useCallback(async (apiKey: string, opts?: { walletWide?: boolean }) => {
     setStoredSubscriptionKey(apiKey);
@@ -1362,8 +1319,6 @@ export function SphereProvider({
     finalizeWallet,
     deleteWallet,
     reinitialize: initialize,
-    ipfsEnabled,
-    toggleIpfs,
     applySubscriptionKey,
     subscriptionKeyStatus,
     walletApiEnabled: isWalletApiEnabled(),

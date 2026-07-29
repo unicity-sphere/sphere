@@ -32,9 +32,6 @@ export interface DerivedAddressInfo {
     format?: string;
   };
   privateKey?: string;
-  ipnsName?: string;
-  ipnsLoading?: boolean;
-  ipnsError?: string;
   /** Whether a balance check is in progress */
   balanceLoading?: boolean;
 }

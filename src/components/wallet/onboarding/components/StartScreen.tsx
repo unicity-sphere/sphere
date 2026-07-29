@@ -15,7 +15,6 @@ interface StartScreenProps {
   identity: { address: string } | null | undefined;
   nametag: string | null | undefined;
   isBusy: boolean;
-  ipnsFetchingNametag: boolean;
   error: string | null;
   progressMessage?: string | null;
   onCreateWallet: () => void;
@@ -27,7 +26,6 @@ export function StartScreen({
   identity,
   nametag,
   isBusy,
-  ipnsFetchingNametag,
   error,
   progressMessage,
   onCreateWallet,
@@ -88,18 +86,6 @@ export function StartScreen({
               Continue Setup
             </span>
           </motion.button>
-
-          {/* Show loading indicator while checking IPNS */}
-          {ipnsFetchingNametag && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center justify-center gap-2 text-neutral-500 dark:text-[rgba(255,255,255,0.45)] text-[11px] mb-2"
-            >
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span>Checking for existing Unicity ID...</span>
-            </motion.div>
-          )}
         </>
       )}
 

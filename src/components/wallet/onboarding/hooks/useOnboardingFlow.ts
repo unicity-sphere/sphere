@@ -126,7 +126,7 @@ export interface UseOnboardingFlowReturn {
   handleSkipNametag: () => Promise<void>;
   handleDeriveNewAddress: () => Promise<void>;
   handleContinueWithAddress: () => Promise<void>;
-  goToAddressSelection: (skipIpnsCheck?: boolean) => Promise<void>;
+  goToAddressSelection: () => Promise<void>;
 
   // Multi-select actions
   handleToggleSelect: (key: string) => void;
@@ -406,7 +406,6 @@ export function useOnboardingFlow(
         existingNametag: a.nametag,
         isChange: false,
         balanceLoading: false,
-        ipnsLoading: false,
       }));
       setDerivedAddresses(addresses);
       setSelectedKeys(new Set(addresses.map(a => addrKey(a.index, false))));
@@ -996,7 +995,6 @@ export function useOnboardingFlow(
           l3Address: '', // Will be populated after switching
           path: addr.path,
           hasNametag: false,
-          ipnsLoading: false,
           balanceLoading: false,
         },
       ]);
@@ -1022,7 +1020,6 @@ export function useOnboardingFlow(
           l3Address: '',
           path: addr.path,
           hasNametag: false,
-          ipnsLoading: false,
           balanceLoading: false,
         }));
 

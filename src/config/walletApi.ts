@@ -85,7 +85,7 @@ export function getWalletApiBaseUrl(): string | null {
 }
 
 /**
- * True when the asset path rides wallet-api (drives IPFS-off, UI hints).
+ * True when the asset path rides wallet-api (drives UI hints).
  * Reads the raw env (no #351 assert) so render paths never throw: the assert
  * fires once, at provider composition (`buildProviders`), where
  * SphereProvider catches it and surfaces a visible initialization error.

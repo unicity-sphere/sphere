@@ -1,9 +1,9 @@
 /**
  * useGlobalSyncStatus - Provides sync status for UI components
  *
- * Previously aggregated IPFS sync status from multiple services.
- * Now simplified since IPFS sync has been removed.
- * Kept for API compatibility with LogoutConfirmModal and DeleteConfirmationModal.
+ * Assets ride wallet-api, which has no user-visible sync phase, so this always
+ * reports idle. Kept for API compatibility with LogoutConfirmModal and
+ * DeleteConfirmationModal.
  */
 
 export interface GlobalSyncStatus {
