@@ -8,6 +8,7 @@ import { CategoryFilter } from '../components/marketplace/CategoryFilter';
 import { MaintenanceScreen } from '../components/MaintenanceScreen';
 import { useMaintenanceStatus } from '../hooks/useMaintenanceStatus';
 import { DEV_PORTAL_URL } from '../config/devPortal';
+import { PROJECT_TYPES } from '../utils/isStandalone';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ function HeroDivider() {
 export function ExplorePage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<'app' | 'sdk'>('app');
+  const [activeType, setActiveType] = useState<typeof PROJECT_TYPES.APP | typeof PROJECT_TYPES.STANDALONE>(PROJECT_TYPES.APP);
   // Proactive maintenance status — the hook polls the allowlisted status endpoint
   // and also listens for `maintenance:forced`, so the marketplace queries (gated on
   // the same status) never fire requests that would 503 during maintenance.
@@ -111,17 +112,17 @@ export function ExplorePage() {
   // Data — both types are always fetched (not just the active one) so the type
   // switch can show a real count on each side and so flipping tabs is instant,
   // reading from the already-cached query instead of refetching.
-  const { data: appProjectsData, isLoading: appLoading } = useProjects({ type: 'app' });
-  const { data: sdkProjectsData, isLoading: sdkLoading } = useProjects({ type: 'sdk' });
-  const projectsData = activeType === 'sdk' ? sdkProjectsData : appProjectsData;
-  const isLoading = activeType === 'sdk' ? sdkLoading : appLoading;
+  const { data: appProjectsData, isLoading: appLoading } = useProjects({ type: PROJECT_TYPES.APP });
+  const { data: standaloneProjectsData, isLoading: standaloneLoading } = useProjects({ type: PROJECT_TYPES.STANDALONE });
+  const projectsData = activeType === PROJECT_TYPES.STANDALONE ? standaloneProjectsData : appProjectsData;
+  const isLoading = activeType === PROJECT_TYPES.STANDALONE ? standaloneLoading : appLoading;
   const allItems = projectsData?.projects ?? [];
   // Apps + standalone together — the hero stats describe the whole catalog,
   // not just the active tab, so they must read identically on both tabs and
   // never collapse just because the tab you happen to be on is empty.
   const combinedItems = useMemo(
-    () => [...(appProjectsData?.projects ?? []), ...(sdkProjectsData?.projects ?? [])],
-    [appProjectsData, sdkProjectsData],
+    () => [...(appProjectsData?.projects ?? []), ...(standaloneProjectsData?.projects ?? [])],
+    [appProjectsData, standaloneProjectsData],
   );
   const { data: featured } = useFeaturedProjects(activeType);
 
@@ -163,8 +164,8 @@ export function ExplorePage() {
   }, [combinedItems, metricsByProject]);
 
   const categories = APP_CATEGORIES;
-  const itemLabel = activeType === 'sdk' ? 'standalone projects' : 'projects';
-  const searchPlaceholder = activeType === 'sdk' ? 'Search standalone projects...' : 'Search projects...';
+  const itemLabel = activeType === PROJECT_TYPES.STANDALONE ? 'standalone projects' : 'projects';
+  const searchPlaceholder = activeType === PROJECT_TYPES.STANDALONE ? 'Search standalone projects...' : 'Search projects...';
 
   if (maintenance?.enabled) {
     return <MaintenanceScreen message={maintenance.message} />;
@@ -249,14 +250,14 @@ export function ExplorePage() {
             <span
               aria-hidden
               className={
-                activeType === 'sdk'
+                activeType === PROJECT_TYPES.STANDALONE
                   ? 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-[calc(100%+0.25rem)] rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
                   : 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-0 rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
               }
             />
             {([
-              { key: 'app' as const, label: 'Apps' },
-              { key: 'sdk' as const, label: 'Standalone' },
+              { key: PROJECT_TYPES.APP, label: 'Apps' },
+              { key: PROJECT_TYPES.STANDALONE, label: 'Standalone' },
             ]).map(tab => {
               const isActive = activeType === tab.key;
               return (
@@ -279,7 +280,7 @@ export function ExplorePage() {
           </div>
         </div>
         <p className="mt-3 text-center text-xs sm:text-sm text-neutral-400 dark:text-white/40">
-          {activeType === 'sdk' ? 'Run on your own machine' : 'Open in Sphere'}
+          {activeType === PROJECT_TYPES.STANDALONE ? 'Run on your own machine' : 'Open in Sphere'}
         </p>
       </section>
 

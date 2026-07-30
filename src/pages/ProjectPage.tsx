@@ -11,6 +11,7 @@ import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
 import { isHttpsUrl } from '../utils/isHttpsUrl';
+import { isStandalone, PROJECT_TYPES } from '../utils/isStandalone';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -347,10 +348,10 @@ export function ProjectPage() {
 
           {!isPreview && (
           <div className="flex flex-col items-stretch sm:items-end shrink-0">
-            {/* Standalone (sdk) projects run outside Sphere — no in-app tab to
+            {/* Standalone projects run outside Sphere — no in-app tab to
                 launch, so the install command is surfaced right above the
                 action row as a copyable terminal line. */}
-            {project.type === 'sdk' && project.installCommand && (
+            {isStandalone(project) && project.installCommand && (
               <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
                 <span className="text-neutral-400 dark:text-white/30">$</span>
                 <span className="flex-1 truncate">{project.installCommand}</span>
@@ -372,7 +373,7 @@ export function ProjectPage() {
               </div>
             )}
           <div className="flex gap-2 shrink-0 flex-wrap">
-            {project.type === 'skill' ? (
+            {project.type === PROJECT_TYPES.SKILL ? (
               /* Skill: Install to Astrid */
               <button
                 onClick={() => slug && toggle(slug)}
@@ -384,10 +385,10 @@ export function ProjectPage() {
               >
                 {installed ? <><Check className="w-4 h-4" /> Installed</> : <><Download className="w-4 h-4" /> Install to Astrid</>}
               </button>
-            ) : project.type === 'sdk' ? (
-              /* Standalone (sdk): Add to Desktop, then the repository link
-                 in place of "Open App" — the app tab launches its target in
-                 a frame, and GitHub sends X-Frame-Options: deny, so a framed
+            ) : isStandalone(project) ? (
+              /* Standalone: Add to Desktop, then the repository link in place
+                 of "Open App" — the app tab launches its target in a frame,
+                 and GitHub sends X-Frame-Options: deny, so a framed
                  repository would render as a blank panel. A plain new-tab
                  link avoids that entirely. */
               <>
@@ -446,11 +447,11 @@ export function ProjectPage() {
         <div className="flex gap-6 sm:gap-10 border-t border-neutral-200 dark:border-white/8 mt-6 pt-5">
           {[
             {
-              label: project.type === 'skill' ? 'Installs' : 'Users',
+              label: project.type === PROJECT_TYPES.SKILL ? 'Installs' : 'Users',
               value: metrics?.uniqueUsers ?? project.stats.totalUsers,
               icon: Users,
             },
-            ...(project.type === 'skill'
+            ...(project.type === PROJECT_TYPES.SKILL
               ? []
               : [
                   { label: 'Quests',      value: metrics?.activeQuests     ?? project.stats.activeQuests,     icon: Target },

@@ -7,6 +7,7 @@ import { useDesktopState } from '../../hooks/useDesktopState';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
 import type { ProjectSummary } from '../../services/marketplaceApi';
 import { isHttpsUrl } from '../../utils/isHttpsUrl';
+import { isStandalone } from '../../utils/isStandalone';
 
 interface InstalledProjectIconProps {
   project: ProjectSummary & { appUrl?: string | null; websiteUrl?: string | null };
@@ -44,12 +45,12 @@ export function InstalledProjectIcon({
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
-  // A `sdk` project has nothing to launch: it runs on the user's own machine.
-  // Its repository must never go through openTab — GitHub sends
+  // A `standalone` project has nothing to launch: it runs on the user's own
+  // machine. Its repository must never go through openTab — GitHub sends
   // X-Frame-Options: deny, so the in-app frame would render blank. Falling
   // through to the project page gives the user the repo and website buttons,
   // the description and the install command instead.
-  const launchUrl = project.type === 'sdk' ? null : (project.appUrl ?? project.websiteUrl);
+  const launchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
 
   const handleClick = () => {
     void ping(project.slug);
@@ -76,9 +77,9 @@ export function InstalledProjectIcon({
   // rather than a menu item whose click would fail safe.
   const menuItems = [
     // Branch on type first so this list can never disagree with launchUrl,
-    // which forbids framing for `sdk` unconditionally: an sdk record must
-    // never offer "Open in Tab", even if it carries a stray appUrl.
-    ...(project.type === 'sdk'
+    // which forbids framing for `standalone` unconditionally: a standalone
+    // record must never offer "Open in Tab", even if it carries a stray appUrl.
+    ...(isStandalone(project)
       ? (project.repoUrl && isHttpsUrl(project.repoUrl)
           ? [{
               label: 'Open repository',

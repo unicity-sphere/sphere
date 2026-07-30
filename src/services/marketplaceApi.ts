@@ -1,9 +1,11 @@
+import type { ProjectType } from '../utils/isStandalone';
+
 const API_BASE = import.meta.env.VITE_SPHERE_API_URL ?? 'http://localhost:3001';
 
 // ── Types ─────────────────────────────────────────────────────────────
 export interface ProjectSummary {
   _id: string;
-  type: 'app' | 'skill' | 'sdk';
+  type: ProjectType;
   slug: string;
   name: string;
   tagline: string;
@@ -89,7 +91,7 @@ async function get<T>(path: string): Promise<T> {
 
 // ── API functions ─────────────────────────────────────────────────────
 export function fetchProjects(params?: {
-  type?: 'app' | 'skill' | 'sdk';
+  type?: ProjectType;
   category?: string;
   search?: string;
   sort?: string;
@@ -109,7 +111,7 @@ export function fetchProjects(params?: {
   return get(`${qs ? `?${qs}` : ''}`);
 }
 
-export function fetchFeaturedProjects(type?: 'app' | 'skill' | 'sdk'): Promise<ProjectSummary[]> {
+export function fetchFeaturedProjects(type?: ProjectType): Promise<ProjectSummary[]> {
   return get(type ? `/featured?type=${type}` : '/featured');
 }
 

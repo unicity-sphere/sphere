@@ -26,14 +26,15 @@ vi.mock('../../../src/components/marketplace/ProjectReviewsSection', () => ({
 }));
 
 import { ProjectPage } from '../../../src/pages/ProjectPage';
+import { PROJECT_TYPES } from '../../../src/utils/isStandalone';
 
 function renderProjectPage(over: Record<string, unknown>) {
   useProject.mockReturnValue({
     data: {
       _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', tagline: 't', description: 'd',
-      type: 'app', appUrl: null, websiteUrl: null, repoUrl: null, installCommand: null,
+      type: PROJECT_TYPES.APP, appUrl: null, websiteUrl: null, repoUrl: null, installCommand: null,
       logoUrl: null, bannerUrl: null, accentColor: '#FF6F00', category: 'tool',
-      // Non-skill types (app/sdk) render a "Completions" stat that reads
+      // Non-skill types (app/standalone) render a "Completions" stat that reads
       // stats.totalCompletions directly (see ProjectPage.tsx) — it must be
       // present in the mock or the page crashes before any assertion runs.
       tags: [], media: [], socialLinks: {}, stats: { totalUsers: 0, activeQuests: 0, totalCompletions: 0, rating: 0, ratingCount: 0 },
@@ -52,20 +53,20 @@ beforeEach(() => { vi.clearAllMocks(); });
 
 describe('ProjectPage actions for a standalone project', () => {
   it('offers the repository instead of launching an app', () => {
-    renderProjectPage({ type: 'sdk', repoUrl: 'https://github.com/owner/repo' });
+    renderProjectPage({ type: PROJECT_TYPES.STANDALONE, repoUrl: 'https://github.com/owner/repo' });
     const link = screen.getByRole('link', { name: /Open repository/i });
     expect(link.getAttribute('href')).toBe('https://github.com/owner/repo');
     expect(screen.queryByText(/Open App/i)).toBeNull();
   });
 
   it('shows the install command as a copyable line', () => {
-    renderProjectPage({ type: 'sdk', repoUrl: 'https://github.com/owner/repo', installCommand: 'npx agent-guild' });
+    renderProjectPage({ type: PROJECT_TYPES.STANDALONE, repoUrl: 'https://github.com/owner/repo', installCommand: 'npx agent-guild' });
     expect(screen.getByText('npx agent-guild')).toBeTruthy();
     expect(screen.getByRole('button', { name: /copy install command/i })).toBeTruthy();
   });
 
   it('leaves an app project alone', () => {
-    renderProjectPage({ type: 'app', appUrl: 'https://app.example.com' });
+    renderProjectPage({ type: PROJECT_TYPES.APP, appUrl: 'https://app.example.com' });
     expect(screen.getByText(/Open App/i)).toBeTruthy();
     expect(screen.queryByText(/Open repository/i)).toBeNull();
   });
@@ -77,33 +78,33 @@ describe('ProjectPage actions for a standalone project', () => {
 // a clickable link — render nothing rather than a dangerous link.
 describe('ProjectPage renders only vetted https:// links', () => {
   it('does not render Open repository for a javascript: repoUrl', () => {
-    renderProjectPage({ type: 'sdk', repoUrl: 'javascript:alert(1)' });
+    renderProjectPage({ type: PROJECT_TYPES.STANDALONE, repoUrl: 'javascript:alert(1)' });
     expect(screen.queryByRole('link', { name: /Open repository/i })).toBeNull();
   });
 
   it('does not render Open repository for an http:// repoUrl', () => {
-    renderProjectPage({ type: 'sdk', repoUrl: 'http://example.com/owner/repo' });
+    renderProjectPage({ type: PROJECT_TYPES.STANDALONE, repoUrl: 'http://example.com/owner/repo' });
     expect(screen.queryByRole('link', { name: /Open repository/i })).toBeNull();
   });
 
   it('renders Open repository for a normal https:// repoUrl', () => {
-    renderProjectPage({ type: 'sdk', repoUrl: 'https://github.com/owner/repo' });
+    renderProjectPage({ type: PROJECT_TYPES.STANDALONE, repoUrl: 'https://github.com/owner/repo' });
     const link = screen.getByRole('link', { name: /Open repository/i });
     expect(link.getAttribute('href')).toBe('https://github.com/owner/repo');
   });
 
   it('does not render Website for a javascript: websiteUrl', () => {
-    renderProjectPage({ type: 'app', websiteUrl: 'javascript:alert(1)' });
+    renderProjectPage({ type: PROJECT_TYPES.APP, websiteUrl: 'javascript:alert(1)' });
     expect(screen.queryByRole('link', { name: /Website/i })).toBeNull();
   });
 
   it('does not render Website for an http:// websiteUrl', () => {
-    renderProjectPage({ type: 'app', websiteUrl: 'http://example.com' });
+    renderProjectPage({ type: PROJECT_TYPES.APP, websiteUrl: 'http://example.com' });
     expect(screen.queryByRole('link', { name: /Website/i })).toBeNull();
   });
 
   it('renders Website for a normal https:// websiteUrl', () => {
-    renderProjectPage({ type: 'app', websiteUrl: 'https://example.com' });
+    renderProjectPage({ type: PROJECT_TYPES.APP, websiteUrl: 'https://example.com' });
     const link = screen.getByRole('link', { name: /Website/i });
     expect(link.getAttribute('href')).toBe('https://example.com');
   });

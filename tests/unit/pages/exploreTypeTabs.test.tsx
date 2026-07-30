@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { ProjectSummary } from '../../../src/services/marketplaceApi';
+import { PROJECT_TYPES } from '../../../src/utils/isStandalone';
 
 // vi.mock factories are hoisted above regular top-level `const`s, so the mocks
 // referenced inside the factory below must themselves be created via vi.hoisted
@@ -40,7 +41,7 @@ const renderExplore = () => render(<MemoryRouter><ExplorePage /></MemoryRouter>)
 function buildProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
   return {
     _id: 'project-1',
-    type: 'app',
+    type: PROJECT_TYPES.APP,
     slug: 'demo-project',
     name: 'Demo Project',
     tagline: 'A demo project for tests',
@@ -72,15 +73,15 @@ beforeEach(() => {
 describe('Explore type tabs', () => {
   it('starts on Apps', () => {
     renderExplore();
-    expect(useProjects).toHaveBeenCalledWith({ type: 'app' });
-    expect(useFeaturedProjects).toHaveBeenCalledWith('app');
+    expect(useProjects).toHaveBeenCalledWith({ type: PROJECT_TYPES.APP });
+    expect(useFeaturedProjects).toHaveBeenCalledWith(PROJECT_TYPES.APP);
   });
 
   it('switches the query to standalone projects', () => {
     renderExplore();
     fireEvent.click(screen.getByRole('tab', { name: /Standalone/i }));
-    expect(useProjects).toHaveBeenLastCalledWith({ type: 'sdk' });
-    expect(useFeaturedProjects).toHaveBeenLastCalledWith('sdk');
+    expect(useProjects).toHaveBeenLastCalledWith({ type: PROJECT_TYPES.STANDALONE });
+    expect(useFeaturedProjects).toHaveBeenLastCalledWith(PROJECT_TYPES.STANDALONE);
   });
 
   // The category filter and the search box are CLIENT-side state — never
@@ -121,8 +122,8 @@ describe('Explore type tabs', () => {
   // both broke once already (the row was accidentally wired to the active
   // tab's own list instead of the combined one).
   it('computes hero totals from both lists combined, unaffected by the active tab, and never zero while the catalog has content', () => {
-    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'sdk' }) =>
-      params?.type === 'sdk'
+    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'standalone' }) =>
+      params?.type === PROJECT_TYPES.STANDALONE
         ? { data: { projects: [] }, isLoading: false }
         : {
             data: {
@@ -151,8 +152,8 @@ describe('Explore type tabs', () => {
   });
 
   it('uses singular wording for a hero stat only when its value is exactly one', () => {
-    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'sdk' }) =>
-      params?.type === 'sdk'
+    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'standalone' }) =>
+      params?.type === PROJECT_TYPES.STANDALONE
         ? { data: { projects: [] }, isLoading: false }
         : {
             data: {
@@ -180,8 +181,8 @@ describe('Explore type tabs', () => {
   });
 
   it('uses plural wording once a hero stat is more than one (and for zero)', () => {
-    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'sdk' }) =>
-      params?.type === 'sdk'
+    useProjects.mockImplementation((params?: { type?: 'app' | 'skill' | 'standalone' }) =>
+      params?.type === PROJECT_TYPES.STANDALONE
         ? { data: { projects: [] }, isLoading: false }
         : {
             data: {

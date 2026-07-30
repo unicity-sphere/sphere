@@ -12,6 +12,7 @@ import {
   fetchCategories,
 } from '../services/marketplaceApi';
 import { useMarketplaceEnabled } from './useMaintenanceStatus';
+import type { ProjectType } from '../utils/isStandalone';
 
 // Every query below talks to the sphere-api marketplace/metrics routes, which the
 // maintenance gate answers with 503 while `sphere` is under maintenance. Gating on
@@ -19,7 +20,7 @@ import { useMarketplaceEnabled } from './useMaintenanceStatus';
 // the browser never logs the (expected) 503s as red console errors. The wallet core
 // is unaffected — it talks to the chain/SDK, not sphere-api.
 
-export function useProjects(params?: { type?: 'app' | 'skill' | 'sdk'; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
+export function useProjects(params?: { type?: ProjectType; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'projects', params],
@@ -29,7 +30,7 @@ export function useProjects(params?: { type?: 'app' | 'skill' | 'sdk'; category?
   });
 }
 
-export function useFeaturedProjects(type?: 'app' | 'skill' | 'sdk') {
+export function useFeaturedProjects(type?: ProjectType) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'featured', type],

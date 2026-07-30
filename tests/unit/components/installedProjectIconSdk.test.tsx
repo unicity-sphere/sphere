@@ -23,9 +23,10 @@ vi.mock('../../../src/hooks/useInstalledProjects', () => ({
 
 import { InstalledProjectIcon } from '../../../src/components/desktop/InstalledProjectIcon';
 import type { ProjectSummary } from '../../../src/services/marketplaceApi';
+import { PROJECT_TYPES } from '../../../src/utils/isStandalone';
 
-const SDK_PROJECT: ProjectSummary = {
-  _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', type: 'sdk',
+const STANDALONE_PROJECT: ProjectSummary = {
+  _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', type: PROJECT_TYPES.STANDALONE,
   repoUrl: 'https://github.com/owner/repo', appUrl: null,
   // A website IS set: this is the case the current `appUrl ?? websiteUrl`
   // fallback would happily frame.
@@ -39,14 +40,14 @@ beforeEach(() => { vi.clearAllMocks(); });
 
 describe('InstalledProjectIcon for a standalone project', () => {
   it('opens the project page rather than an in-app tab', () => {
-    const { container } = render(<InstalledProjectIcon project={SDK_PROJECT} />);
+    const { container } = render(<InstalledProjectIcon project={STANDALONE_PROJECT} />);
     fireEvent.click(container.querySelector('button')!);
     expect(openTab).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/apps/agent-guild');
   });
 
   it('never routes a repository through the in-app frame', () => {
-    const { container } = render(<InstalledProjectIcon project={SDK_PROJECT} />);
+    const { container } = render(<InstalledProjectIcon project={STANDALONE_PROJECT} />);
     fireEvent.click(container.querySelector('button')!);
     for (const [arg] of navigate.mock.calls) {
       expect(String(arg)).not.toContain('/agents/custom');
@@ -54,7 +55,7 @@ describe('InstalledProjectIcon for a standalone project', () => {
   });
 
   it('still opens an app project in a tab', () => {
-    const app: ProjectSummary = { ...SDK_PROJECT, type: 'app', appUrl: 'https://app.example.com', repoUrl: null };
+    const app: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'https://app.example.com', repoUrl: null };
     const { container } = render(<InstalledProjectIcon project={app} />);
     fireEvent.click(container.querySelector('button')!);
     expect(openTab).toHaveBeenCalledWith('custom', { url: 'https://app.example.com', label: 'Agent Guild' });
@@ -83,7 +84,7 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
   });
 
   it('renders no Open repository entry and never calls window.open for a javascript: repoUrl', () => {
-    const project: ProjectSummary = { ...SDK_PROJECT, repoUrl: 'javascript:alert(1)' };
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, repoUrl: 'javascript:alert(1)' };
     render(<InstalledProjectIcon project={project} />);
     openContextMenu();
     expect(screen.queryByRole('button', { name: 'Open repository' })).toBeNull();
@@ -91,7 +92,7 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
   });
 
   it('renders no Open repository entry and never calls window.open for an http:// repoUrl', () => {
-    const project: ProjectSummary = { ...SDK_PROJECT, repoUrl: 'http://github.com/owner/repo' };
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, repoUrl: 'http://github.com/owner/repo' };
     render(<InstalledProjectIcon project={project} />);
     openContextMenu();
     expect(screen.queryByRole('button', { name: 'Open repository' })).toBeNull();
@@ -99,14 +100,14 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
   });
 
   it('still opens a real https repository, with noopener,noreferrer', () => {
-    render(<InstalledProjectIcon project={SDK_PROJECT} />);
+    render(<InstalledProjectIcon project={STANDALONE_PROJECT} />);
     openContextMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Open repository' }));
     expect(openSpy).toHaveBeenCalledWith('https://github.com/owner/repo', '_blank', 'noopener,noreferrer');
   });
 
   it('renders no Open Website entry and never calls window.open for a javascript: websiteUrl', () => {
-    const project: ProjectSummary = { ...SDK_PROJECT, websiteUrl: 'javascript:alert(1)' };
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, websiteUrl: 'javascript:alert(1)' };
     render(<InstalledProjectIcon project={project} />);
     openContextMenu();
     expect(screen.queryByRole('button', { name: 'Open Website' })).toBeNull();
@@ -114,7 +115,7 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
   });
 
   it('renders no Open Website entry and never calls window.open for an http:// websiteUrl', () => {
-    const project: ProjectSummary = { ...SDK_PROJECT, websiteUrl: 'http://aliemul.github.io/agent-guild/' };
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, websiteUrl: 'http://aliemul.github.io/agent-guild/' };
     render(<InstalledProjectIcon project={project} />);
     openContextMenu();
     expect(screen.queryByRole('button', { name: 'Open Website' })).toBeNull();
@@ -122,7 +123,7 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
   });
 
   it('still opens a real https website, with noopener,noreferrer', () => {
-    render(<InstalledProjectIcon project={SDK_PROJECT} />);
+    render(<InstalledProjectIcon project={STANDALONE_PROJECT} />);
     openContextMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Open Website' }));
     expect(openSpy).toHaveBeenCalledWith('https://aliemul.github.io/agent-guild/', '_blank', 'noopener,noreferrer');
@@ -130,13 +131,13 @@ describe('InstalledProjectIcon context menu — https gate on window.open sinks'
 });
 
 describe('InstalledProjectIcon context menu — type branches first', () => {
-  it('never offers Open in Tab for an sdk project even with a stray appUrl and no repoUrl', () => {
-    // Without repoUrl, the old `type === 'sdk' && repoUrl ? [repo] : appUrl ? [tab] : []`
+  it('never offers Open in Tab for a standalone project even with a stray appUrl and no repoUrl', () => {
+    // Without repoUrl, the old `type === 'standalone' && repoUrl ? [repo] : appUrl ? [tab] : []`
     // ternary falls through to the appUrl branch and frames it — even though
-    // launchUrl already forbids framing for sdk unconditionally. Branching on
-    // type first must make the menu agree by construction, not by repoUrl
+    // launchUrl already forbids framing for standalone unconditionally. Branching
+    // on type first must make the menu agree by construction, not by repoUrl
     // happening to be set.
-    const project: ProjectSummary = { ...SDK_PROJECT, repoUrl: null, appUrl: 'https://app.example.com' };
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, repoUrl: null, appUrl: 'https://app.example.com' };
     render(<InstalledProjectIcon project={project} />);
     openContextMenu();
     expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
