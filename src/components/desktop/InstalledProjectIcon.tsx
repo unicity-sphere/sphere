@@ -50,7 +50,18 @@ export function InstalledProjectIcon({
   // X-Frame-Options: deny, so the in-app frame would render blank. Falling
   // through to the project page gives the user the repo and website buttons,
   // the description and the install command instead.
-  const launchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
+  //
+  // This is the most dangerous sink in the app: openTab persists the value
+  // into DesktopTab.url in localStorage, DesktopLayout turns it into
+  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}> with no
+  // sandbox attribute. A non-https `src` (e.g. `javascript:`) on an
+  // unsandboxed iframe executes with the wallet's own origin. Gate the
+  // chosen candidate with isHttpsUrl before it is usable — if appUrl is
+  // present but unsafe, do NOT fall back to websiteUrl (same nullish-only
+  // fallback semantics as before); if the result fails the check, treat it
+  // exactly like a project with no launch URL at all.
+  const candidateLaunchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
+  const launchUrl = candidateLaunchUrl && isHttpsUrl(candidateLaunchUrl) ? candidateLaunchUrl : null;
 
   const handleClick = () => {
     void ping(project.slug);
@@ -87,7 +98,7 @@ export function InstalledProjectIcon({
               onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
             }]
           : [])
-      : (project.appUrl
+      : (project.appUrl && isHttpsUrl(project.appUrl)
           ? [{
               label: 'Open in Tab',
               icon: Globe,

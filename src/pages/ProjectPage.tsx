@@ -260,8 +260,12 @@ export function ProjectPage() {
     caption: m.caption ?? undefined,
   }));
 
+  // appUrl reaches the wallet's most dangerous sink here: openTab persists it
+  // into DesktopTab.url in localStorage, DesktopLayout turns it into
+  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}> with no
+  // sandbox attribute. A non-https value must never be stored via openTab.
   const handleAddToDesktop = () => {
-    if (!project?.appUrl) return;
+    if (!project?.appUrl || !isHttpsUrl(project.appUrl)) return;
     openTab('custom', { url: project.appUrl, label: project.name });
     navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl)}`);
   };
@@ -436,7 +440,7 @@ export function ProjectPage() {
                 >
                   {installed ? <><Check className="w-4 h-4" /> On Desktop</> : <><Download className="w-4 h-4" /> Add to Desktop</>}
                 </button>
-                {project.appUrl && (
+                {isHttpsUrl(project.appUrl) && (
                   <button onClick={handleAddToDesktop} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white hover:border-neutral-300 dark:hover:border-white/15 transition-colors cursor-pointer">
                     Open App <ExternalLink className="w-3.5 h-3.5" />
                   </button>

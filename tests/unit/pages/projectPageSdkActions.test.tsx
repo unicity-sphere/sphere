@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // vi.mock factories are hoisted above regular top-level `const`s, so the mock
 // referenced inside the factory below must itself be created via vi.hoisted
 // to avoid a TDZ ReferenceError when ProjectPage's import of useMarketplace
 // is resolved.
-const { useProject } = vi.hoisted(() => ({
+const { useProject, openTab } = vi.hoisted(() => ({
   useProject: vi.fn(),
+  openTab: vi.fn(),
 }));
 
 vi.mock('../../../src/hooks/useMarketplace', () => ({
@@ -16,7 +17,7 @@ vi.mock('../../../src/hooks/useMarketplace', () => ({
   useProjectMetrics:  () => ({ data: undefined }),
 }));
 vi.mock('../../../src/hooks/useDesktopState', () => ({
-  useDesktopState: () => ({ openTab: vi.fn() }),
+  useDesktopState: () => ({ openTab }),
 }));
 vi.mock('../../../src/hooks/useInstalledProjects', () => ({
   useInstalledProjects: () => ({ isInstalled: () => false, toggle: vi.fn() }),
@@ -107,5 +108,32 @@ describe('ProjectPage renders only vetted https:// links', () => {
     renderProjectPage({ type: PROJECT_TYPES.APP, websiteUrl: 'https://example.com' });
     const link = screen.getByRole('link', { name: /Website/i });
     expect(link.getAttribute('href')).toBe('https://example.com');
+  });
+});
+
+// appUrl reaches the most dangerous sink in this app: handleAddToDesktop hands
+// it to openTab, which persists it into DesktopTab.url in localStorage;
+// DesktopLayout turns that into iframeUrl and IframeAgent renders
+// <iframe src={activeUrl}> with no sandbox attribute. A `javascript:` (or any
+// non-https) value reaching that src runs with the wallet's own origin. The
+// "Open App" button must be gated on isHttpsUrl, not just truthiness, and
+// handleAddToDesktop itself must refuse to store an unsafe URL.
+describe('ProjectPage — https gate on the appUrl -> openTab/iframe sink', () => {
+  it('does not render Open App for a javascript: appUrl', () => {
+    renderProjectPage({ type: PROJECT_TYPES.APP, appUrl: 'javascript:alert(1)' });
+    expect(screen.queryByRole('button', { name: /Open App/i })).toBeNull();
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('does not render Open App for an http:// appUrl', () => {
+    renderProjectPage({ type: PROJECT_TYPES.APP, appUrl: 'http://app.example.com' });
+    expect(screen.queryByRole('button', { name: /Open App/i })).toBeNull();
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('still renders Open App and calls openTab for a normal https:// appUrl', () => {
+    renderProjectPage({ type: PROJECT_TYPES.APP, appUrl: 'https://app.example.com' });
+    fireEvent.click(screen.getByRole('button', { name: /Open App/i }));
+    expect(openTab).toHaveBeenCalledWith('custom', { url: 'https://app.example.com', label: 'Agent Guild' });
   });
 });

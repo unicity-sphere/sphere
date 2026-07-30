@@ -143,3 +143,53 @@ describe('InstalledProjectIcon context menu — type branches first', () => {
     expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
   });
 });
+
+// appUrl reaches the most dangerous sink in this app: openTab persists it into
+// DesktopTab.url in localStorage, DesktopLayout turns it into iframeUrl, and
+// IframeAgent renders <iframe src={activeUrl}> with no sandbox attribute. A
+// `javascript:` (or any non-https) initial src on an unsandboxed iframe runs
+// with the parent's (wallet's) origin — this is script execution holding the
+// user's keys, not merely a bad link. Both the click launcher and the context
+// menu's "Open in Tab" entry must gate appUrl exactly like repoUrl/websiteUrl
+// already are above.
+describe('InstalledProjectIcon — https gate on the appUrl -> openTab/iframe sink', () => {
+  it('does not open a tab and falls back to the project page for a javascript: appUrl', () => {
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'javascript:alert(1)', websiteUrl: null };
+    const { container } = render(<InstalledProjectIcon project={project} />);
+    fireEvent.click(container.querySelector('button')!);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith('/apps/agent-guild');
+  });
+
+  it('does not open a tab and falls back to the project page for an http:// appUrl', () => {
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'http://app.example.com', websiteUrl: null };
+    const { container } = render(<InstalledProjectIcon project={project} />);
+    fireEvent.click(container.querySelector('button')!);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith('/apps/agent-guild');
+  });
+
+  it('renders no Open in Tab entry and never calls openTab for a javascript: appUrl', () => {
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'javascript:alert(1)' };
+    render(<InstalledProjectIcon project={project} />);
+    openContextMenu();
+    expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('renders no Open in Tab entry and never calls openTab for an http:// appUrl', () => {
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'http://app.example.com' };
+    render(<InstalledProjectIcon project={project} />);
+    openContextMenu();
+    expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('still offers Open in Tab and calls openTab for a normal https:// appUrl', () => {
+    const project: ProjectSummary = { ...STANDALONE_PROJECT, type: PROJECT_TYPES.APP, appUrl: 'https://app.example.com' };
+    render(<InstalledProjectIcon project={project} />);
+    openContextMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Tab' }));
+    expect(openTab).toHaveBeenCalledWith('custom', { url: 'https://app.example.com', label: 'Agent Guild' });
+  });
+});
