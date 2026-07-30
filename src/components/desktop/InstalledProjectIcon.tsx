@@ -43,7 +43,12 @@ export function InstalledProjectIcon({
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
-  const launchUrl = project.appUrl ?? project.websiteUrl;
+  // A `sdk` project has nothing to launch: it runs on the user's own machine.
+  // Its repository must never go through openTab — GitHub sends
+  // X-Frame-Options: deny, so the in-app frame would render blank. Falling
+  // through to the project page gives the user the repo and website buttons,
+  // the description and the install command instead.
+  const launchUrl = project.type === 'sdk' ? null : (project.appUrl ?? project.websiteUrl);
 
   const handleClick = () => {
     void ping(project.slug);
@@ -62,16 +67,22 @@ export function InstalledProjectIcon({
   };
 
   const menuItems = [
-    ...(project.appUrl
+    ...(project.type === 'sdk' && project.repoUrl
       ? [{
-          label: 'Open in Tab',
-          icon: Globe,
-          onClick: () => {
-            openTab('custom', { url: project.appUrl!, label: project.name });
-            navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
-          },
+          label: 'Open repository',
+          icon: ExternalLink,
+          onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
         }]
-      : []),
+      : project.appUrl
+        ? [{
+            label: 'Open in Tab',
+            icon: Globe,
+            onClick: () => {
+              openTab('custom', { url: project.appUrl!, label: project.name });
+              navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
+            },
+          }]
+        : []),
     ...(project.websiteUrl
       ? [{
           label: 'Open Website',

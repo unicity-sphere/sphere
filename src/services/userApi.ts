@@ -20,7 +20,7 @@ export interface InstalledApp {
   pinned:       boolean;
   project: {
     _id:         string;
-    type:        'app' | 'skill';
+    type:        'app' | 'skill' | 'sdk';
     slug:        string;
     name:        string;
     tagline:     string;
@@ -30,6 +30,7 @@ export interface InstalledApp {
     accentColor: string;
     appUrl:      string | null;
     websiteUrl:  string | null;
+    repoUrl:     string | null;
     pricing?:    { model: string; priceUCT: number | null };
   };
 }
