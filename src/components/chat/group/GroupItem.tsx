@@ -5,6 +5,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { GroupData } from '@unicitylabs/sphere-sdk';
 import { GroupVisibility } from '@unicitylabs/sphere-sdk';
 import { buildGroupInviteLink } from '../../../utils/groupInviteLink';
+import { copyToClipboard } from '../../../utils/copyToClipboard';
 import { showToast } from '../../ui/toast-utils';
 import { getGroupDisplayName, getGroupFormattedLastMessageTime, isPinnedGroup } from '../utils/groupChatHelpers';
 
@@ -134,8 +135,9 @@ export const GroupItem = memo(function GroupItem({
                       const code = await onCreateInvite(group.id);
                       if (code) {
                         const inviteUrl = buildGroupInviteLink({ groupId: group.id, code });
-                        navigator.clipboard.writeText(inviteUrl);
-                        showToast('Invite link copied to clipboard', 'success');
+                        if (await copyToClipboard(inviteUrl)) {
+                          showToast('Invite link copied to clipboard', 'success');
+                        }
                       }
                       setShowMenu(false);
                     }}

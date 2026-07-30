@@ -9,6 +9,7 @@ import { Check, Copy, Sparkles } from 'lucide-react';
 import { Button } from '../wallet/ui';
 import type { PlanInfo } from '../../services/subscriptionApi';
 import { planFeatures } from '../subscription/planFeatures';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 
 const CONFETTI_COLORS = ['#f97316', '#10b981', '#a855f7', '#ec4899', '#3b82f6', '#eab308'];
 
@@ -59,11 +60,12 @@ interface UpgradeSuccessProps {
 
 export function UpgradeSuccess({ plan, apiKey, upgradedMaskedKey, onDone }: UpgradeSuccessProps) {
   const [copied, setCopied] = useState(false);
-  const copyKey = () => {
+  const copyKey = async () => {
     if (!apiKey) return;
-    navigator.clipboard.writeText(apiKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyToClipboard(apiKey)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
   const features = plan ? planFeatures(plan) : [];
 

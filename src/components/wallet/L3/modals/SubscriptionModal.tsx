@@ -10,6 +10,7 @@ import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { provisionOrRecoverKey } from '../../../../services/subscriptionApi';
 import { validatePastedKey } from '../../../../sdk/subscription/keyCheck';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -189,10 +190,11 @@ function ApiKeyRow({ apiKey }: { apiKey: string }) {
   const [visible, setVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const masked = `${apiKey.slice(0, 5)}…${apiKey.slice(-4)}`;
-  const copy = () => {
-    navigator.clipboard.writeText(apiKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const copy = async () => {
+    if (await copyToClipboard(apiKey)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
   return (
     <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-white/4">

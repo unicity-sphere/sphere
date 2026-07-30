@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Puzzle, ShieldCheck, Github, Linkedin } from 'lucide-react';
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 const openclawFeatures = [
   'Wallet identity — Auto-generated Unicity wallet with mnemonic backup',
@@ -52,10 +53,12 @@ const socialLinks = [
 export function AgentsPage() {
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
 
-  const copyToClipboard = (text: string, index: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
+  const handleCopy = async (text: string, index: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    }
   };
 
   return (
@@ -184,7 +187,7 @@ export function AgentsPage() {
             <div className="flex justify-between items-center px-4 py-2 border-b border-neutral-200 dark:border-white/8">
               <span className="text-xs text-neutral-400 dark:text-white/35 font-mono">terminal</span>
               <button
-                onClick={() => copyToClipboard('openclaw plugins install @unicitylabs/openclaw-unicity\nopenclaw unicity setup\nopenclaw gateway start', 'openclaw-install')}
+                onClick={() => handleCopy('openclaw plugins install @unicitylabs/openclaw-unicity\nopenclaw unicity setup\nopenclaw gateway start', 'openclaw-install')}
                 className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/75 transition"
               >
                 {copiedIndex === 'openclaw-install' ? '✓ Copied' : 'Copy'}
@@ -260,7 +263,7 @@ export function AgentsPage() {
             <div className="flex justify-between items-center px-4 py-2 border-b border-neutral-200 dark:border-white/8">
               <span className="text-xs text-neutral-400 dark:text-white/35 font-mono">terminal</span>
               <button
-                onClick={() => copyToClipboard('cargo install astrid-cli\nastrid identity create\nastrid chat', 'astrid-install')}
+                onClick={() => handleCopy('cargo install astrid-cli\nastrid identity create\nastrid chat', 'astrid-install')}
                 className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/75 transition"
               >
                 {copiedIndex === 'astrid-install' ? '✓ Copied' : 'Copy'}

@@ -5,6 +5,7 @@ import { ModalHeader } from '../../ui';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useIdentity } from '../../../../sdk';
 import { getErrorMessage } from '../../../../sdk/errors';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 interface ResolvedInfo {
   nametag?: string;
@@ -86,11 +87,10 @@ export function LookupModal({ isOpen, onClose }: LookupModalProps) {
   }, [query, sphere]);
 
   const handleCopy = useCallback(async (value: string, field: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
+    if (await copyToClipboard(value)) {
       setCopied(field);
       setTimeout(() => setCopied(false), 1500);
-    } catch { /* ignore */ }
+    }
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

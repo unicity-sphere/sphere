@@ -14,6 +14,7 @@ import { SUBSCRIPTION_ENABLED } from '../../../../config/subscription';
 import { useUpgrade } from '../../../upgrade';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, AlertMessage } from '../../ui';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 type Step = 'asset' | 'details' | 'confirm' | 'processing' | 'success';
 
@@ -36,11 +37,11 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   const assets = sdkAssets;
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const copyToClipboard = useCallback((text: string, key: string) => {
-    navigator.clipboard.writeText(text).then(() => {
+  const handleCopy = useCallback(async (text: string, key: string) => {
+    if (await copyToClipboard(text)) {
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(null), 2000);
-    }).catch(() => {});
+    }
   }, []);
 
   // State
@@ -361,7 +362,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                     </div>
                     <button
                       type="button"
-                      onClick={() => copyToClipboard(
+                      onClick={() => handleCopy(
                         recipientMode === 'pubkey' ? recipient : `@${recipient}`,
                         'recipient'
                       )}
@@ -384,7 +385,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                       </span>
                       <button
                         type="button"
-                        onClick={() => copyToClipboard(resolvedPubkey, 'address')}
+                        onClick={() => handleCopy(resolvedPubkey, 'address')}
                         className="p-0.5 hover:bg-neutral-200 dark:hover:bg-white/10 rounded transition-colors"
                         title="Copy address"
                       >

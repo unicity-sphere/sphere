@@ -7,6 +7,7 @@ import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TrackedAddress } from '@unicitylabs/sphere-sdk';
 import { truncateId } from '../../../../utils/identifiers';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { NewAddressModal } from '../modals/NewAddressModal';
 
 /** Truncate long nametags: show first 6 chars + ... + last 3 chars */
@@ -80,23 +81,21 @@ export function AddressSelector({ compact = true, onNewAddress }: AddressSelecto
   const handleCopyNametag = useCallback(async () => {
     const tagToCopy = nametag;
     if (!tagToCopy) return;
-    try {
-      await navigator.clipboard.writeText(`@${tagToCopy}`);
+    if (await copyToClipboard(`@${tagToCopy}`)) {
       setCopied('nametag');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy nametag:', err);
+    } else {
+      console.error('Failed to copy nametag');
     }
   }, [nametag]);
 
   const handleCopyPubkey = useCallback(async () => {
     if (!chainPubkey) return;
-    try {
-      await navigator.clipboard.writeText(chainPubkey);
+    if (await copyToClipboard(chainPubkey)) {
       setCopied('address');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy public key:', err);
+    } else {
+      console.error('Failed to copy public key');
     }
   }, [chainPubkey]);
 

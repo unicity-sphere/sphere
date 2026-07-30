@@ -3,6 +3,7 @@ import type { Token } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { Box, Copy, CheckCircle2, Loader2 } from 'lucide-react';
 import { useState, memo, useEffect } from 'react';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 interface TokenRowProps {
   token: Token;
@@ -82,11 +83,12 @@ function AnimatedTokenAmount({ amount, coinId, symbol }: {
 export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: TokenRowProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopyId = (e: React.MouseEvent) => {
+  const handleCopyId = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(token.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await copyToClipboard(token.id)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const className = "p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group";

@@ -3,6 +3,7 @@ import { Eye, EyeOff, Copy, Check, ShieldAlert } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, AlertMessage, Button, SecondaryButton } from '../../ui';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 interface SeedPhraseModalProps {
   isOpen: boolean;
@@ -23,12 +24,11 @@ export function SeedPhraseModal({ isOpen, onClose, seedPhrase }: SeedPhraseModal
   }, [isOpen]);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(seedPhrase.join(' '));
+    if (await copyToClipboard(seedPhrase.join(' '))) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy seed phrase:', err);
+    } else {
+      console.error('Failed to copy seed phrase');
     }
   };
 

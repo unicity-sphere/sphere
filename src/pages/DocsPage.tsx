@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { DEV_PORTAL_URL } from '../config/devPortal';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 type Section =
   | 'getting-started'
@@ -159,10 +160,12 @@ const navigation: NavItem[] = [
 function CodeBlock({ code, filename, language = 'typescript' }: { code: string; filename?: string; language?: string }) {
   const [copied, setCopied] = useState(false);
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(code);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (
@@ -170,7 +173,7 @@ function CodeBlock({ code, filename, language = 'typescript' }: { code: string; 
       <div className="flex justify-between items-center px-4 py-2 border-b border-neutral-700">
         <span className="text-xs text-neutral-400 font-mono">{filename || language}</span>
         <button
-          onClick={copyToClipboard}
+          onClick={handleCopy}
           className="text-xs text-neutral-400 hover:text-white transition"
         >
           {copied ? '\u2713 Copied' : 'Copy'}
