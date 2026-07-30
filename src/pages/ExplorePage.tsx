@@ -79,10 +79,10 @@ function FeaturedCarousel({ items, metricsByProject }: {
 
 const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
-function HeroStat({ value, label, compact = false }: { value: number; label: string; compact?: boolean }) {
+function HeroStat({ value, label, compact = false, testId }: { value: number; label: string; compact?: boolean; testId?: string }) {
   const display = compact ? compactFormat.format(value) : value.toLocaleString();
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center" data-testid={testId}>
       <span className="text-2xl sm:text-3xl font-bold font-mono tabular-nums text-neutral-900 dark:text-white tracking-tight">
         {display}
       </span>
@@ -108,15 +108,29 @@ export function ExplorePage() {
   // the same status) never fire requests that would 503 during maintenance.
   const { data: maintenance } = useMaintenanceStatus();
 
-  // Data — filtered by the active tab (apps vs. standalone SDK projects)
-  const { data: projectsData, isLoading } = useProjects({ type: activeType });
+  // Data — both types are always fetched (not just the active one) so the type
+  // switch can show a real count on each side and so flipping tabs is instant,
+  // reading from the already-cached query instead of refetching.
+  const { data: appProjectsData, isLoading: appLoading } = useProjects({ type: 'app' });
+  const { data: sdkProjectsData, isLoading: sdkLoading } = useProjects({ type: 'sdk' });
+  const projectsData = activeType === 'sdk' ? sdkProjectsData : appProjectsData;
+  const isLoading = activeType === 'sdk' ? sdkLoading : appLoading;
   const allItems = projectsData?.projects ?? [];
+  // Apps + standalone together — the hero stats describe the whole catalog,
+  // not just the active tab, so they must read identically on both tabs and
+  // never collapse just because the tab you happen to be on is empty.
+  const combinedItems = useMemo(
+    () => [...(appProjectsData?.projects ?? []), ...(sdkProjectsData?.projects ?? [])],
+    [appProjectsData, sdkProjectsData],
+  );
   const { data: featured } = useFeaturedProjects(activeType);
 
-  // Single batch request for live metrics across every project on this page
+  // Single batch request for live metrics across every project on this page —
+  // sourced from the combined list so hero stats and card metrics are equally
+  // live regardless of which tab is active.
   const allProjectIds = useMemo(
-    () => [...new Set([...allItems, ...(featured ?? [])].map((p) => p._id))],
-    [allItems, featured],
+    () => [...new Set([...combinedItems, ...(featured ?? [])].map((p) => p._id))],
+    [combinedItems, featured],
   );
   const { data: metricsByProject = {} } = useProjectMetricsBatch(allProjectIds);
 
@@ -136,16 +150,17 @@ export function ExplorePage() {
   // Featured items
   const featuredItems = featured ?? [];
 
-  // Hero stats — prefer live metrics, fall back to denormalized stats
+  // Hero stats — apps + standalone combined (never just the active tab), prefer
+  // live metrics, fall back to denormalized stats
   const heroStats = useMemo(() => {
-    const projects = allItems.length;
-    const users = allItems.reduce((sum, p) => {
+    const projects = combinedItems.length;
+    const users = combinedItems.reduce((sum, p) => {
       const live = metricsByProject[p._id]?.uniqueUsers;
       return sum + (live ?? p.stats.totalUsers ?? 0);
     }, 0);
-    const categoriesCount = new Set(allItems.map((p) => p.category)).size;
+    const categoriesCount = new Set(combinedItems.map((p) => p.category)).size;
     return { projects, users, categoriesCount };
-  }, [allItems, metricsByProject]);
+  }, [combinedItems, metricsByProject]);
 
   const categories = APP_CATEGORIES;
   const itemLabel = activeType === 'sdk' ? 'standalone projects' : 'projects';
@@ -192,48 +207,85 @@ export function ExplorePage() {
             transition={{ delay: 0.1 }}
             className="text-base sm:text-lg text-neutral-500 dark:text-white/65 max-w-xl mx-auto leading-relaxed"
           >
-            Games, DeFi, tools and agents — all running on Layer 3.
+            Games, DeFi, tools and agents — all running on the Sphere SDK.
           </motion.p>
 
-          {heroStats.projects > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.18 }}
-              className="mt-10 sm:mt-12 flex items-center justify-center gap-6 sm:gap-10"
-            >
-              <HeroStat value={heroStats.projects} label="Projects" />
-              <HeroDivider />
-              <HeroStat value={heroStats.users} label="Users" compact />
-              <HeroDivider />
-              <HeroStat value={heroStats.categoriesCount} label="Categories" />
-            </motion.div>
-          )}
+          {/* Catalog-wide totals — computed from apps + standalone combined (see
+              combinedItems above), so this row is identical no matter which tab
+              is active and never collapses just because the active tab is empty.
+              Always rendered (no `> 0` gate) — a real zero, not a vanished row. */}
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.18 }}
+            className="mt-10 sm:mt-12 flex items-center justify-center gap-6 sm:gap-10"
+          >
+            <HeroStat testId="hero-stat-projects" value={heroStats.projects} label={heroStats.projects === 1 ? 'Total Project' : 'Total Projects'} />
+            <HeroDivider />
+            <HeroStat testId="hero-stat-users" value={heroStats.users} label={heroStats.users === 1 ? 'Total User' : 'Total Users'} compact />
+            <HeroDivider />
+            <HeroStat testId="hero-stat-categories" value={heroStats.categoriesCount} label={heroStats.categoriesCount === 1 ? 'Category' : 'Categories'} />
+          </motion.div>
         </div>
+      </section>
+
+      {/* Type switch — the top-level split of the catalog: an app opens inside
+          Sphere, a standalone project is installed and run on your own machine.
+          A real segmented control, sized and faced like UI chrome (Geist, control
+          scale) rather than the hero's display type — the hero already owns that
+          register, and a filled block set in Anton at display size just reads as
+          a second banner. The hero's totals row (above) carries the counting;
+          this control only ever shows the two labels. */}
+      <section className="px-4 sm:px-6 pb-10">
+        <div className="flex justify-center">
+          <div
+            role="tablist"
+            aria-label="Project type"
+            className="relative grid grid-cols-2 gap-1 rounded-full border border-neutral-200 dark:border-white/12 bg-neutral-50 dark:bg-white/4 p-1"
+          >
+            {/* Sliding thumb — an absolutely-positioned pill sized to exactly one
+                grid column, translated by its own width + the gap to reach the
+                other column. Instant (no slide) under prefers-reduced-motion. */}
+            <span
+              aria-hidden
+              className={
+                activeType === 'sdk'
+                  ? 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-[calc(100%+0.25rem)] rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
+                  : 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-0 rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
+              }
+            />
+            {([
+              { key: 'app' as const, label: 'Apps' },
+              { key: 'sdk' as const, label: 'Standalone' },
+            ]).map(tab => {
+              const isActive = activeType === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => { setActiveType(tab.key); setCategory(null); setSearch(''); }}
+                  className={
+                    isActive
+                      ? 'relative z-10 rounded-full px-6 sm:px-8 py-2 sm:py-2.5 text-sm font-semibold text-black cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2'
+                      : 'relative z-10 rounded-full px-6 sm:px-8 py-2 sm:py-2.5 text-sm font-semibold text-neutral-500 dark:text-white/60 hover:text-neutral-900 dark:hover:text-white cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2 transition-colors'
+                  }
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <p className="mt-3 text-center text-xs sm:text-sm text-neutral-400 dark:text-white/40">
+          {activeType === 'sdk' ? 'Run on your own machine' : 'Open in Sphere'}
+        </p>
       </section>
 
       {/* Search + Filter */}
       <section className="px-4 sm:px-6 pb-8">
         <div className="space-y-4">
-          <div className="inline-flex p-0.5 bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/8 rounded-lg mb-4">
-            {([
-              { key: 'app' as const, label: 'Apps' },
-              { key: 'sdk' as const, label: 'Standalone' },
-            ]).map(tab => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => { setActiveType(tab.key); setCategory(null); setSearch(''); }}
-                className={
-                  activeType === tab.key
-                    ? 'px-3 py-1.5 rounded-md bg-orange-500 dark:bg-brand-orange text-white text-xs font-medium'
-                    : 'px-3 py-1.5 rounded-md text-neutral-700 dark:text-white/70 text-xs font-medium transition-colors'
-                }
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400 dark:text-white/30" />
             <input
