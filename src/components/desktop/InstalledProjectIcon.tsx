@@ -6,6 +6,7 @@ import { InstalledProjectIcon as InstalledProjectIconUI } from '@unicitylabs/sph
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
 import type { ProjectSummary } from '../../services/marketplaceApi';
+import { isHttpsUrl } from '../../utils/isHttpsUrl';
 
 interface InstalledProjectIconProps {
   project: ProjectSummary & { appUrl?: string | null; websiteUrl?: string | null };
@@ -66,28 +67,40 @@ export function InstalledProjectIcon({
     setMenuOpen((prev) => !prev);
   };
 
+  // window.open is an unsanitised navigation sink — unlike a JSX `href`, React
+  // applies no protocol checking to it at all. This app is the wallet (the
+  // origin holding the user's keys), and repoUrl/websiteUrl are project data
+  // that can reach this component via an admin/migration/seed path that skips
+  // normal write-side validation, so gate on isHttpsUrl before ever rendering
+  // an entry that calls it — a non-https value gets no menu item at all,
+  // rather than a menu item whose click would fail safe.
   const menuItems = [
-    ...(project.type === 'sdk' && project.repoUrl
-      ? [{
-          label: 'Open repository',
-          icon: ExternalLink,
-          onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
-        }]
-      : project.appUrl
-        ? [{
-            label: 'Open in Tab',
-            icon: Globe,
-            onClick: () => {
-              openTab('custom', { url: project.appUrl!, label: project.name });
-              navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
-            },
-          }]
-        : []),
-    ...(project.websiteUrl
+    // Branch on type first so this list can never disagree with launchUrl,
+    // which forbids framing for `sdk` unconditionally: an sdk record must
+    // never offer "Open in Tab", even if it carries a stray appUrl.
+    ...(project.type === 'sdk'
+      ? (project.repoUrl && isHttpsUrl(project.repoUrl)
+          ? [{
+              label: 'Open repository',
+              icon: ExternalLink,
+              onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
+            }]
+          : [])
+      : (project.appUrl
+          ? [{
+              label: 'Open in Tab',
+              icon: Globe,
+              onClick: () => {
+                openTab('custom', { url: project.appUrl!, label: project.name });
+                navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
+              },
+            }]
+          : [])),
+    ...(project.websiteUrl && isHttpsUrl(project.websiteUrl)
       ? [{
           label: 'Open Website',
           icon: ExternalLink,
-          onClick: () => window.open(project.websiteUrl!, '_blank'),
+          onClick: () => window.open(project.websiteUrl!, '_blank', 'noopener,noreferrer'),
         }]
       : []),
     {
