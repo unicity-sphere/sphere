@@ -70,3 +70,41 @@ describe('ProjectPage actions for a standalone project', () => {
     expect(screen.queryByText(/Open repository/i)).toBeNull();
   });
 });
+
+// Both repoUrl and websiteUrl are server-supplied strings rendered straight
+// into an anchor's href on this page, in the wallet's own origin. A stored
+// `javascript:` (or otherwise non-https) value must never reach the DOM as
+// a clickable link — render nothing rather than a dangerous link.
+describe('ProjectPage renders only vetted https:// links', () => {
+  it('does not render Open repository for a javascript: repoUrl', () => {
+    renderProjectPage({ type: 'sdk', repoUrl: 'javascript:alert(1)' });
+    expect(screen.queryByRole('link', { name: /Open repository/i })).toBeNull();
+  });
+
+  it('does not render Open repository for an http:// repoUrl', () => {
+    renderProjectPage({ type: 'sdk', repoUrl: 'http://example.com/owner/repo' });
+    expect(screen.queryByRole('link', { name: /Open repository/i })).toBeNull();
+  });
+
+  it('renders Open repository for a normal https:// repoUrl', () => {
+    renderProjectPage({ type: 'sdk', repoUrl: 'https://github.com/owner/repo' });
+    const link = screen.getByRole('link', { name: /Open repository/i });
+    expect(link.getAttribute('href')).toBe('https://github.com/owner/repo');
+  });
+
+  it('does not render Website for a javascript: websiteUrl', () => {
+    renderProjectPage({ type: 'app', websiteUrl: 'javascript:alert(1)' });
+    expect(screen.queryByRole('link', { name: /Website/i })).toBeNull();
+  });
+
+  it('does not render Website for an http:// websiteUrl', () => {
+    renderProjectPage({ type: 'app', websiteUrl: 'http://example.com' });
+    expect(screen.queryByRole('link', { name: /Website/i })).toBeNull();
+  });
+
+  it('renders Website for a normal https:// websiteUrl', () => {
+    renderProjectPage({ type: 'app', websiteUrl: 'https://example.com' });
+    const link = screen.getByRole('link', { name: /Website/i });
+    expect(link.getAttribute('href')).toBe('https://example.com');
+  });
+});

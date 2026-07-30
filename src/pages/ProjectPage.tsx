@@ -10,6 +10,7 @@ import { ProjectReviewsSection } from '../components/marketplace/ProjectReviewsS
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
+import { isHttpsUrl } from '../utils/isHttpsUrl';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -356,7 +357,14 @@ export function ProjectPage() {
                 <button
                   type="button"
                   aria-label="copy install command"
-                  onClick={() => void navigator.clipboard.writeText(project.installCommand!)}
+                  onClick={() => {
+                    // navigator.clipboard is undefined in non-secure contexts and in
+                    // older browsers; the copy affordance is a convenience, so a
+                    // missing API or a rejected write should fail silently rather
+                    // than throw / surface an unhandled rejection.
+                    if (!navigator.clipboard) return;
+                    navigator.clipboard.writeText(project.installCommand!).catch(() => {});
+                  }}
                   className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
                 >
                   copy
@@ -393,9 +401,9 @@ export function ProjectPage() {
                 >
                   {installed ? <><Check className="w-4 h-4" /> On Desktop</> : <><Download className="w-4 h-4" /> Add to Desktop</>}
                 </button>
-                {project.repoUrl && (
+                {isHttpsUrl(project.repoUrl) && (
                   <a
-                    href={project.repoUrl}
+                    href={project.repoUrl!}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white transition-colors"
@@ -424,8 +432,8 @@ export function ProjectPage() {
                 )}
               </>
             )}
-            {project.websiteUrl && (
-              <a href={project.websiteUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white hover:border-neutral-300 dark:hover:border-white/15 transition-colors">
+            {isHttpsUrl(project.websiteUrl) && (
+              <a href={project.websiteUrl!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white hover:border-neutral-300 dark:hover:border-white/15 transition-colors">
                 Website <Globe className="w-3.5 h-3.5" />
               </a>
             )}
