@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { MarketplaceProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
-import { isStandalone } from '../../utils/isStandalone';
+import { isStandalone, supportsQuests } from '../../utils/isStandalone';
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -45,7 +45,16 @@ export function ProjectCard({ project, metrics }: ProjectCardProps) {
         accentColor={project.accentColor}
         category={project.category}
         users={users}
-        quests={quests}
+        // sphere-ui defaults an absent `quests` prop to 0 and renders the
+        // "Active quests" stat unconditionally either way (checked in its
+        // compiled output — there's no `quests !== undefined &&` guard, only
+        // `quests = 0` as a default param), so passing undefined doesn't
+        // currently change what's on screen for a project whose type has no
+        // quests. Passing it anyway is still wrong: it's a real quest count
+        // for `activeQuests`/`stats.activeQuests`, not a 0 this project
+        // actually has, and it costs nothing to be honest about that —
+        // forward-compatible if sphere-ui ever adds the presence check.
+        quests={supportsQuests(project.type) ? quests : undefined}
         positivePercent={positivePercent}
         ratingCount={ratingCount}
         installState={installed ? 'installed' : 'available'}

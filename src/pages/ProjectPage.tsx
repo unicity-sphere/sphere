@@ -224,11 +224,17 @@ export function ProjectPage() {
   const { data: project, isLoading } = useProject(slug ?? '', isPreview || undefined);
   const installed = slug ? isInstalled(slug) : false;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  // Standalone projects don't support quests — skip the fetch once we know
-  // that from the project's own data (before it loads, fetch optimistically
-  // rather than guess; `project` is undefined for one type, not the "no
-  // quests" type).
-  const { data: quests } = useProjectQuests(slug ?? '', !project || supportsQuests(project.type));
+  // Whether to even fetch quests, and whether to show the Quests section
+  // below, are gated on `!isStandalone`, NOT on `supportsQuests` — this is
+  // deliberately the wider check. `useProjectQuests`/the Quests section had
+  // no type gate at all before this project-type work started, so an `app`
+  // or `skill` project must keep fetching/showing quests exactly as before;
+  // only `standalone` (which structurally never has any) is new here. The
+  // narrower `supportsQuests` (app-only) governs the Quests/Completions stat
+  // TILES further down, which already excluded `skill` before this work —
+  // that's a different, pre-existing behaviour this file must not disturb.
+  // Fetch optimistically before `project` has loaded (unknown type yet).
+  const { data: quests } = useProjectQuests(slug ?? '', !project || !isStandalone(project));
   const { data: metrics } = useProjectMetrics(project?._id);
   // Quests are heavy content — collapsed by default, and collapsed per track.
   const [questsOpen, setQuestsOpen] = useState(false);
@@ -455,9 +461,11 @@ export function ProjectPage() {
               value: metrics?.uniqueUsers ?? project.stats.totalUsers,
               icon: Users,
             },
-            // Quest-derived stats — gate on capability (supportsQuests), not on
-            // type: standalone projects never have quests, so these would
-            // always read 0/0 for them.
+            // Quest-derived stats — gate on capability (supportsQuests: app
+            // only). This already excluded `skill` before this project-type
+            // work (skill shows "Installs" instead, above); supportsQuests
+            // reproduces that exactly while also fixing standalone, which
+            // this array previously forgot to exclude and so read 0/0.
             ...(supportsQuests(project.type)
               ? [
                   { label: 'Quests',      value: metrics?.activeQuests     ?? project.stats.activeQuests,     icon: Target },
@@ -506,9 +514,11 @@ export function ProjectPage() {
       {/* Quests — collapsed by default; expanded view groups quests by track,
           each track collapsed as well. Only active tracks reach this list
           (the API filters out quests of DRAFT/ENDED tracks). Gated on
-          supportsQuests: a standalone project's quest list is always empty,
-          but gate on the capability rather than relying on that emptiness. */}
-      {supportsQuests(project.type) && quests && quests.length > 0 && (
+          !isStandalone (see the useProjectQuests call above for why that's
+          the right predicate here, not supportsQuests) — a standalone
+          project's quest list is always empty, but gate on the type rather
+          than relying on that emptiness. */}
+      {!isStandalone(project) && quests && quests.length > 0 && (
         <section className="px-4 sm:px-6 pb-8">
           <div className="max-w-5xl mx-auto">
             <button

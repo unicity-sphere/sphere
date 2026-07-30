@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { FeaturedProjectCard as UiFeaturedProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
-import { isStandalone } from '../../utils/isStandalone';
+import { isStandalone, supportsQuests } from '../../utils/isStandalone';
 
 interface FeaturedProjectCardProps {
   project: ProjectSummary;
@@ -38,7 +38,11 @@ export function FeaturedProjectCard({ project, metrics }: FeaturedProjectCardPro
         bannerUrl={project.bannerUrl}
         accentColor={project.accentColor}
         users={users}
-        quests={quests}
+        // See ProjectCard.tsx's identical comment: sphere-ui defaults an
+        // absent `quests` to 0 and renders the stat unconditionally either
+        // way, but this repo's own value should still only ever be a real
+        // quest count for a type that has quests, not an asserted 0.
+        quests={supportsQuests(project.type) ? quests : undefined}
         positivePercent={positivePercent}
         ratingCount={ratingCount}
       />
