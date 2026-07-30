@@ -41,4 +41,26 @@ describe('Explore type tabs', () => {
     expect(useProjects).toHaveBeenLastCalledWith({ type: 'sdk' });
     expect(useFeaturedProjects).toHaveBeenLastCalledWith('sdk');
   });
+
+  // The category filter and the search box are CLIENT-side state — never
+  // passed to useProjects/useFeaturedProjects — so the two tests above would
+  // still pass even if the tab handler stopped resetting them. Assert on the
+  // rendered DOM instead of the hooks to actually catch that regression.
+  it('clears the search box and category filter when switching tabs', () => {
+    renderExplore();
+
+    const search = screen.getByPlaceholderText('Search projects...') as HTMLInputElement;
+    fireEvent.change(search, { target: { value: 'agent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+
+    // Sanity: state was actually set before the tab switch.
+    expect(search.value).toBe('agent');
+    expect(screen.getByRole('button', { name: 'Tools' }).className).toContain('bg-orange-500');
+
+    fireEvent.click(screen.getByRole('button', { name: /Standalone/i }));
+
+    expect(search.value).toBe('');
+    expect(screen.getByRole('button', { name: 'All' }).className).toContain('bg-orange-500');
+    expect(screen.getByRole('button', { name: 'Tools' }).className).not.toContain('bg-orange-500');
+  });
 });
