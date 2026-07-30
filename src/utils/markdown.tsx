@@ -2,15 +2,18 @@ import React, { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { getMentionClickHandler } from './mentionHandler';
 import { getDeepLinkClickHandler, deepLinkToHttps } from './deepLinkHandler';
+import { copyToClipboard } from './copyToClipboard';
 
 // Code block component with copy button
 function CodeBlock({ code, language, keyPrefix }: { code: string; language?: string; keyPrefix: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(code);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (

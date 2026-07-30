@@ -15,6 +15,7 @@
 import { motion } from "framer-motion";
 import { ShieldAlert, Copy, Check } from "lucide-react";
 import { useState, useCallback } from "react";
+import { copyToClipboard } from "../../../../utils/copyToClipboard";
 
 interface MnemonicShowScreenProps {
   mnemonic: string;
@@ -29,19 +30,7 @@ export function MnemonicShowScreen({
   const words = mnemonic.split(" ");
 
   const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(mnemonic);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      const textarea = document.createElement("textarea");
-      textarea.value = mnemonic;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
+    if (await copyToClipboard(mnemonic)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }

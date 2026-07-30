@@ -12,6 +12,7 @@ import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
 import { isHttpsUrl } from '../utils/isHttpsUrl';
 import { isStandalone, supportsQuests, PROJECT_TYPES } from '../utils/isStandalone';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -377,13 +378,12 @@ export function ProjectPage() {
                 <button
                   type="button"
                   aria-label="copy install command"
-                  onClick={() => {
-                    // navigator.clipboard is undefined in non-secure contexts and in
-                    // older browsers; the copy affordance is a convenience, so a
-                    // missing API or a rejected write should fail silently rather
-                    // than throw / surface an unhandled rejection.
-                    if (!navigator.clipboard) return;
-                    navigator.clipboard.writeText(project.installCommand!).catch(() => {});
+                  onClick={async () => {
+                    // The copy affordance is a convenience with no visual feedback
+                    // today — copyToClipboard already never throws (missing API,
+                    // non-secure context, rejected write all resolve to false), so
+                    // failures are silent by design rather than surfaced here.
+                    await copyToClipboard(project.installCommand!);
                   }}
                   className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
                 >

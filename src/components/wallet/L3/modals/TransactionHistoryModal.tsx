@@ -6,6 +6,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
 import { truncateId, stripDirectScheme } from '../../../../utils/identifiers';
+import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
 const registry = TokenRegistry.getInstance();
 
@@ -19,12 +20,9 @@ function useCopyToClipboard() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const copy = useCallback(async (text: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyToClipboard(text)) {
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(null), 2000);
-    } catch {
-      // Ignore
     }
   }, []);
 

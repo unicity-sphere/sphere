@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Github, Linkedin, Key, Zap, MessageSquare, Store, type LucideIcon } from 'lucide-react';
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 type ApiKey = 'init' | 'payments' | 'communication' | 'market';
 
@@ -27,10 +28,12 @@ export function DevelopersPage() {
   const [activeApi, setActiveApi] = useState<ApiKey>('init');
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
 
-  const copyToClipboard = (text: string, index: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
+  const handleCopy = async (text: string, index: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    }
   };
 
   const apis: Record<ApiKey, ApiInfo> = {
@@ -286,7 +289,7 @@ sphere.communications.onDirectMessage(async (msg) => {
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs text-neutral-400 dark:text-white/35 font-mono uppercase tracking-wider">The entire integration</span>
                 <button
-                  onClick={() => copyToClipboard(apis[activeApi].code, 'oneliner')}
+                  onClick={() => handleCopy(apis[activeApi].code, 'oneliner')}
                   className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/75 transition"
                 >
                   {copiedIndex === 'oneliner' ? '✓ Copied' : 'Copy'}
@@ -302,7 +305,7 @@ sphere.communications.onDirectMessage(async (msg) => {
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs text-neutral-400 dark:text-white/35 font-mono uppercase tracking-wider">Full example</span>
                 <button
-                  onClick={() => copyToClipboard(apis[activeApi].fullExample, 'full')}
+                  onClick={() => handleCopy(apis[activeApi].fullExample, 'full')}
                   className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/75 transition"
                 >
                   {copiedIndex === 'full' ? '✓ Copied' : 'Copy'}
@@ -334,7 +337,7 @@ sphere.communications.onDirectMessage(async (msg) => {
               </div>
               <span className="text-xs text-neutral-500 dark:text-white/35 font-mono">marketplace.ts</span>
               <button
-                onClick={() => copyToClipboard(marketplaceCode, 'marketplace')}
+                onClick={() => handleCopy(marketplaceCode, 'marketplace')}
                 className="text-xs text-neutral-500 dark:text-white/35 hover:text-neutral-700 dark:hover:text-white/75 transition"
               >
                 {copiedIndex === 'marketplace' ? '✓ Copied' : 'Copy'}
