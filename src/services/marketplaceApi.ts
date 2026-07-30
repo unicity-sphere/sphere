@@ -3,7 +3,7 @@ const API_BASE = import.meta.env.VITE_SPHERE_API_URL ?? 'http://localhost:3001';
 // ── Types ─────────────────────────────────────────────────────────────
 export interface ProjectSummary {
   _id: string;
-  type?: 'app' | 'skill';
+  type: 'app' | 'skill' | 'sdk';
   slug: string;
   name: string;
   tagline: string;
@@ -16,6 +16,8 @@ export interface ProjectSummary {
   stats: { totalUsers: number; totalCompletions: number; activeQuests: number };
   appUrl?: string | null;
   websiteUrl?: string | null;
+  repoUrl: string | null;
+  installCommand: string | null;
   pricing?: { model: string; priceUCT: number | null };
 }
 
@@ -87,7 +89,7 @@ async function get<T>(path: string): Promise<T> {
 
 // ── API functions ─────────────────────────────────────────────────────
 export function fetchProjects(params?: {
-  type?: 'app' | 'skill';
+  type?: 'app' | 'skill' | 'sdk';
   category?: string;
   search?: string;
   sort?: string;
@@ -107,7 +109,7 @@ export function fetchProjects(params?: {
   return get(`${qs ? `?${qs}` : ''}`);
 }
 
-export function fetchFeaturedProjects(type?: 'app' | 'skill'): Promise<ProjectSummary[]> {
+export function fetchFeaturedProjects(type?: 'app' | 'skill' | 'sdk'): Promise<ProjectSummary[]> {
   return get(type ? `/featured?type=${type}` : '/featured');
 }
 

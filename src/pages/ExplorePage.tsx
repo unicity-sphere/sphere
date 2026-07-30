@@ -102,15 +102,16 @@ function HeroDivider() {
 export function ExplorePage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<'app' | 'sdk'>('app');
   // Proactive maintenance status — the hook polls the allowlisted status endpoint
   // and also listens for `maintenance:forced`, so the marketplace queries (gated on
   // the same status) never fire requests that would 503 during maintenance.
   const { data: maintenance } = useMaintenanceStatus();
 
-  // Data — always filtered for apps only
-  const { data: projectsData, isLoading } = useProjects({ type: 'app' });
+  // Data — filtered by the active tab (apps vs. standalone SDK projects)
+  const { data: projectsData, isLoading } = useProjects({ type: activeType });
   const allItems = projectsData?.projects ?? [];
-  const { data: featured } = useFeaturedProjects('app');
+  const { data: featured } = useFeaturedProjects(activeType);
 
   // Single batch request for live metrics across every project on this page
   const allProjectIds = useMemo(
@@ -147,8 +148,8 @@ export function ExplorePage() {
   }, [allItems, metricsByProject]);
 
   const categories = APP_CATEGORIES;
-  const itemLabel = 'projects';
-  const searchPlaceholder = 'Search projects...';
+  const itemLabel = activeType === 'sdk' ? 'standalone projects' : 'projects';
+  const searchPlaceholder = activeType === 'sdk' ? 'Search standalone projects...' : 'Search projects...';
 
   if (maintenance?.enabled) {
     return <MaintenanceScreen message={maintenance.message} />;
@@ -214,6 +215,25 @@ export function ExplorePage() {
       {/* Search + Filter */}
       <section className="px-4 sm:px-6 pb-8">
         <div className="space-y-4">
+          <div className="inline-flex p-0.5 bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/8 rounded-lg mb-4">
+            {([
+              { key: 'app' as const, label: 'Apps' },
+              { key: 'sdk' as const, label: 'Standalone' },
+            ]).map(tab => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => { setActiveType(tab.key); setCategory(null); setSearch(''); }}
+                className={
+                  activeType === tab.key
+                    ? 'px-3 py-1.5 rounded-md bg-orange-500 dark:bg-brand-orange text-white text-xs font-medium'
+                    : 'px-3 py-1.5 rounded-md text-neutral-700 dark:text-white/70 text-xs font-medium transition-colors'
+                }
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400 dark:text-white/30" />
             <input

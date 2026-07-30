@@ -19,7 +19,7 @@ import { useMarketplaceEnabled } from './useMaintenanceStatus';
 // the browser never logs the (expected) 503s as red console errors. The wallet core
 // is unaffected — it talks to the chain/SDK, not sphere-api.
 
-export function useProjects(params?: { type?: 'app' | 'skill'; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
+export function useProjects(params?: { type?: 'app' | 'skill' | 'sdk'; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'projects', params],
@@ -29,7 +29,7 @@ export function useProjects(params?: { type?: 'app' | 'skill'; category?: string
   });
 }
 
-export function useFeaturedProjects(type?: 'app' | 'skill') {
+export function useFeaturedProjects(type?: 'app' | 'skill' | 'sdk') {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'featured', type],
