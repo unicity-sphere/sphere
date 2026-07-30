@@ -350,7 +350,7 @@ export function ProjectPage() {
             {/* Standalone (sdk) projects run outside Sphere — no in-app tab to
                 launch, so the install command is surfaced right above the
                 action row as a copyable terminal line. */}
-            {(project as unknown as Record<string, unknown>).type === 'sdk' && project.installCommand && (
+            {project.type === 'sdk' && project.installCommand && (
               <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
                 <span className="text-neutral-400 dark:text-white/30">$</span>
                 <span className="flex-1 truncate">{project.installCommand}</span>
@@ -372,7 +372,7 @@ export function ProjectPage() {
               </div>
             )}
           <div className="flex gap-2 shrink-0 flex-wrap">
-            {(project as unknown as Record<string, unknown>).type === 'skill' ? (
+            {project.type === 'skill' ? (
               /* Skill: Install to Astrid */
               <button
                 onClick={() => slug && toggle(slug)}
@@ -384,7 +384,7 @@ export function ProjectPage() {
               >
                 {installed ? <><Check className="w-4 h-4" /> Installed</> : <><Download className="w-4 h-4" /> Install to Astrid</>}
               </button>
-            ) : (project as unknown as Record<string, unknown>).type === 'sdk' ? (
+            ) : project.type === 'sdk' ? (
               /* Standalone (sdk): Add to Desktop, then the repository link
                  in place of "Open App" — the app tab launches its target in
                  a frame, and GitHub sends X-Frame-Options: deny, so a framed
@@ -446,11 +446,11 @@ export function ProjectPage() {
         <div className="flex gap-6 sm:gap-10 border-t border-neutral-200 dark:border-white/8 mt-6 pt-5">
           {[
             {
-              label: (project as unknown as Record<string, unknown>).type === 'skill' ? 'Installs' : 'Users',
+              label: project.type === 'skill' ? 'Installs' : 'Users',
               value: metrics?.uniqueUsers ?? project.stats.totalUsers,
               icon: Users,
             },
-            ...((project as unknown as Record<string, unknown>).type === 'skill'
+            ...(project.type === 'skill'
               ? []
               : [
                   { label: 'Quests',      value: metrics?.activeQuests     ?? project.stats.activeQuests,     icon: Target },
