@@ -6,6 +6,7 @@
  * Sphere wallet signs in-process via sphere.signMessage().
  */
 import type { Sphere } from '@unicitylabs/sphere-sdk';
+import type { ProjectType } from '../utils/isStandalone';
 
 const API_BASE = import.meta.env.VITE_SPHERE_API_URL ?? 'http://localhost:3001';
 const JWT_KEY = 'sphere_user_jwt';
@@ -20,7 +21,7 @@ export interface InstalledApp {
   pinned:       boolean;
   project: {
     _id:         string;
-    type:        'app' | 'skill';
+    type:        ProjectType;
     slug:        string;
     name:        string;
     tagline:     string;
@@ -30,6 +31,7 @@ export interface InstalledApp {
     accentColor: string;
     appUrl:      string | null;
     websiteUrl:  string | null;
+    repoUrl:     string | null;
     pricing?:    { model: string; priceUCT: number | null };
   };
 }

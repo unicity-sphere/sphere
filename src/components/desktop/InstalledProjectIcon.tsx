@@ -6,6 +6,8 @@ import { InstalledProjectIcon as InstalledProjectIconUI } from '@unicitylabs/sph
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
 import type { ProjectSummary } from '../../services/marketplaceApi';
+import { isHttpsUrl } from '../../utils/isHttpsUrl';
+import { isStandalone } from '../../utils/isStandalone';
 
 interface InstalledProjectIconProps {
   project: ProjectSummary & { appUrl?: string | null; websiteUrl?: string | null };
@@ -43,7 +45,26 @@ export function InstalledProjectIcon({
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
-  const launchUrl = project.appUrl ?? project.websiteUrl;
+  // A `standalone` project has nothing to launch: it runs on the user's own
+  // machine. Its repository must never go through openTab — GitHub sends
+  // X-Frame-Options: deny, so the in-app frame would render blank. Falling
+  // through to the project page gives the user the repo and website buttons,
+  // the description and the install command instead.
+  //
+  // This is the most dangerous sink in the app: openTab persists the value
+  // into DesktopTab.url in localStorage, DesktopLayout turns it into
+  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}>. The frame
+  // does carry a sandbox attribute (AGENT_IFRAME_SANDBOX), but it includes
+  // both allow-scripts and allow-same-origin, which together leave a framed
+  // page free to script in its own inherited origin — the sandbox grants no
+  // protection against a malicious `src` (e.g. `javascript:`) itself; the
+  // https gate below is what protects the origin. Gate the chosen candidate
+  // with isHttpsUrl before it is usable — if appUrl is present but unsafe,
+  // do NOT fall back to websiteUrl (same nullish-only fallback semantics as
+  // before); if the result fails the check, treat it exactly like a project
+  // with no launch URL at all.
+  const candidateLaunchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
+  const launchUrl = candidateLaunchUrl && isHttpsUrl(candidateLaunchUrl) ? candidateLaunchUrl : null;
 
   const handleClick = () => {
     void ping(project.slug);
@@ -61,22 +82,40 @@ export function InstalledProjectIcon({
     setMenuOpen((prev) => !prev);
   };
 
+  // window.open is an unsanitised navigation sink — unlike a JSX `href`, React
+  // applies no protocol checking to it at all. This app is the wallet (the
+  // origin holding the user's keys), and repoUrl/websiteUrl are project data
+  // that can reach this component via an admin/migration/seed path that skips
+  // normal write-side validation, so gate on isHttpsUrl before ever rendering
+  // an entry that calls it — a non-https value gets no menu item at all,
+  // rather than a menu item whose click would fail safe.
   const menuItems = [
-    ...(project.appUrl
-      ? [{
-          label: 'Open in Tab',
-          icon: Globe,
-          onClick: () => {
-            openTab('custom', { url: project.appUrl!, label: project.name });
-            navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
-          },
-        }]
-      : []),
-    ...(project.websiteUrl
+    // Branch on type first so this list can never disagree with launchUrl,
+    // which forbids framing for `standalone` unconditionally: a standalone
+    // record must never offer "Open in Tab", even if it carries a stray appUrl.
+    ...(isStandalone(project)
+      ? (project.repoUrl && isHttpsUrl(project.repoUrl)
+          ? [{
+              label: 'Open repository',
+              icon: ExternalLink,
+              onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
+            }]
+          : [])
+      : (project.appUrl && isHttpsUrl(project.appUrl)
+          ? [{
+              label: 'Open in Tab',
+              icon: Globe,
+              onClick: () => {
+                openTab('custom', { url: project.appUrl!, label: project.name });
+                navigate(`/agents/custom?url=${encodeURIComponent(project.appUrl!)}`);
+              },
+            }]
+          : [])),
+    ...(project.websiteUrl && isHttpsUrl(project.websiteUrl)
       ? [{
           label: 'Open Website',
           icon: ExternalLink,
-          onClick: () => window.open(project.websiteUrl!, '_blank'),
+          onClick: () => window.open(project.websiteUrl!, '_blank', 'noopener,noreferrer'),
         }]
       : []),
     {

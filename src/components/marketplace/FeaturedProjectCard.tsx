@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { FeaturedProjectCard as UiFeaturedProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
+import { isStandalone, supportsQuests } from '../../utils/isStandalone';
 
 interface FeaturedProjectCardProps {
   project: ProjectSummary;
@@ -15,7 +16,21 @@ export function FeaturedProjectCard({ project, metrics }: FeaturedProjectCardPro
   const ratingCount = metrics?.ratingCount ?? 0;
 
   return (
-    <Link to={`/apps/${project.slug}`} draggable={false}>
+    <Link to={`/apps/${project.slug}`} draggable={false} className="relative block">
+      {/* Same overlay as ProjectCard.tsx (sphere-ui doesn't know about project
+          types, and its version is CI-bumped, so touching it there means a
+          release cycle plus a dependency bump in every consumer). This card's
+          banner ribbon ("Featured") sits at top-3 right-3, and the logo/title
+          sit in a separate row below the banner — top-3 left-3 is free on both
+          counts. Driven off project.type via isStandalone (never off the
+          absence of appUrl). */}
+      {isStandalone(project) && (
+        <span
+          className="absolute top-3 left-3 z-20 px-2 py-0.5 rounded-md bg-black/40 backdrop-blur-sm text-white/80 text-[10px] font-mono uppercase tracking-wider pointer-events-none"
+        >
+          STANDALONE
+        </span>
+      )}
       <UiFeaturedProjectCard
         name={project.name}
         tagline={project.tagline}
@@ -23,7 +38,11 @@ export function FeaturedProjectCard({ project, metrics }: FeaturedProjectCardPro
         bannerUrl={project.bannerUrl}
         accentColor={project.accentColor}
         users={users}
-        quests={quests}
+        // See ProjectCard.tsx's identical comment: sphere-ui defaults an
+        // absent `quests` to 0 and renders the stat unconditionally either
+        // way, but this repo's own value should still only ever be a real
+        // quest count for a type that has quests, not an asserted 0.
+        quests={supportsQuests(project.type) ? quests : undefined}
         positivePercent={positivePercent}
         ratingCount={ratingCount}
       />

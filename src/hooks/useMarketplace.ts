@@ -12,6 +12,7 @@ import {
   fetchCategories,
 } from '../services/marketplaceApi';
 import { useMarketplaceEnabled } from './useMaintenanceStatus';
+import type { ProjectType } from '../utils/isStandalone';
 
 // Every query below talks to the sphere-api marketplace/metrics routes, which the
 // maintenance gate answers with 503 while `sphere` is under maintenance. Gating on
@@ -19,7 +20,7 @@ import { useMarketplaceEnabled } from './useMaintenanceStatus';
 // the browser never logs the (expected) 503s as red console errors. The wallet core
 // is unaffected — it talks to the chain/SDK, not sphere-api.
 
-export function useProjects(params?: { type?: 'app' | 'skill'; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
+export function useProjects(params?: { type?: ProjectType; category?: string; search?: string; sort?: string; page?: number; limit?: number }) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'projects', params],
@@ -29,7 +30,7 @@ export function useProjects(params?: { type?: 'app' | 'skill'; category?: string
   });
 }
 
-export function useFeaturedProjects(type?: 'app' | 'skill') {
+export function useFeaturedProjects(type?: ProjectType) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'featured', type],
@@ -49,12 +50,18 @@ export function useProject(slug: string, preview?: boolean) {
   });
 }
 
-export function useProjectQuests(slug: string) {
+/**
+ * `enabled` lets a caller skip the request entirely once it already knows
+ * (from the project's own data) that this project's type doesn't support
+ * quests — e.g. `useProjectQuests(slug, supportsQuests(project?.type))` on
+ * ProjectPage. Defaults to `true` so existing callers are unaffected.
+ */
+export function useProjectQuests(slug: string, enabled = true) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'project-quests', slug],
     queryFn: () => fetchProjectQuests(slug),
-    enabled: marketplaceEnabled && !!slug,
+    enabled: marketplaceEnabled && !!slug && enabled,
   });
 }
 

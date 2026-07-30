@@ -15,6 +15,7 @@ import { WalletRequiredBlocker } from '../agents/WalletRequiredBlocker';
 import { ActivityTicker } from '../activity';
 import { Footer } from '../layout/Footer';
 import { normalizeUrl } from '../../utils/normalizeUrl';
+import { isHttpsUrl } from '../../utils/isHttpsUrl';
 
 const CUSTOM_URL_PRESETS = [
   { label: 'Sphere Connect Example', url: 'https://unicity-sphere.github.io/sphere-sdk-connect-example/' },
@@ -63,8 +64,19 @@ export function DesktopLayout() {
   const renderTabContent = (tabId: string, appId: string, url?: string) => {
     const agent = getAgentConfig(appId);
 
-    // Custom URL iframe tab
-    if (url) {
+    // Custom URL iframe tab. `tab.url` is untrusted at READ time too, not
+    // just at write time — InstalledProjectIcon and ProjectPage already gate
+    // with isHttpsUrl before ever calling openTab, but that closes the write
+    // side only. `openTabs` is restored from localStorage (useDesktopState's
+    // loadState()), which is user-writable via devtools regardless of what
+    // our code writes, and a tab persisted BEFORE those write-side gates
+    // existed would otherwise still reach the iframe unchanged on every load
+    // from now on. Re-check here so a non-https `url` never becomes
+    // `iframeUrl`. Falling through (no `url`) lands on the `case 'custom'`
+    // branch below, which shows the "Load Custom URL" prompt — the same
+    // screen a custom tab with no URL yet already shows, not a new empty
+    // state invented for this gate.
+    if (url && isHttpsUrl(url)) {
       const customAgent: AgentConfig = {
         id: tabId,
         name: url,
