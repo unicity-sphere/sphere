@@ -12,17 +12,18 @@ vi.mock('../../../src/hooks/useInstalledProjects', () => ({
 }));
 
 import { ProjectCard } from '../../../src/components/marketplace/ProjectCard';
+import type { ProjectSummary } from '../../../src/services/marketplaceApi';
 
-const BASE_PROJECT = {
-  _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', tagline: 't', logoUrl: null,
+const BASE_PROJECT: ProjectSummary = {
+  _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', type: 'app', tagline: 't', logoUrl: '',
   bannerUrl: null, accentColor: '#FF6F00', category: 'tool', tags: [], featured: false,
   appUrl: null, websiteUrl: null, repoUrl: null, installCommand: null,
   stats: { totalUsers: 0, totalCompletions: 0, activeQuests: 0 },
-} as any;
+};
 
 beforeEach(() => { vi.clearAllMocks(); });
 
-function renderCard(over: Record<string, unknown>) {
+function renderCard(over: Partial<ProjectSummary>) {
   return render(
     <MemoryRouter>
       <ProjectCard project={{ ...BASE_PROJECT, ...over }} />

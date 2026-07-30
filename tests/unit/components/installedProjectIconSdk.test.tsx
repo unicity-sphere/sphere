@@ -22,17 +22,18 @@ vi.mock('../../../src/hooks/useInstalledProjects', () => ({
 }));
 
 import { InstalledProjectIcon } from '../../../src/components/desktop/InstalledProjectIcon';
+import type { ProjectSummary } from '../../../src/services/marketplaceApi';
 
-const SDK_PROJECT = {
+const SDK_PROJECT: ProjectSummary = {
   _id: 'p1', slug: 'agent-guild', name: 'Agent Guild', type: 'sdk',
   repoUrl: 'https://github.com/owner/repo', appUrl: null,
   // A website IS set: this is the case the current `appUrl ?? websiteUrl`
   // fallback would happily frame.
   websiteUrl: 'https://aliemul.github.io/agent-guild/',
-  logoUrl: null, accentColor: '#FF6F00', category: 'tool', tagline: 't', tags: [],
-  installCommand: null,
-  stats: { totalUsers: 0, totalCompletions: 0, activeQuests: 0, rating: 0, ratingCount: 0 },
-} as any;
+  logoUrl: '', accentColor: '#FF6F00', category: 'tool', tagline: 't', tags: [],
+  installCommand: null, featured: false,
+  stats: { totalUsers: 0, totalCompletions: 0, activeQuests: 0 },
+};
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -53,7 +54,7 @@ describe('InstalledProjectIcon for a standalone project', () => {
   });
 
   it('still opens an app project in a tab', () => {
-    const app = { ...SDK_PROJECT, type: 'app', appUrl: 'https://app.example.com', repoUrl: null };
+    const app: ProjectSummary = { ...SDK_PROJECT, type: 'app', appUrl: 'https://app.example.com', repoUrl: null };
     const { container } = render(<InstalledProjectIcon project={app} />);
     fireEvent.click(container.querySelector('button')!);
     expect(openTab).toHaveBeenCalledWith('custom', { url: 'https://app.example.com', label: 'Agent Guild' });
