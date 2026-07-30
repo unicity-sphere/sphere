@@ -362,13 +362,9 @@ export function useOnboardingFlow(
     setError(null);
 
     // Read file content
-    let content: string | Uint8Array;
-    if (file.name.endsWith('.dat')) {
-      const buffer = await file.arrayBuffer();
-      content = new Uint8Array(buffer);
-    } else {
-      content = await file.text();
-    }
+    // Backups are text (.txt / .json / a bare mnemonic). Bitcoin Core .dat
+    // import was removed from the SDK — the wallet is L3-only.
+    const content: string = await file.text();
     setFileContent(content);
 
     // Detect file type and encryption
@@ -530,7 +526,7 @@ export function useOnboardingFlow(
         // import()` call.
         //
         // Only meaningful when the import actually recovered a MNEMONIC — a
-        // master-key-only legacy import (.dat/.txt/legacy-JSON with no seed
+        // master-key-only legacy import (.txt/legacy-JSON with no seed
         // phrase) has none, and `setWalletPassword`/`reencryptStoredMnemonic`
         // throws "No wallet mnemonic found" for that case. Caught and skipped
         // gracefully here (no scary error for an automatic step the user

@@ -127,7 +127,7 @@ export function RestoreMethodScreen({
                 Import from File
               </div>
               <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                Import wallet from .json, .dat or .txt file
+                Import wallet from .json or .txt file
               </div>
             </div>
             <ArrowRight className="w-4 h-4 text-neutral-400 group-hover:text-orange-500 transition-colors" />
