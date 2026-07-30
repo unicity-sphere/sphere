@@ -16,7 +16,7 @@ import * as subscriptionConfig from "../../../src/config/subscription";
 // no-ops on the wallet-api path; any regression to it throws here.
 // ============================================================================
 
-type SdkStatus = "pending" | "accepted" | "rejected" | "paid" | "expired" | "settling";
+type SdkStatus = "pending" | "rejected" | "paid" | "expired" | "settling";
 
 interface FakeSdkRequest {
   id: string;
@@ -61,10 +61,6 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
     },
     payments: {
       getPaymentRequests: vi.fn(() => requests.map((r) => ({ ...r }))),
-      acceptPaymentRequest: vi.fn(async (id: string) => {
-        const r = find(id);
-        if (r) r.status = "accepted";
-      }),
       rejectPaymentRequest: vi.fn(async (id: string) => {
         const r = find(id);
         if (r) r.status = "rejected";
