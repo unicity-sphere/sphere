@@ -23,7 +23,18 @@ export function ProjectCard({ project, metrics }: ProjectCardProps) {
   const ratingCount = metrics?.ratingCount ?? 0;
 
   return (
-    <Link to={`/apps/${project.slug}`}>
+    <Link to={`/apps/${project.slug}`} className="relative block">
+      {/* sphere-ui's MarketplaceProjectCard doesn't know about project types, and
+          its version is bumped by CI — adding a type-aware badge there would mean
+          a release cycle plus a dependency bump in every consumer. Overlay it here
+          instead, driven off project.type (never off the absence of appUrl). */}
+      {project.type === 'sdk' && (
+        <span
+          className="absolute top-3 left-3 z-20 px-2 py-0.5 rounded-md bg-black/40 backdrop-blur-sm text-white/80 text-[10px] font-mono uppercase tracking-wider pointer-events-none"
+        >
+          STANDALONE
+        </span>
+      )}
       <MarketplaceProjectCard
         name={project.name}
         tagline={project.tagline}
