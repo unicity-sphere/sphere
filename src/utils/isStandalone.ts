@@ -34,3 +34,24 @@ export type ProjectType = (typeof PROJECT_TYPES)[keyof typeof PROJECT_TYPES];
 export function isStandalone(project: { type: ProjectType }): boolean {
   return project.type === PROJECT_TYPES.STANDALONE;
 }
+
+/**
+ * True when projects of this `type` participate in the quest system — have
+ * quests, quest-derived stats (active quests / completions), etc.
+ *
+ * This is a capability question, not a "where does it run" question: gate
+ * quest-derived UI on `supportsQuests`, never on `isStandalone`/`!isStandalone`
+ * or a direct `type === ...` check, even though today the two happen to
+ * disagree only for `standalone`. The distinction matters because the two
+ * questions can diverge independently in the future (e.g. a fourth type that
+ * launches in-app but still has no quests, or a standalone type that gains
+ * quest support) — code asking "does this have quests" should say so, rather
+ * than encoding that meaning as "is this not standalone".
+ *
+ * `app` and `skill` both support quests; `standalone` does not. Accepts
+ * `null`/`undefined` so call sites don't need an extra guard while a
+ * project's own data is still loading.
+ */
+export function supportsQuests(type: ProjectType | null | undefined): boolean {
+  return type === PROJECT_TYPES.APP || type === PROJECT_TYPES.SKILL;
+}

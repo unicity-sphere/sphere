@@ -11,7 +11,7 @@ import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
 import { isHttpsUrl } from '../utils/isHttpsUrl';
-import { isStandalone, PROJECT_TYPES } from '../utils/isStandalone';
+import { isStandalone, supportsQuests, PROJECT_TYPES } from '../utils/isStandalone';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -224,7 +224,11 @@ export function ProjectPage() {
   const { data: project, isLoading } = useProject(slug ?? '', isPreview || undefined);
   const installed = slug ? isInstalled(slug) : false;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const { data: quests } = useProjectQuests(slug ?? '');
+  // Standalone projects don't support quests — skip the fetch once we know
+  // that from the project's own data (before it loads, fetch optimistically
+  // rather than guess; `project` is undefined for one type, not the "no
+  // quests" type).
+  const { data: quests } = useProjectQuests(slug ?? '', !project || supportsQuests(project.type));
   const { data: metrics } = useProjectMetrics(project?._id);
   // Quests are heavy content — collapsed by default, and collapsed per track.
   const [questsOpen, setQuestsOpen] = useState(false);
@@ -451,12 +455,15 @@ export function ProjectPage() {
               value: metrics?.uniqueUsers ?? project.stats.totalUsers,
               icon: Users,
             },
-            ...(project.type === PROJECT_TYPES.SKILL
-              ? []
-              : [
+            // Quest-derived stats — gate on capability (supportsQuests), not on
+            // type: standalone projects never have quests, so these would
+            // always read 0/0 for them.
+            ...(supportsQuests(project.type)
+              ? [
                   { label: 'Quests',      value: metrics?.activeQuests     ?? project.stats.activeQuests,     icon: Target },
                   { label: 'Completions', value: metrics?.totalCompletions ?? project.stats.totalCompletions, icon: Trophy },
-                ]),
+                ]
+              : []),
             ...(metrics && metrics.ratingCount > 0
               ? [{ label: `${metrics.positivePercent}% +`, value: metrics.ratingCount, icon: Star, isCount: true as const }]
               : []),
@@ -498,8 +505,10 @@ export function ProjectPage() {
 
       {/* Quests — collapsed by default; expanded view groups quests by track,
           each track collapsed as well. Only active tracks reach this list
-          (the API filters out quests of DRAFT/ENDED tracks). */}
-      {quests && quests.length > 0 && (
+          (the API filters out quests of DRAFT/ENDED tracks). Gated on
+          supportsQuests: a standalone project's quest list is always empty,
+          but gate on the capability rather than relying on that emptiness. */}
+      {supportsQuests(project.type) && quests && quests.length > 0 && (
         <section className="px-4 sm:px-6 pb-8">
           <div className="max-w-5xl mx-auto">
             <button

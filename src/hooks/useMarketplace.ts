@@ -50,12 +50,18 @@ export function useProject(slug: string, preview?: boolean) {
   });
 }
 
-export function useProjectQuests(slug: string) {
+/**
+ * `enabled` lets a caller skip the request entirely once it already knows
+ * (from the project's own data) that this project's type doesn't support
+ * quests — e.g. `useProjectQuests(slug, supportsQuests(project?.type))` on
+ * ProjectPage. Defaults to `true` so existing callers are unaffected.
+ */
+export function useProjectQuests(slug: string, enabled = true) {
   const marketplaceEnabled = useMarketplaceEnabled();
   return useQuery({
     queryKey: ['marketplace', 'project-quests', slug],
     queryFn: () => fetchProjectQuests(slug),
-    enabled: marketplaceEnabled && !!slug,
+    enabled: marketplaceEnabled && !!slug && enabled,
   });
 }
 
