@@ -30,4 +30,9 @@ describe('FeaturedProjectCard standalone badge', () => {
     renderCard({ type: 'app', appUrl: 'https://app.example.com' });
     expect(screen.queryByText('STANDALONE')).toBeNull();
   });
+
+  it('does not show the badge for a skill featured project', () => {
+    renderCard({ type: 'skill' });
+    expect(screen.queryByText('STANDALONE')).toBeNull();
+  });
 });
