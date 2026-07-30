@@ -125,7 +125,7 @@ export interface ImportWalletOptions {
 }
 
 export interface ImportFromFileOptions {
-  fileContent: string | Uint8Array;
+  fileContent: string;
   fileName: string;
   password?: string;
   nametag?: string;

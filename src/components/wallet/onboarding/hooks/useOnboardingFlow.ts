@@ -217,7 +217,7 @@ export function useOnboardingFlow(
   // File import state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [fileContent, setFileContent] = useState<string | Uint8Array | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
   const [, setDetectedFileType] = useState<LegacyFileType>('unknown');
   const [isEncrypted, setIsEncrypted] = useState(false);
   // Holds the imported Sphere instance during the import flow.
