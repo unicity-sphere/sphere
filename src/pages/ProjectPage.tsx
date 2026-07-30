@@ -345,6 +345,24 @@ export function ProjectPage() {
           </div>
 
           {!isPreview && (
+          <div className="flex flex-col items-stretch sm:items-end shrink-0">
+            {/* Standalone (sdk) projects run outside Sphere — no in-app tab to
+                launch, so the install command is surfaced right above the
+                action row as a copyable terminal line. */}
+            {(project as unknown as Record<string, unknown>).type === 'sdk' && project.installCommand && (
+              <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
+                <span className="text-neutral-400 dark:text-white/30">$</span>
+                <span className="flex-1 truncate">{project.installCommand}</span>
+                <button
+                  type="button"
+                  aria-label="copy install command"
+                  onClick={() => void navigator.clipboard.writeText(project.installCommand!)}
+                  className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
+                >
+                  copy
+                </button>
+              </div>
+            )}
           <div className="flex gap-2 shrink-0 flex-wrap">
             {(project as unknown as Record<string, unknown>).type === 'skill' ? (
               /* Skill: Install to Astrid */
@@ -358,6 +376,34 @@ export function ProjectPage() {
               >
                 {installed ? <><Check className="w-4 h-4" /> Installed</> : <><Download className="w-4 h-4" /> Install to Astrid</>}
               </button>
+            ) : (project as unknown as Record<string, unknown>).type === 'sdk' ? (
+              /* Standalone (sdk): Add to Desktop, then the repository link
+                 in place of "Open App" — the app tab launches its target in
+                 a frame, and GitHub sends X-Frame-Options: deny, so a framed
+                 repository would render as a blank panel. A plain new-tab
+                 link avoids that entirely. */
+              <>
+                <button
+                  onClick={() => slug && toggle(slug)}
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all cursor-pointer ${
+                    installed
+                      ? 'bg-green-500/15 text-green-500 border border-green-500/25 hover:bg-red-500/15 hover:text-red-400 hover:border-red-500/25'
+                      : 'bg-orange-500 dark:bg-brand-orange hover:bg-orange-600 dark:hover:bg-brand-orange-dark text-white shadow-lg shadow-orange-500/20'
+                  }`}
+                >
+                  {installed ? <><Check className="w-4 h-4" /> On Desktop</> : <><Download className="w-4 h-4" /> Add to Desktop</>}
+                </button>
+                {project.repoUrl && (
+                  <a
+                    href={project.repoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white transition-colors"
+                  >
+                    Open repository <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </>
             ) : (
               /* App: Add to Desktop */
               <>
@@ -383,6 +429,7 @@ export function ProjectPage() {
                 Website <Globe className="w-3.5 h-3.5" />
               </a>
             )}
+          </div>
           </div>
           )}
         </div>
