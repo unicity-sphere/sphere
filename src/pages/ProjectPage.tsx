@@ -262,8 +262,13 @@ export function ProjectPage() {
 
   // appUrl reaches the wallet's most dangerous sink here: openTab persists it
   // into DesktopTab.url in localStorage, DesktopLayout turns it into
-  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}> with no
-  // sandbox attribute. A non-https value must never be stored via openTab.
+  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}>. The frame
+  // does carry a sandbox attribute (AGENT_IFRAME_SANDBOX), but it includes
+  // both allow-scripts and allow-same-origin, which together leave a framed
+  // page free to script in its own inherited origin — the sandbox grants no
+  // protection against a malicious `src` itself. The https gate is what
+  // protects the origin here, so a non-https value must never be stored via
+  // openTab.
   const handleAddToDesktop = () => {
     if (!project?.appUrl || !isHttpsUrl(project.appUrl)) return;
     openTab('custom', { url: project.appUrl, label: project.name });

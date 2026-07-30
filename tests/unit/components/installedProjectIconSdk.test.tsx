@@ -146,8 +146,11 @@ describe('InstalledProjectIcon context menu — type branches first', () => {
 
 // appUrl reaches the most dangerous sink in this app: openTab persists it into
 // DesktopTab.url in localStorage, DesktopLayout turns it into iframeUrl, and
-// IframeAgent renders <iframe src={activeUrl}> with no sandbox attribute. A
-// `javascript:` (or any non-https) initial src on an unsandboxed iframe runs
+// IframeAgent renders <iframe src={activeUrl}>. The frame does carry a
+// sandbox attribute, but it includes allow-scripts + allow-same-origin, which
+// together leave a framed page free to script in its own inherited origin —
+// the sandbox grants no protection against a malicious `src` itself. A
+// `javascript:` (or any non-https) initial src reaching that iframe runs
 // with the parent's (wallet's) origin — this is script execution holding the
 // user's keys, not merely a bad link. Both the click launcher and the context
 // menu's "Open in Tab" entry must gate appUrl exactly like repoUrl/websiteUrl

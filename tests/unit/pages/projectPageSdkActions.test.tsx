@@ -114,7 +114,10 @@ describe('ProjectPage renders only vetted https:// links', () => {
 // appUrl reaches the most dangerous sink in this app: handleAddToDesktop hands
 // it to openTab, which persists it into DesktopTab.url in localStorage;
 // DesktopLayout turns that into iframeUrl and IframeAgent renders
-// <iframe src={activeUrl}> with no sandbox attribute. A `javascript:` (or any
+// <iframe src={activeUrl}>. The frame does carry a sandbox attribute, but it
+// includes allow-scripts + allow-same-origin, which together leave a framed
+// page free to script in its own inherited origin — the sandbox grants no
+// protection against a malicious `src` itself. A `javascript:` (or any
 // non-https) value reaching that src runs with the wallet's own origin. The
 // "Open App" button must be gated on isHttpsUrl, not just truthiness, and
 // handleAddToDesktop itself must refuse to store an unsafe URL.

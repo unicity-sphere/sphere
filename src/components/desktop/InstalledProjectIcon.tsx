@@ -53,13 +53,16 @@ export function InstalledProjectIcon({
   //
   // This is the most dangerous sink in the app: openTab persists the value
   // into DesktopTab.url in localStorage, DesktopLayout turns it into
-  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}> with no
-  // sandbox attribute. A non-https `src` (e.g. `javascript:`) on an
-  // unsandboxed iframe executes with the wallet's own origin. Gate the
-  // chosen candidate with isHttpsUrl before it is usable — if appUrl is
-  // present but unsafe, do NOT fall back to websiteUrl (same nullish-only
-  // fallback semantics as before); if the result fails the check, treat it
-  // exactly like a project with no launch URL at all.
+  // iframeUrl, and IframeAgent renders <iframe src={activeUrl}>. The frame
+  // does carry a sandbox attribute (AGENT_IFRAME_SANDBOX), but it includes
+  // both allow-scripts and allow-same-origin, which together leave a framed
+  // page free to script in its own inherited origin — the sandbox grants no
+  // protection against a malicious `src` (e.g. `javascript:`) itself; the
+  // https gate below is what protects the origin. Gate the chosen candidate
+  // with isHttpsUrl before it is usable — if appUrl is present but unsafe,
+  // do NOT fall back to websiteUrl (same nullish-only fallback semantics as
+  // before); if the result fails the check, treat it exactly like a project
+  // with no launch URL at all.
   const candidateLaunchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
   const launchUrl = candidateLaunchUrl && isHttpsUrl(candidateLaunchUrl) ? candidateLaunchUrl : null;
 
