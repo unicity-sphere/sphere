@@ -25,6 +25,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `build` runs `tsc -b`, which covers src/ only — tests/ is a separate
+      # project (tsconfig.test.json) that nothing checked, so it drifted: the
+      # marketplace hook mocks had been uncompilable for a while and CI stayed
+      # green. Types before behaviour, so a broken mock fails here rather than as
+      # a confusing runtime assertion.
+      - name: Typecheck tests
+        run: npm run typecheck:tests
+
       - name: Test
         run: npm run test:run
 
