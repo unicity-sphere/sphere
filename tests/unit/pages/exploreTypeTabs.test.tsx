@@ -3,13 +3,26 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import type { ProjectSummary } from '../../../src/services/marketplaceApi';
 import { PROJECT_TYPES } from '../../../src/utils/isStandalone';
 
+import type { ProjectType } from '../../../src/utils/isStandalone';
+
+type ProjectQueryParams = { type?: ProjectType; category?: string; search?: string; sort?: string; page?: number; limit?: number };
+
 // vi.mock factories are hoisted above regular top-level `const`s, so the mocks
 // referenced inside the factory below must themselves be created via vi.hoisted
 // to avoid a TDZ ReferenceError when ExplorePage's import of useMarketplace is
 // resolved.
+// Typed against the real hooks: `vi.fn(() => …)` would infer a ZERO-arg mock
+// returning `projects: never[]`, so every mockImplementation that takes `params`
+// or returns real projects fails to compile.
+type ProjectsQuery = (params?: ProjectQueryParams) => {
+  data?: { projects: ProjectSummary[] };
+  isLoading: boolean;
+};
+type FeaturedQuery = () => { data?: ProjectSummary[] };
+
 const { useProjects, useFeaturedProjects } = vi.hoisted(() => ({
-  useProjects: vi.fn(() => ({ data: { projects: [] }, isLoading: false })),
-  useFeaturedProjects: vi.fn(() => ({ data: [] })),
+  useProjects: vi.fn<ProjectsQuery>(() => ({ data: { projects: [] }, isLoading: false })),
+  useFeaturedProjects: vi.fn<FeaturedQuery>(() => ({ data: [] })),
 }));
 
 vi.mock('../../../src/hooks/useMarketplace', () => ({
