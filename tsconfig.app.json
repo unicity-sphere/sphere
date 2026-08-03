@@ -8,6 +8,25 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
 
+    // SCAFFOLDING FOR THE `file:../sphere-ui` LINK ONLY — see
+    // tests/unit/dependency-hygiene.test.ts. sphere-ui carries its own
+    // node_modules with its own @types/react; once file:-linked, its
+    // dist/index.d.ts resolves `react` against THAT copy, so a type like
+    // `Ref<T>` coming through a sphere-ui component (InstalledProjectIcon)
+    // is structurally identical but nominally a "different" type from this
+    // repo's own @types/react ("Two different types with this name exist,
+    // but they are unrelated" — a well-known duplicate-@types/react
+    // symptom). `paths` forces every resolution of these bare specifiers,
+    // including ones inside sphere-ui's bundled .d.ts, to this repo's own
+    // copies. DELETE with the rest of the link scaffolding once sphere-ui
+    // publishes and the dependency reverts to a semver range.
+    "baseUrl": ".",
+    "paths": {
+      "react":         ["./node_modules/@types/react"],
+      "react-dom":     ["./node_modules/@types/react-dom"],
+      "react-dom/*":   ["./node_modules/@types/react-dom/*"]
+    },
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Menu, X, Github, Linkedin } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { AnnouncementBell } from '@unicitylabs/sphere-ui';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
 import { IpfsSyncIndicator } from './IpfsSyncIndicator';
 import { WalletApiSessionIndicator } from './WalletApiSessionIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
+import { useAnnouncementsUI } from '../../contexts';
 
 function devReset(): void {
   localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
@@ -30,6 +32,7 @@ export function Header() {
   const navigate = useNavigate();
   const { showDesktop } = useDesktopState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const announcementsUI = useAnnouncementsUI();
 
   const getDevConfig = () => ({
     aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
@@ -158,6 +161,17 @@ export function Header() {
               <div className="hidden lg:flex items-center gap-3">
                 <IpfsSyncIndicator />
                 <WalletApiSessionIndicator />
+                {announcementsUI && (
+                  <AnnouncementBell
+                    items={announcementsUI.items}
+                    unreadCount={announcementsUI.unreadCount}
+                    prefs={announcementsUI.prefs}
+                    onMarkRead={announcementsUI.markRead}
+                    onMarkAllRead={announcementsUI.markAllRead}
+                    onSetAutoOpen={announcementsUI.setAutoOpen}
+                    onOpenItem={announcementsUI.openItem}
+                  />
+                )}
                 {/* <ThemeToggle /> */}
               </div>
             </div>
@@ -240,6 +254,17 @@ export function Header() {
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
               <IpfsSyncIndicator />
               <WalletApiSessionIndicator />
+              {announcementsUI && (
+                <AnnouncementBell
+                  items={announcementsUI.items}
+                  unreadCount={announcementsUI.unreadCount}
+                  prefs={announcementsUI.prefs}
+                  onMarkRead={announcementsUI.markRead}
+                  onMarkAllRead={announcementsUI.markAllRead}
+                  onSetAutoOpen={announcementsUI.setAutoOpen}
+                  onOpenItem={announcementsUI.openItem}
+                />
+              )}
               <div className="flex-1" />
               <div className="flex items-center gap-5">
                 {[

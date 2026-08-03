@@ -10,9 +10,17 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     // Mirrors vitest.config.ts's `alias: { "@": "/src" }` — tests use it, and
-    // TypeScript has never been told about it.
+    // TypeScript has never been told about it. `paths` is NOT merged across
+    // `extends` — it fully replaces the parent's — so the react/react-dom
+    // entries from tsconfig.app.json's own `file:../sphere-ui` scaffolding
+    // (see that file) are repeated here rather than inherited.
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": {
+      "@/*":         ["src/*"],
+      "react":       ["./node_modules/@types/react"],
+      "react-dom":   ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"]
+    }
   },
   // src/*.d.ts carries the ambient shim for @unicitylabs/sphere-sdk/impl/browser
   // (src/sphere-sdk-browser.d.ts); without it every test that reaches
