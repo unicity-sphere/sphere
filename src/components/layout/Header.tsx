@@ -180,6 +180,25 @@ export function Header() {
             <div className="h-0.5 bg-neutral-300 dark:bg-[#fefefe] rounded-[10px]" />
           </div>
 
+          {/* Mobile/tablet bell — same slot as the hamburger (lg:hidden), NOT
+              inside the expandable mobile menu below: that panel is
+              overflow-hidden and only tall enough for its own content, so a
+              w-80 popover anchored inside it renders as a ~12px sliver. This
+              row is the header bar itself, never clipped. */}
+          {announcementsUI && (
+            <div className="lg:hidden shrink-0 relative z-10">
+              <AnnouncementBell
+                items={announcementsUI.items}
+                unreadCount={announcementsUI.unreadCount}
+                prefs={announcementsUI.prefs}
+                onMarkRead={announcementsUI.markRead}
+                onMarkAllRead={announcementsUI.markAllRead}
+                onSetAutoOpen={announcementsUI.setAutoOpen}
+                onOpenItem={announcementsUI.openItem}
+              />
+            </div>
+          )}
+
           {/* Mobile hamburger */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -250,21 +269,13 @@ export function Header() {
               )
             ))}
 
-            {/* Custody status + Social links — mobile only */}
+            {/* Custody status + Social links — mobile only. The bell lives in
+                the header bar next to the hamburger instead of here: this
+                panel is overflow-hidden and only as tall as its own content,
+                which would clip the popover to a sliver. */}
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
               <IpfsSyncIndicator />
               <WalletApiSessionIndicator />
-              {announcementsUI && (
-                <AnnouncementBell
-                  items={announcementsUI.items}
-                  unreadCount={announcementsUI.unreadCount}
-                  prefs={announcementsUI.prefs}
-                  onMarkRead={announcementsUI.markRead}
-                  onMarkAllRead={announcementsUI.markAllRead}
-                  onSetAutoOpen={announcementsUI.setAutoOpen}
-                  onOpenItem={announcementsUI.openItem}
-                />
-              )}
               <div className="flex-1" />
               <div className="flex items-center gap-5">
                 {[

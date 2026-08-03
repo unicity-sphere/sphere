@@ -34,25 +34,34 @@ describe('dependency hygiene', () => {
   });
 
   /**
-   * The companion tripwire. `vitest.config.ts`'s own "SCAFFOLDING FOR THE
-   * `file:../sphere-ui` LINK ONLY" block exists solely to make the `file:`
-   * dependency above work under vitest — it has no purpose once that
-   * dependency reverts to a published semver range, and at that point it
-   * describes a problem that no longer exists, misleading the next reader
-   * into thinking this repo still needs it. Without this assertion, the test
-   * above could go green on its own (dependency reverted) while the
-   * scaffolding it was written to justify sat there, dead and unexplained,
-   * with nothing failing to catch it — the exact blind spot this file exists
-   * to close for the dependency itself. This assertion only engages once the
-   * dependency is no longer a `file:` link (while it still is, the
-   * scaffolding is expected and this is vacuously satisfied — the test above
-   * is the one carrying that signal), so both tripwires clear together.
+   * The companion tripwire. `vitest.config.ts`, `tsconfig.app.json` and
+   * `tsconfig.test.json` each carry their own "SCAFFOLDING FOR THE
+   * `file:../sphere-ui` LINK ONLY" block, solely to make the `file:`
+   * dependency above work under vitest / tsc / the production build — none
+   * has a purpose once that dependency reverts to a published semver range,
+   * and at that point each describes a problem that no longer exists,
+   * misleading the next reader into thinking this repo still needs it.
+   * Without this assertion, the test above could go green on its own
+   * (dependency reverted) while the scaffolding it was written to justify
+   * sat there, dead and unexplained, in ANY of the three files, with nothing
+   * failing to catch it — the exact blind spot this file exists to close for
+   * the dependency itself. `tsconfig.app.json`'s is the one most worth
+   * catching: unlike the vitest block it is mildly harmful even once dead,
+   * since its `baseUrl: "."` newly permits accidental root-relative bare
+   * imports that would otherwise be caught as unresolved. This assertion
+   * only engages once the dependency is no longer a `file:` link (while it
+   * still is, the scaffolding is expected and this is vacuously satisfied —
+   * the test above is the one carrying that signal), so all tripwires clear
+   * together.
    */
-  it('requires vitest.config.ts scaffolding to be removed once the file: link is gone', () => {
+  it('requires the vitest/tsconfig scaffolding to be removed once the file: link is gone', () => {
     const version = packageJson.dependencies['@unicitylabs/sphere-ui'];
     const isFileLink = version.startsWith('file:');
-    const vitestConfigSource = readFileSync(join(process.cwd(), 'vitest.config.ts'), 'utf8');
-    const hasScaffoldingMarker = vitestConfigSource.includes('SCAFFOLDING FOR THE `file:../sphere-ui` LINK ONLY');
+    const marker = 'SCAFFOLDING FOR THE `file:../sphere-ui` LINK ONLY';
+    const scaffoldedFiles = ['vitest.config.ts', 'tsconfig.app.json', 'tsconfig.test.json'];
+    const hasScaffoldingMarker = scaffoldedFiles.some((file) =>
+      readFileSync(join(process.cwd(), file), 'utf8').includes(marker),
+    );
 
     expect(isFileLink || !hasScaffoldingMarker).toBe(true);
   });

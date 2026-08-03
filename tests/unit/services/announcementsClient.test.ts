@@ -55,16 +55,19 @@ describe('announcementsClient (sphere)', () => {
     fetchMock.mockReturnValueOnce(ok({ items: [], nextCursor: null }));
     const client = createAnnouncementsClient(getSphere);
     await client.getArchive('2026-07-01T00:00:00.000Z');
-    expect(String(fetchMock.mock.calls[0][0])).toBe(
-      'http://localhost:3001/api/announcements/archive?cursor=2026-07-01T00%3A00%3A00.000Z',
-    );
+    // `toContain`, not an absolute-URL `toBe`: the base URL is
+    // VITE_SPHERE_API_URL ?? the localhost default, so a developer with the
+    // env var set in `.env` would otherwise fail this for no real reason.
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/announcements/archive?cursor=2026-07-01T00%3A00%3A00.000Z');
   });
 
   it('omits the cursor query entirely when none is given', async () => {
     fetchMock.mockReturnValueOnce(ok({ items: [], nextCursor: null }));
     const client = createAnnouncementsClient(getSphere);
     await client.getArchive();
-    expect(String(fetchMock.mock.calls[0][0])).toBe('http://localhost:3001/api/announcements/archive');
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/api/announcements/archive');
+    expect(url).not.toContain('?');
   });
 
   it('marks a single announcement read with its via', async () => {
