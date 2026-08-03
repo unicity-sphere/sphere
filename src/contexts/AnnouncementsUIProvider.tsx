@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as Sentry from '@sentry/react';
 import { useAnnouncements, AnnouncementModal, type ClientAnnouncement } from '@unicitylabs/sphere-ui';
 import { useSphereContext } from '../sdk';
 import { createAnnouncementsClient } from '../services/announcementsClient';
@@ -47,7 +48,10 @@ export function AnnouncementsUIProvider({ children }: { children: ReactNode }) {
   };
 
   const handleCtaClick = (announcement: ClientAnnouncement) => {
-    void client.recordClick(announcement.id);
+    // Telemetry only: a rejected recordClick must never surface as an
+    // unhandled rejection (every client here throws on any non-2xx, and this
+    // is the one announcements call not already wrapped in a swallowed catch).
+    void client.recordClick(announcement.id).catch(() => {});
     const url = announcement.cta?.url;
     if (!url) return;
     // The server validates cta.url as either a rooted path or an https://
@@ -71,11 +75,28 @@ export function AnnouncementsUIProvider({ children }: { children: ReactNode }) {
     <AnnouncementsUIContext.Provider value={value}>
       {children}
       {modalAnnouncement && (
-        <AnnouncementModal
-          announcement={modalAnnouncement}
-          onDismiss={closeModal}
-          onCtaClick={handleCtaClick}
-        />
+        // The root Sentry.ErrorBoundary in main.tsx wraps the ENTIRE app, so
+        // an uncaught throw from AnnouncementModal/Markdown/this provider
+        // would replace the whole wallet UI until reload — for a decorative
+        // feature. Scoping a second, silent boundary to just the modal means
+        // a bad announcement body can only ever cost the modal, never the
+        // wallet underneath it. `fallback` is deliberately omitted rather
+        // than passed as `null` — `ErrorBoundaryProps['fallback']` types out
+        // `null`, but the component already renders null on error whenever
+        // `fallback` is falsy (see its own render()), so omitting it gets the
+        // same effect without fighting the type. Still reported to Sentry
+        // (tagged so it's filterable, and marked `handled` since this
+        // boundary is deliberate, unlike a crash the root one would catch).
+        <Sentry.ErrorBoundary
+          handled
+          beforeCapture={scope => scope.setTag('source', 'announcement-modal')}
+        >
+          <AnnouncementModal
+            announcement={modalAnnouncement}
+            onDismiss={closeModal}
+            onCtaClick={handleCtaClick}
+          />
+        </Sentry.ErrorBoundary>
       )}
     </AnnouncementsUIContext.Provider>
   );
