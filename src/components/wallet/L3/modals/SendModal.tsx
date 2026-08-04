@@ -480,7 +480,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
             <motion.div key="proc" className="flex-1 flex flex-col items-center justify-center text-center py-10">
               <Loader2 className="w-12 h-12 text-orange-500 animate-spin mx-auto mb-4" />
               <h3 className="text-neutral-900 dark:text-white font-medium text-lg">Sending Transaction...</h3>
-              <p className="text-neutral-500 text-sm mt-2">Processing proofs and broadcasting via Nostr</p>
+              <p className="text-neutral-500 text-sm mt-2">Certifying on Unicity and delivering to the recipient's mailbox</p>
             </motion.div>
           )}
 

@@ -367,7 +367,7 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
             <motion.div key="proc" className="flex-1 flex flex-col items-center justify-center text-center py-10">
               <Loader2 className="w-12 h-12 text-orange-500 animate-spin mx-auto mb-4" />
               <h3 className="text-neutral-900 dark:text-white font-medium text-lg">Sending Payment Request...</h3>
-              <p className="text-neutral-500 text-sm mt-2">Delivering request via Nostr</p>
+              <p className="text-neutral-500 text-sm mt-2">Delivering request</p>
             </motion.div>
           )}
 
