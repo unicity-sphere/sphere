@@ -23,7 +23,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@types/katex": "^0.16.7",
     "@unicitylabs/sphere-sdk": "0.13.1",
-    "@unicitylabs/sphere-ui": "file:../sphere-ui",
+    "@unicitylabs/sphere-ui": "^0.1.38",
     "framer-motion": "^12.23.24",
     "katex": "^0.16.27",
     "lucide-react": "^0.552.0",
