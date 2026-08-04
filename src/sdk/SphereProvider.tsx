@@ -574,6 +574,7 @@ export function SphereProvider({
           ({ sphere: instance } = await Sphere.init({
             ...browserProviders,
             network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
+            paymentsV2: true, // P9: run the wallet-api payments-v2 vertical (sphere.paymentsV2)
             ...(passwordRef.current ? { password: passwordRef.current } : {}),
             discoverAddresses: false, // Run separately below for UX
             onProgress: setInitProgress,
@@ -701,6 +702,7 @@ export function SphereProvider({
         const { sphere: instance, generatedMnemonic } = await Sphere.init({
           ...providers,
           network,
+          paymentsV2: true,
           autoGenerate: true,
           nametag: options?.nametag,
           password: options?.password,
@@ -784,6 +786,7 @@ export function SphereProvider({
       const instance = await Sphere.import({
         ...providers,
         network,
+        paymentsV2: true,
         mnemonic,
         nametag: options?.nametag,
         password: options?.password,
@@ -812,6 +815,7 @@ export function SphereProvider({
         const result = await Sphere.importFromLegacyFile({
           ...providers,
           network,
+          paymentsV2: true,
           fileContent: options.fileContent,
           fileName: options.fileName,
           password: options.password,
@@ -945,6 +949,7 @@ export function SphereProvider({
     const { sphere: instance } = await Sphere.init({
       ...providers,
       network,
+      paymentsV2: true,
       password,
       discoverAddresses: false,
     });

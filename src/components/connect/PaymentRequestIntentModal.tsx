@@ -50,17 +50,18 @@ export function PaymentRequestIntentModal({
   const displayAmount = formatAmount(amount, { decimals, symbol, maxFractionDigits: 8 });
 
   const handleSend = async () => {
-    if (!sphere) {
+    const paymentsV2 = sphere?.paymentsV2;
+    if (!paymentsV2) {
       onReject('Wallet not available');
       return;
     }
     setBusy(true);
     try {
       const recipient = to.startsWith('DIRECT://') ? to : `@${to.replace(/^@/, '')}`;
-      const result = await sphere.payments.sendPaymentRequest(recipient, {
+      const result = await paymentsV2.requests.create(recipient, {
         amount,
         coinId,
-        ...(message ? { message } : {}),
+        ...(message ? { memo: message } : {}),
       });
       if (!result.success) throw new Error(result.error || 'Failed to send payment request');
       onResolve(result.requestId || undefined);

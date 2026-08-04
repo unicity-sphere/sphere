@@ -4,16 +4,16 @@ import { HeaderTooltip } from './HeaderTooltip';
 
 /**
  * Header badge for the wallet-api session state (#351 / sphere-sdk#515 F3) and
- * the realtime wake-socket liveness (`realtime:status`).
+ * the wallet-api connection health (`connection:status`).
  *
  * Two distinct, ordered states (sign-in is the hard failure, takes priority):
  *  - session 'offline' — the SDK could not sign in, so server custody
  *    (inventory + mailbox) is unreachable even though the app booted. The
  *    2026-06-12 incident class: must be visible, never log-only.
- *  - signed-in but the wake socket is 'reconnecting'/'closed' — cross-session
+ *  - signed-in but the connection is 'degraded'/'offline' — cross-session
  *    updates won't arrive in realtime (they fall back to the slower poll
- *    backstop). A window can be signed-in while its wake socket is dead, so
- *    this liveness is surfaced separately from sign-in.
+ *    backstop). A window can be signed-in while its connection is degraded,
+ *    so this liveness is surfaced separately from sign-in.
  */
 export function WalletApiSessionIndicator() {
   const { walletApiEnabled } = useSphereContext();
@@ -40,9 +40,9 @@ export function WalletApiSessionIndicator() {
     );
   }
 
-  // Wake-socket degraded while signed-in: realtime updates are delayed (the
+  // Connection degraded while signed-in: realtime updates are delayed (the
   // poll backstop still keeps state correct), so this is a milder warning.
-  if (realtimeStatus === 'reconnecting' || realtimeStatus === 'closed') {
+  if (realtimeStatus === 'degraded' || realtimeStatus === 'offline') {
     return (
       <HeaderTooltip
         label="Realtime updates paused — reconnecting. Changes from other windows may be delayed."

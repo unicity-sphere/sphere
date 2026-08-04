@@ -24,8 +24,9 @@ export function useTokens(): UseTokensReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.tokens.list,
     queryFn: async () => {
-      if (!sphere) return [];
-      return sphere.payments.getTokens();
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) return [];
+      return paymentsV2.tokens();
     },
     enabled: !!sphere,
     staleTime: 30_000,

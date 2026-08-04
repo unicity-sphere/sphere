@@ -76,7 +76,8 @@ export function useTransfer(): UseTransferReturn {
 
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
-      if (!sphere) throw new Error('Wallet not initialized');
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) throw new Error('Wallet not initialized');
 
       // Subscription-key readiness gate: refuse the send until the live oracle
       // holds the per-wallet key, else it hits the aggregator unauthenticated
@@ -103,7 +104,7 @@ export function useTransfer(): UseTransferReturn {
       }
 
       try {
-        return await sphere.payments.send({
+        return await paymentsV2.send({
           coinId: params.coinId,
           amount: params.amount,
           recipient: params.recipient,
@@ -162,7 +163,7 @@ export function useTransfer(): UseTransferReturn {
     onSuccess: () => {
       // Force refetch all payment queries with fresh data.
       // Use refetchQueries (not invalidateQueries) to guarantee a new fetch
-      // even if a previous refetch from the transfer:confirmed event is in-flight.
+      // even if a previous refetch from the transfer:updated event is in-flight.
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.tokens.all });
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.balance.all });
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.assets.all });

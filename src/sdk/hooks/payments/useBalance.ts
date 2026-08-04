@@ -25,15 +25,16 @@ export function useBalance(coinId?: string): UseBalanceReturn {
       ? SPHERE_KEYS.payments.balance.byCoin(coinId)
       : SPHERE_KEYS.payments.balance.total,
     queryFn: async () => {
-      if (!sphere) return null;
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) return null;
 
       if (coinId) {
         // Get specific asset with price data
-        const assets = await sphere.payments.getAssets(coinId);
+        const assets = await paymentsV2.assets(coinId);
         return assets.length > 0 ? assets[0] : null;
       } else {
         // Get all assets and sum fiat values for total portfolio value
-        const assets = await sphere.payments.getAssets();
+        const assets = await paymentsV2.assets();
         const totalUsd = assets.reduce((sum, a) => sum + (a.fiatValueUsd ?? 0), 0);
         return totalUsd;
       }

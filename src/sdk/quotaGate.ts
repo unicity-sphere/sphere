@@ -1,7 +1,7 @@
 /**
  * Pre-send quota gate (spec §2, proactive path). A single choke point
  * (`useTransfer.ts` mutationFn, Task 3) calls `checkSendQuota()` right before
- * `sphere.payments.send` to decide whether the send should proceed, warn, or
+ * `sphere.paymentsV2.send` to decide whether the send should proceed, warn, or
  * be blocked — WITHOUT throwing itself. The caller owns the decision: it may
  * construct/throw `QuotaBlockedError` on a `'block'` verdict, show a
  * non-blocking banner on `'warn'`, or do nothing on `'allow'`.
