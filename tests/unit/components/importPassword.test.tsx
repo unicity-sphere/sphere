@@ -182,12 +182,20 @@ describe('encrypted file import auto-applies its decrypt password (#449 Task C)'
     fireEvent.change(input, { target: { files: [file] } });
 
     // Encrypted detection happens after the async file read — wait for the
-    // selected-file UI (and its "Import" button) to appear.
-    await waitFor(() => expect(screen.getByRole('button', { name: /^import$/i })).toBeDefined());
+    // selected-file UI (and its "Import" button) to appear. Same 3s deadline
+    // as this file's other animated-screen waits: the 1s waitFor default
+    // flaked at 1079ms on a loaded CI runner (PR #470 run 30903923228).
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: /^import$/i })).toBeDefined(),
+      { timeout: 3000 },
+    );
     fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
 
     // Encrypted → password prompt (no importFromFile call yet).
-    await waitFor(() => expect(screen.getByText(/enter password/i)).toBeDefined());
+    await waitFor(
+      () => expect(screen.getByText(/enter password/i)).toBeDefined(),
+      { timeout: 3000 },
+    );
     expect(ctx.importFromFile).not.toHaveBeenCalled();
   }
 
