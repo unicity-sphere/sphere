@@ -25,6 +25,8 @@ export { useTopUp } from './payments/useTopUp';
 export type { UseTopUpReturn, TopUpResult } from './payments/useTopUp';
 export { useTransactionHistory } from './payments/useTransactionHistory';
 export type { UseTransactionHistoryReturn } from './payments/useTransactionHistory';
+export { usePendingTransfers, PENDING_TRANSFERS_POLL_MS } from './payments/usePendingTransfers';
+export type { UsePendingTransfersReturn } from './payments/usePendingTransfers';
 
 // Communications
 export { useSendDM } from './comms/useSendDM';

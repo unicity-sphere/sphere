@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
 import { WalletApiSessionIndicator } from './WalletApiSessionIndicator';
+import { PendingTransfersIndicator } from './PendingTransfersIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
 
@@ -152,8 +153,9 @@ export function Header() {
                 </div>
               )}
 
-              {/* Desktop: wallet-api session status (S4). */}
+              {/* Desktop: pending-transfer convergence + wallet-api session status (S4). */}
               <div className="hidden lg:flex items-center gap-3">
+                <PendingTransfersIndicator />
                 <WalletApiSessionIndicator />
                 {/* <ThemeToggle /> */}
               </div>
@@ -234,7 +236,8 @@ export function Header() {
             ))}
 
             {/* Custody status + Social links — mobile only */}
-            <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
+            <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center gap-2">
+              <PendingTransfersIndicator />
               <WalletApiSessionIndicator />
               <div className="flex-1" />
               <div className="flex items-center gap-5">

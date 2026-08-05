@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getErrorCode, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
+import { getErrorCode, getKeepOpenTransferId, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
@@ -151,11 +151,21 @@ export function useTransfer(): UseTransferReturn {
         // delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a fresh send()
         // would consume a DIFFERENT source and double-pay the recipient. (See the single
         // PENDING_COMMIT_CODES definition in ../../errors — shared with the pay path.)
-        // `id` is intentionally empty: these errors carry no transferId (the still-open
-        // intent + resume own it) and no send UI reads result.id on this path — it exists
-        // only to render the "pending" state.
+        // `id` carries the keep-open transferId the SDK stamps on possibly-committed
+        // errors (#441) — sphere-sdk 0.14 converges that SAME transfer in-session and
+        // emits transfer:updated with it, so the send UI can clear its "network busy"
+        // pending copy when convergence lands. Empty when the error carries none.
+        // The synthetic `status: 'pending'` is the keep-open discriminator
+        // (isKeepOpenPendingResult) — a real #621 delivery-deferred success keeps its
+        // SDK-produced status.
         if (isPendingCommitCode(e)) {
-          return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
+          return {
+            id: getKeepOpenTransferId(e),
+            status: 'pending',
+            tokens: [],
+            tokenTransfers: [],
+            deliveryPending: true,
+          };
         }
         throw e;
       }

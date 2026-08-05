@@ -116,8 +116,10 @@ export function ConnectIntentHandler() {
         memo={params.memo as string | undefined}
         // #433: additive result fields so the dApp can distinguish "delivered"
         // from "certified on-chain, delivery journaled for retry" and correlate
-        // the send with wallet history. transferId is omitted on the synthetic
-        // pending results (#631/#665) — those carry an empty id by design.
+        // the send with wallet history. On the synthetic keep-open pending
+        // results (#631/#665) `id` carries the #441-stamped keep-open
+        // transferId (sphere-sdk 0.14 converges that SAME transfer
+        // in-session); it is omitted only when the error carried none.
         onResolve={(result) =>
           resolveIntent(intentId, {
             success: true,
