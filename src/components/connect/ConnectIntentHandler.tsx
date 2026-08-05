@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getPayments } from '../../sdk/payments';
 import { MessageSquare, PenLine, Coins, Inbox } from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
@@ -309,8 +310,8 @@ export function ConnectIntentHandler() {
 
     const handleMint = async () => {
       setMintError(null);
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) {
+      const payments = getPayments(sphere);
+      if (!payments) {
         setMintError('Wallet not available');
         return;
       }
@@ -339,7 +340,7 @@ export function ConnectIntentHandler() {
 
       setIsMinting(true);
       try {
-        const result = await paymentsV2.mint(coinId, amountBig);
+        const result = await payments.mint(coinId, amountBig);
         if (result.success) {
           resolveIntent(intentId, { tokenId: result.tokenId, coinId, amount });
         } else {
@@ -415,14 +416,14 @@ export function ConnectIntentHandler() {
   if (action === 'receive') {
     const handleReceive = async () => {
       setReceiveError(null);
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) {
+      const payments = getPayments(sphere);
+      if (!payments) {
         setReceiveError('Wallet not available');
         return;
       }
       setIsReceiving(true);
       try {
-        const { transfers } = await paymentsV2.receive();
+        const { transfers } = await payments.receive();
         resolveIntent(intentId, { transfers });
       } catch (err) {
         setReceiveError(getErrorMessage(err));

@@ -4,7 +4,7 @@ import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 import { PendingTransfersIndicator } from '../../../src/components/layout/PendingTransfersIndicator';
 
 // ============================================================================
-// Fake sphere: the paymentsV2 surface the chip (via usePendingTransfers) may
+// Fake sphere: the payments surface the chip (via usePendingTransfers) may
 // use. `send` exists ONLY to prove the retry button never reaches it — the
 // button must call resumeNow() (same-transfer convergence), never a re-send.
 // ============================================================================
@@ -34,7 +34,7 @@ function makeFakeSphere(initial: PendingTransfer[] = []) {
     off: (evt: string, fn: (data: unknown) => void) => {
       listeners.get(evt)?.delete(fn);
     },
-    paymentsV2: {
+    payments: {
       pendingTransfers: vi.fn(async () => rows.map((r) => ({ ...r }))),
       resumeNow: vi.fn(async () => {}),
       send: vi.fn(),
@@ -87,7 +87,7 @@ describe('PendingTransfersIndicator', () => {
     expect(screen.getByText(/will complete automatically/)).toBeTruthy();
   });
 
-  it('"Retry now" calls paymentsV2.resumeNow() — NEVER send() (a re-send would double-pay)', async () => {
+  it('"Retry now" calls payments.resumeNow() — NEVER send() (a re-send would double-pay)', async () => {
     fakeSphere = makeFakeSphere([makeRow('t1')]);
     render(<PendingTransfersIndicator />);
 
@@ -96,8 +96,8 @@ describe('PendingTransfersIndicator', () => {
       fireEvent.click(screen.getByText('Retry now'));
     });
 
-    expect(fakeSphere.paymentsV2.resumeNow).toHaveBeenCalledTimes(1);
-    expect(fakeSphere.paymentsV2.send).not.toHaveBeenCalled();
+    expect(fakeSphere.payments.resumeNow).toHaveBeenCalledTimes(1);
+    expect(fakeSphere.payments.send).not.toHaveBeenCalled();
   });
 
   it('disappears when convergence empties the list (transfer:updated refresh)', async () => {

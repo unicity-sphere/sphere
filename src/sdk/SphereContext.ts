@@ -1,17 +1,18 @@
 import { createContext } from 'react';
 import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
-import type { WalletApiProviderExtras } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+import type { WalletApiTransportConfig } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import type { AutoLockValue } from './walletLock/lockSettings';
 
 /**
- * The app's provider bundle: the browser base, plus — when the asset path
- * rides wallet-api (VITE_WALLET_API_URL set) — the S4 extras (`delivery`,
- * `walletApi`). The extras are additive: helpers taking `BrowserProviders`
- * keep working unchanged.
+ * The app's provider bundle: the browser base, plus — when the money path
+ * rides wallet-api (VITE_WALLET_API_URL set) — the plain `walletApi`
+ * transport CONFIG (post-flip: createWalletApiProviders attaches config, not
+ * a client; the session lifecycle is SDK-internal). The extra is additive:
+ * helpers taking `BrowserProviders` keep working unchanged.
  */
-export type SphereAppProviders = BrowserProviders & Partial<WalletApiProviderExtras>;
+export type SphereAppProviders = BrowserProviders & { walletApi?: WalletApiTransportConfig };
 
 export interface SphereContextValue {
   sphere: Sphere | null;

@@ -46,8 +46,6 @@ vi.mock('@unicitylabs/sphere-sdk/impl/browser', async (importOriginal) => {
         setIdentity: vi.fn(async () => {}),
       },
       oracle: {},
-      tokenStorage: { disconnect: vi.fn(async () => {}) },
-      ipfsTokenStorage: undefined,
       groupChat: true,
       market: true,
     })),

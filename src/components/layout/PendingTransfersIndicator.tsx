@@ -30,12 +30,12 @@ function formatPendingAmount(row: PendingTransfer): string {
 
 /**
  * Compact header chip for in-flight (keep-open / shortfall) outgoing
- * transfers — `paymentsV2.pendingTransfers()` via usePendingTransfers, so
+ * transfers — `payments.pendingTransfers()` via usePendingTransfers, so
  * transfers still converging across a close/reopen are visible immediately at
  * mount. Hidden entirely while the list is empty. Expands to a small list
  * (amount, recipient, certified/total legs, age) with a "Retry now" action.
  *
- * MONEY-SAFETY: "Retry now" calls paymentsV2.resumeNow() — the SDK converges
+ * MONEY-SAFETY: "Retry now" calls payments.resumeNow() — the SDK converges
  * the SAME transferIds. It must never trigger send() (double-pay).
  */
 export function PendingTransfersIndicator() {

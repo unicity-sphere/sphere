@@ -13,8 +13,6 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
     StorageProvider,
     TransportProvider,
     OracleProvider,
-    TokenStorageProvider,
-    TxfStorageDataBase,
     PriceProvider,
   } from '@unicitylabs/sphere-sdk';
 
@@ -33,7 +31,6 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
     storage: StorageProvider;
     transport: TransportProvider;
     oracle: OracleProvider;
-    tokenStorage: TokenStorageProvider<TxfStorageDataBase>;
     l1?: Record<string, unknown>;
     price?: PriceProvider;
     groupChat?: Record<string, unknown> | boolean;

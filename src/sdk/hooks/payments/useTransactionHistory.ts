@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import type { TransactionHistoryEntry } from '@unicitylabs/sphere-sdk';
 
 /**
- * paymentsV2.history() is PAGED (newest-first keyset pages). Fetch one
+ * payments.history() is PAGED (newest-first keyset pages). Fetch one
  * generous first page so the hook keeps serving the modal's windowed
  * infinite-scroll UX; wiring the modal to real server pagination
  * (cursor/more) is a follow-up.
@@ -24,9 +25,9 @@ export function useTransactionHistory(): UseTransactionHistoryReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.transactions.history,
     queryFn: async (): Promise<TransactionHistoryEntry[]> => {
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) return [];
-      const page = await paymentsV2.history({ limit: HISTORY_PAGE_LIMIT });
+      const payments = getPayments(sphere);
+      if (!payments) return [];
+      const page = await payments.history({ limit: HISTORY_PAGE_LIMIT });
       // Bridge v2 HistoryEntry → the legacy TransactionHistoryEntry shape the
       // consumers were built against (dedupKey/symbol are required there; the
       // v2 per-coin breakdown carries no per-token source).

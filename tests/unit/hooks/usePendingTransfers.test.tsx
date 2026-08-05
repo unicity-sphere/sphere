@@ -7,7 +7,7 @@ import {
 } from '../../../src/sdk/hooks/payments/usePendingTransfers';
 
 // ============================================================================
-// Fake sphere: exactly the paymentsV2 surface the hook may use —
+// Fake sphere: exactly the payments surface the hook may use —
 // pendingTransfers() + resumeNow(). A `send` spy is present ONLY to prove the
 // hook's retry path never touches it (re-sending double-pays; the SDK
 // converges the SAME transfer via resumeNow).
@@ -39,7 +39,7 @@ function makeFakeSphere(initial: PendingTransfer[] = []) {
     off: (evt: string, fn: (data: unknown) => void) => {
       listeners.get(evt)?.delete(fn);
     },
-    paymentsV2: {
+    payments: {
       pendingTransfers: vi.fn(async () => rows.map((r) => ({ ...r }))),
       resumeNow: vi.fn(async () => {}),
       send: vi.fn(),
@@ -71,14 +71,14 @@ afterEach(() => {
 });
 
 describe('usePendingTransfers', () => {
-  it('seeds from paymentsV2.pendingTransfers() at mount — transfers pending across a close/reopen are visible immediately', async () => {
+  it('seeds from payments.pendingTransfers() at mount — transfers pending across a close/reopen are visible immediately', async () => {
     fakeSphere = makeFakeSphere([makeRow('t1'), makeRow('t2', { kind: 'shortfall' })]);
     const { result } = renderHook(() => usePendingTransfers());
 
     await waitFor(() => expect(result.current.pending).toHaveLength(2));
     expect(result.current.pending[0].transferId).toBe('t1');
     expect(result.current.pending[1].kind).toBe('shortfall');
-    expect(fakeSphere.paymentsV2.pendingTransfers).toHaveBeenCalledTimes(1);
+    expect(fakeSphere.payments.pendingTransfers).toHaveBeenCalledTimes(1);
   });
 
   it('is empty (and stays empty) without a sphere', () => {
@@ -124,12 +124,12 @@ describe('usePendingTransfers', () => {
       await vi.advanceTimersByTimeAsync(0); // flush the mount read
     });
     expect(result.current.pending).toHaveLength(1);
-    const callsAfterMount = fakeSphere.paymentsV2.pendingTransfers.mock.calls.length;
+    const callsAfterMount = fakeSphere.payments.pendingTransfers.mock.calls.length;
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PENDING_TRANSFERS_POLL_MS);
     });
-    expect(fakeSphere.paymentsV2.pendingTransfers.mock.calls.length).toBe(callsAfterMount + 1);
+    expect(fakeSphere.payments.pendingTransfers.mock.calls.length).toBe(callsAfterMount + 1);
 
     // Poll picks up an emptied list…
     fakeSphere._setRows([]);
@@ -148,15 +148,15 @@ describe('usePendingTransfers', () => {
       await vi.advanceTimersByTimeAsync(0); // flush the mount read
     });
     expect(result.current.pending).toHaveLength(0);
-    const callsAfterMount = fakeSphere.paymentsV2.pendingTransfers.mock.calls.length;
+    const callsAfterMount = fakeSphere.payments.pendingTransfers.mock.calls.length;
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PENDING_TRANSFERS_POLL_MS * 4);
     });
-    expect(fakeSphere.paymentsV2.pendingTransfers.mock.calls.length).toBe(callsAfterMount);
+    expect(fakeSphere.payments.pendingTransfers.mock.calls.length).toBe(callsAfterMount);
   });
 
-  it('resumeNow() calls paymentsV2.resumeNow — and NEVER send (re-sending double-pays)', async () => {
+  it('resumeNow() calls payments.resumeNow — and NEVER send (re-sending double-pays)', async () => {
     fakeSphere = makeFakeSphere([makeRow('t1')]);
     const { result } = renderHook(() => usePendingTransfers());
     await waitFor(() => expect(result.current.pending).toHaveLength(1));
@@ -165,8 +165,8 @@ describe('usePendingTransfers', () => {
       await result.current.resumeNow();
     });
 
-    expect(fakeSphere.paymentsV2.resumeNow).toHaveBeenCalledTimes(1);
-    expect(fakeSphere.paymentsV2.send).not.toHaveBeenCalled();
+    expect(fakeSphere.payments.resumeNow).toHaveBeenCalledTimes(1);
+    expect(fakeSphere.payments.send).not.toHaveBeenCalled();
   });
 
   it('resumeNow() refreshes the list afterwards (converged rows disappear without waiting for an event)', async () => {
@@ -174,7 +174,7 @@ describe('usePendingTransfers', () => {
     const { result } = renderHook(() => usePendingTransfers());
     await waitFor(() => expect(result.current.pending).toHaveLength(1));
 
-    fakeSphere.paymentsV2.resumeNow.mockImplementationOnce(async () => {
+    fakeSphere.payments.resumeNow.mockImplementationOnce(async () => {
       fakeSphere!._setRows([]);
     });
     await act(async () => {
@@ -189,14 +189,14 @@ describe('usePendingTransfers', () => {
     const { result } = renderHook(() => usePendingTransfers());
     await waitFor(() => expect(result.current.pending).toHaveLength(1));
 
-    fakeSphere.paymentsV2.pendingTransfers.mockRejectedValueOnce(new Error('offline'));
+    fakeSphere.payments.pendingTransfers.mockRejectedValueOnce(new Error('offline'));
     act(() => {
       fakeSphere!._emit('transfer:updated', { id: 'x', status: 'failed' });
     });
 
     // The refresh failed — the row is still shown.
     await waitFor(() =>
-      expect(fakeSphere!.paymentsV2.pendingTransfers.mock.calls.length).toBeGreaterThan(1),
+      expect(fakeSphere!.payments.pendingTransfers.mock.calls.length).toBeGreaterThan(1),
     );
     expect(result.current.pending).toHaveLength(1);
   });

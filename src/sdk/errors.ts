@@ -124,7 +124,7 @@ export function getKeepOpenTransferId(err: unknown): string {
  * in-session (sphere-sdk 0.14 auto-retry) or via resumeNow()" from an ordinary
  * certified-but-delivery-deferred success (#621: a real result, status
  * confirmed/delivered, deliveryPending true). Any retry affordance keyed off
- * this MUST call paymentsV2.resumeNow(), NEVER send() (double-pay).
+ * this MUST call payments.resumeNow(), NEVER send() (double-pay).
  */
 export function isKeepOpenPendingResult(
   result: Pick<TransferResult, 'status' | 'deliveryPending'>,

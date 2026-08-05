@@ -122,9 +122,9 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
  * Compose the app's provider bundle (S4): the browser base, an optional
  * engine-port override (LOCAL dev stack: mock aggregator + the trustbase it
  * serves), and — when VITE_WALLET_API_URL is set — the wallet-api preset:
- * thin server-custody token storage + mailbox delivery + the S1 client.
- * Composing `delivery` moves ASSETS to wallet-api; messaging, group chat and
- * nametags stay on the Nostr transport in the base bundle.
+ * the plain `walletApi` transport config the SDK's payments vertical is
+ * composed from (server custody + mailbox delivery ride it); messaging,
+ * group chat and nametags stay on the Nostr transport in the base bundle.
  *
  * Fail-closed (#351): on builds with VITE_REQUIRE_WALLET_API set,
  * getWalletApiBaseUrl() throws when VITE_WALLET_API_URL is missing — the
@@ -159,26 +159,22 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
 
   const walletApiBaseUrl = getWalletApiBaseUrl();
   if (!walletApiBaseUrl) return withEngine;
+  // Post-flip (sdk 0.14.1): createWalletApiProviders attaches a plain
+  // `walletApi` transport CONFIG (WalletApiTransportConfig) — the session,
+  // retries and timeouts are composed inside the SDK's payments vertical.
+  // The old S1 client options (requestTimeoutMs/retry) no longer exist here.
   return createWalletApiProviders(withEngine, {
     baseUrl: walletApiBaseUrl,
     network,
     deviceId: getOrCreateWalletApiDeviceId(),
-    // Robustness for slow/unstable connections: the SDK default request
-    // timeout is 30s, which prematurely aborts a slow-but-completing send
-    // write (POST /v1/inventory/apply) and hard-fails the send. Give slow
-    // links room to finish; and harden the read/sync + 429 retry path
-    // (writes stay single-attempt in the SDK for double-apply safety).
-    requestTimeoutMs: 45000,
-    retry: { maxAttempts: 5, capMs: 15000 },
   });
 }
 
 /** Clean up persisted wallet data on creation/import failure */
 async function cleanupOnError(providers: BrowserProviders): Promise<void> {
-  const clearDone = Sphere.clear({
-    storage: providers.storage,
-    tokenStorage: providers.tokenStorage,
-  });
+  // Post-flip: tokens are server-custody — Sphere.clear takes { storage } only
+  // (it also wipes the pv2:* scoped KV and sweeps orphaned pre-flip token DBs).
+  const clearDone = Sphere.clear({ storage: providers.storage });
   await Promise.race([clearDone, new Promise(r => setTimeout(r, 3000))]);
 }
 
@@ -574,7 +570,6 @@ export function SphereProvider({
           ({ sphere: instance } = await Sphere.init({
             ...browserProviders,
             network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
-            paymentsV2: true, // P9: run the wallet-api payments-v2 vertical (sphere.paymentsV2)
             ...(passwordRef.current ? { password: passwordRef.current } : {}),
             discoverAddresses: false, // Run separately below for UX
             onProgress: setInitProgress,
@@ -702,7 +697,6 @@ export function SphereProvider({
         const { sphere: instance, generatedMnemonic } = await Sphere.init({
           ...providers,
           network,
-          paymentsV2: true,
           autoGenerate: true,
           nametag: options?.nametag,
           password: options?.password,
@@ -786,7 +780,6 @@ export function SphereProvider({
       const instance = await Sphere.import({
         ...providers,
         network,
-        paymentsV2: true,
         mnemonic,
         nametag: options?.nametag,
         password: options?.password,
@@ -815,7 +808,6 @@ export function SphereProvider({
         const result = await Sphere.importFromLegacyFile({
           ...providers,
           network,
-          paymentsV2: true,
           fileContent: options.fileContent,
           fileName: options.fileName,
           password: options.password,
@@ -858,14 +850,12 @@ export function SphereProvider({
     // The remembered unlock belongs to a wallet that no longer exists.
     void clearPersistedUnlock();
 
-    // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
-    // calls walletApi.logout() on address switch, not on destroy — without
-    // this the server session row would outlive wallet deletion.
-    if (providers?.walletApi) {
-      await providers.walletApi.logout().catch((err) => {
-        logger.warn('SphereProvider', 'wallet-api logout failed (best effort)', err);
-      });
-    }
+    // wallet-api sign-out is SDK-internal post-flip (sdk 0.14.1): the old S1
+    // WalletApiClient (providers.walletApi.logout()) is deleted — providers.
+    // walletApi is now a plain transport CONFIG. The session lifecycle lives
+    // inside the payments vertical: sphere.destroy() below stops it
+    // (FacadeSession.stop), and Sphere.clear() wipes the pv2:* scoped KV that
+    // holds the refresh token, so no reusable credential outlives deletion.
 
     // Destroy sphere to close SDK connections (Nostr, IndexedDB handles, etc.)
     if (sphereRef.current) {
@@ -877,15 +867,11 @@ export function SphereProvider({
     // Sphere.clear() handles reconnecting storage internally, so we just
     // disconnect first to release stale handles.
     if (providers) {
-      await Promise.allSettled([
-        providers.storage.disconnect(),
-        providers.tokenStorage.disconnect(),
-      ]);
+      await providers.storage.disconnect().catch(() => {});
       try {
-        await Sphere.clear({
-          storage: providers.storage,
-          tokenStorage: providers.tokenStorage,
-        });
+        // Post-flip: { storage } only — also wipes the pv2:* scoped KV and
+        // sweeps orphaned pre-flip sphere-token-storage-* databases.
+        await Sphere.clear({ storage: providers.storage });
       } catch (err) {
         logger.warn('SphereProvider', 'Sphere.clear() failed, sweeping IndexedDB directly', err);
       }
@@ -949,7 +935,6 @@ export function SphereProvider({
     const { sphere: instance } = await Sphere.init({
       ...providers,
       network,
-      paymentsV2: true,
       password,
       discoverAddresses: false,
     });

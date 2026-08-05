@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import type { Asset } from '../..';
@@ -25,16 +26,16 @@ export function useBalance(coinId?: string): UseBalanceReturn {
       ? SPHERE_KEYS.payments.balance.byCoin(coinId)
       : SPHERE_KEYS.payments.balance.total,
     queryFn: async () => {
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) return null;
+      const payments = getPayments(sphere);
+      if (!payments) return null;
 
       if (coinId) {
         // Get specific asset with price data
-        const assets = await paymentsV2.assets(coinId);
+        const assets = await payments.assets(coinId);
         return assets.length > 0 ? assets[0] : null;
       } else {
         // Get all assets and sum fiat values for total portfolio value
-        const assets = await paymentsV2.assets();
+        const assets = await payments.assets();
         const totalUsd = assets.reduce((sum, a) => sum + (a.fiatValueUsd ?? 0), 0);
         return totalUsd;
       }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getPayments } from '../../sdk/payments';
 import { Receipt } from 'lucide-react';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../sdk';
@@ -50,15 +51,15 @@ export function PaymentRequestIntentModal({
   const displayAmount = formatAmount(amount, { decimals, symbol, maxFractionDigits: 8 });
 
   const handleSend = async () => {
-    const paymentsV2 = sphere?.paymentsV2;
-    if (!paymentsV2) {
+    const payments = getPayments(sphere);
+    if (!payments) {
       onReject('Wallet not available');
       return;
     }
     setBusy(true);
     try {
       const recipient = to.startsWith('DIRECT://') ? to : `@${to.replace(/^@/, '')}`;
-      const result = await paymentsV2.requests.create(recipient, {
+      const result = await payments.requests.create(recipient, {
         amount,
         coinId,
         ...(message ? { memo: message } : {}),

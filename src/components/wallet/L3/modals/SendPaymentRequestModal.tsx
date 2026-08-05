@@ -156,7 +156,7 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
       const amount = parseTokenAmount(amountInput, selectedCoin.decimals).toString();
       const recipientStr = recipientMode === 'nametag' ? `@${recipient}` : recipient;
 
-      const result = await sphere!.paymentsV2!.requests.create(recipientStr, {
+      const result = await sphere!.payments!.requests.create(recipientStr, {
         amount,
         coinId: selectedCoin.coinId,
         ...(messageInput ? { memo: messageInput } : {}),

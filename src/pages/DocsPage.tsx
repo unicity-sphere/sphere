@@ -102,12 +102,12 @@ const navigation: NavItem[] = [
     id: 'api-payments',
     label: 'Payments (L3)',
     children: [
-      { id: 'api-payments-send', label: 'paymentsV2.send()' },
-      { id: 'api-payments-getbalance', label: 'paymentsV2.assets()' },
-      { id: 'api-payments-getassets', label: 'paymentsV2.mint()' },
-      { id: 'api-payments-gettokens', label: 'paymentsV2.tokens()' },
-      { id: 'api-payments-gethistory', label: 'paymentsV2.history()' },
-      { id: 'api-payments-receive', label: 'paymentsV2.receive()' },
+      { id: 'api-payments-send', label: 'payments.send()' },
+      { id: 'api-payments-getbalance', label: 'payments.assets()' },
+      { id: 'api-payments-getassets', label: 'payments.mint()' },
+      { id: 'api-payments-gettokens', label: 'payments.tokens()' },
+      { id: 'api-payments-gethistory', label: 'payments.history()' },
+      { id: 'api-payments-receive', label: 'payments.receive()' },
       { id: 'api-payments-request', label: 'Payment Requests' },
     ],
   },
@@ -411,7 +411,6 @@ const providers = createBrowserProviders({ network: 'testnet' });
 // 2. Initialize (auto-loads existing wallet or creates new one)
 const { sphere, created, generatedMnemonic } = await Sphere.init({
   ...providers,
-  paymentsV2: true,   // payments-v2 vertical (sphere.paymentsV2)
   autoGenerate: true, // auto-generate mnemonic if no wallet exists
 });
 
@@ -424,7 +423,7 @@ console.log('Nametag:', sphere.getNametag());
 console.log('Identity:', sphere.identity);
 
 // 4. Send tokens
-await sphere.paymentsV2.send({
+await sphere.payments.send({
   coinId: '0x...',
   amount: '100000000',
   recipient: '@alice',
@@ -457,7 +456,7 @@ const providers = createBrowserProviders({
   market: true,                 // enable intent bulletin board
 });
 
-// providers contains: storage, transport, oracle, tokenStorage,
+// providers contains: storage, transport, oracle,
 // groupChat, market`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
@@ -533,7 +532,7 @@ await sphere.registerNametag('alice');
 console.log(sphere.getNametag()); // '@alice'
 
 // Use nametags when sending tokens
-await sphere.paymentsV2.send({
+await sphere.payments.send({
   coinId: '0x...',
   amount: '100',
   recipient: '@alice', // resolved automatically
@@ -558,13 +557,13 @@ console.log(peer?.directAddress);`}
               </ul>
               <CodeBlock
                 code={`// Get individual tokens
-const tokens = sphere.paymentsV2.tokens();
+const tokens = sphere.payments.tokens();
 tokens.forEach(t => {
   console.log(t.id, t.coinId, t.amount, t.status);
 });
 
 // Get aggregated balance per coin type
-const assets = await sphere.paymentsV2.assets();
+const assets = await sphere.payments.assets();
 assets.forEach(a => {
   console.log(a.symbol, a.totalAmount, a.tokenCount);
 });`}
@@ -848,13 +847,13 @@ await sphere.destroy();`}
               API Reference &mdash; Payments (L3)
             </h2>
             <p className="text-neutral-600 dark:text-neutral-400 mb-8">
-              All L3 payment operations are accessed via <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2</code> (enable
-              with <code className="text-amber-600 dark:text-amber-400">paymentsV2: true</code> in <code className="text-amber-600 dark:text-amber-400">Sphere.init</code>).
+              All L3 payment operations are accessed via <code className="text-amber-600 dark:text-amber-400">sphere.payments</code> — available
+              on every wallet initialized with <code className="text-amber-600 dark:text-amber-400">Sphere.init</code>.
             </p>
 
             <div id="api-payments-send" data-section="api-payments-send" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.send(request)</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.send(request)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Sends tokens to a recipient. Supports @nametags and direct addresses.
@@ -886,7 +885,7 @@ await sphere.destroy();`}
               <h4 className="font-medium text-lg mt-6 mb-3">Example</h4>
               <CodeBlock
                 filename="send.ts"
-                code={`const result = await sphere.paymentsV2.send({
+                code={`const result = await sphere.payments.send({
   coinId: '0x...',
   amount: '100000000',
   recipient: '@merchant',
@@ -900,7 +899,7 @@ console.log('Status:', result.status);`}
 
             <div id="api-payments-getbalance" data-section="api-payments-getbalance" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.assets(coinId?)</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.assets(coinId?)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Returns aggregated balance per coin type, with fiat prices from the price provider. Async.
@@ -920,18 +919,18 @@ console.log('Status:', result.status);`}
               <CodeBlock
                 filename="balance.ts"
                 code={`// All assets
-const assets = await sphere.paymentsV2.assets();
+const assets = await sphere.payments.assets();
 assets.forEach(a => console.log(\`\${a.symbol}: \${a.totalAmount} ($\${a.fiatValueUsd})\`));
 
 // Specific coin
-const [asset] = await sphere.paymentsV2.assets('0x...');
+const [asset] = await sphere.payments.assets('0x...');
 console.log('Balance:', asset?.totalAmount);`}
               />
             </div>
 
             <div id="api-payments-getassets" data-section="api-payments-getassets" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.mint(coinId, amount)</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.mint(coinId, amount)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Self-mints fungible tokens to this wallet (testnet top-up — no faucet).
@@ -939,7 +938,7 @@ console.log('Balance:', asset?.totalAmount);`}
               <CodeBlock code={`async mint(coinId: string, amount: bigint): Promise<MintResult>`} />
               <CodeBlock
                 filename="mint.ts"
-                code={`const result = await sphere.paymentsV2.mint('0x...', 100000000n);
+                code={`const result = await sphere.payments.mint('0x...', 100000000n);
 if (result.success) {
   console.log('Minted token:', result.tokenId);
 }`}
@@ -948,7 +947,7 @@ if (result.success) {
 
             <div id="api-payments-gettokens" data-section="api-payments-gettokens" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.tokens(filter?)</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.tokens(filter?)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Returns individual token objects. Optionally filter by coin ID. Synchronous.
@@ -957,10 +956,10 @@ if (result.success) {
               <CodeBlock
                 filename="tokens.ts"
                 code={`// All tokens
-const tokens = sphere.paymentsV2.tokens();
+const tokens = sphere.payments.tokens();
 
 // Only tokens for a specific coin
-const filtered = sphere.paymentsV2.tokens({ coinId: '0x...' });
+const filtered = sphere.payments.tokens({ coinId: '0x...' });
 
 tokens.forEach(t => {
   console.log(t.id, t.coinId, t.amount, t.status);
@@ -970,7 +969,7 @@ tokens.forEach(t => {
 
             <div id="api-payments-gethistory" data-section="api-payments-gethistory" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.history(page?)</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.history(page?)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Returns the L3 transaction history, newest-first, in cursor pages.
@@ -978,7 +977,7 @@ tokens.forEach(t => {
               <CodeBlock code={`async history(page?: { before?: string; limit?: number }): Promise<HistoryPage>`} />
               <CodeBlock
                 filename="history.ts"
-                code={`const { entries, more, cursor } = await sphere.paymentsV2.history({ limit: 50 });
+                code={`const { entries, more, cursor } = await sphere.payments.history({ limit: 50 });
 entries.forEach(tx => {
   console.log(tx.type, tx.amount, tx.timestamp); // timestamp: epoch ms
   // type: 'SENT' | 'RECEIVED' | 'MINT'
@@ -986,14 +985,14 @@ entries.forEach(tx => {
 
 // Older entries
 if (more && cursor) {
-  const nextPage = await sphere.paymentsV2.history({ before: cursor, limit: 50 });
+  const nextPage = await sphere.payments.history({ before: cursor, limit: 50 });
 }`}
               />
             </div>
 
             <div id="api-payments-receive" data-section="api-payments-receive" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
-                <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.receive()</code>
+                <code className="text-amber-600 dark:text-amber-400">sphere.payments.receive()</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Explicitly checks for and processes incoming token transfers.
@@ -1002,7 +1001,7 @@ if (more && cursor) {
               <CodeBlock
                 filename="receive.ts"
                 code={`// Check for incoming transfers
-const { transfers } = await sphere.paymentsV2.receive();
+const { transfers } = await sphere.payments.receive();
 console.log('Received:', transfers.length, 'transfers');
 transfers.forEach(transfer => {
   console.log('Incoming:', transfer.tokens);
@@ -1015,12 +1014,12 @@ transfers.forEach(transfer => {
                 <code className="text-amber-600 dark:text-amber-400">Payment Requests</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Request payments from others and manage incoming requests via <code className="text-amber-600 dark:text-amber-400">sphere.paymentsV2.requests</code>.
+                Request payments from others and manage incoming requests via <code className="text-amber-600 dark:text-amber-400">sphere.payments.requests</code>.
               </p>
               <CodeBlock
                 filename="payment-requests.ts"
                 code={`// Send a payment request to someone
-await sphere.paymentsV2.requests.create('@buyer', {
+await sphere.payments.requests.create('@buyer', {
   amount: '50000000',
   coinId: '0x...',
   memo: 'Invoice #456',
@@ -1032,17 +1031,17 @@ sphere.on('payment_request:incoming', (request) => {
 });
 
 // List requests (filter by status as needed)
-const pending = sphere.paymentsV2.requests.list()
+const pending = sphere.payments.requests.list()
   .filter(r => r.status === 'pending');
 
 // Pay a request
-await sphere.paymentsV2.requests.pay(requestId);
+await sphere.payments.requests.pay(requestId);
 
 // Or decline
-await sphere.paymentsV2.requests.decline(requestId);
+await sphere.payments.requests.decline(requestId);
 
 // Clear processed (paid/declined/expired) requests from the list
-sphere.paymentsV2.requests.dismissProcessed();`}
+sphere.payments.requests.dismissProcessed();`}
               />
             </div>
           </section>
@@ -1568,7 +1567,7 @@ sphere.communications.onDirectMessage(async (msg) => {
 
   if (data.type === 'accepted') {
     // Seller accepted - send payment
-    await sphere.paymentsV2.send({
+    await sphere.payments.send({
       coinId: data.coinId,
       amount: String(data.price),
       recipient: msg.senderPubkey,
@@ -1663,17 +1662,16 @@ async function main() {
   const providers = createBrowserProviders({ network: 'testnet' });
   const { sphere } = await Sphere.init({
     ...providers,
-    paymentsV2: true,
     mnemonic: process.env.MNEMONIC,
   });
 
   // Check balance
-  const assets = await sphere.paymentsV2.assets();
+  const assets = await sphere.payments.assets();
   console.log('Balances:');
   assets.forEach(a => console.log(\`  \${a.symbol}: \${a.totalAmount}\`));
 
   // Send payment
-  const result = await sphere.paymentsV2.send({
+  const result = await sphere.payments.send({
     coinId: assets[0].coinId,
     amount: '100000000',
     recipient: '@recipient',

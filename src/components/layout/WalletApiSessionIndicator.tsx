@@ -1,31 +1,30 @@
 import { CloudOff, RadioTower } from 'lucide-react';
-import { useSphereContext, useWalletApiSession, useRealtimeStatus } from '../../sdk/hooks';
+import { useSphereContext, useRealtimeStatus } from '../../sdk/hooks';
 import { HeaderTooltip } from './HeaderTooltip';
 
 /**
- * Header badge for the wallet-api session state (#351 / sphere-sdk#515 F3) and
- * the wallet-api connection health (`connection:status`).
+ * Header badge for the wallet-api session health, driven solely by the SDK's
+ * `connection:status` event (mirrored by useRealtimeStatus).
  *
- * Two distinct, ordered states (sign-in is the hard failure, takes priority):
- *  - session 'offline' — the SDK could not sign in, so server custody
- *    (inventory + mailbox) is unreachable even though the app booted. The
- *    2026-06-12 incident class: must be visible, never log-only.
- *  - signed-in but the connection is 'degraded'/'offline' — cross-session
- *    updates won't arrive in realtime (they fall back to the slower poll
- *    backstop). A window can be signed-in while its connection is degraded,
- *    so this liveness is surfaced separately from sign-in.
+ * Post-flip (sdk 0.14.1): `sphere.walletApiSessionStatus` and the
+ * `walletapi:session` event are deleted — sign-in state and connection
+ * liveness are one consolidated signal now:
+ *  - 'offline' — the wallet-api session is unreachable (sign-in failed or the
+ *    backend is down), so server custody (inventory + mailbox) is unavailable.
+ *    The 2026-06-12 incident class: must be visible, never log-only.
+ *  - 'degraded' — signed-in but realtime updates are paused; cross-session
+ *    changes fall back to the slower poll backstop. A milder warning.
  */
 export function WalletApiSessionIndicator() {
   const { walletApiEnabled } = useSphereContext();
-  const { status, lastError } = useWalletApiSession();
-  const { status: realtimeStatus } = useRealtimeStatus();
+  const { status } = useRealtimeStatus();
 
   if (!walletApiEnabled) return null;
 
   if (status === 'offline') {
     return (
       <HeaderTooltip
-        label={lastError ?? 'wallet-api sign-in failed — assets are unavailable'}
+        label="Wallet API unreachable — assets are unavailable until the connection recovers"
       >
         <div className="relative flex items-center gap-1.5 px-2 py-1.5 sm:px-2.5 sm:py-2 rounded-lg sm:rounded-xl bg-red-500/10">
           <span className="relative">
@@ -42,7 +41,7 @@ export function WalletApiSessionIndicator() {
 
   // Connection degraded while signed-in: realtime updates are delayed (the
   // poll backstop still keeps state correct), so this is a milder warning.
-  if (realtimeStatus === 'degraded' || realtimeStatus === 'offline') {
+  if (status === 'degraded') {
     return (
       <HeaderTooltip
         label="Realtime updates paused — reconnecting. Changes from other windows may be delayed."

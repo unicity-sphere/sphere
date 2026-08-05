@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { getPayments } from '../../../../sdk/payments';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
 import { isPendingCommitCode } from '../../../../sdk/errors';
@@ -64,7 +65,7 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
 }
 
 /**
- * Incoming payment requests, driven by paymentsV2.requests (the SDK list is
+ * Incoming payment requests, driven by payments.requests (the SDK list is
  * the source of truth — statuses are read back after every action, never
  * flipped optimistically):
  *
@@ -72,8 +73,8 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  *   respond happens BEFORE the local flip, and a server rejection (403
  *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
  *   surface it, the local status stays pending.
- * - `pay` — `paymentsV2.requests.pay`: sends the transfer (through the same
- *   paymentsV2.send() as a normal send), then links the transferId in the
+ * - `pay` — `payments.requests.pay`: sends the transfer (through the same
+ *   payments.send() as a normal send), then links the transferId in the
  *   'paid' respond. A failed respond after a successful send is logged by the
  *   SDK, never reported as a payment failure. A possibly-committed keep-open
  *   reject (PENDING_COMMIT_CODES — SEND_SYNC_PENDING / CERTIFICATION_UNCONFIRMED
@@ -86,13 +87,13 @@ export const useIncomingPaymentRequests = () => {
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
     const refresh = useCallback(() => {
-        const paymentsV2 = sphere?.paymentsV2;
-        if (!paymentsV2) return;
+        const payments = getPayments(sphere);
+        if (!payments) return;
         // The SDK list is the source of truth. A possibly-committed pay is held by
         // the SDK in a DURABLE 'settling' state (→ ACCEPTED via STATUS_MAP, non-
         // payable) that survives reload — so no client-side override is needed
         // here; bridging the SDK status directly is both correct and reload-safe.
-        setRequests(paymentsV2.requests.list().map(bridgeRequest));
+        setRequests(payments.requests.list().map(bridgeRequest));
     }, [sphere]);
 
     useEffect(() => {
@@ -128,24 +129,24 @@ export const useIncomingPaymentRequests = () => {
 
 
     const reject = useCallback(async (request: IncomingPaymentRequest) => {
-        const paymentsV2 = sphere?.paymentsV2;
-        if (!paymentsV2) return;
+        const payments = getPayments(sphere);
+        if (!payments) return;
         try {
-            await paymentsV2.requests.decline(request.id);
+            await payments.requests.decline(request.id);
         } finally {
             refresh();
         }
     }, [sphere, refresh]);
 
     const pay = useCallback(async (request: IncomingPaymentRequest) => {
-        const paymentsV2 = sphere?.paymentsV2;
-        if (!paymentsV2) return;
-        // Paying a request routes through paymentsV2.send() (certification) — same
+        const payments = getPayments(sphere);
+        if (!payments) return;
+        // Paying a request routes through payments.send() (certification) — same
         // keyless-send window as a normal send, so it uses the shared readiness
         // guard. handleAction in PaymentRequestModal surfaces the thrown message.
         requireSubscriptionKey();
         try {
-            await paymentsV2.requests.pay(request.id);
+            await payments.requests.pay(request.id);
         } catch (err) {
             // #441: requests.pay routes through the same send() as a normal
             // transfer, so it can reject with a possibly-committed keep-open code
@@ -156,7 +157,7 @@ export const useIncomingPaymentRequests = () => {
             // survives reload) before it threw.
             //
             // CONTRACT DEPENDENCY: non-payability here is the SDK's job, not this
-            // hook's. The paymentsV2 vertical owns the settling durability: it sets
+            // hook's. The payments vertical owns the settling durability: it sets
             // 'settling' on every possibly-committed throw (its settling journal
             // survives reload). This hook must stay on an SDK that upholds it — if
             // a downgrade ever left the request 'pending' on such a throw, the
@@ -174,9 +175,9 @@ export const useIncomingPaymentRequests = () => {
     }, [sphere, requireSubscriptionKey, refresh]);
 
     const clearProcessed = useCallback(() => {
-        const paymentsV2 = sphere?.paymentsV2;
-        if (!paymentsV2) return;
-        paymentsV2.requests.dismissProcessed();
+        const payments = getPayments(sphere);
+        if (!payments) return;
+        payments.requests.dismissProcessed();
         refresh();
     }, [sphere, refresh]);
 
