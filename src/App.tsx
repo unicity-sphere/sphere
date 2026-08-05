@@ -8,6 +8,7 @@ import { ConnectPage } from './pages/ConnectPage';
 import { DesktopShell } from './components/desktop/DesktopShell';
 import { useSphereEvents } from './sdk';
 import { trackPageView } from './services/telemetry';
+import { AnnouncementsUIProvider } from './contexts';
 
 // Retry wrapper: auto-reload page once on chunk load failure (stale deployment)
 function lazyWithRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
@@ -79,5 +80,9 @@ function usePageViewTelemetry(): void {
 export default function App() {
   useSphereEvents();
   usePageViewTelemetry();
-  return <AppRoutes />;
+  return (
+    <AnnouncementsUIProvider>
+      <AppRoutes />
+    </AnnouncementsUIProvider>
+  );
 }
