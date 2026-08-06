@@ -192,6 +192,9 @@ export interface MyRating {
   recommended: boolean;
   comment:     string | null;
   updatedAt:   string;
+  /** Set when a moderator hid this review. The author sees the reason, never who did it. */
+  hiddenAt:     string | null;
+  hiddenReason: string | null;
 }
 
 export async function fetchMyRatings(sphere: Sphere): Promise<MyRating[]> {

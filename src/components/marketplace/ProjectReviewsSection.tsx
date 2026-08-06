@@ -15,6 +15,7 @@ import {
 import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import { RecommendBadge } from './RecommendBadge';
 import { ReviewReplies } from './ReviewReplies';
+import { hiddenNoticeFor, type HiddenNotice } from './hiddenReviewNotice';
 
 interface ProjectReviewsSectionProps {
   projectId:       string;
@@ -54,6 +55,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
   const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set());
+  const [hidden, setHidden] = useState<HiddenNotice | null>(null);
 
   const myAddress = sphere?.identity?.directAddress ?? null;
 
@@ -66,6 +68,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
         if (mine) {
           setRecommended(mine.recommended);
           setComment(mine.comment ?? '');
+          setHidden(hiddenNoticeFor(mine));
         }
       })
       .catch(() => { /* not signed in yet — ignore */ });
@@ -77,8 +80,11 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       if (recommended === null) throw new Error('thumb-required');
       return submitRating(sphere, projectId, recommended, comment.trim() || undefined);
     },
-    onSuccess: () => {
+    onSuccess: (mine) => {
       setError(null);
+      // An edit does not unhide a review — refresh the banner from what the
+      // server actually returned instead of assuming success means "visible again".
+      setHidden(hiddenNoticeFor(mine));
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
     },
@@ -98,6 +104,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       setRecommended(null);
       setComment('');
       setError(null);
+      setHidden(null);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
     },
@@ -171,6 +178,21 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                 </button>
               )}
             </div>
+            {hidden && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                  A moderator hid this review from the marketplace.
+                </p>
+                {hidden.reason && (
+                  <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
+                    Reason: {hidden.reason}
+                  </p>
+                )}
+                <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
+                  Editing it will not restore it. Contact support if you think this was a mistake.
+                </p>
+              </div>
+            )}
             <div className="flex gap-2 mb-3">
               <button
                 type="button"
