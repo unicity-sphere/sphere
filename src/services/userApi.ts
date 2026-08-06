@@ -309,10 +309,13 @@ export async function submitReport(sphere: Sphere, body: ReportBody): Promise<vo
  * time — all enforced server-side.
  *
  * Known failure codes (thrown as Error.message):
- * - 'rate-limited' — 429, more than 5 appeals/wallet/hour (shared with appealReply)
- * - 'appeal-open'  — 409, an appeal is already open for this rating
- * - 'not-author'   — 403, the caller doesn't own the rating
- * - 'not-hidden'   — 400, the rating isn't currently hidden
+ * - 'rate-limited'   — 429, more than 5 appeals/wallet/hour (shared with appealReply)
+ * - 'appeal-open'    — 409, an appeal is already open for this rating
+ * - 'not-author'     — 403, the caller doesn't own the rating
+ * - 'invalid-appeal' — 400, either the rating isn't currently hidden or the
+ *   payload failed validation (both are ValidationError server-side and are
+ *   indistinguishable from the status code alone — see the body's `code`
+ *   field if the two ever need different copy)
  */
 export async function appealRating(sphere: Sphere, ratingId: string, comment: string): Promise<void> {
   const res = await authFetch(sphere, `/api/user/ratings/${ratingId}/appeal`, {
@@ -322,7 +325,7 @@ export async function appealRating(sphere: Sphere, ratingId: string, comment: st
   if (res.status === 429) throw new Error('rate-limited');
   if (res.status === 409) throw new Error('appeal-open');
   if (res.status === 403) throw new Error('not-author');
-  if (res.status === 400) throw new Error('not-hidden');
+  if (res.status === 400) throw new Error('invalid-appeal');
   if (!res.ok) throw new Error(`appealRating: ${res.status}`);
 }
 
@@ -338,6 +341,6 @@ export async function appealReply(sphere: Sphere, replyId: string, comment: stri
   if (res.status === 429) throw new Error('rate-limited');
   if (res.status === 409) throw new Error('appeal-open');
   if (res.status === 403) throw new Error('not-author');
-  if (res.status === 400) throw new Error('not-hidden');
+  if (res.status === 400) throw new Error('invalid-appeal');
   if (!res.ok) throw new Error(`appealReply: ${res.status}`);
 }

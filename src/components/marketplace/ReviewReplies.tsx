@@ -110,8 +110,11 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
                     )}
                     {canReport(myAddress, reply.userAddress) && (
                       reportedReplyIds.has(reply._id) ? (
-                        <span title="Reported" className="text-neutral-400 dark:text-white/35 p-1">
-                          <Flag className="w-3.5 h-3.5" />
+                        // Filled + tinted so "reported" reads at a glance, not just on hover —
+                        // an icon-only marker that's otherwise identical to the live button
+                        // (same outline, same grey) gives no visible confirmation it landed.
+                        <span title="Reported" className="text-emerald-500 p-1">
+                          <Flag className="w-3.5 h-3.5" fill="currentColor" />
                         </span>
                       ) : (
                         <button

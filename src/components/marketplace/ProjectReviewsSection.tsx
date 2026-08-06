@@ -150,10 +150,13 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       else if (e.message === 'appeal-open') {
         // The server disagrees with our session-local guess — trust it and
         // switch to "submitted" so the control stops offering a doomed retry.
+        // Still surface *why*, and overwrite any earlier error (e.g. a stale
+        // rate-limit message from a previous attempt) so the two can't coexist.
         setAppealSubmitted(true);
         setAppealOpen(false);
+        setAppealError('An appeal is already open for this review.');
       }
-      else if (e.message === 'not-hidden') setAppealError('This review is not currently hidden.');
+      else if (e.message === 'invalid-appeal') setAppealError("This appeal couldn't be submitted.");
       else if (e.message === 'not-author') setAppealError('You can only appeal your own review.');
       else if (e.message === 'empty-comment') setAppealError('Explain why you think this was a mistake.');
       else setAppealError('Failed to submit appeal.');
