@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Send, Trash2, CornerDownRight, X } from 'lucide-react';
+import { Loader2, Send, Trash2, CornerDownRight, X, Flag } from 'lucide-react';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useRatingReplies } from '../../hooks/useMarketplace';
-import { postReply, deleteReply, getStoredJwt } from '../../services/userApi';
+import { postReply, deleteReply, getStoredJwt, submitReport, type ReportCategory } from '../../services/userApi';
 import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import type { RatingReplyEntry } from '../../services/marketplaceApi';
+import { ReportModal } from './ReportModal';
+import { canReport } from './moderationAffordances';
 
 interface ReviewRepliesProps {
   ratingId: string;
@@ -23,6 +25,8 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
   const { data, isLoading } = useRatingReplies(ratingId);
   const [draft, setDraft] = useState('');
   const [quoteTarget, setQuoteTarget] = useState<RatingReplyEntry | null>(null);
+  const [reportedReplyIds, setReportedReplyIds] = useState<Set<string>>(new Set());
+  const [reportTarget, setReportTarget] = useState<{ id: string } | null>(null);
 
   const authed = !!getStoredJwt() && !!sphere;
   const myAddress = sphere?.identity?.directAddress ?? null;
@@ -104,6 +108,22 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
+                    {canReport(myAddress, reply.userAddress) && (
+                      reportedReplyIds.has(reply._id) ? (
+                        <span title="Reported" className="text-neutral-400 dark:text-white/35 p-1">
+                          <Flag className="w-3.5 h-3.5" />
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setReportTarget({ id: reply._id })}
+                          title="Report reply"
+                          className="text-neutral-400 dark:text-white/35 hover:text-red-500 p-1"
+                        >
+                          <Flag className="w-3.5 h-3.5" />
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
               </li>
@@ -161,6 +181,17 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
           </div>
         </div>
       )}
+
+      <ReportModal
+        isOpen={reportTarget !== null}
+        onClose={() => setReportTarget(null)}
+        onSubmit={async (category: ReportCategory, comment?: string) => {
+          if (!sphere || !reportTarget) throw new Error('wallet-unavailable');
+          const targetId = reportTarget.id;
+          await submitReport(sphere, { targetType: 'rating_reply', targetId, category, comment });
+          setReportedReplyIds((prev) => new Set(prev).add(targetId));
+        }}
+      />
     </div>
   );
 }

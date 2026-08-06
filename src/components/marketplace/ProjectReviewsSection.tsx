@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Send, Trash2, ThumbsUp, ThumbsDown, MessageCircle } from 'lucide-react';
+import { Loader2, Send, Trash2, ThumbsUp, ThumbsDown, MessageCircle, Flag } from 'lucide-react';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useProjectRatings } from '../../hooks/useMarketplace';
 import {
@@ -10,12 +10,17 @@ import {
   fetchMyRatings,
   voteRating,
   unvoteRating,
+  submitReport,
+  appealRating,
   type HelpfulVote,
+  type ReportCategory,
 } from '../../services/userApi';
 import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import { RecommendBadge } from './RecommendBadge';
 import { ReviewReplies } from './ReviewReplies';
+import { ReportModal } from './ReportModal';
 import { hiddenNoticeFor, type HiddenNotice } from './hiddenReviewNotice';
+import { canReport, canAppeal } from './moderationAffordances';
 
 interface ProjectReviewsSectionProps {
   projectId:       string;
@@ -56,6 +61,17 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
   const [error, setError] = useState<string | null>(null);
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set());
   const [hidden, setHidden] = useState<HiddenNotice | null>(null);
+  const [myRatingId, setMyRatingId] = useState<string | null>(null);
+  const [reportedRatingIds, setReportedRatingIds] = useState<Set<string>>(new Set());
+  const [reportTarget, setReportTarget] = useState<{ id: string } | null>(null);
+  const [appealOpen, setAppealOpen] = useState(false);
+  const [appealComment, setAppealComment] = useState('');
+  // Session-local: the backend doesn't expose "is there already an open appeal for
+  // this rating" on GET /api/user/ratings, so this starts false and flips true
+  // either on a successful submit or when the server itself reports one already
+  // exists (409) — see appealMutation.onError below.
+  const [appealSubmitted, setAppealSubmitted] = useState(false);
+  const [appealError, setAppealError] = useState<string | null>(null);
 
   const myAddress = sphere?.identity?.directAddress ?? null;
 
@@ -69,6 +85,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           setRecommended(mine.recommended);
           setComment(mine.comment ?? '');
           setHidden(hiddenNoticeFor(mine));
+          setMyRatingId(mine._id);
         }
       })
       .catch(() => { /* not signed in yet — ignore */ });
@@ -85,6 +102,7 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       // An edit does not unhide a review — refresh the banner from what the
       // server actually returned instead of assuming success means "visible again".
       setHidden(hiddenNoticeFor(mine));
+      setMyRatingId(mine._id);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
     },
@@ -105,8 +123,40 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       setComment('');
       setError(null);
       setHidden(null);
+      setMyRatingId(null);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealSubmitted(false);
+      setAppealError(null);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
+    },
+  });
+
+  const appealMutation = useMutation({
+    mutationFn: async () => {
+      if (!sphere || !myRatingId) throw new Error('wallet-unavailable');
+      if (appealComment.trim().length === 0) throw new Error('empty-comment');
+      await appealRating(sphere, myRatingId, appealComment.trim());
+    },
+    onSuccess: () => {
+      setAppealSubmitted(true);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealError(null);
+    },
+    onError: (e: Error) => {
+      if (e.message === 'rate-limited') setAppealError("You've submitted too many appeals recently. Try again later.");
+      else if (e.message === 'appeal-open') {
+        // The server disagrees with our session-local guess — trust it and
+        // switch to "submitted" so the control stops offering a doomed retry.
+        setAppealSubmitted(true);
+        setAppealOpen(false);
+      }
+      else if (e.message === 'not-hidden') setAppealError('This review is not currently hidden.');
+      else if (e.message === 'not-author') setAppealError('You can only appeal your own review.');
+      else if (e.message === 'empty-comment') setAppealError('Explain why you think this was a mistake.');
+      else setAppealError('Failed to submit appeal.');
     },
   });
 
@@ -191,6 +241,50 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                 <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
                   Editing it will not restore it. Contact support if you think this was a mistake.
                 </p>
+                {canAppeal({ hiddenAt: hidden.at }, appealSubmitted) ? (
+                  appealOpen ? (
+                    <div className="mt-2 space-y-1.5">
+                      <textarea
+                        value={appealComment}
+                        onChange={(e) => setAppealComment(e.target.value.slice(0, 1000))}
+                        placeholder="Explain why you think this was a mistake…"
+                        rows={2}
+                        maxLength={1000}
+                        className="w-full text-xs rounded-lg bg-white dark:bg-white/6 border border-amber-500/30 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => appealMutation.mutate()}
+                          disabled={appealMutation.isPending || appealComment.trim().length === 0}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {appealMutation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+                          Submit appeal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setAppealOpen(false); setAppealError(null); }}
+                          disabled={appealMutation.isPending}
+                          className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAppealOpen(true)}
+                      className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400 underline hover:no-underline"
+                    >
+                      Appeal this decision
+                    </button>
+                  )
+                ) : appealSubmitted && (
+                  <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">Appeal submitted</p>
+                )}
+                {appealError && <p className="mt-1 text-xs text-red-500">{appealError}</p>}
               </div>
             )}
             <div className="flex gap-2 mb-3">
@@ -279,9 +373,27 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                       <RecommendBadge recommended={r.recommended} />
                       <span className="text-sm font-medium">{label}</span>
                     </div>
-                    <span className="text-[11px] text-neutral-400 dark:text-white/35">
-                      {new Date(r.createdAt).toLocaleDateString()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-neutral-400 dark:text-white/35">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </span>
+                      {canReport(myAddress, r.userAddress) && (
+                        reportedRatingIds.has(r._id) ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35">
+                            <Flag className="w-3 h-3" /> Reported
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReportTarget({ id: r._id })}
+                            title="Report this review"
+                            className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35 hover:text-red-500"
+                          >
+                            <Flag className="w-3 h-3" /> Report
+                          </button>
+                        )
+                      )}
+                    </div>
                   </div>
                   {r.comment && (
                     <p className="text-sm text-neutral-600 dark:text-white/55 whitespace-pre-line break-words mb-3">
@@ -325,6 +437,17 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           <p className="text-sm text-neutral-400 dark:text-white/35">No reviews yet.</p>
         )}
       </div>
+
+      <ReportModal
+        isOpen={reportTarget !== null}
+        onClose={() => setReportTarget(null)}
+        onSubmit={async (category: ReportCategory, comment?: string) => {
+          if (!sphere || !reportTarget) throw new Error('wallet-unavailable');
+          const targetId = reportTarget.id;
+          await submitReport(sphere, { targetType: 'rating', targetId, category, comment });
+          setReportedRatingIds((prev) => new Set(prev).add(targetId));
+        }}
+      />
     </section>
   );
 }
