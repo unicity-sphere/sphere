@@ -64,4 +64,48 @@ describe('mergeOwnHiddenReplies', () => {
     const result = mergeOwnHiddenReplies(publicReplies, mineList);
     expect(result.map((r) => r._id)).toEqual(['a', 'b', 'c', 'd']);
   });
+
+  it('tags appended entries with __ownHidden so callers can discriminate on a field this module owns', () => {
+    // The render branch in ReviewReplies must never rely on a NEGATIVE test
+    // against a field the public shape happens to lack today (e.g.
+    // `userAddress`) — if the public API ever grows that field, a negative
+    // structural test would silently stop firing and a moderated reply
+    // would render as a normal one again. Pin the positive tag instead.
+    const publicReplies = [pub('a', '2026-08-01T00:00:00.000Z')];
+    const hidden = mine('b', '2026-08-02T00:00:00.000Z', '2026-08-05T00:00:00.000Z');
+    const result = mergeOwnHiddenReplies(publicReplies, [hidden]);
+
+    const appended = result.find((r) => r._id === 'b') as { __ownHidden?: true };
+    const untouched = result.find((r) => r._id === 'a') as { __ownHidden?: true };
+    expect(appended.__ownHidden).toBe(true);
+    expect(untouched.__ownHidden).toBeUndefined();
+  });
+
+  it('treats an empty-string hiddenAt as not hidden, matching canAppeal\'s !!mine?.hiddenAt check', () => {
+    // moderationAffordances.ts:canAppeal uses `!!mine?.hiddenAt`. If this
+    // helper used `hiddenAt !== null` instead, an empty-string hiddenAt
+    // would merge in and render "A moderator hid this reply of yours" while
+    // canAppeal refused to show the Appeal control for it — a dead-end
+    // accusation with nothing to click. Keep both checks in agreement.
+    const publicReplies = [pub('a', '2026-08-01T00:00:00.000Z')];
+    const mineList = [mine('b', '2026-08-02T00:00:00.000Z', '')];
+    expect(mergeOwnHiddenReplies(publicReplies, mineList)).toEqual(publicReplies);
+  });
+
+  it('does not mutate the public thread array or its elements', () => {
+    // `data?.replies` is the react-query cache array — an implementation
+    // that pushed onto it in place (e.g. `publicReplies.push(...); return
+    // publicReplies.sort(...)`) would pass every `toEqual` assertion above
+    // (they all compare against the same, now-mutated, reference) while
+    // corrupting every other consumer of that cached array.
+    const publicReplies = [pub('b', '2026-08-02T00:00:00.000Z'), pub('a', '2026-08-01T00:00:00.000Z')];
+    const snapshotBefore = publicReplies.map((r) => ({ ...r }));
+    const hidden = mine('c', '2026-08-03T00:00:00.000Z', '2026-08-05T00:00:00.000Z');
+
+    const result = mergeOwnHiddenReplies(publicReplies, [hidden]);
+
+    expect(result).not.toBe(publicReplies);
+    expect(publicReplies).toEqual(snapshotBefore);
+    expect(publicReplies).toHaveLength(2);
+  });
 });

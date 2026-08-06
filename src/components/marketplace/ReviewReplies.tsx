@@ -11,7 +11,7 @@ import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import type { RatingReplyEntry } from '../../services/marketplaceApi';
 import { ReportModal } from './ReportModal';
 import { canReport, canAppeal } from './moderationAffordances';
-import { mergeOwnHiddenReplies } from './mergeOwnHiddenReplies';
+import { mergeOwnHiddenReplies, type OwnHiddenTag } from './mergeOwnHiddenReplies';
 
 interface ReviewRepliesProps {
   ratingId: string;
@@ -116,9 +116,12 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
     },
   });
 
-  // RatingReplyEntry (public thread) vs MyReply (own, merged back in when hidden)
-  // — the two shapes never overlap on `userAddress`, so that's the discriminant.
-  const isOwnHidden = (entry: RatingReplyEntry | MyReply): entry is MyReply => !('userAddress' in entry);
+  // Discriminate on the tag mergeOwnHiddenReplies attaches, not on the
+  // (absence of a) field the public shape happens to carry today — a
+  // negative structural test would silently break the moment
+  // RatingReplyEntry grows a field MyReply also has.
+  const isOwnHidden = (entry: RatingReplyEntry | (MyReply & OwnHiddenTag)): entry is MyReply & OwnHiddenTag =>
+    '__ownHidden' in entry;
 
   return (
     <div className="mt-3 pl-4 border-l-2 border-orange-500/30">
@@ -168,7 +171,15 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
                             </button>
                             <button
                               type="button"
-                              onClick={() => { setAppealOpenId(null); setAppealComment(''); }}
+                              onClick={() => {
+                                setAppealOpenId(null);
+                                setAppealComment('');
+                                setAppealErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[reply._id];
+                                  return next;
+                                });
+                              }}
                               disabled={appealMutation.isPending}
                               className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/60"
                             >
