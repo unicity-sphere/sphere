@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Send, Trash2, CornerDownRight, X, Flag } from 'lucide-react';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useRatingReplies } from '../../hooks/useMarketplace';
-import { postReply, deleteReply, getStoredJwt, submitReport, type ReportCategory } from '../../services/userApi';
+import {
+  postReply, deleteReply, getStoredJwt, submitReport, appealReply, fetchMyReplies,
+  type ReportCategory, type MyReply,
+} from '../../services/userApi';
 import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import type { RatingReplyEntry } from '../../services/marketplaceApi';
 import { ReportModal } from './ReportModal';
-import { canReport } from './moderationAffordances';
+import { canReport, canAppeal } from './moderationAffordances';
+import { mergeOwnHiddenReplies } from './mergeOwnHiddenReplies';
 
 interface ReviewRepliesProps {
   ratingId: string;
@@ -31,6 +35,60 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
   const authed = !!getStoredJwt() && !!sphere;
   const myAddress = sphere?.identity?.directAddress ?? null;
 
+  // The public thread (above) filters out hidden replies entirely, so the
+  // only way to learn one of my own was moderated is to ask for my own
+  // replies separately and merge the hidden ones back in — same shadow-ban
+  // fix Task 13 shipped for reviews, applied to replies.
+  const { data: myReplies } = useQuery({
+    queryKey: ['marketplace', 'my-replies', ratingId],
+    queryFn: () => fetchMyReplies(sphere!, ratingId),
+    enabled: authed && !!ratingId,
+    staleTime: 15_000,
+  });
+  const merged = mergeOwnHiddenReplies(data?.replies ?? [], myReplies ?? []);
+
+  // Appeal state is keyed by replyId — a thread can in principle hold more
+  // than one hidden reply of mine, and each needs its own open/submitted/error
+  // state rather than one shared slot (unlike ProjectReviewsSection, which
+  // only ever has a single review to appeal per project).
+  const [appealOpenId, setAppealOpenId] = useState<string | null>(null);
+  const [appealComment, setAppealComment] = useState('');
+  const [appealSubmittedIds, setAppealSubmittedIds] = useState<Set<string>>(new Set());
+  const [appealErrors, setAppealErrors] = useState<Record<string, string>>({});
+
+  const appealMutation = useMutation({
+    mutationFn: async (replyId: string) => {
+      if (!sphere) throw new Error('wallet-unavailable');
+      if (appealComment.trim().length === 0) throw new Error('empty-comment');
+      await appealReply(sphere, replyId, appealComment.trim());
+    },
+    onSuccess: (_data, replyId) => {
+      setAppealSubmittedIds((prev) => new Set(prev).add(replyId));
+      setAppealOpenId(null);
+      setAppealComment('');
+      setAppealErrors((prev) => { const next = { ...prev }; delete next[replyId]; return next; });
+    },
+    onError: (e: Error, replyId) => {
+      if (e.message === 'rate-limited') {
+        setAppealErrors((prev) => ({ ...prev, [replyId]: "You've submitted too many appeals recently. Try again later." }));
+      } else if (e.message === 'appeal-open') {
+        // The server disagrees with our session-local guess — trust it and
+        // switch to "submitted" so the control stops offering a doomed retry.
+        setAppealSubmittedIds((prev) => new Set(prev).add(replyId));
+        setAppealOpenId(null);
+        setAppealErrors((prev) => ({ ...prev, [replyId]: 'An appeal is already open for this reply.' }));
+      } else if (e.message === 'invalid-appeal') {
+        setAppealErrors((prev) => ({ ...prev, [replyId]: "This appeal couldn't be submitted." }));
+      } else if (e.message === 'not-author') {
+        setAppealErrors((prev) => ({ ...prev, [replyId]: 'You can only appeal your own reply.' }));
+      } else if (e.message === 'empty-comment') {
+        setAppealErrors((prev) => ({ ...prev, [replyId]: 'Explain why you think this was a mistake.' }));
+      } else {
+        setAppealErrors((prev) => ({ ...prev, [replyId]: 'Failed to submit appeal.' }));
+      }
+    },
+  });
+
   const submitMutation = useMutation({
     mutationFn: async () => {
       if (!sphere) throw new Error('wallet-unavailable');
@@ -53,8 +111,14 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'replies', ratingId] });
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings'] });
+      // A hidden reply can still be deleted by its author — drop its banner too.
+      queryClient.invalidateQueries({ queryKey: ['marketplace', 'my-replies', ratingId] });
     },
   });
+
+  // RatingReplyEntry (public thread) vs MyReply (own, merged back in when hidden)
+  // — the two shapes never overlap on `userAddress`, so that's the discriminant.
+  const isOwnHidden = (entry: RatingReplyEntry | MyReply): entry is MyReply => !('userAddress' in entry);
 
   return (
     <div className="mt-3 pl-4 border-l-2 border-orange-500/30">
@@ -62,7 +126,74 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
         <div className="text-xs text-neutral-400 dark:text-white/35 py-2">Loading replies…</div>
       ) : (
         <ul className="space-y-2">
-          {data?.replies.map((reply) => {
+          {merged.map((reply) => {
+            if (isOwnHidden(reply)) {
+              const isOpen = appealOpenId === reply._id;
+              const submitted = appealSubmittedIds.has(reply._id);
+              const error = appealErrors[reply._id];
+              return (
+                <li key={reply._id} className="text-sm">
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                      A moderator hid this reply of yours.
+                    </p>
+                    {reply.hiddenReason && (
+                      <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
+                        Reason: {reply.hiddenReason}
+                      </p>
+                    )}
+                    <p className="text-xs text-neutral-600 dark:text-white/55 mt-1 whitespace-pre-line break-words">
+                      {reply.comment}
+                    </p>
+                    {canAppeal({ hiddenAt: reply.hiddenAt }, submitted) ? (
+                      isOpen ? (
+                        <div className="mt-2 space-y-1.5">
+                          <textarea
+                            value={appealComment}
+                            onChange={(e) => setAppealComment(e.target.value.slice(0, 1000))}
+                            placeholder="Explain why you think this was a mistake…"
+                            rows={2}
+                            maxLength={1000}
+                            className="w-full text-xs rounded-lg bg-white dark:bg-white/6 border border-amber-500/30 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => appealMutation.mutate(reply._id)}
+                              disabled={appealMutation.isPending || appealComment.trim().length === 0}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {appealMutation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+                              Submit appeal
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setAppealOpenId(null); setAppealComment(''); }}
+                              disabled={appealMutation.isPending}
+                              className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/60"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => { setAppealOpenId(reply._id); setAppealComment(''); }}
+                          className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400 underline hover:no-underline"
+                        >
+                          Appeal this decision
+                        </button>
+                      )
+                    ) : submitted && (
+                      <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">Appeal submitted</p>
+                    )}
+                    {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+                  </div>
+                </li>
+              );
+            }
+
             const mine = myAddress && reply.userAddress === myAddress;
             const label = reply.userNametag ? `@${reply.userNametag}` : truncateId(stripDirectScheme(reply.userAddress));
             return (
@@ -132,7 +263,7 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
               </li>
             );
           })}
-          {data?.replies.length === 0 && (
+          {merged.length === 0 && (
             <li className="text-xs text-neutral-400 dark:text-white/35">No replies yet.</li>
           )}
         </ul>

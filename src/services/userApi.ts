@@ -242,6 +242,28 @@ export async function unvoteRating(sphere: Sphere, ratingId: string): Promise<vo
 
 // ── Replies (Telegram-style comments on a review) ────────────────────
 
+export interface MyReply {
+  _id:            string;
+  ratingId:       string;
+  replyToReplyId: string | null;
+  comment:        string;
+  createdAt:      string;
+  /** Set when a moderator hid this reply. The author sees the reason, never who did it. */
+  hiddenAt:       string | null;
+  hiddenReason:   string | null;
+}
+
+/**
+ * The caller's own replies to a review, hidden ones included — every public
+ * read filters hidden replies out, so this is the only way the author can
+ * learn a reply of theirs was moderated.
+ */
+export async function fetchMyReplies(sphere: Sphere, ratingId: string): Promise<MyReply[]> {
+  const res = await authFetch(sphere, `/api/user/rating-replies?ratingId=${ratingId}`);
+  if (!res.ok) throw new Error(`fetchMyReplies: ${res.status}`);
+  return (await res.json()).replies;
+}
+
 export interface PostedReply {
   _id:            string;
   ratingId:       string;
