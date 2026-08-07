@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Menu, X, Github, Linkedin } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { AnnouncementBell } from '@unicitylabs/sphere-ui';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
 import { WalletApiSessionIndicator } from './WalletApiSessionIndicator';
 import { PendingTransfersIndicator } from './PendingTransfersIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
+import { useAnnouncementsUI } from '../../contexts';
 
 function devReset(): void {
   localStorage.removeItem(STORAGE_KEYS.DEV_AGGREGATOR_URL);
@@ -30,6 +32,7 @@ export function Header() {
   const navigate = useNavigate();
   const { showDesktop } = useDesktopState();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const announcementsUI = useAnnouncementsUI();
 
   const getDevConfig = () => ({
     aggregatorUrl: localStorage.getItem(STORAGE_KEYS.DEV_AGGREGATOR_URL),
@@ -157,6 +160,17 @@ export function Header() {
               <div className="hidden lg:flex items-center gap-3">
                 <PendingTransfersIndicator />
                 <WalletApiSessionIndicator />
+                {announcementsUI && (
+                  <AnnouncementBell
+                    items={announcementsUI.items}
+                    unreadCount={announcementsUI.unreadCount}
+                    prefs={announcementsUI.prefs}
+                    onMarkRead={announcementsUI.markRead}
+                    onMarkAllRead={announcementsUI.markAllRead}
+                    onSetAutoOpen={announcementsUI.setAutoOpen}
+                    onOpenItem={announcementsUI.openItem}
+                  />
+                )}
                 {/* <ThemeToggle /> */}
               </div>
             </div>
@@ -164,6 +178,25 @@ export function Header() {
             {/* Line */}
             <div className="h-0.5 bg-neutral-300 dark:bg-[#fefefe] rounded-[10px]" />
           </div>
+
+          {/* Mobile/tablet bell — same slot as the hamburger (lg:hidden), NOT
+              inside the expandable mobile menu below: that panel is
+              overflow-hidden and only tall enough for its own content, so a
+              w-80 popover anchored inside it renders as a ~12px sliver. This
+              row is the header bar itself, never clipped. */}
+          {announcementsUI && (
+            <div className="lg:hidden shrink-0 relative z-10">
+              <AnnouncementBell
+                items={announcementsUI.items}
+                unreadCount={announcementsUI.unreadCount}
+                prefs={announcementsUI.prefs}
+                onMarkRead={announcementsUI.markRead}
+                onMarkAllRead={announcementsUI.markAllRead}
+                onSetAutoOpen={announcementsUI.setAutoOpen}
+                onOpenItem={announcementsUI.openItem}
+              />
+            </div>
+          )}
 
           {/* Mobile hamburger */}
           <button
@@ -235,7 +268,10 @@ export function Header() {
               )
             ))}
 
-            {/* Custody status + Social links — mobile only */}
+            {/* Custody status + Social links — mobile only. The bell lives in
+                the header bar next to the hamburger instead of here: this
+                panel is overflow-hidden and only as tall as its own content,
+                which would clip the popover to a sliver. */}
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center gap-2">
               <PendingTransfersIndicator />
               <WalletApiSessionIndicator />
