@@ -22,8 +22,6 @@ export const STORAGE_KEYS = {
   CHAT_SELECTED_GROUP: 'sphere_chat_selected_group',
   CHAT_SELECTED_DM: 'sphere_chat_selected_dm',
 
-  // IPFS
-  IPFS_ENABLED: 'sphere_ipfs_enabled',
 
   // Desktop state (open tabs, active tab)
   DESKTOP_STATE: 'sphere_desktop_state',

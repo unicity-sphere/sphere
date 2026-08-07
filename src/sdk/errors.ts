@@ -1,4 +1,4 @@
-import { isSphereError, type SphereErrorCode } from '@unicitylabs/sphere-sdk';
+import { isSphereError, type SphereErrorCode, type TransferResult } from '@unicitylabs/sphere-sdk';
 
 // Friendly overrides for codes where SDK message is too technical.
 // For codes NOT listed here, we use the SDK's own err.message (which is
@@ -103,6 +103,33 @@ export const PENDING_COMMIT_CODES: readonly SphereErrorCode[] = [
 export function isPendingCommitCode(err: unknown): boolean {
   const code = getErrorCode(err);
   return code !== null && PENDING_COMMIT_CODES.includes(code);
+}
+
+/**
+ * The keep-open transferId stamped on possibly-committed send errors
+ * (sphere-sdk #441: `SphereError.transferId`, present only on keep-open /
+ * possibly-committed outcomes). Empty string when absent — the UI then has no
+ * id to match convergence events against and keeps its generic pending copy.
+ */
+export function getKeepOpenTransferId(err: unknown): string {
+  if (!isSphereError(err)) return '';
+  const transferId = (err as { transferId?: unknown }).transferId;
+  return typeof transferId === 'string' ? transferId : '';
+}
+
+/**
+ * True for the SYNTHETIC pending result useTransfer returns on a keep-open
+ * reject ({@link isPendingCommitCode}): `status: 'pending'` + deliveryPending.
+ * Distinguishes "network is busy — the SDK converges this SAME transfer
+ * in-session (sphere-sdk 0.14 auto-retry) or via resumeNow()" from an ordinary
+ * certified-but-delivery-deferred success (#621: a real result, status
+ * confirmed/delivered, deliveryPending true). Any retry affordance keyed off
+ * this MUST call payments.resumeNow(), NEVER send() (double-pay).
+ */
+export function isKeepOpenPendingResult(
+  result: Pick<TransferResult, 'status' | 'deliveryPending'>,
+): boolean {
+  return result.status === 'pending' && result.deliveryPending === true;
 }
 
 // --- Gateway (SGW) 429/401 classification ---------------------------------

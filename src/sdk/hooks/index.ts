@@ -7,10 +7,6 @@ export type { UseIdentityReturn } from './core/useIdentity';
 export { useNametag } from './core/useNametag';
 export type { UseNametagReturn } from './core/useNametag';
 export { useSphereEvents } from './core/useSphereEvents';
-export { useIpfsSync } from './core/useIpfsSync';
-export type { IpfsSyncStatus, IpfsSyncState, UseIpfsSyncReturn } from './core/useIpfsSync';
-export { useWalletApiSession } from './core/useWalletApiSession';
-export type { WalletApiSessionStatus, UseWalletApiSessionReturn } from './core/useWalletApiSession';
 export { useRealtimeStatus } from './core/useRealtimeStatus';
 export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtimeStatus';
 
@@ -27,9 +23,9 @@ export { useTopUp } from './payments/useTopUp';
 export type { UseTopUpReturn, TopUpResult } from './payments/useTopUp';
 export { useTransactionHistory } from './payments/useTransactionHistory';
 export type { UseTransactionHistoryReturn } from './payments/useTransactionHistory';
+export { usePendingTransfers, PENDING_TRANSFERS_POLL_MS } from './payments/usePendingTransfers';
+export type { UsePendingTransfersReturn } from './payments/usePendingTransfers';
 
 // Communications
 export { useSendDM } from './comms/useSendDM';
 export type { UseSendDMReturn } from './comms/useSendDM';
-export { usePaymentRequests } from './comms/usePaymentRequests';
-export type { UsePaymentRequestsReturn } from './comms/usePaymentRequests';

@@ -107,26 +107,6 @@ if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).logger = logger;
 }
 
-function isIpfsEnabled(): boolean {
-  const stored = localStorage.getItem(STORAGE_KEYS.IPFS_ENABLED);
-  return stored !== 'false'; // enabled by default
-}
-
-function getIpfsConfig() {
-  // wallet-api mode: server inventory custody — a second token-storage
-  // mirror (IPFS) has undefined ownership-handoff/tombstone semantics, so
-  // token sync is forced off (the toggle is hidden too).
-  if (isWalletApiEnabled()) return {};
-  if (!isIpfsEnabled()) return {};
-  return {
-    tokenSync: {
-      ipfs: {
-        enabled: true,
-      },
-    },
-  };
-}
-
 // =============================================================================
 // Shared helpers (pure functions, no React state)
 // =============================================================================
@@ -138,23 +118,13 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
   }
 }
 
-/** Add IPFS storage provider and trigger initial sync (fire-and-forget) */
-function setupIpfsSync(instance: Sphere, providers: BrowserProviders): void {
-  if (isWalletApiEnabled()) return; // see getIpfsConfig()
-  if (providers.ipfsTokenStorage) {
-    instance.addTokenStorageProvider(providers.ipfsTokenStorage)
-      .then(() => instance.sync())
-      .catch(err => logger.warn('SphereProvider', 'IPFS sync failed', err));
-  }
-}
-
 /**
  * Compose the app's provider bundle (S4): the browser base, an optional
  * engine-port override (LOCAL dev stack: mock aggregator + the trustbase it
  * serves), and — when VITE_WALLET_API_URL is set — the wallet-api preset:
- * thin server-custody token storage + mailbox delivery + the S1 client.
- * Composing `delivery` moves ASSETS to wallet-api; messaging, group chat and
- * nametags stay on the Nostr transport in the base bundle.
+ * the plain `walletApi` transport config the SDK's payments vertical is
+ * composed from (server custody + mailbox delivery ride it); messaging,
+ * group chat and nametags stay on the Nostr transport in the base bundle.
  *
  * Fail-closed (#351): on builds with VITE_REQUIRE_WALLET_API set,
  * getWalletApiBaseUrl() throws when VITE_WALLET_API_URL is missing — the
@@ -174,7 +144,6 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
     market: true,
-    ...getIpfsConfig(),
   });
 
   const engineOverride = getEngineOverride();
@@ -190,26 +159,22 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
 
   const walletApiBaseUrl = getWalletApiBaseUrl();
   if (!walletApiBaseUrl) return withEngine;
+  // Post-flip (sdk 0.14.1): createWalletApiProviders attaches a plain
+  // `walletApi` transport CONFIG (WalletApiTransportConfig) — the session,
+  // retries and timeouts are composed inside the SDK's payments vertical.
+  // The old S1 client options (requestTimeoutMs/retry) no longer exist here.
   return createWalletApiProviders(withEngine, {
     baseUrl: walletApiBaseUrl,
     network,
     deviceId: getOrCreateWalletApiDeviceId(),
-    // Robustness for slow/unstable connections: the SDK default request
-    // timeout is 30s, which prematurely aborts a slow-but-completing send
-    // write (POST /v1/inventory/apply) and hard-fails the send. Give slow
-    // links room to finish; and harden the read/sync + 429 retry path
-    // (writes stay single-attempt in the SDK for double-apply safety).
-    requestTimeoutMs: 45000,
-    retry: { maxAttempts: 5, capMs: 15000 },
   });
 }
 
 /** Clean up persisted wallet data on creation/import failure */
 async function cleanupOnError(providers: BrowserProviders): Promise<void> {
-  const clearDone = Sphere.clear({
-    storage: providers.storage,
-    tokenStorage: providers.tokenStorage,
-  });
+  // Post-flip: tokens are server-custody — Sphere.clear takes { storage } only
+  // (it also wipes the pv2:* scoped KV and sweeps orphaned pre-flip token DBs).
+  const clearDone = Sphere.clear({ storage: providers.storage });
   await Promise.race([clearDone, new Promise(r => setTimeout(r, 3000))]);
 }
 
@@ -278,7 +243,6 @@ export function SphereProvider({
   // passwordless init of an encrypted wallet (see isDecryptionError.ts for the
   // code-verified detail); only that real signal may flip this true.
   const [isLocked, setIsLocked] = useState(false);
-  const [ipfsEnabled, setIpfsEnabled] = useState(isIpfsEnabled);
   const [isDiscoveringAddresses, setIsDiscoveringAddresses] = useState(false);
   const [initProgress, setInitProgress] = useState<InitProgress | null>(null);
   // Readiness of the subscription key on the live oracle — gates the send path
@@ -353,7 +317,7 @@ export function SphereProvider({
     }
   }, []);
   // Monotonic init generation: only the LATEST initialize() run may adopt its
-  // Sphere; a run superseded mid-flight (StrictMode double-mount, IPFS/network
+  // Sphere; a run superseded mid-flight (StrictMode double-mount, network
   // toggle, unmount) destroys the instance it built instead of leaking it. See
   // #453 and adoptOrDiscardInstance.
   const initGenRef = useRef(0);
@@ -597,7 +561,7 @@ export function SphereProvider({
         //    one is MEANT to throw SphereError('Failed to decrypt mnemonic',
         //    'STORAGE_ERROR'), which we read as "locked", not a fatal error
         //    (#449) — see isDecryptionError.ts.
-        //  - RE-INIT while unlocked (toggleIpfs(), the exported `reinitialize`):
+        //  - RE-INIT while unlocked (the exported `reinitialize`):
         //    carry passwordRef.current. Omitting it relocked a wallet the user
         //    had just unlocked — one click in permanent chrome (graceful lock
         //    §8.5).
@@ -629,7 +593,6 @@ export function SphereProvider({
         // Adopt only if we're still the latest init; otherwise destroy the
         // instance we just built so it can't linger as a zombie (#453).
         const outcome = await adoptOrDiscardInstance(instance, isStale, (inst) => {
-          setupIpfsSync(inst, browserProviders);
           sphereRef.current = inst;
           setSphere(inst);
           markSessionStart();
@@ -887,14 +850,12 @@ export function SphereProvider({
     // The remembered unlock belongs to a wallet that no longer exists.
     void clearPersistedUnlock();
 
-    // Best-effort wallet-api session revoke (S4 auth lifecycle): the SDK only
-    // calls walletApi.logout() on address switch, not on destroy — without
-    // this the server session row would outlive wallet deletion.
-    if (providers?.walletApi) {
-      await providers.walletApi.logout().catch((err) => {
-        logger.warn('SphereProvider', 'wallet-api logout failed (best effort)', err);
-      });
-    }
+    // wallet-api sign-out is SDK-internal post-flip (sdk 0.14.1): the old S1
+    // WalletApiClient (providers.walletApi.logout()) is deleted — providers.
+    // walletApi is now a plain transport CONFIG. The session lifecycle lives
+    // inside the payments vertical: sphere.destroy() below stops it
+    // (FacadeSession.stop), and Sphere.clear() wipes the pv2:* scoped KV that
+    // holds the refresh token, so no reusable credential outlives deletion.
 
     // Destroy sphere to close SDK connections (Nostr, IndexedDB handles, etc.)
     if (sphereRef.current) {
@@ -906,15 +867,11 @@ export function SphereProvider({
     // Sphere.clear() handles reconnecting storage internally, so we just
     // disconnect first to release stale handles.
     if (providers) {
-      await Promise.allSettled([
-        providers.storage.disconnect(),
-        providers.tokenStorage.disconnect(),
-      ]);
+      await providers.storage.disconnect().catch(() => {});
       try {
-        await Sphere.clear({
-          storage: providers.storage,
-          tokenStorage: providers.tokenStorage,
-        });
+        // Post-flip: { storage } only — also wipes the pv2:* scoped KV and
+        // sweeps orphaned pre-flip sphere-token-storage-* databases.
+        await Sphere.clear({ storage: providers.storage });
       } catch (err) {
         logger.warn('SphereProvider', 'Sphere.clear() failed, sweeping IndexedDB directly', err);
       }
@@ -982,7 +939,6 @@ export function SphereProvider({
       discoverAddresses: false,
     });
     const outcome = await adoptOrDiscardInstance(instance, () => gen !== initGenRef.current, (inst) => {
-      setupIpfsSync(inst, providers);
       sphereRef.current = inst;
       setSphere(inst);
       markSessionStart();
@@ -1033,7 +989,7 @@ export function SphereProvider({
     // Idempotent — see lockingRef.
     //
     // `sphereRef.current === null` is NOT a reason to bail. That is exactly the state a re-init
-    // leaves behind (toggleIpfs, reinitialize), and a cross-tab lock arriving in that window
+    // leaves behind (reinitialize), and a cross-tab lock arriving in that window
     // used to do nothing at all: the tab stayed unlocked, its hosts kept reporting 'live', the
     // lock epoch was never written, and the in-flight init went on to adopt a fully usable
     // Sphere. Bumping initGenRef below is what supersedes that init, so the lock must run.
@@ -1271,7 +1227,6 @@ export function SphereProvider({
   const finalizeWallet = useCallback((importedSphere?: Sphere) => {
     markSessionStart();
     if (importedSphere) {
-      if (providers) setupIpfsSync(importedSphere, providers);
       sphereRef.current = importedSphere;
       setSphere(importedSphere);
       sendWelcomeDM(importedSphere);
@@ -1298,14 +1253,6 @@ export function SphereProvider({
     const inst = importedSphere ?? sphereRef.current;
     if (inst) setupSubscriptionKey(inst, undefined);
   }, [providers, setupSubscriptionKey, markSessionStart]);
-
-  const toggleIpfs = useCallback(() => {
-    const next = !isIpfsEnabled();
-    localStorage.setItem(STORAGE_KEYS.IPFS_ENABLED, String(next));
-    setIpfsEnabled(next);
-    // Reinitialize so the new IPFS setting takes effect
-    initialize();
-  }, [initialize]);
 
   const applySubscriptionKey = useCallback(async (apiKey: string, opts?: { walletWide?: boolean }) => {
     setStoredSubscriptionKey(apiKey);
@@ -1362,8 +1309,6 @@ export function SphereProvider({
     finalizeWallet,
     deleteWallet,
     reinitialize: initialize,
-    ipfsEnabled,
-    toggleIpfs,
     applySubscriptionKey,
     subscriptionKeyStatus,
     walletApiEnabled: isWalletApiEnabled(),

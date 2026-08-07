@@ -90,7 +90,6 @@ async function driveRestoreToSetPassword() {
 
   await waitFor(
     () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
-    { timeout: 3000 },
   );
 }
 
@@ -181,8 +180,9 @@ describe('encrypted file import auto-applies its decrypt password (#449 Task C)'
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file] } });
 
-    // Encrypted detection happens after the async file read — wait for the
-    // selected-file UI (and its "Import" button) to appear.
+    // Encrypted detection happens after the async file read. Wait budget is
+    // global (tests/setup.ts) — this file flaked at 1079ms and again at
+    // 3069ms on loaded CI runners while passing locally every time.
     await waitFor(() => expect(screen.getByRole('button', { name: /^import$/i })).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
 
@@ -248,7 +248,6 @@ describe('encrypted file import auto-applies its decrypt password (#449 Task C)'
     // Not auto-applied (it threw) — the optional SetPasswordScreen IS shown.
     await waitFor(
       () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
-      { timeout: 3000 },
     );
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
   });

@@ -90,13 +90,13 @@ export function ImportFileScreen({
               Select wallet file
             </p>
             <p className="text-xs text-neutral-400 dark:text-neutral-500 mb-3">
-              .json, .txt or .dat
+              .json or .txt
             </p>
             <label className="inline-block cursor-pointer">
               <input
                 type="file"
                 className="hidden"
-                accept=".json,.txt,.dat"
+                accept=".json,.txt"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) onFileSelect(file);

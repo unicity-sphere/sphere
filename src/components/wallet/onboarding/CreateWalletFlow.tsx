@@ -160,7 +160,6 @@ export function CreateWalletFlow({ initialStep, fromLock, onExitToUnlock }: Crea
             identity={identity}
             nametag={nametag}
             isBusy={isBusy}
-            ipnsFetchingNametag={false}
             error={error}
             progressMessage={progressMessage}
             onCreateWallet={handleCreateKeys}

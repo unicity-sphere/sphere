@@ -13,8 +13,6 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
     StorageProvider,
     TransportProvider,
     OracleProvider,
-    TokenStorageProvider,
-    TxfStorageDataBase,
     PriceProvider,
   } from '@unicitylabs/sphere-sdk';
 
@@ -24,7 +22,6 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
     transport?: Record<string, unknown>;
     oracle?: Record<string, unknown>;
     l1?: Record<string, unknown>;
-    tokenSync?: Record<string, unknown>;
     price?: Record<string, unknown>;
     groupChat?: Record<string, unknown> | boolean;
     market?: Record<string, unknown> | boolean;
@@ -34,13 +31,10 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
     storage: StorageProvider;
     transport: TransportProvider;
     oracle: OracleProvider;
-    tokenStorage: TokenStorageProvider<TxfStorageDataBase>;
     l1?: Record<string, unknown>;
     price?: PriceProvider;
-    ipfsTokenStorage?: TokenStorageProvider<TxfStorageDataBase>;
     groupChat?: Record<string, unknown> | boolean;
     market?: Record<string, unknown> | boolean;
-    tokenSyncConfig?: Record<string, unknown>;
   }
 
   export function createBrowserProviders(

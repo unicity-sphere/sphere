@@ -190,6 +190,25 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('stamps the #441 keep-open transferId into the synthetic result id (so the UI can match transfer:updated convergence)', async () => {
+    const err = new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED');
+    // The SDK stamps transferId on possibly-committed outcomes (#441).
+    (err as { transferId?: string }).transferId = 'tid-keepopen-1';
+    const send = vi.fn().mockRejectedValue(err);
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { id?: string; status?: string; deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.id).toBe('tid-keepopen-1');
+    // status 'pending' is the keep-open discriminator (isKeepOpenPendingResult).
+    expect(res?.status).toBe('pending');
+    expect(res?.deliveryPending).toBe(true);
+  });
+
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
     fakeSphere = { payments: { send } };

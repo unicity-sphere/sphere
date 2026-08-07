@@ -15,7 +15,7 @@ interface PaymentRequestsModalProps {
   pendingCount: number;
   /** Server-confirmed on wallet-api — 403/409 rejections throw and are surfaced here. */
   reject: (request: IncomingPaymentRequest) => Promise<void>;
-  /** Pays via payments.payPaymentRequest (send + linked 'paid' respond). */
+  /** Pays via payments.requests.pay (send + linked 'paid' respond). */
   pay: (request: IncomingPaymentRequest) => Promise<void>;
   clearProcessed: () => void;
 }

@@ -15,21 +15,16 @@ interface SDKDirectMessage {
   recipientPubkey: string;
 }
 
-// One degraded-storage toast (and Sentry event) per provider per window —
-// the SDK emits storage:degraded per failed background save (sphere-sdk#642).
-const STORAGE_DEGRADED_TOAST_COOLDOWN_MS = 5 * 60 * 1000;
-
 export function useSphereEvents(): void {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
-  // One deferred-delivery toast per transfer — the SDK re-emits delivery:deferred
-  // on every replay pass that hits the recipient's full mailbox again.
+  // One deferred-delivery toast per transfer — the SDK re-emits the
+  // delivery:deferred attention code on every replay pass that hits the
+  // recipient's full mailbox again.
   const deferredToastIdsRef = useRef<Set<string>>(new Set());
-  // Last storage:degraded toast per providerId — cooldown against toast storms
-  const degradedToastAtRef = useRef<Map<string, number>>(new Map());
 
   // When sphere instance changes (new wallet, delete, import) —
   // immediately sync identity cache so the UI never shows stale data
@@ -90,7 +85,9 @@ export function useSphereEvents(): void {
         memo: transfer.memo,
       });
     };
-    const handleTransferConfirmed = invalidatePayments;
+    // transfer:updated replaces transfer:confirmed / transfer:delivery_pending /
+    // transfer:failed on the v2 vertical — any outcome refreshes the payment queries.
+    const handleTransferUpdated = invalidatePayments;
 
     // Write sphere.identity directly into the query cache — by the time SDK
     // fires these events, its internal state is already updated.  Plain
@@ -125,9 +122,9 @@ export function useSphereEvents(): void {
       sendWelcomeDM(sphere);
     };
 
-    const handleSyncCompleted = invalidatePayments;
-
-    const handleSyncRemoteUpdate = invalidatePayments;
+    // inventory:updated replaces sync:completed / sync:remote-update — the
+    // wallet-api inventory mirror changed, re-read tokens()/assets().
+    const handleInventoryUpdated = invalidatePayments;
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
     const handleDmReceived = (dm: SDKDirectMessage) => {
@@ -176,97 +173,69 @@ export function useSphereEvents(): void {
       });
     };
 
-    // sphere-sdk#515 F2: a background custody save failed — the active
-    // custody provider rejected a write. Surface it (never log-only); the
-    // SEND pipeline already fails hard on its own writes.
-    // sphere-sdk#642: the SDK emits one event PER failed save — during a
-    // backend degradation that is one per incoming token (the 2026-07-07
-    // red-toast storm, Sentry SPHERE-2/-3). The condition is per-provider,
-    // self-healing, and not user-actionable per occurrence, so toast (and
-    // thereby report to Sentry) at most once per provider per cooldown;
-    // repeats within the window stay visible in the console.
-    const handleStorageDegraded = (data: { providerId: string; error: string }) => {
-      const now = Date.now();
-      const last = degradedToastAtRef.current.get(data.providerId) ?? 0;
-      if (now - last < STORAGE_DEGRADED_TOAST_COOLDOWN_MS) {
-        console.warn(`storage:degraded (toast suppressed) ${data.providerId}: ${data.error}`);
-        return;
+    // transfer:attention replaces split:checkpoint-stuck / delivery:undeliverable /
+    // delivery:deferred — one event, toast keyed by `code`:
+    //  - 'split:checkpoint-stuck' (sphere-sdk#501 / E.4): a certified split is
+    //    STUCK on a keep-open checkpoint error. The intent stays OPEN and the
+    //    funds are safe — it retries on the next resume — but the E.4 contract
+    //    requires a LOUD signal (not a silent retry). `detail` carries the
+    //    checkpoint error code (e.g. SPLIT_CHECKPOINT_LOST).
+    //  - 'delivery:undeliverable' (sphere-sdk#517 item 1, #434): a journaled
+    //    post-commit delivery exhausted its bounded replay budget and is POISON —
+    //    kept journaled, never auto-retried. The spend is final on-chain and the
+    //    recipient has NOT received it, so it must not strand silently.
+    //  - 'delivery:deferred' (§3.1 / sphere-sdk#621, #434): recipient's mailbox is
+    //    full (429) — the delivery stays journaled and retries after the deferral
+    //    window. Not a failure; toast once per transfer so replay passes don't
+    //    re-announce the same deferral.
+    const handleTransferAttention = (data: { transferId: string; code: string; detail?: string }) => {
+      switch (data.code) {
+        case 'split:checkpoint-stuck':
+          showToast(
+            `A split payment is stuck settling (${data.detail ?? data.code}) — your funds are safe and it will retry on ` +
+              `reconnect. If it persists, contact support with reference ${data.transferId.slice(0, 8)}.`,
+            'error',
+            15000,
+          );
+          break;
+        case 'delivery:undeliverable':
+          showToast(
+            `A sent transfer could not be delivered after repeated attempts — the funds are ` +
+              `committed to the recipient but undelivered. Contact support with reference ` +
+              `${data.transferId.slice(0, 8)}.`,
+            'error',
+            15000,
+          );
+          break;
+        case 'delivery:deferred':
+          if (deferredToastIdsRef.current.has(data.transferId)) return;
+          deferredToastIdsRef.current.add(data.transferId);
+          showToast(
+            "Recipient can't receive yet (inbox full) — delivery will retry automatically.",
+            'info',
+            8000,
+          );
+          break;
+        // Other codes (e.g. 'sync:pending', 'mint:unresolved') resolve on their
+        // own via resume — no toast.
       }
-      degradedToastAtRef.current.set(data.providerId, now);
-      showToast(
-        `Token storage degraded (${data.providerId}): a background save failed — ${data.error}`,
-        'error',
-        10000,
-      );
-    };
-
-    // sphere-sdk#501 / E.4: a certified split is STUCK on a keep-open checkpoint
-    // error (a lost/withheld burn checkpoint, or a trust-base rotation). The
-    // intent stays OPEN and the funds are safe — it retries on the next resume —
-    // but the E.4 contract requires a LOUD signal (not a silent retry) so the
-    // holder can act (or reach support) rather than assume the split completed.
-    const handleSplitCheckpointStuck = (data: { transferId: string; code: string; error: string }) => {
-      showToast(
-        `A split payment is stuck settling (${data.code}) — your funds are safe and it will retry on ` +
-          `reconnect. If it persists, contact support with reference ${data.transferId.slice(0, 8)}.`,
-        'error',
-        15000,
-      );
-    };
-
-    // sphere-sdk#517 item 1 (#434): a journaled post-commit delivery exhausted its
-    // bounded replay budget and is marked POISON — kept journaled, NEVER auto-retried
-    // again. The spend is final on-chain and the recipient has NOT received it, so
-    // without a loud signal the transfer is stranded silently until support steps in.
-    const handleDeliveryUndeliverable = (data: {
-      transferId: string;
-      recipientPubkey: string;
-      attempts: number;
-      error: string;
-    }) => {
-      showToast(
-        `A sent transfer could not be delivered after ${data.attempts} attempts — the funds are ` +
-          `committed to the recipient but undelivered. Contact support with reference ` +
-          `${data.transferId.slice(0, 8)}.`,
-        'error',
-        15000,
-      );
-    };
-
-    // §3.1 / sphere-sdk#621 (#434): recipient's mailbox is full (429) — the delivery
-    // stays journaled and retries after the deferral window. Not a failure; toast once
-    // per transfer so periodic replay passes don't re-announce the same deferral.
-    const handleDeliveryDeferred = (data: { transferId: string }) => {
-      if (deferredToastIdsRef.current.has(data.transferId)) return;
-      deferredToastIdsRef.current.add(data.transferId);
-      showToast(
-        "Recipient can't receive yet (inbox full) — delivery will retry automatically.",
-        'info',
-        8000,
-      );
     };
 
     sphere.on('transfer:incoming', handleIncomingTransfer);
-    sphere.on('transfer:confirmed', handleTransferConfirmed);
-    // sphere-sdk 0.10.6 (#621/#622): a send whose recipient delivery is deferred (full mailbox / 429,
-    // or a transient outage) resolves and emits transfer:delivery_pending INSTEAD of transfer:confirmed
-    // — the spend is final on-chain. Refresh on it too so balances/inventory/history don't go stale
-    // until the next sync.
-    sphere.on('transfer:delivery_pending', handleTransferConfirmed);
+    // v2 vertical: transfer:updated fires for every outgoing-transfer outcome
+    // (confirmed, delivery pending, failed) — the spend state changed either
+    // way, so balances/inventory/history must refresh.
+    sphere.on('transfer:updated', handleTransferUpdated);
     sphere.on('history:updated', handleHistoryUpdated);
     sphere.on('nametag:registered', handleNametagChange);
     sphere.on('nametag:recovered', handleNametagChange);
     sphere.on('identity:changed', handleIdentityChange);
-    sphere.on('sync:completed', handleSyncCompleted);
-    sphere.on('sync:remote-update', handleSyncRemoteUpdate);
+    sphere.on('inventory:updated', handleInventoryUpdated);
     sphere.on('message:dm', handleDmReceived);
     sphere.on('message:read', handleMessageRead);
     sphere.on('composing:started', handleComposingStarted);
     sphere.on('payment_request:incoming', handlePaymentRequestIncoming);
-    sphere.on('storage:degraded', handleStorageDegraded);
-    sphere.on('split:checkpoint-stuck', handleSplitCheckpointStuck);
-    sphere.on('delivery:undeliverable', handleDeliveryUndeliverable);
-    sphere.on('delivery:deferred', handleDeliveryDeferred);
+    sphere.on('transfer:attention', handleTransferAttention);
 
     return () => {
       if (invalidateTimerRef.current) {
@@ -274,22 +243,17 @@ export function useSphereEvents(): void {
         invalidateTimerRef.current = null;
       }
       sphere.off('transfer:incoming', handleIncomingTransfer);
-      sphere.off('transfer:confirmed', handleTransferConfirmed);
-      sphere.off('transfer:delivery_pending', handleTransferConfirmed);
+      sphere.off('transfer:updated', handleTransferUpdated);
       sphere.off('history:updated', handleHistoryUpdated);
       sphere.off('nametag:registered', handleNametagChange);
       sphere.off('nametag:recovered', handleNametagChange);
       sphere.off('identity:changed', handleIdentityChange);
-      sphere.off('sync:completed', handleSyncCompleted);
-      sphere.off('sync:remote-update', handleSyncRemoteUpdate);
+      sphere.off('inventory:updated', handleInventoryUpdated);
       sphere.off('message:dm', handleDmReceived);
       sphere.off('message:read', handleMessageRead);
       sphere.off('composing:started', handleComposingStarted);
       sphere.off('payment_request:incoming', handlePaymentRequestIncoming);
-      sphere.off('storage:degraded', handleStorageDegraded);
-      sphere.off('split:checkpoint-stuck', handleSplitCheckpointStuck);
-      sphere.off('delivery:undeliverable', handleDeliveryUndeliverable);
-      sphere.off('delivery:deferred', handleDeliveryDeferred);
+      sphere.off('transfer:attention', handleTransferAttention);
     };
   }, [sphere, queryClient]);
 }

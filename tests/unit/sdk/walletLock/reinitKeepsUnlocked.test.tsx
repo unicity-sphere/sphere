@@ -1,7 +1,6 @@
 /**
- * Graceful lock §8.5: initialize() doubles as `reinitialize` and as the target
- * of toggleIpfs(). Omitting the session password there relocks an encrypted
- * wallet the user just unlocked — one click in permanent chrome.
+ * Graceful lock §8.5: initialize() doubles as `reinitialize`. Omitting the
+ * session password there relocks an encrypted wallet the user just unlocked.
  *
  * The other side of the invariant is guarded by plaintextWalletLoads.test.tsx
  * and lockedWalletColdStart.test.tsx: with NO session password the cold load
@@ -56,8 +55,6 @@ vi.mock('@unicitylabs/sphere-sdk/impl/browser', async (importOriginal) => {
         setIdentity: vi.fn(async () => {}),
       },
       oracle: {},
-      tokenStorage: { disconnect: vi.fn(async () => {}) },
-      ipfsTokenStorage: undefined,
       groupChat: true,
       market: true,
     })),
@@ -101,14 +98,14 @@ afterEach(() => {
 });
 
 describe('re-init keeps an unlocked encrypted wallet unlocked (graceful lock §8.5)', () => {
-  it('toggleIpfs() does not relock', async () => {
+  it('reinitialize() does not relock', async () => {
     render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('locked').textContent).toBe('true'));
 
     await act(async () => { await ctx!.unlock('correct horse battery staple'); });
     expect(screen.getByTestId('locked').textContent).toBe('false');
 
-    await act(async () => { ctx!.toggleIpfs(); });
+    await act(async () => { await ctx!.reinitialize(); });
 
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
     expect(screen.getByTestId('locked').textContent).toBe('false');

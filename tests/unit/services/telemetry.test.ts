@@ -20,10 +20,15 @@ vi.mock('../../../src/config/sentry', () => ({
 import { getOrCreateClientId, routePatternFor, trackPageView } from '../../../src/services/telemetry';
 import { STORAGE_KEYS } from '../../../src/config/storageKeys';
 
-const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 204 })));
+// Typed as the real fetch: `vi.fn(() => …)` infers a ZERO-arg mock, so
+// `mock.calls[n][1]` is a missing tuple element and every read of the request
+// init below fails to compile.
+const fetchMock = vi.fn<typeof globalThis.fetch>(() =>
+  Promise.resolve(new Response(null, { status: 204 }))
+);
 
 function bodyOf(call: number): Record<string, unknown> {
-  const init = fetchMock.mock.calls[call]![1] as RequestInit;
+  const init = fetchMock.mock.calls[call]![1]!;
   return JSON.parse(init.body as string);
 }
 
@@ -83,7 +88,7 @@ describe('trackPageView', () => {
 
   it('identifies the client so the server can pick the right property', () => {
     trackPageView('/home');
-    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const init = fetchMock.mock.calls[0]![1]!;
     expect((init.headers as Record<string, string>)['X-Client']).toBe('sphere');
     expect(init.keepalive).toBe(true);
   });

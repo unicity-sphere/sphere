@@ -3,7 +3,7 @@ import { Send } from 'lucide-react';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import type { TransferResult } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer } from '../../sdk';
-import { getErrorMessage } from '../../sdk/errors';
+import { getErrorMessage, isKeepOpenPendingResult } from '../../sdk/errors';
 import { QuotaBlockedError } from '../../sdk/quotaGate';
 import { useUpgrade } from '../upgrade';
 import { showToast } from '../ui/toast-utils';
@@ -64,7 +64,17 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
       // recipient-side delivery is journaled for retry (§3.1). The dApp learns it
       // via the intent result; this modal unmounts on resolve, so the wallet-side
       // signal has to be a toast (SendModal's equivalent is its pending screen).
-      if (result.deliveryPending) {
+      // A keep-open outcome (useTransfer's synthetic pending result for
+      // PENDING_COMMIT_CODES) gets the honest "network busy" copy instead —
+      // sphere-sdk 0.14 converges the SAME transfer in-session; it must never
+      // read as something to re-send.
+      if (isKeepOpenPendingResult(result)) {
+        showToast(
+          'Network is busy — your transfer is safe and will complete automatically.',
+          'info',
+          8000,
+        );
+      } else if (result.deliveryPending) {
         showToast(
           'Sent — delivery to the recipient is pending and will retry automatically.',
           'info',

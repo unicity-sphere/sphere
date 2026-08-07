@@ -77,12 +77,9 @@ await sphere.payments.send({
   memo: 'Order #123',
 });
 
-// Check balance (synchronous)
-const assets = sphere.payments.getBalance();
+// Check balances (aggregated per coin, with fiat prices)
+const assets = await sphere.payments.assets();
 assets.forEach(a => console.log(\`\${a.symbol}: \${a.totalAmount}\`));
-
-// Get assets with fiat prices
-const withPrices = await sphere.payments.getAssets();
 
 // Listen for incoming transfers
 sphere.on('transfer:incoming', (transfer) => {

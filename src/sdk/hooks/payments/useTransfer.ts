@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getErrorCode, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
+import { getErrorCode, getKeepOpenTransferId, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
@@ -76,7 +77,8 @@ export function useTransfer(): UseTransferReturn {
 
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
-      if (!sphere) throw new Error('Wallet not initialized');
+      const payments = getPayments(sphere);
+      if (!payments) throw new Error('Wallet not initialized');
 
       // Subscription-key readiness gate: refuse the send until the live oracle
       // holds the per-wallet key, else it hits the aggregator unauthenticated
@@ -103,7 +105,7 @@ export function useTransfer(): UseTransferReturn {
       }
 
       try {
-        return await sphere.payments.send({
+        return await payments.send({
           coinId: params.coinId,
           amount: params.amount,
           recipient: params.recipient,
@@ -150,11 +152,21 @@ export function useTransfer(): UseTransferReturn {
         // delivery-pending SUCCESS, NEVER a re-sendable failure: re-issuing a fresh send()
         // would consume a DIFFERENT source and double-pay the recipient. (See the single
         // PENDING_COMMIT_CODES definition in ../../errors — shared with the pay path.)
-        // `id` is intentionally empty: these errors carry no transferId (the still-open
-        // intent + resume own it) and no send UI reads result.id on this path — it exists
-        // only to render the "pending" state.
+        // `id` carries the keep-open transferId the SDK stamps on possibly-committed
+        // errors (#441) — sphere-sdk 0.14 converges that SAME transfer in-session and
+        // emits transfer:updated with it, so the send UI can clear its "network busy"
+        // pending copy when convergence lands. Empty when the error carries none.
+        // The synthetic `status: 'pending'` is the keep-open discriminator
+        // (isKeepOpenPendingResult) — a real #621 delivery-deferred success keeps its
+        // SDK-produced status.
         if (isPendingCommitCode(e)) {
-          return { id: '', status: 'pending', tokens: [], tokenTransfers: [], deliveryPending: true };
+          return {
+            id: getKeepOpenTransferId(e),
+            status: 'pending',
+            tokens: [],
+            tokenTransfers: [],
+            deliveryPending: true,
+          };
         }
         throw e;
       }
@@ -162,7 +174,7 @@ export function useTransfer(): UseTransferReturn {
     onSuccess: () => {
       // Force refetch all payment queries with fresh data.
       // Use refetchQueries (not invalidateQueries) to guarantee a new fetch
-      // even if a previous refetch from the transfer:confirmed event is in-flight.
+      // even if a previous refetch from the transfer:updated event is in-flight.
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.tokens.all });
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.balance.all });
       queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.assets.all });

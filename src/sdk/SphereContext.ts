@@ -1,17 +1,18 @@
 import { createContext } from 'react';
 import type { Sphere, PeerInfo, InitProgress } from '@unicitylabs/sphere-sdk';
 import type { BrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
-import type { WalletApiProviderExtras } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+import type { WalletApiTransportConfig } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 import type { SubscriptionKeyStatus } from './subscription/keyStatus';
 import type { AutoLockValue } from './walletLock/lockSettings';
 
 /**
- * The app's provider bundle: the browser base, plus — when the asset path
- * rides wallet-api (VITE_WALLET_API_URL set) — the S4 extras (`delivery`,
- * `walletApi`). The extras are additive: helpers taking `BrowserProviders`
- * keep working unchanged.
+ * The app's provider bundle: the browser base, plus — when the money path
+ * rides wallet-api (VITE_WALLET_API_URL set) — the plain `walletApi`
+ * transport CONFIG (post-flip: createWalletApiProviders attaches config, not
+ * a client; the session lifecycle is SDK-internal). The extra is additive:
+ * helpers taking `BrowserProviders` keep working unchanged.
  */
-export type SphereAppProviders = BrowserProviders & Partial<WalletApiProviderExtras>;
+export type SphereAppProviders = BrowserProviders & { walletApi?: WalletApiTransportConfig };
 
 export interface SphereContextValue {
   sphere: Sphere | null;
@@ -98,10 +99,6 @@ export interface SphereContextValue {
   deleteWallet: () => Promise<void>;
   reinitialize: () => Promise<void>;
 
-  /** Whether IPFS token sync is currently enabled */
-  ipfsEnabled: boolean;
-  /** Toggle IPFS sync on/off (persists to localStorage, triggers reinitialize) */
-  toggleIpfs: () => void;
 
   /** Persist a per-wallet subscription API key and re-init the SDK oracle with it. */
   applySubscriptionKey: (apiKey: string, opts?: { walletWide?: boolean }) => Promise<void>;
@@ -114,11 +111,7 @@ export interface SphereContextValue {
    */
   subscriptionKeyStatus: SubscriptionKeyStatus;
 
-  /**
-   * True when the asset path rides the wallet-api backend (S4 composition).
-   * IPFS token sync is unavailable in this mode — server inventory custody
-   * and a second token-storage mirror have undefined handoff semantics.
-   */
+  /** True when the asset path rides the wallet-api backend (S4 composition). */
   walletApiEnabled: boolean;
 }
 
@@ -133,7 +126,7 @@ export interface ImportWalletOptions {
 }
 
 export interface ImportFromFileOptions {
-  fileContent: string | Uint8Array;
+  fileContent: string;
   fileName: string;
   password?: string;
   nametag?: string;
