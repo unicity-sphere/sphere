@@ -12,7 +12,9 @@
     // Mirrors vitest.config.ts's `alias: { "@": "/src" }` — tests use it, and
     // TypeScript has never been told about it.
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
   // src/*.d.ts carries the ambient shim for @unicitylabs/sphere-sdk/impl/browser
   // (src/sphere-sdk-browser.d.ts); without it every test that reaches
