@@ -25,6 +25,12 @@ vi.mock('../../../src/hooks/useInstalledProjects', () => ({
 vi.mock('../../../src/components/marketplace/ProjectReviewsSection', () => ({
   ProjectReviewsSection: () => null,
 }));
+// This suite exercises action buttons only, not the signed-in-only Report
+// control — no identity means no control, same as every other consumer of
+// this hook in an unauthenticated test context.
+vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
+  useSphereContext: () => ({ sphere: null }),
+}));
 
 import { ProjectPage } from '../../../src/pages/ProjectPage';
 import { PROJECT_TYPES } from '../../../src/utils/isStandalone';

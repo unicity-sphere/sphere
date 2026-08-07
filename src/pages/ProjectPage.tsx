@@ -1,12 +1,16 @@
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronDown, ChevronLeft, ChevronRight, Star } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronDown, ChevronLeft, ChevronRight, Star, Flag } from 'lucide-react';
 import { ProjectLogo } from '@unicitylabs/sphere-ui';
+import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useProject, useProjectQuests, useProjectMetrics } from '../hooks/useMarketplace';
 import { groupQuestsByTrack } from '../utils/groupQuestsByTrack';
 import { QuestPreviewCard } from '../components/marketplace/QuestPreviewCard';
 import { ProjectReviewsSection } from '../components/marketplace/ProjectReviewsSection';
+import { ReportModal } from '../components/marketplace/ReportModal';
+import { canReportProject } from '../components/marketplace/moderationAffordances';
+import { submitReport, type ReportCategory } from '../services/userApi';
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
@@ -220,11 +224,18 @@ export function ProjectPage() {
   const [searchParams] = useSearchParams();
   const isPreview = searchParams.get('preview') === 'true';
   const navigate = useNavigate();
+  const { sphere } = useSphereContext();
   const { openTab } = useDesktopState();
   const { isInstalled, toggle } = useInstalledProjects();
   const { data: project, isLoading } = useProject(slug ?? '', isPreview || undefined);
   const installed = slug ? isInstalled(slug) : false;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const myAddress = sphere?.identity?.directAddress ?? null;
+  // Session-local, same pattern as ProjectReviewsSection's reportedRatingIds:
+  // the backend has no "did I already report this" read, so this only ever
+  // flips true on a successful submit for the current page visit.
+  const [projectReported, setProjectReported] = useState(false);
+  const [projectReportOpen, setProjectReportOpen] = useState(false);
   // Whether to even fetch quests, and whether to show the Quests section
   // below, are gated on `!isStandalone`, NOT on `supportsQuests` — this is
   // deliberately the wider check. `useProjectQuests`/the Quests section had
@@ -622,6 +633,43 @@ export function ProjectPage() {
           </div>
         </section>
       )}
+
+      {/* Report this project — a safety affordance, not a primary action, so
+          it sits quietly at the foot of the page rather than beside the
+          install/open buttons up top. Same signed-in gate and "Reported"
+          marker style as the per-review Report control in
+          ProjectReviewsSection; hidden in preview mode like the reviews
+          section itself (a project being previewed isn't published yet). */}
+      {!isPreview && canReportProject(myAddress) && (
+        <section className="px-4 sm:px-6 pb-8">
+          <div className="max-w-5xl mx-auto">
+            {projectReported ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35">
+                <Flag className="w-3 h-3" /> Reported
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setProjectReportOpen(true)}
+                title="Report this project"
+                className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35 hover:text-red-500"
+              >
+                <Flag className="w-3 h-3" /> Report this project
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      <ReportModal
+        isOpen={projectReportOpen}
+        onClose={() => setProjectReportOpen(false)}
+        onSubmit={async (category: ReportCategory, comment?: string) => {
+          if (!sphere) throw new Error('wallet-unavailable');
+          await submitReport(sphere, { targetType: 'project', targetId: project._id, category, comment });
+          setProjectReported(true);
+        }}
+      />
     </motion.div>
   );
 }

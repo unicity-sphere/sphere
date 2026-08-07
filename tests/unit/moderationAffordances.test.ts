@@ -1,6 +1,6 @@
 // tests/unit/moderationAffordances.test.ts
 import { describe, it, expect } from 'vitest';
-import { canReport, canAppeal } from '../../src/components/marketplace/moderationAffordances';
+import { canReport, canReportProject, canAppeal } from '../../src/components/marketplace/moderationAffordances';
 
 describe('canReport', () => {
   it('allows reporting someone else\'s content', () => {
@@ -13,6 +13,16 @@ describe('canReport', () => {
 
   it('disallows reporting when the viewer is not signed in', () => {
     expect(canReport(null, 'direct://author')).toBe(false);
+  });
+});
+
+describe('canReportProject', () => {
+  it('allows reporting a project when signed in', () => {
+    expect(canReportProject('direct://viewer')).toBe(true);
+  });
+
+  it('disallows reporting a project when the viewer is not signed in', () => {
+    expect(canReportProject(null)).toBe(false);
   });
 });
 
