@@ -1629,11 +1629,11 @@ const result = await Sphere.importFromJSON({
   jsonContent: '{"version":...}',
 });
 
-// Import from legacy wallet file
+// Import from a legacy wallet file (.txt / JSON backups; .dat was removed)
 const result = await Sphere.importFromLegacyFile({
   ...providers,
   fileContent: fileData,
-  fileName: 'wallet.dat',
+  fileName: 'wallet.txt',
   password: 'if-encrypted',
 });`}
               />
