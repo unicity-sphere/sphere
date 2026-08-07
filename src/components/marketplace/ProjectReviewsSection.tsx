@@ -32,6 +32,19 @@ interface ProjectReviewsSectionProps {
   ratingCount:     number;
 }
 
+/**
+ * Steam-style verdict for a project's positive percentage.
+ *
+ * This is the original; it now has two deliberate copies, both named
+ * `ratingSummaryLabel`:
+ *   - sphere-dev-portal/src/lib/ratingSummary.ts
+ *   - sphere-backoffice/src/lib/ratingSummary.ts
+ * Extracting one pure function into sphere-ui would cost a publish plus a
+ * version bump in all three consumers, so the duplication is on purpose — but
+ * changing the thresholds or the copy HERE and nowhere else makes the wallet
+ * and the two admin surfaces describe the same project differently, silently.
+ * Change all three together.
+ */
 function summaryLabel(pct: number, total: number): string {
   if (total === 0) return 'No reviews yet';
   if (total < 10) {
@@ -130,6 +143,17 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       setAppealError(null);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
+    },
+    onError: (e: Error) => {
+      // The server refuses to delete a review while it is hidden — deleting
+      // would free the unique (wallet, project) slot and let the same text be
+      // re-posted as a fresh, fully public row. Say so, rather than letting
+      // Remove look like a no-op: the appeal control is right below.
+      if (e.message.endsWith('403')) {
+        setError('A hidden review cannot be removed while it is under moderation. Appeal the decision instead.');
+      } else {
+        setError('Failed to remove your review.');
+      }
     },
   });
 
