@@ -55,7 +55,7 @@ function makeFakeSphere(pendingRows: PendingTransfer[]) {
       listeners.get(evt)?.delete(fn);
     },
     resolve: vi.fn(async () => ({ chainPubkey: '02'.padEnd(66, 'a') })),
-    paymentsV2: {
+    payments: {
       pendingTransfers: vi.fn(async () => pendingRows.map((r) => ({ ...r }))),
       resumeNow: vi.fn(async () => {}),
       send: vi.fn(),
@@ -160,7 +160,7 @@ describe('SendModal — keep-open pending state (in-session convergence)', () =>
     expect(screen.getByText('Network is busy')).toBeTruthy();
   });
 
-  it('"Retry now" calls paymentsV2.resumeNow() and NEVER re-issues the send (double-pay guard)', async () => {
+  it('"Retry now" calls payments.resumeNow() and NEVER re-issues the send (double-pay guard)', async () => {
     transferMock.mockResolvedValue(keepOpenResult('tid-1'));
     await driveSend();
     await screen.findByText('Network is busy');
@@ -170,10 +170,10 @@ describe('SendModal — keep-open pending state (in-session convergence)', () =>
       fireEvent.click(screen.getByText('Retry now'));
     });
 
-    expect(fakeSphere.paymentsV2.resumeNow).toHaveBeenCalledTimes(1);
+    expect(fakeSphere.payments.resumeNow).toHaveBeenCalledTimes(1);
     // The retry affordance converges the SAME transfer — no second send.
     expect(transferMock).toHaveBeenCalledTimes(1);
-    expect(fakeSphere.paymentsV2.send).not.toHaveBeenCalled();
+    expect(fakeSphere.payments.send).not.toHaveBeenCalled();
   });
 
   it('an ordinary delivery-deferred success (#621: real status, deliveryPending) keeps the existing copy — NOT the keep-open state', async () => {

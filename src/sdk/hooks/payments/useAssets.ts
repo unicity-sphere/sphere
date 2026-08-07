@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useEffect, useMemo, useRef } from 'react';
 import { useSphereContext } from '../core/useSphere';
 import { useRegistryReady } from './useRegistryReady';
@@ -30,9 +31,9 @@ export function useAssets(): UseAssetsReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.assets.list,
     queryFn: async (): Promise<Asset[]> => {
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) return [];
-      return await paymentsV2.assets();
+      const payments = getPayments(sphere);
+      if (!payments) return [];
+      return await payments.assets();
     },
     enabled: !!sphere,
     staleTime: 30_000,

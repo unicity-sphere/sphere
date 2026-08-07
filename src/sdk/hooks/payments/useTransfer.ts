@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { getErrorCode, getKeepOpenTransferId, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
@@ -76,8 +77,8 @@ export function useTransfer(): UseTransferReturn {
 
   const mutation = useMutation({
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) throw new Error('Wallet not initialized');
+      const payments = getPayments(sphere);
+      if (!payments) throw new Error('Wallet not initialized');
 
       // Subscription-key readiness gate: refuse the send until the live oracle
       // holds the per-wallet key, else it hits the aggregator unauthenticated
@@ -104,7 +105,7 @@ export function useTransfer(): UseTransferReturn {
       }
 
       try {
-        return await paymentsV2.send({
+        return await payments.send({
           coinId: params.coinId,
           amount: params.amount,
           recipient: params.recipient,

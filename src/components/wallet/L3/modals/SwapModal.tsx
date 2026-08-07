@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { getPayments } from '../../../../sdk/payments';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowDownUp, Loader2, CheckCircle, ChevronDown } from 'lucide-react';
@@ -124,8 +125,8 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   };
 
   const handleSwap = async () => {
-    const paymentsV2 = sphere?.paymentsV2;
-    if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !paymentsV2) return;
+    const payments = getPayments(sphere);
+    if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !payments) return;
     setStep('processing'); setError(null);
     try {
       // 1. Send the "from" asset to the swap stub recipient (unchanged).
@@ -134,7 +135,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
 
       // 2. Self-mint the "to" asset to this wallet (replaces the faucet call).
       const toAmountSmallestUnit = parseTokenAmount(exchangeInfo.toAmount.toFixed(toAsset.decimals), toAsset.decimals);
-      const mintResult = await paymentsV2.mint(toAsset.coinId, toAmountSmallestUnit);
+      const mintResult = await payments.mint(toAsset.coinId, toAmountSmallestUnit);
       if (!mintResult.success) throw new Error(mintResult.error);
 
       // useTransfer's refetch already fired after step 1 (before the mint), so

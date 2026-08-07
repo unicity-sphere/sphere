@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { getPayments } from '../../payments';
 import { useMemo } from 'react';
 import { useSphereContext } from '../core/useSphere';
 import { useRegistryReady } from './useRegistryReady';
@@ -24,9 +25,9 @@ export function useTokens(): UseTokensReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.tokens.list,
     queryFn: async () => {
-      const paymentsV2 = sphere?.paymentsV2;
-      if (!paymentsV2) return [];
-      return paymentsV2.tokens();
+      const payments = getPayments(sphere);
+      if (!payments) return [];
+      return payments.tokens();
     },
     enabled: !!sphere,
     staleTime: 30_000,

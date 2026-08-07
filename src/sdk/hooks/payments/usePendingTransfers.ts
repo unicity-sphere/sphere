@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 
@@ -11,13 +12,13 @@ import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 export const PENDING_TRANSFERS_POLL_MS = 15_000;
 
 export interface UsePendingTransfersReturn {
-  /** Open/shortfall transfers still converging (sphere-sdk 0.14 `paymentsV2.pendingTransfers()`). */
+  /** Open/shortfall transfers still converging (sphere-sdk 0.14 `payments.pendingTransfers()`). */
   pending: PendingTransfer[];
   /** Re-read the list from the SDK (also runs automatically, see below). */
   refresh: () => Promise<void>;
   /**
    * Kick the SDK's in-session convergence immediately
-   * (`paymentsV2.resumeNow()`). This is the ONLY correct user-facing retry:
+   * (`payments.resumeNow()`). This is the ONLY correct user-facing retry:
    * it converges the SAME transferIds. NEVER wire a retry affordance to
    * send() — a fresh send consumes a different source and double-pays.
    */
@@ -28,7 +29,7 @@ export interface UsePendingTransfersReturn {
 
 /**
  * Pending (still-converging) outgoing transfers, read from
- * `sphere.paymentsV2.pendingTransfers()` — the SDK derives the list from its
+ * `sphere.payments.pendingTransfers()` — the SDK derives the list from its
  * durable stores, so transfers left pending across a close/reopen are visible
  * from the very first mount.
  *
@@ -47,14 +48,14 @@ export function usePendingTransfers(): UsePendingTransfersReturn {
   const generationRef = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
-    const paymentsV2 = sphere?.paymentsV2;
-    if (!paymentsV2) {
+    const payments = getPayments(sphere);
+    if (!payments) {
       setPending([]);
       return;
     }
     const generation = ++generationRef.current;
     try {
-      const rows = await paymentsV2.pendingTransfers();
+      const rows = await payments.pendingTransfers();
       if (generationRef.current === generation) setPending(rows);
     } catch {
       // Transient read failure: keep the last known list (the poll/events
@@ -92,11 +93,11 @@ export function usePendingTransfers(): UsePendingTransfersReturn {
   }, [sphere, hasPending, refresh]);
 
   const resumeNow = useCallback(async (): Promise<void> => {
-    const paymentsV2 = sphere?.paymentsV2;
-    if (!paymentsV2) return;
+    const payments = getPayments(sphere);
+    if (!payments) return;
     setIsResuming(true);
     try {
-      await paymentsV2.resumeNow();
+      await payments.resumeNow();
     } finally {
       setIsResuming(false);
       void refresh();

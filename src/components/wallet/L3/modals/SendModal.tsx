@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { getPayments } from '../../../../sdk/payments';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw } from 'lucide-react';
 import type { Asset, TransferResult } from '@unicitylabs/sphere-sdk';
@@ -69,7 +70,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // result): the spend may already be on-chain and sphere-sdk 0.14 converges
   // the SAME transfer in-session (auto-retry, backoff 5s→120s). transferId is
   // the #441-stamped id ('' when the error carried none); legs is the
-  // certified/total detail read best-effort from paymentsV2.pendingTransfers().
+  // certified/total detail read best-effort from payments.pendingTransfers().
   const [keepOpen, setKeepOpen] = useState<{
     transferId: string;
     legs: { certified: number; total: number } | null;
@@ -95,15 +96,15 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     };
   }, [sphere, keepOpen]);
 
-  // MONEY-SAFETY: the retry affordance calls paymentsV2.resumeNow() — the SDK
+  // MONEY-SAFETY: the retry affordance calls payments.resumeNow() — the SDK
   // converges the SAME transferId. It must NEVER call send()/transfer() again
   // (a fresh send consumes a different source and double-pays the recipient).
   const handleResumeNow = async () => {
-    const paymentsV2 = sphere?.paymentsV2;
-    if (!paymentsV2 || isResuming) return;
+    const payments = getPayments(sphere);
+    if (!payments || isResuming) return;
     setIsResuming(true);
     try {
-      await paymentsV2.resumeNow();
+      await payments.resumeNow();
     } catch {
       // Best-effort nudge — the SDK's in-session auto-retry keeps converging.
     } finally {
@@ -233,7 +234,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
         // the copy renders without it).
         setKeepOpen({ transferId: result.id, legs: null });
         if (result.id) {
-          sphere?.paymentsV2
+          getPayments(sphere)
             ?.pendingTransfers()
             .then((rows) => {
               const row = rows.find((r) => r.transferId === result.id);

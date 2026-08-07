@@ -68,9 +68,9 @@ console.log('Ready:', sphere.isReady);`,
       title: 'Payments',
       tagline: 'Instant. Off-chain. P2P.',
       description: 'Send tokens to anyone via @nametag or address. Instant P2P settlement on Layer 3.',
-      code: `await sphere.paymentsV2.send({ recipient: '@merchant', amount: '100', coinId });`,
+      code: `await sphere.payments.send({ recipient: '@merchant', amount: '100', coinId });`,
       fullExample: `// Send tokens (use @nametag or direct address)
-await sphere.paymentsV2.send({
+await sphere.payments.send({
   coinId: '0x...',         // token type ID
   amount: '100000000',     // in smallest units
   recipient: '@merchant',  // @nametag or DIRECT:// address
@@ -78,7 +78,7 @@ await sphere.paymentsV2.send({
 });
 
 // Check balances (aggregated per coin, with fiat prices)
-const assets = await sphere.paymentsV2.assets();
+const assets = await sphere.payments.assets();
 assets.forEach(a => console.log(\`\${a.symbol}: \${a.totalAmount}\`));
 
 // Listen for incoming transfers
@@ -177,7 +177,7 @@ await sphere.communications.sendDM(seller.agentPubkey, JSON.stringify({
 sphere.communications.onDirectMessage(async (msg) => {
   const data = JSON.parse(msg.content);
   if (data.type === 'accepted') {
-    await sphere.paymentsV2.send({
+    await sphere.payments.send({
       coinId: '0x...', amount: String(data.price), recipient: msg.senderPubkey,
     });
   }
@@ -369,7 +369,7 @@ sphere.communications.onDirectMessage(async (msg) => {
                 <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Private key IS identity</li>
                 <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Included (off-chain)</li>
                 <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Unified Unicity ID</li>
-                <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Just call <code className="text-amber-600 dark:text-amber-400 text-sm">paymentsV2.send()</code></li>
+                <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Just call <code className="text-amber-600 dark:text-amber-400 text-sm">payments.send()</code></li>
                 <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> Built-in P2P messaging</li>
                 <li className="flex items-center gap-3 text-neutral-700 dark:text-white/75"><span className="text-orange-500">✓</span> <strong>Days</strong></li>
               </ul>
