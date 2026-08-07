@@ -37,7 +37,7 @@ const AMOUNTS: Record<string, number> = {
 /**
  * Self-mint test tokens to this wallet (v2 faucet replacement). Mints ONLY the
  * predefined `AMOUNTS` basket to the wallet's own identity via
- * `payments.mintFungibleToken`, then refreshes the payment queries. The
+ * `paymentsV2.mint`, then refreshes the payment queries. The
  * TokenRegistry is used solely to resolve each symbol's coinId + decimals — it
  * does NOT drive which coins are minted. No faucet, no nametag required.
  */
@@ -48,7 +48,8 @@ export function useTopUp(): UseTopUpReturn {
 
   const mutation = useMutation({
     mutationFn: async (): Promise<TopUpResult[]> => {
-      if (!sphere) throw new Error('Wallet not initialized');
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) throw new Error('Wallet not initialized');
       // Self-mint is a certification_request — gate it on the subscription key
       // like a send, so it can't go out keyless in the provisioning window.
       requireSubscriptionKey();
@@ -76,7 +77,7 @@ export function useTopUp(): UseTopUpReturn {
           const iconUrl = registry.getIconUrl(def.id) ?? undefined;
           const amount = parseTokenAmount(String(human), def.decimals ?? 0);
           try {
-            const res = await sphere.payments.mintFungibleToken(def.id, amount);
+            const res = await paymentsV2.mint(def.id, amount);
             return res.success
               ? { ...base, iconUrl, success: true }
               : { ...base, iconUrl, success: false, error: res.error };

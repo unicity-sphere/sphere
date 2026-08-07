@@ -1,10 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles } from 'lucide-react';
-import type { Asset } from '@unicitylabs/sphere-sdk';
+import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import type { Asset, TransferResult } from '@unicitylabs/sphere-sdk';
 import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
-import { getErrorMessage } from '../../../../sdk/errors';
+import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
@@ -65,6 +65,51 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // deferred (full inbox / 429, or a transient outage). The spend is FINAL — surface "delivery
   // pending", never a failure.
   const [deliveryPending, setDeliveryPending] = useState(false);
+  // Keep-open outcome (PENDING_COMMIT_CODES → useTransfer's synthetic pending
+  // result): the spend may already be on-chain and sphere-sdk 0.14 converges
+  // the SAME transfer in-session (auto-retry, backoff 5s→120s). transferId is
+  // the #441-stamped id ('' when the error carried none); legs is the
+  // certified/total detail read best-effort from paymentsV2.pendingTransfers().
+  const [keepOpen, setKeepOpen] = useState<{
+    transferId: string;
+    legs: { certified: number; total: number } | null;
+  } | null>(null);
+  const [isResuming, setIsResuming] = useState(false);
+
+  // Clear the keep-open copy when the SDK's convergence lands: transfer:updated
+  // for the SAME transferId with a done status flips the screen to plain
+  // success. Without a stamped id there is nothing safe to match — the honest
+  // pending copy stays (never clear on an unrelated transfer's event).
+  useEffect(() => {
+    if (!sphere || !keepOpen || !keepOpen.transferId) return;
+    const handleTransferUpdated = (result: TransferResult) => {
+      if (result.id !== keepOpen.transferId) return;
+      if (result.status === 'confirmed' || result.status === 'delivered' || result.status === 'completed') {
+        setKeepOpen(null);
+        setDeliveryPending(false);
+      }
+    };
+    sphere.on('transfer:updated', handleTransferUpdated);
+    return () => {
+      sphere.off('transfer:updated', handleTransferUpdated);
+    };
+  }, [sphere, keepOpen]);
+
+  // MONEY-SAFETY: the retry affordance calls paymentsV2.resumeNow() — the SDK
+  // converges the SAME transferId. It must NEVER call send()/transfer() again
+  // (a fresh send consumes a different source and double-pays the recipient).
+  const handleResumeNow = async () => {
+    const paymentsV2 = sphere?.paymentsV2;
+    if (!paymentsV2 || isResuming) return;
+    setIsResuming(true);
+    try {
+      await paymentsV2.resumeNow();
+    } catch {
+      // Best-effort nudge — the SDK's in-session auto-retry keeps converging.
+    } finally {
+      setIsResuming(false);
+    }
+  };
 
   const handleRecipientChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (recipientMode === 'nametag') {
@@ -90,6 +135,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setRecipientError(null);
     setQuotaBlocked(null);
     setDeliveryPending(false);
+    setKeepOpen(null);
   };
 
   const handleClose = () => {
@@ -169,6 +215,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setStep('processing');
     setRecipientError(null);
     setQuotaBlocked(null);
+    setKeepOpen(null);
 
     try {
       const amount = parseTokenAmount(amountInput, selectedAsset.decimals).toString();
@@ -179,6 +226,26 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
         ...(memoInput ? { memo: memoInput } : {}),
       });
 
+      if (isKeepOpenPendingResult(result)) {
+        // Keep-open outcome: honest "network busy" copy instead of the generic
+        // pending state. Enrich with the certified-legs detail when the SDK's
+        // pending-transfers view has partial info for this transfer (best-effort;
+        // the copy renders without it).
+        setKeepOpen({ transferId: result.id, legs: null });
+        if (result.id) {
+          sphere?.paymentsV2
+            ?.pendingTransfers()
+            .then((rows) => {
+              const row = rows.find((r) => r.transferId === result.id);
+              if (row) {
+                setKeepOpen((prev) =>
+                  prev && prev.transferId === result.id ? { ...prev, legs: row.legs } : prev,
+                );
+              }
+            })
+            .catch(() => { /* detail only — the keep-open copy stands alone */ });
+        }
+      }
       setDeliveryPending(result.deliveryPending ?? false);
       setStep('success');
     } catch (e: unknown) {
@@ -480,14 +547,42 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
             <motion.div key="proc" className="flex-1 flex flex-col items-center justify-center text-center py-10">
               <Loader2 className="w-12 h-12 text-orange-500 animate-spin mx-auto mb-4" />
               <h3 className="text-neutral-900 dark:text-white font-medium text-lg">Sending Transaction...</h3>
-              <p className="text-neutral-500 text-sm mt-2">Processing proofs and broadcasting via Nostr</p>
+              <p className="text-neutral-500 text-sm mt-2">Certifying on Unicity and delivering to the recipient's mailbox</p>
             </motion.div>
           )}
 
-          {/* 5. SUCCESS (delivered) or DELIVERY PENDING — both mean the spend is final on-chain. */}
+          {/* 5. SUCCESS (delivered), DELIVERY PENDING (spend final on-chain), or KEEP-OPEN
+              (network busy — the SDK converges the SAME transfer in-session; resumeNow()
+              only nudges it, NEVER a re-send). */}
           {step === 'success' && (
             <motion.div key="done" className="flex-1 flex flex-col items-center justify-center text-center py-10">
-              {deliveryPending ? (
+              {keepOpen ? (
+                <>
+                  <div className="w-16 h-16 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-500/50">
+                    <Clock className="w-8 h-8 text-amber-500" />
+                  </div>
+                  <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Network is busy</h3>
+                  <p className="text-neutral-500 dark:text-white/45">
+                    Your transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> is safe and will complete automatically.
+                  </p>
+                  {keepOpen.legs && keepOpen.legs.total > 0 && (
+                    <p className="text-neutral-400 dark:text-white/35 text-sm mt-2">
+                      {keepOpen.legs.certified} of {keepOpen.legs.total} {keepOpen.legs.total === 1 ? 'part' : 'parts'} already certified on-chain.
+                    </p>
+                  )}
+                  <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
+                    Don&apos;t send it again — this same transfer keeps retrying on its own.
+                  </p>
+                  <button
+                    onClick={handleResumeNow}
+                    disabled={isResuming}
+                    className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 rounded-full transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isResuming ? 'animate-spin' : ''}`} />
+                    {isResuming ? 'Retrying…' : 'Retry now'}
+                  </button>
+                </>
+              ) : deliveryPending ? (
                 <>
                   <div className="w-16 h-16 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-500/50">
                     <Clock className="w-8 h-8 text-amber-500" />

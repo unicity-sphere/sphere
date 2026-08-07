@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
 import { isPendingCommitCode } from '../../../../sdk/errors';
-import type { IncomingPaymentRequest as SDKPaymentRequest } from '@unicitylabs/sphere-sdk';
+import type { PaymentRequestView as SDKPaymentRequest } from '@unicitylabs/sphere-sdk/payments-v2';
 
 export const PaymentRequestStatus = {
     PENDING: 'PENDING',
@@ -49,7 +49,7 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
         senderPubkey: sdk.senderPubkey,
         amount: BigInt(sdk.amount || '0'),
         coinId: sdk.coinId,
-        symbol: sdk.symbol,
+        symbol: sdk.symbol ?? '',
         message: sdk.message,
         // Legacy model uses recipientNametag to display "From" (the requester)
         recipientNametag: sdk.senderNametag ?? '',
@@ -64,7 +64,7 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
 }
 
 /**
- * Incoming payment requests, driven by the PaymentsModule (the SDK list is
+ * Incoming payment requests, driven by paymentsV2.requests (the SDK list is
  * the source of truth — statuses are read back after every action, never
  * flipped optimistically):
  *
@@ -72,12 +72,12 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  *   respond happens BEFORE the local flip, and a server rejection (403
  *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
  *   surface it, the local status stays pending.
- * - `pay` — `payments.payPaymentRequest`: sends the transfer (through the same
- *   payments.send() as a normal send), then links the transferId in the 'paid'
- *   respond. A failed respond after a successful send is logged by the SDK,
- *   never reported as a payment failure. A possibly-committed keep-open reject
- *   (PENDING_COMMIT_CODES — SEND_SYNC_PENDING / CERTIFICATION_UNCONFIRMED / the
- *   E.4 split-checkpoint trio) is presented as a pending SUCCESS, never a
+ * - `pay` — `paymentsV2.requests.pay`: sends the transfer (through the same
+ *   paymentsV2.send() as a normal send), then links the transferId in the
+ *   'paid' respond. A failed respond after a successful send is logged by the
+ *   SDK, never reported as a payment failure. A possibly-committed keep-open
+ *   reject (PENDING_COMMIT_CODES — SEND_SYNC_PENDING / CERTIFICATION_UNCONFIRMED
+ *   / the E.4 split-checkpoint trio) is presented as a pending SUCCESS, never a
  *   re-payable failure (see `pay` below for the double-pay reasoning).
  */
 export const useIncomingPaymentRequests = () => {
@@ -86,12 +86,13 @@ export const useIncomingPaymentRequests = () => {
     const [requests, setRequests] = useState<IncomingPaymentRequest[]>([]);
 
     const refresh = useCallback(() => {
-        if (!sphere) return;
+        const paymentsV2 = sphere?.paymentsV2;
+        if (!paymentsV2) return;
         // The SDK list is the source of truth. A possibly-committed pay is held by
         // the SDK in a DURABLE 'settling' state (→ ACCEPTED via STATUS_MAP, non-
         // payable) that survives reload — so no client-side override is needed
         // here; bridging the SDK status directly is both correct and reload-safe.
-        setRequests(sphere.payments.getPaymentRequests().map(bridgeRequest));
+        setRequests(paymentsV2.requests.list().map(bridgeRequest));
     }, [sphere]);
 
     useEffect(() => {
@@ -105,21 +106,18 @@ export const useIncomingPaymentRequests = () => {
         refresh();
 
         // The SDK list is the source of truth: on incoming AND on resolution
-        // (paid / rejected / expired), the SDK advances the request's status in
-        // its own list, then emits. Re-reading drops a request resolved
-        // elsewhere (another window — or this wallet's other session) out of
-        // the actionable (PENDING) state, so its Pay/Decline buttons disappear:
-        // the UI half of the cross-session-sync fix.
+        // (payment_request:updated — paid / rejected / expired / settling), the
+        // SDK advances the request's status in its own list, then emits.
+        // Re-reading drops a request resolved elsewhere (another window — or
+        // this wallet's other session) out of the actionable (PENDING) state,
+        // so its Pay/Decline buttons disappear: the UI half of the
+        // cross-session-sync fix.
         const handler = () => refresh();
         sphere.on('payment_request:incoming', handler);
-        sphere.on('payment_request:paid', handler);
-        sphere.on('payment_request:rejected', handler);
-        sphere.on('payment_request:expired', handler);
+        sphere.on('payment_request:updated', handler);
         return () => {
             sphere.off('payment_request:incoming', handler);
-            sphere.off('payment_request:paid', handler);
-            sphere.off('payment_request:rejected', handler);
-            sphere.off('payment_request:expired', handler);
+            sphere.off('payment_request:updated', handler);
         };
     }, [sphere, refresh]);
 
@@ -130,24 +128,26 @@ export const useIncomingPaymentRequests = () => {
 
 
     const reject = useCallback(async (request: IncomingPaymentRequest) => {
-        if (!sphere) return;
+        const paymentsV2 = sphere?.paymentsV2;
+        if (!paymentsV2) return;
         try {
-            await sphere.payments.rejectPaymentRequest(request.id);
+            await paymentsV2.requests.decline(request.id);
         } finally {
             refresh();
         }
     }, [sphere, refresh]);
 
     const pay = useCallback(async (request: IncomingPaymentRequest) => {
-        if (!sphere) return;
-        // Paying a request routes through payments.send() (certification) — same
+        const paymentsV2 = sphere?.paymentsV2;
+        if (!paymentsV2) return;
+        // Paying a request routes through paymentsV2.send() (certification) — same
         // keyless-send window as a normal send, so it uses the shared readiness
         // guard. handleAction in PaymentRequestModal surfaces the thrown message.
         requireSubscriptionKey();
         try {
-            await sphere.payments.payPaymentRequest(request.id);
+            await paymentsV2.requests.pay(request.id);
         } catch (err) {
-            // #441: payPaymentRequest routes through the same send() as a normal
+            // #441: requests.pay routes through the same send() as a normal
             // transfer, so it can reject with a possibly-committed keep-open code
             // (PENDING_COMMIT_CODES). On those the spend is (or may be) on-chain and
             // resume completes it — a second pay would double-pay. We swallow the
@@ -156,14 +156,14 @@ export const useIncomingPaymentRequests = () => {
             // survives reload) before it threw.
             //
             // CONTRACT DEPENDENCY: non-payability here is the SDK's job, not this
-            // hook's. sphere-sdk >= 0.11.14 (pinned in package.json) sets 'settling'
-            // on every possibly-committed throw (PaymentsModule.payPaymentRequest,
-            // covered by the sdk deferred-paid tests). This hook must stay on an SDK
-            // that upholds it — if a downgrade ever left the request 'pending' on
-            // such a throw, the finally→refresh would re-list it payable. The
-            // earlier in-memory override that guarded this locally was removed
-            // because it did NOT survive reload (its own double-pay gap); the SDK's
-            // durable 'settling' is the correct, reload-safe mechanism.
+            // hook's. The paymentsV2 vertical owns the settling durability: it sets
+            // 'settling' on every possibly-committed throw (its settling journal
+            // survives reload). This hook must stay on an SDK that upholds it — if
+            // a downgrade ever left the request 'pending' on such a throw, the
+            // finally→refresh would re-list it payable. The earlier in-memory
+            // override that guarded this locally was removed because it did NOT
+            // survive reload (its own double-pay gap); the SDK's durable 'settling'
+            // is the correct, reload-safe mechanism.
             if (isPendingCommitCode(err)) return;
             // Any OTHER error is a genuine failure — re-throw so PaymentRequestModal
             // surfaces it and the request stays actionable (safe to retry).
@@ -174,8 +174,9 @@ export const useIncomingPaymentRequests = () => {
     }, [sphere, requireSubscriptionKey, refresh]);
 
     const clearProcessed = useCallback(() => {
-        if (!sphere) return;
-        sphere.payments.clearProcessedPaymentRequests();
+        const paymentsV2 = sphere?.paymentsV2;
+        if (!paymentsV2) return;
+        paymentsV2.requests.dismissProcessed();
         refresh();
     }, [sphere, refresh]);
 

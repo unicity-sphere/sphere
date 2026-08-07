@@ -30,8 +30,9 @@ export function useAssets(): UseAssetsReturn {
   const query = useQuery({
     queryKey: SPHERE_KEYS.payments.assets.list,
     queryFn: async (): Promise<Asset[]> => {
-      if (!sphere) return [];
-      return await sphere.payments.getAssets();
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) return [];
+      return await paymentsV2.assets();
     },
     enabled: !!sphere,
     staleTime: 30_000,

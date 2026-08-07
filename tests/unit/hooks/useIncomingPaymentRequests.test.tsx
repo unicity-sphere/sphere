@@ -10,7 +10,7 @@ import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from "../../../
 import * as subscriptionConfig from "../../../src/config/subscription";
 
 // ============================================================================
-// Fake sphere: implements exactly the PaymentsModule surface the hook is
+// Fake sphere: implements exactly the paymentsV2.requests surface the hook is
 // allowed to use. There is deliberately NO getTransport() — the legacy
 // implementation bypassed the module via the transport, which silently
 // no-ops on the wallet-api path; any regression to it throws here.
@@ -59,22 +59,24 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
     off: (evt: string, fn: (data: unknown) => void) => {
       listeners.get(evt)?.delete(fn);
     },
-    payments: {
-      getPaymentRequests: vi.fn(() => requests.map((r) => ({ ...r }))),
-      rejectPaymentRequest: vi.fn(async (id: string) => {
-        const r = find(id);
-        if (r) r.status = "rejected";
-      }),
-      payPaymentRequest: vi.fn(async (id: string) => {
-        const r = find(id);
-        if (r) r.status = "paid";
-        return { success: true, id: "transfer-1" };
-      }),
-      clearProcessedPaymentRequests: vi.fn(() => {
-        for (let i = requests.length - 1; i >= 0; i--) {
-          if (requests[i].status !== "pending") requests.splice(i, 1);
-        }
-      }),
+    paymentsV2: {
+      requests: {
+        list: vi.fn(() => requests.map((r) => ({ ...r }))),
+        decline: vi.fn(async (id: string) => {
+          const r = find(id);
+          if (r) r.status = "rejected";
+        }),
+        pay: vi.fn(async (id: string) => {
+          const r = find(id);
+          if (r) r.status = "paid";
+          return { success: true, id: "transfer-1" };
+        }),
+        dismissProcessed: vi.fn(() => {
+          for (let i = requests.length - 1; i >= 0; i--) {
+            if (requests[i].status !== "pending") requests.splice(i, 1);
+          }
+        }),
+      },
     },
     // Test-side helpers
     _setStatus: (id: string, status: SdkStatus) => {
@@ -87,12 +89,11 @@ function makeFakeSphere(initial: FakeSdkRequest[] = []) {
     },
     // Simulate a resolution driven elsewhere (another window / this wallet's
     // other session): the SDK advances the status in its own list, THEN emits
-    // the matching event. Mirrors sphere-sdk's paid/rejected/expired surface.
+    // payment_request:updated. Mirrors sphere-sdk's paymentsV2 surface.
     _resolveRemote: (id: string, status: "paid" | "rejected" | "expired") => {
       const r = find(id);
       if (r) r.status = status;
-      const evt = `payment_request:${status}`;
-      listeners.get(evt)?.forEach((fn) => fn(r ? { ...r } : { id, status }));
+      listeners.get("payment_request:updated")?.forEach((fn) => fn({ id, status }));
     },
   };
   return sphere;
@@ -118,7 +119,7 @@ beforeEach(() => {
 });
 
 describe("useIncomingPaymentRequests", () => {
-  it("seeds from payments.getPaymentRequests() on mount (sign-in backfill)", () => {
+  it("seeds from paymentsV2.requests.list() on mount (sign-in backfill)", () => {
     fakeSphere = makeFakeSphere([makeRequest("a"), makeRequest("b", "expired")]);
 
     const { result } = renderHook(() => useIncomingPaymentRequests());
@@ -150,7 +151,7 @@ describe("useIncomingPaymentRequests", () => {
     ["rejected", PaymentRequestStatus.REJECTED],
     ["expired", PaymentRequestStatus.EXPIRED],
   ] as const)(
-    "drops a request from the actionable view on payment_request:%s (cross-session)",
+    "drops a request from the actionable view on payment_request:updated (%s, cross-session)",
     async (sdkStatus, uiStatus) => {
       fakeSphere = makeFakeSphere([makeRequest("a")]);
       const { result } = renderHook(() => useIncomingPaymentRequests());
@@ -169,23 +170,23 @@ describe("useIncomingPaymentRequests", () => {
     },
   );
 
-  it("pays through payments.payPaymentRequest (no raw transfer + paid flip)", async () => {
+  it("pays through paymentsV2.requests.pay (no raw transfer + paid flip)", async () => {
     fakeSphere = makeFakeSphere([makeRequest("a")]);
     const { result } = renderHook(() => useIncomingPaymentRequests());
 
     await act(() => result.current.pay(result.current.requests[0]));
 
-    expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledWith("a");
+    expect(fakeSphere.paymentsV2.requests.pay).toHaveBeenCalledWith("a");
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID);
   });
 
-  it("rejects through payments.rejectPaymentRequest (server-confirmed)", async () => {
+  it("rejects through paymentsV2.requests.decline (server-confirmed)", async () => {
     fakeSphere = makeFakeSphere([makeRequest("a")]);
     const { result } = renderHook(() => useIncomingPaymentRequests());
 
     await act(() => result.current.reject(result.current.requests[0]));
 
-    expect(fakeSphere.payments.rejectPaymentRequest).toHaveBeenCalledWith("a");
+    expect(fakeSphere.paymentsV2.requests.decline).toHaveBeenCalledWith("a");
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.REJECTED);
   });
 
@@ -193,7 +194,7 @@ describe("useIncomingPaymentRequests", () => {
     fakeSphere = makeFakeSphere([makeRequest("a")]);
     // 403 non-addressee / 409 non-open propagate from the module — the
     // request must stay pending locally (the respond IS the state change).
-    fakeSphere.payments.rejectPaymentRequest.mockRejectedValueOnce(
+    fakeSphere.paymentsV2.requests.decline.mockRejectedValueOnce(
       new Error("HTTP 409: request is not open"),
     );
     const { result } = renderHook(() => useIncomingPaymentRequests());
@@ -207,7 +208,7 @@ describe("useIncomingPaymentRequests", () => {
 
   it("propagates a pay failure and leaves the request pending", async () => {
     fakeSphere = makeFakeSphere([makeRequest("a")]);
-    fakeSphere.payments.payPaymentRequest.mockRejectedValueOnce(
+    fakeSphere.paymentsV2.requests.pay.mockRejectedValueOnce(
       new Error("INSUFFICIENT_FUNDS"),
     );
     const { result } = renderHook(() => useIncomingPaymentRequests());
@@ -219,7 +220,7 @@ describe("useIncomingPaymentRequests", () => {
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
   });
 
-  // #441: payPaymentRequest routes through the same send() as a normal transfer,
+  // #441: requests.pay routes through the same send() as a normal transfer,
   // so it can reject with the possibly-committed keep-open codes. The SDK (0.11.14+)
   // marks the request DURABLY 'settling' (survives reload via its journal) before
   // re-throwing — mirrored here by _setStatus(id, 'settling'). The app swallows the
@@ -229,7 +230,7 @@ describe("useIncomingPaymentRequests", () => {
     "a %s pay reject is swallowed and the request is held NON-payable via the SDK's durable 'settling' status (no double-pay) (#441)",
     async (code) => {
       fakeSphere = makeFakeSphere([makeRequest("a")]);
-      fakeSphere.payments.payPaymentRequest.mockImplementationOnce(async (id: string) => {
+      fakeSphere.paymentsV2.requests.pay.mockImplementationOnce(async (id: string) => {
         fakeSphere!._setStatus(id, "settling"); // the real SDK's durable mark
         throw new SphereError("possibly committed on-chain", code);
       });
@@ -240,7 +241,7 @@ describe("useIncomingPaymentRequests", () => {
       await act(() => result.current.pay(result.current.requests[0]));
 
       // Mapped to ACCEPTED ('Payment Sent', non-payable) via STATUS_MAP['settling'].
-      expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledTimes(1);
+      expect(fakeSphere.paymentsV2.requests.pay).toHaveBeenCalledTimes(1);
       expect(result.current.requests[0].status).toBe(PaymentRequestStatus.ACCEPTED);
       expect(result.current.pendingCount).toBe(0);
     },
@@ -287,7 +288,7 @@ describe("useIncomingPaymentRequests", () => {
     ).rejects.toBeInstanceOf(SubscriptionNotReadyError);
 
     // The keyless send never left, and the request stays actionable.
-    expect(fakeSphere.payments.payPaymentRequest).not.toHaveBeenCalled();
+    expect(fakeSphere.paymentsV2.requests.pay).not.toHaveBeenCalled();
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
   });
 
@@ -299,7 +300,7 @@ describe("useIncomingPaymentRequests", () => {
 
     await act(() => result.current.pay(result.current.requests[0]));
 
-    expect(fakeSphere.payments.payPaymentRequest).toHaveBeenCalledWith("a");
+    expect(fakeSphere.paymentsV2.requests.pay).toHaveBeenCalledWith("a");
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID);
   });
 

@@ -122,7 +122,18 @@ jobs:
           # The testnet2 value is NOT a secret (see .env / .env.example), so it
           # is safe to hardcode here. Without it the deployed bundle gets
           # undefined and the aggregator rejects mints with "unauthorized".
+          # With subscriptions ON (below) this key is only the pre-onboarding
+          # fallback — steady-state traffic rides per-wallet SGW keys.
           VITE_AGGREGATOR_API_KEY: sk_ddc3cfcc001e4a28ac3fad7407f99590
+          # Subscriptions — mirrors staging (sphere-infra deploy-sphere-site.sh:
+          # SUBSCRIPTION_ENABLED=true, PAID_PLANS_ENABLED=false). Staging feeds
+          # these through the container runtime config; Pages previews have no
+          # container, so they bake the VITE_* fallbacks at build time
+          # (src/config/subscription.ts). Without this, previews hide the
+          # subscription settings AND funnel every visitor through the one
+          # shared static key above — which is what 429s the gateway.
+          VITE_SUBSCRIPTION_ENABLED: 'true'
+          VITE_PAID_PLANS_ENABLED: 'false'
           # Sentry stays OFF in branch previews: an empty DSN skips init
           # (src/config/sentry.ts). Previews are PROD builds, so without this
           # every branch push would report errors/replays against the shared

@@ -8,11 +8,11 @@ import { useTransfer } from '../../../src/sdk/hooks/payments/useTransfer';
 import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from '../../../src/sdk/subscription/keyStatus';
 
 // The hook reads the wallet + subscription-key readiness from useSphereContext —
-// swap in a fake with just payments.send. The SDK throws a ProofUnconfirmedError
+// swap in a fake with just paymentsV2.send. The SDK throws a ProofUnconfirmedError
 // (extends SphereError, code CERTIFICATION_UNCONFIRMED) for a possibly-certified
 // send (#631/#633). `subscriptionKeyStatus` defaults to 'ready' so the readiness
 // gate is transparent to the quota/send tests; the gate tests flip it.
-let fakeSphere: { payments: { send: ReturnType<typeof vi.fn> } } | null = null;
+let fakeSphere: { paymentsV2: { send: ReturnType<typeof vi.fn> } } | null = null;
 let subscriptionKeyStatus: SubscriptionKeyStatus = 'ready';
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
   useSphereContext: () => ({ sphere: fakeSphere, subscriptionKeyStatus }),
@@ -111,7 +111,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed — the source spend may be on-chain', 'CERTIFICATION_UNCONFIRMED'),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -130,7 +130,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('Your payment was sent. Your wallet is syncing.', 'SEND_SYNC_PENDING'),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -156,7 +156,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     'converts a %s reject into a delivery-pending SUCCESS (keep-open E.4 — no re-send → no double-pay) (#440)',
     async (code) => {
       const send = vi.fn().mockRejectedValue(new SphereError('split checkpoint stuck', code));
-      fakeSphere = { payments: { send } };
+      fakeSphere = { paymentsV2: { send } };
       const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
       let res: { deliveryPending?: boolean } | undefined;
@@ -177,7 +177,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     // has irreversibly left the wallet; a full re-send would double-pay the delivered
     // legs, so useTransfer MUST present it as pending, never a re-sendable failure.
     const send = vi.fn().mockRejectedValue(new SphereError('part sent', 'SEND_PARTIALLY_COMPLETED'));
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -190,9 +190,28 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('stamps the #441 keep-open transferId into the synthetic result id (so the UI can match transfer:updated convergence)', async () => {
+    const err = new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED');
+    // The SDK stamps transferId on possibly-committed outcomes (#441).
+    (err as { transferId?: string }).transferId = 'tid-keepopen-1';
+    const send = vi.fn().mockRejectedValue(err);
+    fakeSphere = { paymentsV2: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { id?: string; status?: string; deliveryPending?: boolean } | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.id).toBe('tid-keepopen-1');
+    // status 'pending' is the keep-open discriminator (isKeepOpenPendingResult).
+    expect(res?.status).toBe('pending');
+    expect(res?.deliveryPending).toBe(true);
+  });
+
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
     const send = vi.fn().mockRejectedValue(new SphereError('not enough balance', 'INSUFFICIENT_BALANCE'));
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await expect(
@@ -205,7 +224,7 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
   it('passes a normal success result through unchanged', async () => {
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
@@ -220,7 +239,7 @@ describe('useTransfer — subscription-key readiness gate (keyless-send window)'
   it('refuses the send while the key is still provisioning (never reaches quota/send → no keyless 401)', async () => {
     subscriptionKeyStatus = 'provisioning';
     const send = vi.fn();
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await expect(
@@ -237,7 +256,7 @@ describe('useTransfer — subscription-key readiness gate (keyless-send window)'
   it('refuses with a reload hint when provisioning has failed', async () => {
     subscriptionKeyStatus = 'failed';
     const send = vi.fn();
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let caught: unknown;
@@ -253,7 +272,7 @@ describe('useTransfer — subscription-key readiness gate (keyless-send window)'
     subscriptionKeyStatus = 'ready';
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await act(async () => {
@@ -267,7 +286,7 @@ describe('useTransfer — subscription-key readiness gate (keyless-send window)'
     subscriptionKeyStatus = 'provisioning';
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await act(async () => {
@@ -282,7 +301,7 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     const info = utilization({ status: 'expired' });
     vi.mocked(checkSendQuota).mockResolvedValue({ verdict: 'block', info });
     const send = vi.fn().mockResolvedValue({ id: 't1', status: 'completed', tokens: [], tokenTransfers: [] });
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     await expect(
@@ -297,7 +316,7 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     vi.mocked(checkSendQuota).mockResolvedValue({ verdict: 'allow' });
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
@@ -313,7 +332,7 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     vi.mocked(checkSendQuota).mockResolvedValue({ verdict: 'warn', info });
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
@@ -328,7 +347,7 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     vi.mocked(checkSendQuota).mockRejectedValue(new Error('boom'));
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
@@ -343,7 +362,7 @@ describe('useTransfer — proactive quota gate (Task 3)', () => {
     (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
     const ok = { id: 't1', status: 'completed', tokens: [], tokenTransfers: [] };
     const send = vi.fn().mockResolvedValue(ok);
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: unknown;
@@ -361,7 +380,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(429)),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -378,7 +397,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -397,7 +416,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
@@ -423,7 +442,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed — the source spend may be on-chain', 'CERTIFICATION_UNCONFIRMED'),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -449,7 +468,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(401)),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;
@@ -469,7 +488,7 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
     const send = vi.fn().mockRejectedValue(
       new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED', jsonRpcNetworkError(429)),
     );
-    fakeSphere = { payments: { send } };
+    fakeSphere = { paymentsV2: { send } };
     const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
 
     let res: { deliveryPending?: boolean } | undefined;

@@ -116,8 +116,10 @@ export function ConnectIntentHandler() {
         memo={params.memo as string | undefined}
         // #433: additive result fields so the dApp can distinguish "delivered"
         // from "certified on-chain, delivery journaled for retry" and correlate
-        // the send with wallet history. transferId is omitted on the synthetic
-        // pending results (#631/#665) — those carry an empty id by design.
+        // the send with wallet history. On the synthetic keep-open pending
+        // results (#631/#665) `id` carries the #441-stamped keep-open
+        // transferId (sphere-sdk 0.14 converges that SAME transfer
+        // in-session); it is omitted only when the error carried none.
         onResolve={(result) =>
           resolveIntent(intentId, {
             success: true,
@@ -307,7 +309,8 @@ export function ConnectIntentHandler() {
 
     const handleMint = async () => {
       setMintError(null);
-      if (!sphere) {
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) {
         setMintError('Wallet not available');
         return;
       }
@@ -336,11 +339,11 @@ export function ConnectIntentHandler() {
 
       setIsMinting(true);
       try {
-        const result = await sphere.payments.mintFungibleToken(coinId, amountBig);
+        const result = await paymentsV2.mint(coinId, amountBig);
         if (result.success) {
           resolveIntent(intentId, { tokenId: result.tokenId, coinId, amount });
         } else {
-          rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, result.error);
+          rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, result.error ?? 'Mint failed');
         }
       } catch (err) {
         setMintError(getErrorMessage(err));
@@ -412,13 +415,14 @@ export function ConnectIntentHandler() {
   if (action === 'receive') {
     const handleReceive = async () => {
       setReceiveError(null);
-      if (!sphere) {
+      const paymentsV2 = sphere?.paymentsV2;
+      if (!paymentsV2) {
         setReceiveError('Wallet not available');
         return;
       }
       setIsReceiving(true);
       try {
-        const { transfers } = await sphere.payments.receive();
+        const { transfers } = await paymentsV2.receive();
         resolveIntent(intentId, { transfers });
       } catch (err) {
         setReceiveError(getErrorMessage(err));

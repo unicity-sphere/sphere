@@ -124,7 +124,8 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   };
 
   const handleSwap = async () => {
-    if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !sphere) return;
+    const paymentsV2 = sphere?.paymentsV2;
+    if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !paymentsV2) return;
     setStep('processing'); setError(null);
     try {
       // 1. Send the "from" asset to the swap stub recipient (unchanged).
@@ -133,7 +134,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
 
       // 2. Self-mint the "to" asset to this wallet (replaces the faucet call).
       const toAmountSmallestUnit = parseTokenAmount(exchangeInfo.toAmount.toFixed(toAsset.decimals), toAsset.decimals);
-      const mintResult = await sphere.payments.mintFungibleToken(toAsset.coinId, toAmountSmallestUnit);
+      const mintResult = await paymentsV2.mint(toAsset.coinId, toAmountSmallestUnit);
       if (!mintResult.success) throw new Error(mintResult.error);
 
       // useTransfer's refetch already fired after step 1 (before the mint), so
