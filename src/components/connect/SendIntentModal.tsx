@@ -8,6 +8,7 @@ import { QuotaBlockedError } from '../../sdk/quotaGate';
 import { useUpgrade } from '../upgrade';
 import { showToast } from '../ui/toast-utils';
 import { IntentConfirmModal } from './IntentConfirmModal';
+import { sendIntentRecipient } from './duplicateSendGuard';
 
 interface SendIntentModalProps {
   /** Recipient: Unicity ID (@tag) or DIRECT:// address, as supplied by the dApp. */
@@ -58,7 +59,9 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
   const handleSend = async () => {
     setBusy(true);
     try {
-      const recipient = to.startsWith('DIRECT://') ? to : to.replace(/^@/, '');
+      // Shared with the duplicate-send guard, so the identifier this modal
+      // spends against is the identifier the guard resolved and matched.
+      const recipient = sendIntentRecipient(to);
       const result = await transfer({ coinId, amount, recipient, ...(memo ? { memo } : {}) });
       // #433: a deliveryPending result means the spend certified on-chain but the
       // recipient-side delivery is journaled for retry (§3.1). The dApp learns it
