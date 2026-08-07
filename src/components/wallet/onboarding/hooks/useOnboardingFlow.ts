@@ -126,7 +126,7 @@ export interface UseOnboardingFlowReturn {
   handleSkipNametag: () => Promise<void>;
   handleDeriveNewAddress: () => Promise<void>;
   handleContinueWithAddress: () => Promise<void>;
-  goToAddressSelection: (skipIpnsCheck?: boolean) => Promise<void>;
+  goToAddressSelection: () => Promise<void>;
 
   // Multi-select actions
   handleToggleSelect: (key: string) => void;
@@ -217,7 +217,7 @@ export function useOnboardingFlow(
   // File import state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [fileContent, setFileContent] = useState<string | Uint8Array | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
   const [, setDetectedFileType] = useState<LegacyFileType>('unknown');
   const [isEncrypted, setIsEncrypted] = useState(false);
   // Holds the imported Sphere instance during the import flow.
@@ -362,13 +362,9 @@ export function useOnboardingFlow(
     setError(null);
 
     // Read file content
-    let content: string | Uint8Array;
-    if (file.name.endsWith('.dat')) {
-      const buffer = await file.arrayBuffer();
-      content = new Uint8Array(buffer);
-    } else {
-      content = await file.text();
-    }
+    // Backups are text (.txt / .json / a bare mnemonic). Bitcoin Core .dat
+    // import was removed from the SDK — the wallet is L3-only.
+    const content: string = await file.text();
     setFileContent(content);
 
     // Detect file type and encryption
@@ -406,7 +402,6 @@ export function useOnboardingFlow(
         existingNametag: a.nametag,
         isChange: false,
         balanceLoading: false,
-        ipnsLoading: false,
       }));
       setDerivedAddresses(addresses);
       setSelectedKeys(new Set(addresses.map(a => addrKey(a.index, false))));
@@ -531,7 +526,7 @@ export function useOnboardingFlow(
         // import()` call.
         //
         // Only meaningful when the import actually recovered a MNEMONIC — a
-        // master-key-only legacy import (.dat/.txt/legacy-JSON with no seed
+        // master-key-only legacy import (.txt/legacy-JSON with no seed
         // phrase) has none, and `setWalletPassword`/`reencryptStoredMnemonic`
         // throws "No wallet mnemonic found" for that case. Caught and skipped
         // gracefully here (no scary error for an automatic step the user
@@ -996,7 +991,6 @@ export function useOnboardingFlow(
           l3Address: '', // Will be populated after switching
           path: addr.path,
           hasNametag: false,
-          ipnsLoading: false,
           balanceLoading: false,
         },
       ]);
@@ -1022,7 +1016,6 @@ export function useOnboardingFlow(
           l3Address: '',
           path: addr.path,
           hasNametag: false,
-          ipnsLoading: false,
           balanceLoading: false,
         }));
 

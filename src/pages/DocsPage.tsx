@@ -454,13 +454,10 @@ const providers = createBrowserProviders({
   },
   groupChat: true,              // enable NIP-29 group chat
   market: true,                 // enable intent bulletin board
-  tokenSync: {
-    ipfs: { enabled: true },    // enable IPFS token backup
-  },
 });
 
 // providers contains: storage, transport, oracle, tokenStorage,
-// ipfsTokenStorage, groupChat, market`}
+// groupChat, market`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 The providers object is spread into <code className="text-amber-600 dark:text-amber-400">Sphere.init()</code> to configure the SDK instance.

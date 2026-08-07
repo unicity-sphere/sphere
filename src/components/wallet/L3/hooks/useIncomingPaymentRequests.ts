@@ -18,7 +18,6 @@ export type PaymentRequestStatus = typeof PaymentRequestStatus[keyof typeof Paym
 
 const STATUS_MAP: Record<SDKPaymentRequest['status'], PaymentRequestStatus> = {
     pending: PaymentRequestStatus.PENDING,
-    accepted: PaymentRequestStatus.ACCEPTED,
     rejected: PaymentRequestStatus.REJECTED,
     paid: PaymentRequestStatus.PAID,
     expired: PaymentRequestStatus.EXPIRED,
@@ -69,9 +68,6 @@ function bridgeRequest(sdk: SDKPaymentRequest): IncomingPaymentRequest {
  * the source of truth — statuses are read back after every action, never
  * flipped optimistically):
  *
- * - `accept` — local status only; the wallet-api backend has no 'accepted'
- *   state (§16 models open → paid | declined | expired), so the requester is
- *   NOT notified until the request is actually paid.
  * - `reject` — server-confirmed on the wallet-api path: the §16 'declined'
  *   respond happens BEFORE the local flip, and a server rejection (403
  *   non-addressee / 409 non-open, e.g. expired) propagates to the caller —
@@ -132,14 +128,6 @@ export const useIncomingPaymentRequests = () => {
         [requests],
     );
 
-    const accept = useCallback(async (request: IncomingPaymentRequest) => {
-        if (!sphere) return;
-        try {
-            await sphere.payments.acceptPaymentRequest(request.id);
-        } finally {
-            refresh();
-        }
-    }, [sphere, refresh]);
 
     const reject = useCallback(async (request: IncomingPaymentRequest) => {
         if (!sphere) return;
@@ -191,5 +179,5 @@ export const useIncomingPaymentRequests = () => {
         refresh();
     }, [sphere, refresh]);
 
-    return { requests, pendingCount, accept, reject, pay, clearProcessed };
+    return { requests, pendingCount, reject, pay, clearProcessed };
 };

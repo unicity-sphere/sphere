@@ -89,8 +89,7 @@ async function driveRestoreToSetPassword() {
   fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
 
   await waitFor(
-    () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
-    { timeout: 3000 },
+    () => expect(screen.getByText(/protect your wallet/i)).toBeDefined()
   );
 }
 
@@ -247,8 +246,7 @@ describe('encrypted file import auto-applies its decrypt password (#449 Task C)'
 
     // Not auto-applied (it threw) — the optional SetPasswordScreen IS shown.
     await waitFor(
-      () => expect(screen.getByText(/protect your wallet/i)).toBeDefined(),
-      { timeout: 3000 },
+      () => expect(screen.getByText(/protect your wallet/i)).toBeDefined()
     );
     expect(ctx.finalizeWallet).not.toHaveBeenCalled();
   });

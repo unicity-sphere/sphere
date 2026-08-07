@@ -5,7 +5,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AnnouncementBell } from '@unicitylabs/sphere-ui';
 // import { ThemeToggle } from '../theme';
 import { STORAGE_KEYS } from '../../config/storageKeys';
-import { IpfsSyncIndicator } from './IpfsSyncIndicator';
 import { WalletApiSessionIndicator } from './WalletApiSessionIndicator';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { DiscordIcon, XIcon } from '../icons/SocialIcons';
@@ -156,10 +155,8 @@ export function Header() {
                 </div>
               )}
 
-              {/* Desktop: custody status — IPFS sync (legacy) / wallet-api
-                  session (S4); each renders only in its own composition. */}
+              {/* Desktop: wallet-api session status (S4). */}
               <div className="hidden lg:flex items-center gap-3">
-                <IpfsSyncIndicator />
                 <WalletApiSessionIndicator />
                 {announcementsUI && (
                   <AnnouncementBell
@@ -274,7 +271,6 @@ export function Header() {
                 panel is overflow-hidden and only as tall as its own content,
                 which would clip the popover to a sliver. */}
             <div className="px-4 py-3 border-t border-neutral-200 dark:border-brand-orange-border mt-1 flex items-center">
-              <IpfsSyncIndicator />
               <WalletApiSessionIndicator />
               <div className="flex-1" />
               <div className="flex items-center gap-5">
