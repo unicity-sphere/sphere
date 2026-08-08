@@ -82,6 +82,24 @@ export interface ConnectContextValue {
    * is clickjacking without an iframe (graceful lock §8.4).
    */
   intentInteractive: boolean;
+  /**
+   * (Re)start that settle window.
+   *
+   * THE INVARIANT: the window measures from the moment ACTIONABLE intent UI is
+   * first PRESENTED to the user — never from queue arrival. Any UI that can
+   * authorize or refuse an intent starts the window when it becomes visible.
+   *
+   * Arrival IS presentation for every modal that renders as soon as its intent
+   * reaches the head of the queue, and the provider arms then. UI that is held
+   * back first (the `send` intent's duplicate-payment check, which can take
+   * seconds) must call this when it finally appears — otherwise a check slower
+   * than the window hands the user a live primary button the instant the modal
+   * shows up, which is precisely what the shield exists to prevent.
+   *
+   * Every call restarts the window, so arming once per presentation — never on
+   * every render — is the CALLER's responsibility.
+   */
+  armIntentShield: () => void;
 
   approveConnection: (grantedPermissions: PermissionScope[]) => void;
   denyConnection: () => void;

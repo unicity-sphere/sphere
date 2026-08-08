@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { getPayments } from '../../sdk/payments';
-import { MessageSquare, PenLine, Coins, Inbox } from 'lucide-react';
+import { MessageSquare, PenLine, Coins, Inbox, AlertTriangle } from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
@@ -11,6 +11,8 @@ import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
 import { useSubscriptionKeyGuard } from '../../sdk/hooks/subscription';
+import { useDuplicateSendGuard } from './duplicateSendGuard';
+import { truncateId } from '../../utils/identifiers';
 
 /** Intents this wallet actually implements. Anything else is rejected cleanly. */
 const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'receive']);
@@ -69,7 +71,8 @@ function validateIntent(action: string, params: Record<string, unknown>): Intent
 }
 
 export function ConnectIntentHandler() {
-  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent } = useConnectContext();
+  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
+    useConnectContext();
   const { sphere } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
@@ -80,6 +83,9 @@ export function ConnectIntentHandler() {
   const [isMinting, setIsMinting] = useState(false);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [isReceiving, setIsReceiving] = useState(false);
+  // Money-safety gate for `send` — see duplicateSendGuard.ts for the invariant.
+  const { guard: duplicateSend, approveAnyway: approveDuplicateSend } =
+    useDuplicateSendGuard(pendingIntent);
 
   // Validate/normalize params up front: reject malformed or unsupported intents
   // cleanly (INVALID_PARAMS / METHOD_NOT_FOUND) instead of opening a modal that
@@ -91,6 +97,36 @@ export function ConnectIntentHandler() {
     if (error) rejectIntent(pendingIntent.id, error.code, error.message);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIntent]);
+
+  // THE INVARIANT (ConnectContext.armIntentShield): the §8.4 settle window
+  // measures from the moment actionable UI is PRESENTED. Every modal below
+  // renders the instant its intent reaches the head of the queue, so the
+  // provider's arrival arm is already the presentation arm for them — EXCEPT
+  // `send`, which is held behind the duplicate-payment check (up to
+  // DUPLICATE_CHECK_TIMEOUT_MS, i.e. far past the window). Both of that check's
+  // outcomes are actionable: the send confirmation, and the duplicate warning
+  // whose "Send anyway" spends a second time. So both arm on appearance, and
+  // the transition from the warning to the confirmation arms again — that is a
+  // fresh primary button under a cursor that just clicked one.
+  const shieldPresentation =
+    pendingIntent !== null &&
+    pendingIntent.action === 'send' &&
+    duplicateSend.status !== 'checking' &&
+    validateIntent(pendingIntent.action, pendingIntent.params) === null
+      ? `${pendingIntent.id}:${duplicateSend.status}`
+      : null;
+
+  // Arm ONCE per presentation: this component re-renders for reasons unrelated
+  // to what is on screen (DM error, mint progress, a parent sync), and re-arming
+  // on every render would hold the shield up indefinitely. A LAYOUT effect, so
+  // the shield is up in the SAME paint the modal first appears in — useEffect
+  // runs after paint, and that frame is real.
+  const armedForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (shieldPresentation === null || armedForRef.current === shieldPresentation) return;
+    armedForRef.current = shieldPresentation;
+    armIntentShield();
+  }, [shieldPresentation, armIntentShield]);
 
   if (!pendingIntent) return null;
 
@@ -109,6 +145,88 @@ export function ConnectIntentHandler() {
 
   // --- Send Intent: confirm-only (amount fixed, base units, approve/reject) ---
   if (action === 'send') {
+    // THE INVARIANT (see duplicateSendGuard.ts): never execute a send intent
+    // that duplicates a payment already converging. The check runs BEFORE the
+    // send modal exists — a duplicate must never reach a plain "Send" button —
+    // and it fails open on any error/timeout, so it can never strand an intent.
+    //
+    // Nothing renders while it runs (usually one local store read). The §8.4
+    // settle shield is re-armed when the check's UI finally appears (see
+    // shieldPresentation above), so a slow check no longer spends the window
+    // behind a blank screen — and THIS modal's safe action is additionally the
+    // one sitting where every other intent modal puts its primary.
+    if (duplicateSend.status === 'checking') return null;
+
+    if (duplicateSend.status === 'duplicate') {
+      const match = duplicateSend.match;
+      const registry = TokenRegistry.getInstance();
+      const def = registry.getDefinition(params.coinId as string);
+      const displayAmount =
+        def?.symbol && def.decimals != null
+          ? formatAmount(String(params.amount), {
+              decimals: def.decimals,
+              symbol: def.symbol,
+              maxFractionDigits: 8,
+            })
+          : String(params.amount);
+      // USER_REJECTED — a human looked at it and said no, and nothing was
+      // spent for THIS intent. Honest, and a code every dApp already knows:
+      // inventing one would be unreadable to the client, and 4201
+      // (INTENT_OUTCOME_UNKNOWN) would falsely claim this intent's own money
+      // may have moved. The transferId in the message is how the dApp
+      // reconciles instead of retrying.
+      const declineMessage =
+        `Declined: a matching payment is still completing (transfer ${match.transferId}). ` +
+        `Do not re-send — reconcile against that transfer.`;
+      const decline = () => rejectIntent(intentId, ERROR_CODES.USER_REJECTED, declineMessage);
+
+      return (
+        <BaseModal isOpen={true} onClose={decline}>
+          <ModalHeader title="Payment already in progress" icon={AlertTriangle} onClose={decline} />
+
+          <div className="px-6 py-5 flex-1 flex flex-col justify-center">
+            <div className="bg-amber-50 dark:bg-amber-500/10 rounded-2xl p-5 mb-5 border border-amber-300 dark:border-amber-500/30">
+              <div className="text-sm text-neutral-700 dark:text-neutral-200">
+                A payment of{' '}
+                <span className="font-semibold text-neutral-900 dark:text-white break-all">
+                  {displayAmount}
+                </span>{' '}
+                to{' '}
+                <span className="font-semibold text-neutral-900 dark:text-white break-all">
+                  {params.to as string}
+                </span>{' '}
+                is still completing (transfer {truncateId(match.transferId)}).
+              </div>
+
+              <div className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                Approving this sends a SECOND payment.
+              </div>
+
+              <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+                The payment already in flight finishes on its own — the wallet keeps working on it.
+                {match.legs.total > 0 && (
+                  <> {match.legs.certified} of {match.legs.total} parts are already certified.</>
+                )}
+              </div>
+            </div>
+
+            {/* The destructive action is the SECONDARY button, and the safe one
+                sits where every other intent modal puts its primary — so a
+                reflex click on a modal that appeared under the cursor cannot
+                spend money. */}
+            <div className="flex gap-3">
+              <Button variant="secondary" fullWidth onClick={approveDuplicateSend}>
+                Send anyway
+              </Button>
+              <Button variant="primary" fullWidth onClick={decline}>
+                Don&apos;t send
+              </Button>
+            </div>
+          </div>
+        </BaseModal>
+      );
+    }
+
     return (
       <SendIntentModal
         to={params.to as string}

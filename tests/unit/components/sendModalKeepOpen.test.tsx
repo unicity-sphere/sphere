@@ -96,7 +96,12 @@ async function driveSend() {
   // Wait for the CONFIRM step (its summary card) — the details step's header
   // title is also 'Send', so the button must be located only once we're there.
   await screen.findByText('You are sending');
-  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  // The confirm-step Send button is inert for INTENT_SETTLE_MS after it first
+  // paints (the duplicate-payment / double-tap shield) — a real user waits that
+  // window out, and so does this driver.
+  const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+  await waitFor(() => expect(send.disabled).toBe(false));
+  fireEvent.click(send);
 }
 
 beforeEach(() => {

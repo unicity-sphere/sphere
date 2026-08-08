@@ -1,9 +1,12 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { getPayments } from '../../../../sdk/payments';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react';
 import type { Asset, TransferResult } from '@unicitylabs/sphere-sdk';
+import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
+import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../connect/duplicateSendGuard';
+import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
 import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
@@ -17,11 +20,29 @@ import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, Button, AlertMessage } from '../../ui';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
-type Step = 'asset' | 'details' | 'confirm' | 'processing' | 'success';
+type Step = 'asset' | 'details' | 'confirm' | 'duplicate' | 'processing' | 'success';
 
 interface SendModalProps {
   isOpen: boolean;
   onClose: (result?: { success: boolean }) => void;
+}
+
+/**
+ * The chain pubkey this send will actually be locked to, derived from what the
+ * modal already resolved — never a second resolution path. `null` means there
+ * is nothing to compare (a pasted DIRECT:// address, or a Unicity ID the peer
+ * lookup could not answer), and the duplicate check then fails open.
+ */
+function sendTargetPubkey(
+  mode: 'nametag' | 'pubkey',
+  recipient: string,
+  resolvedPubkey: string | null,
+): string | null {
+  if (mode === 'pubkey') {
+    const value = recipient.trim();
+    return isChainPubkey(value) ? value : null;
+  }
+  return resolvedPubkey;
 }
 
 export function SendModal({ isOpen, onClose }: SendModalProps) {
@@ -76,6 +97,87 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     legs: { certified: number; total: number } | null;
   } | null>(null);
   const [isResuming, setIsResuming] = useState(false);
+
+  // THE INVARIANT (stated once in connect/duplicateSendGuard.ts): the wallet
+  // does not start a send that duplicates a payment already converging, and no
+  // control that can authorize one is live the instant it appears.
+  //
+  // The wallet's OWN send is the same hole the Connect path closed: a keep-open
+  // outcome ("Network is busy") leaves the SDK converging that transfer, but the
+  // reservation ledger only stops the SAME token being spent twice — a fresh
+  // attempt simply plans a NEW transferId against the remaining balance and the
+  // recipient is paid twice. A user who closes the busy screen and sends again,
+  // or double-taps Confirm, does exactly that.
+  //
+  // `findDuplicatePending` is the single matcher for both surfaces (imported,
+  // never re-implemented) and `INTENT_SETTLE_MS` the single settle window.
+  const [duplicateMatch, setDuplicateMatch] = useState<PendingTransfer | null>(null);
+  const [duplicateApproved, setDuplicateApproved] = useState(false);
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
+  const sendAttemptRef = useRef(false);
+
+  /**
+   * The converging transfer this attempt would duplicate, or null.
+   *
+   * FAILS OPEN on every unhappy path — no payments facade, an unresolvable
+   * recipient, a throwing or slow `pendingTransfers()` (bounded by
+   * DUPLICATE_CHECK_TIMEOUT_MS, the Connect guard's own budget). A safety net
+   * over a rare outcome must never become a gate that blocks a legitimate send.
+   */
+  const findConvergingDuplicate = useCallback(
+    async (
+      recipientPubkey: string | null,
+      coinId: string,
+      amount: string,
+    ): Promise<PendingTransfer | null> => {
+      if (!recipientPubkey) return null;
+      const payments = getPayments(sphere);
+      if (!payments) return null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const rows = await Promise.race([
+          payments.pendingTransfers(),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), DUPLICATE_CHECK_TIMEOUT_MS);
+          }),
+        ]);
+        if (rows === null || rows.length === 0) return null;
+        return findDuplicatePending(rows, { recipientPubkey, coinId, amount });
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    [sphere],
+  );
+
+  // The §8.4 settle window, local equivalent of the ConnectProvider shield
+  // (there is no provider here) and measured with the SAME constant.
+  //
+  // It is armed by a callback ref on every control that can authorize a spend,
+  // so the window starts when the control MOUNTS — not when the step state
+  // flips. Those differ: AnimatePresence mode="wait" holds the next step back
+  // until the previous one has finished exiting, and a window started at the
+  // state change would already be half spent behind an animation. Every arm is
+  // a real presentation: entering confirm, the duplicate warning, and the
+  // warning→proceed transition that puts a fresh Send button under a cursor
+  // that just clicked "Send anyway".
+  //
+  // Ref callbacks and the LAYOUT effect below both run in the commit phase, so
+  // the disabled state is in the control's FIRST paint — a useEffect runs after
+  // paint, and that frame is real and clickable.
+  const [actionsLive, setActionsLive] = useState(false);
+  const [shieldArm, setShieldArm] = useState(0);
+  const armSettleShield = useCallback((node: HTMLButtonElement | null) => {
+    if (node !== null) setShieldArm((n) => n + 1);
+  }, []);
+  useLayoutEffect(() => {
+    setActionsLive(false);
+    if (shieldArm === 0) return;
+    const timer = setTimeout(() => setActionsLive(true), INTENT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [shieldArm]);
 
   // Clear the keep-open copy when the SDK's convergence lands: transfer:updated
   // for the SAME transferId with a done status flips the screen to plain
@@ -137,6 +239,8 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setQuotaBlocked(null);
     setDeliveryPending(false);
     setKeepOpen(null);
+    setDuplicateMatch(null);
+    setDuplicateApproved(false);
   };
 
   const handleClose = () => {
@@ -147,6 +251,9 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   const getBackHandler = () => {
     if (step === 'details') return () => setStep('asset');
     if (step === 'confirm') return () => setStep('details');
+    // Backing out of the duplicate warning lands on the edit step — a safe
+    // place, and never one that can send.
+    if (step === 'duplicate') return () => { setDuplicateMatch(null); setStep('details'); };
     return handleClose;
   };
 
@@ -155,6 +262,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
       case 'asset': return 'Select Asset';
       case 'details': return 'Send';
       case 'confirm': return 'Confirm Transfer';
+      case 'duplicate': return 'Payment already in progress';
       case 'processing': return 'Processing...';
       case 'success': return 'Sent!';
     }
@@ -173,8 +281,15 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     // Re-entering confirm via details is a fresh attempt — a quota block from
     // a previous send must not survive it (same lifecycle as recipientError).
     setQuotaBlocked(null);
+    // ...and neither may an override the user granted for an earlier
+    // recipient/amount: this attempt is checked on its own merits.
+    setDuplicateMatch(null);
+    setDuplicateApproved(false);
 
     try {
+      let finalRecipient: string;
+      let resolved: string | null = null;
+
       if (recipientMode === 'pubkey') {
         const value = recipient.trim();
         // Pasted DIRECT:// addresses stay accepted for compatibility — the SDK resolves them.
@@ -182,25 +297,38 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
           setRecipientError('Enter a valid public key (66 hex characters starting with 02 or 03)');
           return;
         }
-        setRecipient(value);
-        setResolvedPubkey(null);
-        setStep('confirm');
+        finalRecipient = value;
       } else {
         const cleanTag = recipient.replace('@', '').replace('@unicity', '').trim();
+        finalRecipient = cleanTag;
 
         if (sphere?.resolve) {
           const peerInfo = await sphere.resolve(`@${cleanTag}`);
-          if (peerInfo) {
-            setRecipient(cleanTag);
-            setResolvedPubkey(peerInfo.chainPubkey || null);
-            setStep('confirm');
-          } else {
+          if (!peerInfo) {
             setRecipientError(`User @${cleanTag} not found`);
+            return;
           }
-        } else {
-          setRecipient(cleanTag);
-          setStep('confirm');
+          resolved = peerInfo.chainPubkey || null;
         }
+      }
+
+      setRecipient(finalRecipient);
+      setResolvedPubkey(resolved);
+
+      // Learn about a converging duplicate HERE, before the confirm screen —
+      // the same resolution that feeds the confirm summary feeds the check, so
+      // the two can never disagree about who is being paid. handleSend checks
+      // again: this screen can sit open while another send goes keep-open.
+      const match = await findConvergingDuplicate(
+        sendTargetPubkey(recipientMode, finalRecipient, resolved),
+        selectedAsset.coinId,
+        targetAmount.toString(),
+      );
+      if (match) {
+        setDuplicateMatch(match);
+        setStep('duplicate');
+      } else {
+        setStep('confirm');
       }
     } catch (err) {
       setRecipientError(getErrorMessage(err));
@@ -212,14 +340,44 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // STEP 3: Execute transfer via SDK
   const handleSend = async () => {
     if (!selectedAsset || !amountInput || !recipient) return;
+    // Re-entrancy floor UNDER the disabled button: `isTransferring` and
+    // `isCheckingDuplicate` are React state, so they only stop a second click
+    // once a re-render has flushed. The ref flips synchronously — two clicks
+    // dispatched in one task (a queued double-tap, a programmatic re-dispatch)
+    // can never open two attempts. Cleared in `finally`, so no path can leave
+    // the button permanently dead.
+    if (isTransferring || isCheckingDuplicate || sendAttemptRef.current) return;
+    sendAttemptRef.current = true;
 
-    setStep('processing');
     setRecipientError(null);
     setQuotaBlocked(null);
     setKeepOpen(null);
 
     try {
       const amount = parseTokenAmount(amountInput, selectedAsset.decimals).toString();
+
+      // Last gate before money moves. Only an explicit "Send anyway" gets past
+      // a match — the user may genuinely want to pay the same person twice.
+      if (!duplicateApproved) {
+        setIsCheckingDuplicate(true);
+        let match: PendingTransfer | null;
+        try {
+          match = await findConvergingDuplicate(
+            sendTargetPubkey(recipientMode, recipient, resolvedPubkey),
+            selectedAsset.coinId,
+            amount,
+          );
+        } finally {
+          setIsCheckingDuplicate(false);
+        }
+        if (match) {
+          setDuplicateMatch(match);
+          setStep('duplicate');
+          return;
+        }
+      }
+
+      setStep('processing');
       const result = await transfer({
         coinId: selectedAsset.coinId,
         amount,
@@ -256,6 +414,8 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
         setRecipientError(getErrorMessage(e));
       }
       setStep('confirm');
+    } finally {
+      sendAttemptRef.current = false;
     }
   };
 
@@ -533,11 +693,66 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   Cancel
                 </button>
                 <button
+                  ref={armSettleShield}
                   onClick={handleSend}
-                  disabled={isTransferring || subsNotReady}
+                  disabled={isTransferring || subsNotReady || isCheckingDuplicate || !actionsLive}
                   className="flex-1 py-4 bg-orange-500 hover:bg-orange-600 dark:bg-brand-orange dark:hover:bg-brand-orange-dark text-white font-bold font-mono rounded-full transition-colors disabled:opacity-50"
                 >
                   Send
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* 3b. DUPLICATE WARNING — a payment matching this one is still
+              converging. Same wording and same button shape as the Connect
+              duplicate modal (ConnectIntentHandler), so both surfaces teach the
+              user the same thing: the destructive action is the SECONDARY
+              button, and the safe one sits where the primary always is. */}
+          {step === 'duplicate' && duplicateMatch && selectedAsset && (
+            <motion.div key="dup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <div className="bg-amber-50 dark:bg-amber-500/10 rounded-2xl p-5 mb-5 border border-amber-300 dark:border-amber-500/30">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-sm text-neutral-700 dark:text-neutral-200">
+                    A payment of{' '}
+                    <span className="font-semibold text-neutral-900 dark:text-white break-all">
+                      {amountInput} {selectedAsset.symbol}
+                    </span>{' '}
+                    to{' '}
+                    <span className="font-semibold text-neutral-900 dark:text-white break-all" title={recipient}>
+                      {recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}
+                    </span>{' '}
+                    is still completing (transfer {truncateId(duplicateMatch.transferId)}).
+                  </div>
+                </div>
+
+                <div className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                  Sending again pays TWICE.
+                </div>
+
+                <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+                  The payment already in flight finishes on its own — the wallet keeps working on it.
+                  {duplicateMatch.legs.total > 0 && (
+                    <> {duplicateMatch.legs.certified} of {duplicateMatch.legs.total} parts are already certified.</>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  ref={armSettleShield}
+                  onClick={() => { setDuplicateApproved(true); setDuplicateMatch(null); setStep('confirm'); }}
+                  disabled={!actionsLive}
+                  className="flex-1 py-4 bg-neutral-100 dark:bg-white/6 hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-700 dark:text-white/65 font-semibold font-mono rounded-full transition-colors disabled:opacity-50"
+                >
+                  Send anyway
+                </button>
+                <button
+                  onClick={() => { setDuplicateMatch(null); setStep('details'); }}
+                  className="flex-1 py-4 bg-orange-500 hover:bg-orange-600 dark:bg-brand-orange dark:hover:bg-brand-orange-dark text-white font-bold font-mono rounded-full transition-colors"
+                >
+                  Don&apos;t send
                 </button>
               </div>
             </motion.div>

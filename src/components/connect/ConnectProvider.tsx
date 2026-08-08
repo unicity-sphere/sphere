@@ -18,6 +18,7 @@ import { ConnectIntentHandler } from './ConnectIntentHandler';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBadge';
+import { INTENT_SETTLE_MS } from './settleWindow';
 
 /**
  * Recommended refusal text for WALLET_LOCKED, matching what the host sends. It
@@ -25,14 +26,6 @@ import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBad
  * 4009 code. Nothing may depend on this string being byte-identical anywhere.
  */
 const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
-
-/**
- * Clicks are swallowed for this long after the intent modal's contents change.
- * Every intent modal shares button geometry, so a swap under a stationary cursor
- * is clickjacking without an iframe — and a FIFO queue makes the moment
- * predictable (graceful lock §8.4).
- */
-const INTENT_SETTLE_MS = 500;
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -150,6 +143,18 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
 
   const [intentInteractive, setIntentInteractive] = useState(false);
 
+  // THE INVARIANT: the settle window measures from the moment ACTIONABLE intent
+  // UI is first PRESENTED to the user — never from queue arrival. For every
+  // modal that renders as soon as its intent reaches the head those are the same
+  // instant, and arrival arms the window below. UI that is held back first — the
+  // `send` intent's duplicate-payment check, up to DUPLICATE_CHECK_TIMEOUT_MS —
+  // re-arms via armIntentShield() when it actually appears; otherwise a check
+  // slower than INTENT_SETTLE_MS handed the user a live Send button the instant
+  // the modal rendered, with the whole window already spent behind a blank
+  // screen.
+  const [shieldArm, setShieldArm] = useState(0);
+  const armIntentShield = useCallback(() => setShieldArm((n) => n + 1), []);
+
   useEffect(() => {
     if (!pendingIntent) {
       setIntentInteractive(false);
@@ -160,9 +165,10 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     return () => clearTimeout(timer);
     // Keyed on the intent IDENTITY, not the object: the queue head object is
     // re-read on every sync, and depending on the object would restart the
-    // window forever.
+    // window forever. `shieldArm` is the explicit re-arm — it only ever changes
+    // when a caller says new actionable UI just appeared.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingIntent?.id]);
+  }, [pendingIntent?.id, shieldArm]);
 
   const releaseHost = useCallback(
     (host: ConnectHost) => {
@@ -275,6 +281,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     pendingApproval,
     pendingIntent,
     intentInteractive,
+    armIntentShield,
     approveConnection,
     denyConnection,
     resolveIntent,

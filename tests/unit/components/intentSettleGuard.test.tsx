@@ -76,6 +76,57 @@ describe('intent settle-time guard', () => {
     expect(screen.getByTestId('interactive').textContent).toBe('false');
   });
 
+  it('re-arms on demand, even after the arrival window has already elapsed', () => {
+    render(<ConnectProvider><Probe /></ConnectProvider>);
+    act(() => ctx!.attachHost(host, 'https://a.example'));
+
+    act(() => { void ctx!.requestIntent(host, 'https://a.example', 'send', {}); });
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(screen.getByTestId('interactive').textContent).toBe('true');
+
+    // Same intent, but its actionable UI is only being PRESENTED now (a
+    // duplicate-send check that finally answered). The window measures from
+    // here — arrival shielded a blank screen.
+    act(() => ctx!.armIntentShield());
+
+    expect(screen.getByTestId('intent-settle-shield')).toBeDefined();
+    expect(screen.getByTestId('interactive').textContent).toBe('false');
+
+    act(() => { vi.advanceTimersByTime(499); });
+    expect(screen.getByTestId('interactive').textContent).toBe('false');
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getByTestId('interactive').textContent).toBe('true');
+  });
+
+  it('an arm mid-window restarts it in full instead of inheriting the remainder', () => {
+    render(<ConnectProvider><Probe /></ConnectProvider>);
+    act(() => ctx!.attachHost(host, 'https://a.example'));
+
+    act(() => { void ctx!.requestIntent(host, 'https://a.example', 'send', {}); });
+    act(() => { vi.advanceTimersByTime(400); });
+
+    act(() => ctx!.armIntentShield());
+
+    // The arrival timer must have been cleared: if it survived, 100 ms more
+    // would release the button 400 ms early.
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(screen.getByTestId('interactive').textContent).toBe('false');
+
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(screen.getByTestId('interactive').textContent).toBe('true');
+  });
+
+  it('arming with nothing on screen shields nothing', () => {
+    render(<ConnectProvider><Probe /></ConnectProvider>);
+
+    act(() => ctx!.armIntentShield());
+
+    // No intent, no actionable UI — and therefore no full-screen click eater
+    // over a wallet the user is using normally.
+    expect(screen.queryByTestId('intent-settle-shield')).toBeNull();
+    expect(screen.getByTestId('interactive').textContent).toBe('false');
+  });
+
   it('renders no shield when there is no intent on screen', () => {
     render(<ConnectProvider><Probe /></ConnectProvider>);
     expect(screen.queryByTestId('intent-settle-shield')).toBeNull();
