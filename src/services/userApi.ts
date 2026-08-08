@@ -192,6 +192,9 @@ export interface MyRating {
   recommended: boolean;
   comment:     string | null;
   updatedAt:   string;
+  /** Set when a moderator hid this review. The author sees the reason, never who did it. */
+  hiddenAt:     string | null;
+  hiddenReason: string | null;
 }
 
 export async function fetchMyRatings(sphere: Sphere): Promise<MyRating[]> {
@@ -239,6 +242,28 @@ export async function unvoteRating(sphere: Sphere, ratingId: string): Promise<vo
 
 // ── Replies (Telegram-style comments on a review) ────────────────────
 
+export interface MyReply {
+  _id:            string;
+  ratingId:       string;
+  replyToReplyId: string | null;
+  comment:        string;
+  createdAt:      string;
+  /** Set when a moderator hid this reply. The author sees the reason, never who did it. */
+  hiddenAt:       string | null;
+  hiddenReason:   string | null;
+}
+
+/**
+ * The caller's own replies to a review, hidden ones included — every public
+ * read filters hidden replies out, so this is the only way the author can
+ * learn a reply of theirs was moderated.
+ */
+export async function fetchMyReplies(sphere: Sphere, ratingId: string): Promise<MyReply[]> {
+  const res = await authFetch(sphere, `/api/user/rating-replies?ratingId=${ratingId}`);
+  if (!res.ok) throw new Error(`fetchMyReplies: ${res.status}`);
+  return (await res.json()).replies;
+}
+
 export interface PostedReply {
   _id:            string;
   ratingId:       string;
@@ -265,4 +290,79 @@ export async function postReply(
 export async function deleteReply(sphere: Sphere, ratingId: string, replyId: string): Promise<void> {
   const res = await authFetch(sphere, `/api/user/ratings/${ratingId}/replies/${replyId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`deleteReply: ${res.status}`);
+}
+
+// ── Moderation: report content, appeal a hide ────────────────────────
+
+export type ReportTargetType = 'project' | 'rating' | 'rating_reply';
+export type ReportCategory = 'spam' | 'abuse' | 'off_topic' | 'illegal' | 'other';
+
+export interface ReportBody {
+  targetType: ReportTargetType;
+  targetId:   string;
+  category:   ReportCategory;
+  comment?:   string;
+}
+
+/**
+ * Flag content for moderator review. Reporting the same target again edits
+ * the caller's existing report rather than creating a second one, and never
+ * reopens a case a moderator already resolved — both handled server-side.
+ *
+ * Known failure codes (thrown as Error.message):
+ * - 'rate-limited' — 429, more than 10 reports/wallet/hour
+ * - 'own-content'  — 403, the target belongs to the caller
+ * - 'not-found'    — 404, the target (or its parent project) doesn't exist / isn't published
+ */
+export async function submitReport(sphere: Sphere, body: ReportBody): Promise<void> {
+  const res = await authFetch(sphere, '/api/user/reports', {
+    method: 'POST',
+    body:   JSON.stringify(body),
+  });
+  if (res.status === 429) throw new Error('rate-limited');
+  if (res.status === 403) throw new Error('own-content');
+  if (res.status === 404) throw new Error('not-found');
+  if (!res.ok) throw new Error(`submitReport: ${res.status}`);
+}
+
+/**
+ * Appeal a hidden rating. Only the rating's author may call this, only
+ * while it is actually hidden, and only one open appeal is allowed at a
+ * time — all enforced server-side.
+ *
+ * Known failure codes (thrown as Error.message):
+ * - 'rate-limited'   — 429, more than 5 appeals/wallet/hour (shared with appealReply)
+ * - 'appeal-open'    — 409, an appeal is already open for this rating
+ * - 'not-author'     — 403, the caller doesn't own the rating
+ * - 'invalid-appeal' — 400, either the rating isn't currently hidden or the
+ *   payload failed validation (both are ValidationError server-side and are
+ *   indistinguishable from the status code alone — see the body's `code`
+ *   field if the two ever need different copy)
+ */
+export async function appealRating(sphere: Sphere, ratingId: string, comment: string): Promise<void> {
+  const res = await authFetch(sphere, `/api/user/ratings/${ratingId}/appeal`, {
+    method: 'POST',
+    body:   JSON.stringify({ comment }),
+  });
+  if (res.status === 429) throw new Error('rate-limited');
+  if (res.status === 409) throw new Error('appeal-open');
+  if (res.status === 403) throw new Error('not-author');
+  if (res.status === 400) throw new Error('invalid-appeal');
+  if (!res.ok) throw new Error(`appealRating: ${res.status}`);
+}
+
+/**
+ * Appeal a hidden reply. Same rules as {@link appealRating}, scoped to a
+ * rating reply instead of the rating itself.
+ */
+export async function appealReply(sphere: Sphere, replyId: string, comment: string): Promise<void> {
+  const res = await authFetch(sphere, `/api/user/rating-replies/${replyId}/appeal`, {
+    method: 'POST',
+    body:   JSON.stringify({ comment }),
+  });
+  if (res.status === 429) throw new Error('rate-limited');
+  if (res.status === 409) throw new Error('appeal-open');
+  if (res.status === 403) throw new Error('not-author');
+  if (res.status === 400) throw new Error('invalid-appeal');
+  if (!res.ok) throw new Error(`appealReply: ${res.status}`);
 }

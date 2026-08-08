@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Send, Trash2, ThumbsUp, ThumbsDown, MessageCircle } from 'lucide-react';
+import { Loader2, Send, Trash2, ThumbsUp, ThumbsDown, MessageCircle, Flag } from 'lucide-react';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useProjectRatings } from '../../hooks/useMarketplace';
 import {
@@ -10,11 +10,17 @@ import {
   fetchMyRatings,
   voteRating,
   unvoteRating,
+  submitReport,
+  appealRating,
   type HelpfulVote,
+  type ReportCategory,
 } from '../../services/userApi';
 import { stripDirectScheme, truncateId } from '../../utils/identifiers';
 import { RecommendBadge } from './RecommendBadge';
 import { ReviewReplies } from './ReviewReplies';
+import { ReportModal } from './ReportModal';
+import { hiddenNoticeFor, type HiddenNotice } from './hiddenReviewNotice';
+import { canReport, canAppeal } from './moderationAffordances';
 
 interface ProjectReviewsSectionProps {
   projectId:       string;
@@ -26,6 +32,19 @@ interface ProjectReviewsSectionProps {
   ratingCount:     number;
 }
 
+/**
+ * Steam-style verdict for a project's positive percentage.
+ *
+ * This is the original; it now has two deliberate copies, both named
+ * `ratingSummaryLabel`:
+ *   - sphere-dev-portal/src/lib/ratingSummary.ts
+ *   - sphere-backoffice/src/lib/ratingSummary.ts
+ * Extracting one pure function into sphere-ui would cost a publish plus a
+ * version bump in all three consumers, so the duplication is on purpose — but
+ * changing the thresholds or the copy HERE and nowhere else makes the wallet
+ * and the two admin surfaces describe the same project differently, silently.
+ * Change all three together.
+ */
 function summaryLabel(pct: number, total: number): string {
   if (total === 0) return 'No reviews yet';
   if (total < 10) {
@@ -54,21 +73,61 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
   const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set());
+  const [hidden, setHidden] = useState<HiddenNotice | null>(null);
+  const [myRatingId, setMyRatingId] = useState<string | null>(null);
+  const [reportedRatingIds, setReportedRatingIds] = useState<Set<string>>(new Set());
+  const [reportTarget, setReportTarget] = useState<{ id: string } | null>(null);
+  const [appealOpen, setAppealOpen] = useState(false);
+  const [appealComment, setAppealComment] = useState('');
+  // Session-local: the backend doesn't expose "is there already an open appeal for
+  // this rating" on GET /api/user/ratings, so this starts false and flips true
+  // either on a successful submit or when the server itself reports one already
+  // exists (409) — see appealMutation.onError below.
+  const [appealSubmitted, setAppealSubmitted] = useState(false);
+  const [appealError, setAppealError] = useState<string | null>(null);
 
   const myAddress = sphere?.identity?.directAddress ?? null;
 
-  // Pre-fill the rater with my existing rating on this project (if any)
+  // Pre-fill the rater with my existing rating on this project (if any).
+  //
+  // Every branch assigns — including "I have no review here". This component
+  // is reused across projects rather than remounted per project, so a
+  // one-sided effect left the previous project's state standing: opening a
+  // project you had never reviewed still showed the review, the hide reason
+  // and the Appeal button belonging to the LAST project you had, and that
+  // Appeal button carried the other project's rating id, so using it filed an
+  // appeal against a review on a different page. Resetting first, then
+  // filling in what the fetch actually returns, is what makes the displayed
+  // state belong to `projectId`.
   useEffect(() => {
+    let cancelled = false;
+    const reset = () => {
+      setRecommended(null);
+      setComment('');
+      setHidden(null);
+      setMyRatingId(null);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealSubmitted(false);
+      setAppealError(null);
+      setError(null);
+    };
+    reset();
     if (!sphere || !getStoredJwt()) return;
     fetchMyRatings(sphere)
       .then((list) => {
+        // A response that lands after the user has already moved on belongs
+        // to the project they left, so it must not be applied here either.
+        if (cancelled) return;
         const mine = list.find((r) => String(r.projectId) === projectId);
-        if (mine) {
-          setRecommended(mine.recommended);
-          setComment(mine.comment ?? '');
-        }
+        if (!mine) return;   // reset() above is already the correct state
+        setRecommended(mine.recommended);
+        setComment(mine.comment ?? '');
+        setHidden(hiddenNoticeFor(mine));
+        setMyRatingId(mine._id);
       })
       .catch(() => { /* not signed in yet — ignore */ });
+    return () => { cancelled = true; };
   }, [sphere, projectId]);
 
   const submitMutation = useMutation({
@@ -77,8 +136,12 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       if (recommended === null) throw new Error('thumb-required');
       return submitRating(sphere, projectId, recommended, comment.trim() || undefined);
     },
-    onSuccess: () => {
+    onSuccess: (mine) => {
       setError(null);
+      // An edit does not unhide a review — refresh the banner from what the
+      // server actually returned instead of assuming success means "visible again".
+      setHidden(hiddenNoticeFor(mine));
+      setMyRatingId(mine._id);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
     },
@@ -98,8 +161,55 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
       setRecommended(null);
       setComment('');
       setError(null);
+      setHidden(null);
+      setMyRatingId(null);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealSubmitted(false);
+      setAppealError(null);
       queryClient.invalidateQueries({ queryKey: ['marketplace', 'ratings', slug] });
       queryClient.invalidateQueries({ queryKey: ['metrics', 'project', projectId] });
+    },
+    onError: (e: Error) => {
+      // The server refuses to delete a review while it is hidden — deleting
+      // would free the unique (wallet, project) slot and let the same text be
+      // re-posted as a fresh, fully public row. Say so, rather than letting
+      // Remove look like a no-op: the appeal control is right below.
+      if (e.message.endsWith('403')) {
+        setError('A hidden review cannot be removed while it is under moderation. Appeal the decision instead.');
+      } else {
+        setError('Failed to remove your review.');
+      }
+    },
+  });
+
+  const appealMutation = useMutation({
+    mutationFn: async () => {
+      if (!sphere || !myRatingId) throw new Error('wallet-unavailable');
+      if (appealComment.trim().length === 0) throw new Error('empty-comment');
+      await appealRating(sphere, myRatingId, appealComment.trim());
+    },
+    onSuccess: () => {
+      setAppealSubmitted(true);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealError(null);
+    },
+    onError: (e: Error) => {
+      if (e.message === 'rate-limited') setAppealError("You've submitted too many appeals recently. Try again later.");
+      else if (e.message === 'appeal-open') {
+        // The server disagrees with our session-local guess — trust it and
+        // switch to "submitted" so the control stops offering a doomed retry.
+        // Still surface *why*, and overwrite any earlier error (e.g. a stale
+        // rate-limit message from a previous attempt) so the two can't coexist.
+        setAppealSubmitted(true);
+        setAppealOpen(false);
+        setAppealError('An appeal is already open for this review.');
+      }
+      else if (e.message === 'invalid-appeal') setAppealError("This appeal couldn't be submitted.");
+      else if (e.message === 'not-author') setAppealError('You can only appeal your own review.');
+      else if (e.message === 'empty-comment') setAppealError('Explain why you think this was a mistake.');
+      else setAppealError('Failed to submit appeal.');
     },
   });
 
@@ -155,12 +265,21 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           )}
         </div>
 
-        {/* Rater */}
-        {canRate && sphere && (
+        {/* Rater.
+            `|| hidden`: eligibility to WRITE a review is not the same as the
+            right to see what happened to one you already wrote. Uninstalling
+            the project (or a completion aging out) flips canRate to false,
+            and gating the whole block on it took the "a moderator hid this"
+            notice and the Appeal button away with it — the review stays
+            hidden, the author just stops being told, which is the one
+            outcome a contestable moderation system must not produce. The
+            editor controls below stay behind canRate; only the notice and
+            its appeal survive. */}
+        {(canRate || hidden) && sphere && (
           <div className="mb-6 no-text-shadow rounded-2xl border border-neutral-200 dark:border-white/8 bg-neutral-50 dark:bg-white/4 dark:backdrop-blur-2xl p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium">Your review</span>
-              {recommended !== null && !submitMutation.isPending && (
+              {canRate && recommended !== null && !submitMutation.isPending && (
                 <button
                   type="button"
                   onClick={() => removeMutation.mutate()}
@@ -171,6 +290,67 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                 </button>
               )}
             </div>
+            {hidden && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                  A moderator hid this review from the marketplace.
+                </p>
+                {hidden.reason && (
+                  <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
+                    Reason: {hidden.reason}
+                  </p>
+                )}
+                <p className="text-xs text-neutral-500 dark:text-white/45 mt-0.5">
+                  Editing it will not restore it. Contact support if you think this was a mistake.
+                </p>
+                {canAppeal({ hiddenAt: hidden.at }, appealSubmitted) ? (
+                  appealOpen ? (
+                    <div className="mt-2 space-y-1.5">
+                      <textarea
+                        value={appealComment}
+                        onChange={(e) => setAppealComment(e.target.value.slice(0, 1000))}
+                        placeholder="Explain why you think this was a mistake…"
+                        rows={2}
+                        maxLength={1000}
+                        className="w-full text-xs rounded-lg bg-white dark:bg-white/6 border border-amber-500/30 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => appealMutation.mutate()}
+                          disabled={appealMutation.isPending || appealComment.trim().length === 0}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {appealMutation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+                          Submit appeal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setAppealOpen(false); setAppealError(null); }}
+                          disabled={appealMutation.isPending}
+                          className="text-xs text-neutral-400 dark:text-white/35 hover:text-neutral-600 dark:hover:text-white/60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAppealOpen(true)}
+                      className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400 underline hover:no-underline"
+                    >
+                      Appeal this decision
+                    </button>
+                  )
+                ) : appealSubmitted && (
+                  <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">Appeal submitted</p>
+                )}
+                {appealError && <p className="mt-1 text-xs text-red-500">{appealError}</p>}
+              </div>
+            )}
+            {canRate && (
+            <>
             <div className="flex gap-2 mb-3">
               <button
                 type="button"
@@ -215,9 +395,11 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
               {submitMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
               Post review
             </button>
+            </>
+            )}
           </div>
         )}
-        {!canRate && sphere && (
+        {!canRate && !hidden && sphere && (
           <p className="text-xs text-neutral-400 dark:text-white/35 mb-6">
             Install this project or complete a quest in it to leave a review.
           </p>
@@ -257,9 +439,27 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                       <RecommendBadge recommended={r.recommended} />
                       <span className="text-sm font-medium">{label}</span>
                     </div>
-                    <span className="text-[11px] text-neutral-400 dark:text-white/35">
-                      {new Date(r.createdAt).toLocaleDateString()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-neutral-400 dark:text-white/35">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </span>
+                      {canReport(myAddress, r.userAddress) && (
+                        reportedRatingIds.has(r._id) ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35">
+                            <Flag className="w-3 h-3" /> Reported
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReportTarget({ id: r._id })}
+                            title="Report this review"
+                            className="inline-flex items-center gap-1 text-[11px] text-neutral-400 dark:text-white/35 hover:text-red-500"
+                          >
+                            <Flag className="w-3 h-3" /> Report
+                          </button>
+                        )
+                      )}
+                    </div>
                   </div>
                   {r.comment && (
                     <p className="text-sm text-neutral-600 dark:text-white/55 whitespace-pre-line break-words mb-3">
@@ -303,6 +503,17 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           <p className="text-sm text-neutral-400 dark:text-white/35">No reviews yet.</p>
         )}
       </div>
+
+      <ReportModal
+        isOpen={reportTarget !== null}
+        onClose={() => setReportTarget(null)}
+        onSubmit={async (category: ReportCategory, comment?: string) => {
+          if (!sphere || !reportTarget) throw new Error('wallet-unavailable');
+          const targetId = reportTarget.id;
+          await submitReport(sphere, { targetType: 'rating', targetId, category, comment });
+          setReportedRatingIds((prev) => new Set(prev).add(targetId));
+        }}
+      />
     </section>
   );
 }

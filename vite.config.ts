@@ -171,6 +171,13 @@ export default defineConfig(({ mode }) => {
         'react-dom',
         'react-router-dom',
         '@tanstack/react-query',
+        // The node-polyfill shims are only reached from transformed source, so
+        // Vite discovers them on the first page load rather than at startup —
+        // which triggers a mid-session re-optimize + full server restart that
+        // the dev server does not survive (it exits, taking :5173 with it).
+        // Pre-bundling them keeps the discovery at startup where it belongs.
+        'vite-plugin-node-polyfills/shims/global',
+        'vite-plugin-node-polyfills/shims/process',
       ],
       // Force re-bundling on dev start so the file:-linked sphere-ui is freshly resolved
       // against the deduped peer deps (otherwise Vite caches stale pre-bundles).
