@@ -18,6 +18,7 @@ import { ConnectIntentHandler } from './ConnectIntentHandler';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBadge';
+import { INTENT_SETTLE_MS } from './settleWindow';
 
 /**
  * Recommended refusal text for WALLET_LOCKED, matching what the host sends. It
@@ -25,14 +26,6 @@ import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBad
  * 4009 code. Nothing may depend on this string being byte-identical anywhere.
  */
 const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
-
-/**
- * Clicks are swallowed for this long after the intent modal's contents change.
- * Every intent modal shares button geometry, so a swap under a stationary cursor
- * is clickjacking without an iframe — and a FIFO queue makes the moment
- * predictable (graceful lock §8.4).
- */
-const INTENT_SETTLE_MS = 500;
 
 interface ConnectProviderProps {
   children: ReactNode;
