@@ -26,7 +26,7 @@ interface ReviewRepliesProps {
 export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
-  const { data, isLoading } = useRatingReplies(ratingId);
+  const { data, isLoading, isError } = useRatingReplies(ratingId);
   const [draft, setDraft] = useState('');
   const [quoteTarget, setQuoteTarget] = useState<RatingReplyEntry | null>(null);
   const [reportedReplyIds, setReportedReplyIds] = useState<Set<string>>(new Set());
@@ -127,6 +127,16 @@ export function ReviewReplies({ ratingId }: ReviewRepliesProps) {
     <div className="mt-3 pl-4 border-l-2 border-orange-500/30">
       {isLoading ? (
         <div className="text-xs text-neutral-400 dark:text-white/35 py-2">Loading replies…</div>
+      ) : isError ? (
+        // The thread read 403s once the review above it is hidden — the
+        // server stops serving a moderated review's replies. Ignoring the
+        // error left the last successful fetch on screen, so the thread went
+        // on rendering (and offering Reply, which then failed) as if nothing
+        // had happened. Saying so is the honest state, and it is the same
+        // message a deleted review produces.
+        <div className="text-xs text-neutral-400 dark:text-white/35 py-2">
+          This thread is no longer available.
+        </div>
       ) : (
         <ul className="space-y-2">
           {merged.map((reply) => {

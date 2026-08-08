@@ -88,20 +88,46 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
 
   const myAddress = sphere?.identity?.directAddress ?? null;
 
-  // Pre-fill the rater with my existing rating on this project (if any)
+  // Pre-fill the rater with my existing rating on this project (if any).
+  //
+  // Every branch assigns — including "I have no review here". This component
+  // is reused across projects rather than remounted per project, so a
+  // one-sided effect left the previous project's state standing: opening a
+  // project you had never reviewed still showed the review, the hide reason
+  // and the Appeal button belonging to the LAST project you had, and that
+  // Appeal button carried the other project's rating id, so using it filed an
+  // appeal against a review on a different page. Resetting first, then
+  // filling in what the fetch actually returns, is what makes the displayed
+  // state belong to `projectId`.
   useEffect(() => {
+    let cancelled = false;
+    const reset = () => {
+      setRecommended(null);
+      setComment('');
+      setHidden(null);
+      setMyRatingId(null);
+      setAppealOpen(false);
+      setAppealComment('');
+      setAppealSubmitted(false);
+      setAppealError(null);
+      setError(null);
+    };
+    reset();
     if (!sphere || !getStoredJwt()) return;
     fetchMyRatings(sphere)
       .then((list) => {
+        // A response that lands after the user has already moved on belongs
+        // to the project they left, so it must not be applied here either.
+        if (cancelled) return;
         const mine = list.find((r) => String(r.projectId) === projectId);
-        if (mine) {
-          setRecommended(mine.recommended);
-          setComment(mine.comment ?? '');
-          setHidden(hiddenNoticeFor(mine));
-          setMyRatingId(mine._id);
-        }
+        if (!mine) return;   // reset() above is already the correct state
+        setRecommended(mine.recommended);
+        setComment(mine.comment ?? '');
+        setHidden(hiddenNoticeFor(mine));
+        setMyRatingId(mine._id);
       })
       .catch(() => { /* not signed in yet — ignore */ });
+    return () => { cancelled = true; };
   }, [sphere, projectId]);
 
   const submitMutation = useMutation({
@@ -239,12 +265,21 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
           )}
         </div>
 
-        {/* Rater */}
-        {canRate && sphere && (
+        {/* Rater.
+            `|| hidden`: eligibility to WRITE a review is not the same as the
+            right to see what happened to one you already wrote. Uninstalling
+            the project (or a completion aging out) flips canRate to false,
+            and gating the whole block on it took the "a moderator hid this"
+            notice and the Appeal button away with it — the review stays
+            hidden, the author just stops being told, which is the one
+            outcome a contestable moderation system must not produce. The
+            editor controls below stay behind canRate; only the notice and
+            its appeal survive. */}
+        {(canRate || hidden) && sphere && (
           <div className="mb-6 no-text-shadow rounded-2xl border border-neutral-200 dark:border-white/8 bg-neutral-50 dark:bg-white/4 dark:backdrop-blur-2xl p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium">Your review</span>
-              {recommended !== null && !submitMutation.isPending && (
+              {canRate && recommended !== null && !submitMutation.isPending && (
                 <button
                   type="button"
                   onClick={() => removeMutation.mutate()}
@@ -314,6 +349,8 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
                 {appealError && <p className="mt-1 text-xs text-red-500">{appealError}</p>}
               </div>
             )}
+            {canRate && (
+            <>
             <div className="flex gap-2 mb-3">
               <button
                 type="button"
@@ -358,9 +395,11 @@ export function ProjectReviewsSection({ projectId, slug, canRate, positivePercen
               {submitMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
               Post review
             </button>
+            </>
+            )}
           </div>
         )}
-        {!canRate && sphere && (
+        {!canRate && !hidden && sphere && (
           <p className="text-xs text-neutral-400 dark:text-white/35 mb-6">
             Install this project or complete a quest in it to leave a review.
           </p>
