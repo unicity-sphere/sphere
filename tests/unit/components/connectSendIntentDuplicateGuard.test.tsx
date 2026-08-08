@@ -77,6 +77,13 @@ vi.mock('../../../src/components/upgrade', () => ({
 
 const resolveIntent = vi.fn();
 const rejectIntent = vi.fn();
+/**
+ * ConnectProvider's settle-window arm. The handler must call it exactly once
+ * per PRESENTATION — the send confirmation and the duplicate warning each count
+ * as one, and a plain re-render counts as none. The window itself is verified
+ * end to end in connectIntentShieldPresentation.test.tsx.
+ */
+const armIntentShield = vi.fn();
 let pendingIntent: {
   id: number;
   host: ConnectHost;
@@ -92,6 +99,7 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
     resolveIntent,
     rejectIntent,
     registerAutoIntent: vi.fn(),
+    armIntentShield,
   }),
 }));
 
@@ -140,6 +148,7 @@ beforeEach(() => {
   pendingTransfersMock.mockResolvedValue([]);
   resolveIntent.mockClear();
   rejectIntent.mockClear();
+  armIntentShield.mockClear();
   pendingIntent = sendIntent();
 });
 
@@ -261,5 +270,66 @@ describe('Connect send intent — duplicate-payment guard', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * The guard delays the modal, so the §8.4 settle window can no longer be
+ * measured from the intent's ARRIVAL — it is armed when the UI is PRESENTED.
+ * Here: WHO arms and HOW OFTEN. That the armed window actually shields the
+ * button is proven end to end in connectIntentShieldPresentation.test.tsx.
+ */
+describe('Connect send intent — settle shield arms per presentation', () => {
+  it('arms when the send confirmation appears after a check that outlives the window', async () => {
+    vi.useFakeTimers();
+    try {
+      // Answers only at 1200 ms — well past the 500 ms window the intent's
+      // arrival started.
+      pendingTransfersMock.mockReturnValue(
+        new Promise<PendingTransfer[]>((resolve) => setTimeout(() => resolve([]), 1200)),
+      );
+
+      render(<ConnectIntentHandler />);
+      // Nothing actionable is on screen yet, so nothing to shield.
+      expect(armIntentShield).not.toHaveBeenCalled();
+
+      await act(async () => { vi.advanceTimersByTime(1200); });
+
+      expect(screen.getByText(SEND_MODAL_COPY)).toBeTruthy();
+      expect(armIntentShield).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('arms for the duplicate warning too, and again for the confirmation behind "Send anyway"', async () => {
+    pendingTransfersMock.mockResolvedValue([pendingRow()]);
+
+    render(<ConnectIntentHandler />);
+
+    // "Send anyway" is destructive — it deserves the window as much as "Send".
+    expect(await screen.findByText('Payment already in progress')).toBeTruthy();
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('Send anyway'));
+
+    // A fresh primary button just appeared under the cursor that clicked the
+    // secondary one — a new presentation, a new window.
+    expect(await screen.findByText(SEND_MODAL_COPY)).toBeTruthy();
+    expect(armIntentShield).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-arm on re-renders that present nothing new', async () => {
+    const { rerender } = render(<ConnectIntentHandler />);
+
+    expect(await screen.findByText(SEND_MODAL_COPY)).toBeTruthy();
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+
+    rerender(<ConnectIntentHandler />);
+    rerender(<ConnectIntentHandler />);
+
+    // Re-arming per render would hold the shield up for as long as the modal is
+    // open, which is not a settle window — it is a broken modal.
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
   });
 });

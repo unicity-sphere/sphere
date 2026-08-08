@@ -150,6 +150,18 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
 
   const [intentInteractive, setIntentInteractive] = useState(false);
 
+  // THE INVARIANT: the settle window measures from the moment ACTIONABLE intent
+  // UI is first PRESENTED to the user — never from queue arrival. For every
+  // modal that renders as soon as its intent reaches the head those are the same
+  // instant, and arrival arms the window below. UI that is held back first — the
+  // `send` intent's duplicate-payment check, up to DUPLICATE_CHECK_TIMEOUT_MS —
+  // re-arms via armIntentShield() when it actually appears; otherwise a check
+  // slower than INTENT_SETTLE_MS handed the user a live Send button the instant
+  // the modal rendered, with the whole window already spent behind a blank
+  // screen.
+  const [shieldArm, setShieldArm] = useState(0);
+  const armIntentShield = useCallback(() => setShieldArm((n) => n + 1), []);
+
   useEffect(() => {
     if (!pendingIntent) {
       setIntentInteractive(false);
@@ -160,9 +172,10 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     return () => clearTimeout(timer);
     // Keyed on the intent IDENTITY, not the object: the queue head object is
     // re-read on every sync, and depending on the object would restart the
-    // window forever.
+    // window forever. `shieldArm` is the explicit re-arm — it only ever changes
+    // when a caller says new actionable UI just appeared.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingIntent?.id]);
+  }, [pendingIntent?.id, shieldArm]);
 
   const releaseHost = useCallback(
     (host: ConnectHost) => {
@@ -275,6 +288,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     pendingApproval,
     pendingIntent,
     intentInteractive,
+    armIntentShield,
     approveConnection,
     denyConnection,
     resolveIntent,

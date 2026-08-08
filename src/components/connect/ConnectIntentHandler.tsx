@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { getPayments } from '../../sdk/payments';
 import { MessageSquare, PenLine, Coins, Inbox, AlertTriangle } from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
@@ -71,7 +71,8 @@ function validateIntent(action: string, params: Record<string, unknown>): Intent
 }
 
 export function ConnectIntentHandler() {
-  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent } = useConnectContext();
+  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
+    useConnectContext();
   const { sphere } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
@@ -97,6 +98,36 @@ export function ConnectIntentHandler() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIntent]);
 
+  // THE INVARIANT (ConnectContext.armIntentShield): the §8.4 settle window
+  // measures from the moment actionable UI is PRESENTED. Every modal below
+  // renders the instant its intent reaches the head of the queue, so the
+  // provider's arrival arm is already the presentation arm for them — EXCEPT
+  // `send`, which is held behind the duplicate-payment check (up to
+  // DUPLICATE_CHECK_TIMEOUT_MS, i.e. far past the window). Both of that check's
+  // outcomes are actionable: the send confirmation, and the duplicate warning
+  // whose "Send anyway" spends a second time. So both arm on appearance, and
+  // the transition from the warning to the confirmation arms again — that is a
+  // fresh primary button under a cursor that just clicked one.
+  const shieldPresentation =
+    pendingIntent !== null &&
+    pendingIntent.action === 'send' &&
+    duplicateSend.status !== 'checking' &&
+    validateIntent(pendingIntent.action, pendingIntent.params) === null
+      ? `${pendingIntent.id}:${duplicateSend.status}`
+      : null;
+
+  // Arm ONCE per presentation: this component re-renders for reasons unrelated
+  // to what is on screen (DM error, mint progress, a parent sync), and re-arming
+  // on every render would hold the shield up indefinitely. A LAYOUT effect, so
+  // the shield is up in the SAME paint the modal first appears in — useEffect
+  // runs after paint, and that frame is real.
+  const armedForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (shieldPresentation === null || armedForRef.current === shieldPresentation) return;
+    armedForRef.current = shieldPresentation;
+    armIntentShield();
+  }, [shieldPresentation, armIntentShield]);
+
   if (!pendingIntent) return null;
 
   // Captured HERE, so every callback below settles the intent this render belongs to. The
@@ -120,9 +151,10 @@ export function ConnectIntentHandler() {
     // and it fails open on any error/timeout, so it can never strand an intent.
     //
     // Nothing renders while it runs (usually one local store read). The §8.4
-    // settle shield still counts from when the intent became the head, so a
-    // slow check eats into that window — which is why THIS modal's safe action
-    // is the one sitting where every other intent modal puts its primary.
+    // settle shield is re-armed when the check's UI finally appears (see
+    // shieldPresentation above), so a slow check no longer spends the window
+    // behind a blank screen — and THIS modal's safe action is additionally the
+    // one sitting where every other intent modal puts its primary.
     if (duplicateSend.status === 'checking') return null;
 
     if (duplicateSend.status === 'duplicate') {
