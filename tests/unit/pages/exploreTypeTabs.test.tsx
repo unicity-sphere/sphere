@@ -42,6 +42,9 @@ vi.mock('../../../src/hooks/useMarketplace', () => ({
   useMarketplaceStats,
   useCategories,
   useProjectMetricsByGroups: () => ({}),
+  // The page reads this to stagger a page of cards as it arrives; the mock
+  // has to carry it or every render throws on the missing export.
+  EXPLORE_PAGE_SIZE: 24,
 }));
 vi.mock('../../../src/hooks/useMaintenanceStatus', () => ({
   useMaintenanceStatus: () => ({ data: { enabled: false } }),

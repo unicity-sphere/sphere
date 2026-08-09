@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Search, ArrowRight } from 'lucide-react';
 import {
   useInfiniteProjects,
@@ -7,6 +7,7 @@ import {
   useProjectMetricsByGroups,
   useMarketplaceStats,
   useCategories,
+  EXPLORE_PAGE_SIZE,
 } from '../hooks/useMarketplace';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { FeaturedProjectCard } from '../components/marketplace/FeaturedProjectCard';
@@ -82,6 +83,10 @@ export function ExplorePage() {
   // and also listens for `maintenance:forced`, so the marketplace queries (gated on
   // the same status) never fire requests that would 503 during maintenance.
   const { data: maintenance } = useMaintenanceStatus();
+  // Honoured throughout the grid below: motion here is decoration on top of a
+  // list that reads fine without it, so a viewer who has asked the OS for less
+  // of it gets none.
+  const reduceMotion = useReducedMotion();
 
   // Typing drives a SERVER-side search, so it is debounced before it reaches
   // the query key. The raw value stays on the input so the box itself never
@@ -347,12 +352,41 @@ export function ExplorePage() {
                 style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}
               >
                 {items.map((project, i) => (
-                  <ProjectCard
+                  <motion.div
                     key={project.slug}
-                    project={project}
-                    index={i}
-                    metrics={metricsByProject[project._id]}
-                  />
+                    // Two different motions, because two different things
+                    // happen to this grid:
+                    //
+                    // `layout` covers REORDERING. Changing the sort keeps the
+                    // same cards and only moves them, so React reuses every
+                    // element and nothing animates by default — the grid just
+                    // teleports into its new order. "position" rather than
+                    // full layout so only the move is animated; the cards are
+                    // uniform, and animating size would scale their contents
+                    // for a frame.
+                    //
+                    // initial/animate covers ARRIVAL — a new page appended by
+                    // Load more, or a new result set. Existing cards keep
+                    // their key, so they do not replay it.
+                    layout={reduceMotion ? false : 'position'}
+                    initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{
+                      duration: 0.22,
+                      ease: 'easeOut',
+                      // Staggered within its own page and capped, so a page
+                      // ripples in instead of appearing as one block — and
+                      // the last card of a 24-card page is never a quarter of
+                      // a second behind the first.
+                      delay: reduceMotion ? 0 : Math.min(i % EXPLORE_PAGE_SIZE, 11) * 0.02,
+                    }}
+                  >
+                    <ProjectCard
+                      project={project}
+                      index={i}
+                      metrics={metricsByProject[project._id]}
+                    />
+                  </motion.div>
                 ))}
               </div>
 
