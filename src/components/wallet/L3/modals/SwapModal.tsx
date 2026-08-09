@@ -1,12 +1,13 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { getPayments } from '../../../../sdk/payments';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowDownUp, Loader2, CheckCircle, ChevronDown } from 'lucide-react';
+import { ArrowDownUp, Loader2, CheckCircle, ChevronDown, AlertCircle } from 'lucide-react';
 import { useAssets, useTransfer } from '../../../../sdk';
 import type { Asset } from '@unicitylabs/sphere-sdk';
 import { parseTokenAmount, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
+import { useRegistryReady } from '../../../../sdk/hooks/payments/useRegistryReady';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { getErrorMessage } from '../../../../sdk/errors';
@@ -15,10 +16,33 @@ import { ModalHeader } from '../../ui';
 
 type Step = 'swap' | 'processing' | 'success';
 
+/** Coins this stub swap surface offers on the "You Receive" side. */
+const SUPPORTED_SWAP_COINS = ['bitcoin', 'ethereum', 'solana', 'unicity', 'tether', 'usd-coin', 'unicity-usd'];
+
+/**
+ * Hardcoded prices (USD) for tokens that CoinGecko does not list at all.
+ * Key = token registry name (lowercased) — the same key space as a CoinGecko id.
+ * This table is deliberately NOT a patch for a broken price lookup; only genuinely
+ * unlisted coins belong here.
+ */
+/** Unlisted-on-CoinGecko coins (Unicity's own) price at a $1.00 nominal so they
+ *  stay swappable — the long-standing behavior this modal was built around. */
+const UNLISTED_COIN_NOMINAL_USD = 1.0;
+const UNLISTED_COIN_NOMINAL_EUR = 0.92;
+
 const FALLBACK_PRICES: Record<string, { priceUsd: number; priceEur: number }> = {
   unicity:       { priceUsd: 1.0, priceEur: 0.92 },
   'unicity-usd': { priceUsd: 1.0, priceEur: 0.92 },
 };
+
+interface Quote {
+  priceUsd: number;
+  priceEur: number;
+  change24h: number;
+}
+
+/** 'loading' = registry/prices still resolving; 'unavailable' = nothing priced. */
+type RateStatus = 'loading' | 'ready' | 'unavailable';
 
 function formatAssetAmount(asset: Asset): string {
   return toHumanReadable(asset.totalAmount, asset.decimals);
@@ -33,6 +57,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const { assets } = useAssets();
   const { transfer } = useTransfer();
   const { sphere, providers } = useSphereContext();
+  const registryReady = useRegistryReady();
   const queryClient = useQueryClient();
 
   const [step, setStep] = useState<Step>('swap');
@@ -44,25 +69,66 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [allSwappableAssets, setAllSwappableAssets] = useState<Asset[]>([]);
   const [isSwapHovered, setIsSwapHovered] = useState(false);
+  /** coinId → quote. The modal's single source of price truth for BOTH sides. */
+  const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map());
+  const [rateStatus, setRateStatus] = useState<RateStatus>('loading');
+  const [rateAttempt, setRateAttempt] = useState(0);
 
+  // Prices are keyed by the registry's RAW (lowercase) token name — that IS the
+  // CoinGecko id ("bitcoin", "unicity"). Never by a display name: `Asset.name` /
+  // `registry.getName()` are capitalized ("Bitcoin"), and a capitalized key
+  // silently misses, which is exactly how every from-side price became 0.
+  // We quote both the swappable ("to") coins and every held ("from") coin here
+  // rather than trusting `Asset.priceUsd`, because the SDK's own asset pricing
+  // (payments-v2 `withPrices`) currently makes that same key mistake — see the
+  // PR body; the SDK-side fix is tracked separately.
   useEffect(() => {
+    if (!isOpen) return;
+    if (!registryReady) { setRateStatus('loading'); return; }
+
+    let cancelled = false;
+    setRateStatus('loading');
+
     const loadSwappableCoins = async () => {
       const registry = TokenRegistry.getInstance();
       const definitions = registry.getAllDefinitions();
-      const SUPPORTED_SWAP_COINS = ['bitcoin', 'ethereum', 'solana', 'unicity', 'tether', 'usd-coin', 'unicity-usd'];
       const fungibleDefs = definitions.filter(def =>
         def.assetKind === 'fungible' && SUPPORTED_SWAP_COINS.includes(def.name.toLowerCase())
       );
-      const tokenNames = fungibleDefs.map(def => def.name.toLowerCase());
-      let pricesMap = new Map<string, { priceUsd: number; priceEur?: number; change24h?: number }>();
-      if (providers?.price) {
-        try { pricesMap = await providers.price.getPrices(tokenNames); }
+
+      const priceIdByCoinId = new Map<string, string>();
+      for (const def of fungibleDefs) priceIdByCoinId.set(def.id, def.name.toLowerCase());
+      for (const asset of assets) {
+        const name = registry.getDefinition(asset.coinId)?.name?.toLowerCase();
+        if (name) priceIdByCoinId.set(asset.coinId, name);
+      }
+
+      let fetched = new Map<string, { priceUsd: number; priceEur?: number; change24h?: number }>();
+      if (providers?.price && priceIdByCoinId.size > 0) {
+        try { fetched = await providers.price.getPrices([...new Set(priceIdByCoinId.values())]); }
         catch (e) { console.warn('Failed to fetch prices:', e); }
       }
+
+      const resolved = new Map<string, Quote>();
+      for (const [coinId, priceId] of priceIdByCoinId) {
+        const quoted = fetched.get(priceId);
+        const fallback = FALLBACK_PRICES[priceId];
+        // Unicity's own coins are NOT listed on CoinGecko, so "no quote" is the
+        // normal case for them, not an error: the $1.00 nominal keeps unlisted
+        // tokens swappable (a deliberate product behavior — do not "fix" it into
+        // a refusal). A quote or an explicit fallback still wins when present.
+        const priceUsd = quoted?.priceUsd && quoted.priceUsd > 0
+          ? quoted.priceUsd
+          : fallback?.priceUsd ?? UNLISTED_COIN_NOMINAL_USD;
+        const priceEur = quoted?.priceEur && quoted.priceEur > 0
+          ? quoted.priceEur
+          : fallback?.priceEur ?? UNLISTED_COIN_NOMINAL_EUR;
+        resolved.set(coinId, { priceUsd, priceEur, change24h: quoted?.change24h ?? 0 });
+      }
+
       const swappableAssets: Asset[] = fungibleDefs.map(def => {
         const symbol = def.symbol || def.name.toUpperCase();
-        const priceData = pricesMap.get(def.name.toLowerCase());
-        const fallback = FALLBACK_PRICES[def.name.toLowerCase()];
+        const quote = resolved.get(def.id);
         const iconUrl = registry.getIconUrl(def.id);
         return {
           coinId: def.id, symbol, name: def.name,
@@ -70,12 +136,16 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
           confirmedAmount: '0', unconfirmedAmount: '0', transferringAmount: '0',
           confirmedTokenCount: 0, unconfirmedTokenCount: 0, transferringTokenCount: 0,
           iconUrl: iconUrl ?? undefined,
-          priceUsd: priceData?.priceUsd || fallback?.priceUsd || 1.0,
-          priceEur: priceData?.priceEur || fallback?.priceEur || 0.92,
-          change24h: priceData?.change24h ?? 0,
+          priceUsd: quote?.priceUsd ?? null,
+          priceEur: quote?.priceEur ?? null,
+          change24h: quote?.change24h ?? null,
           fiatValueUsd: null, fiatValueEur: null,
         };
       });
+
+      if (cancelled) return;
+      setQuotes(resolved);
+      setRateStatus(resolved.size > 0 ? 'ready' : 'unavailable');
       setAllSwappableAssets(swappableAssets);
 
       // Set defaults immediately while we have both data sources in scope
@@ -87,19 +157,29 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
         });
       }
     };
-    if (isOpen) loadSwappableCoins();
-  }, [isOpen, providers?.price, assets]);
+
+    // Any throw here (registry read, unexpected provider error) must land in the
+    // explanatory state — never leave the modal spinning on "loading" forever.
+    loadSwappableCoins().catch((e) => {
+      console.warn('Failed to load swap rates:', e);
+      if (!cancelled) setRateStatus('unavailable');
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, providers?.price, assets, registryReady, rateAttempt]);
 
   const getUserBalance = (coinId: string): string => {
     const userAsset = assets.find(a => a.coinId === coinId);
     return userAsset ? formatAssetAmount(userAsset) : '0';
   };
 
-  const resolvePrice = (asset: Asset): number => {
+  /** 0 means "no honest price" — the caller must explain, not invent one. */
+  const resolvePrice = useCallback((asset: Asset): number => {
+    const quote = quotes.get(asset.coinId);
+    if (quote) return quote.priceUsd;
     if (asset.priceUsd && asset.priceUsd > 0) return asset.priceUsd;
     const name = (asset.name ?? asset.symbol ?? '').toLowerCase();
     return FALLBACK_PRICES[name]?.priceUsd ?? 0;
-  };
+  }, [quotes]);
 
   const exchangeInfo = useMemo(() => {
     if (!fromAsset || !toAsset || !fromAmount || parseFloat(fromAmount) <= 0) return null;
@@ -110,7 +190,25 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     const rate = fromPrice / toPrice;
     const toAmount = fromAmountNum * rate;
     return { rate, fromValueUSD: fromAmountNum * fromPrice, toAmount, toValueUSD: toAmount * toPrice };
-  }, [fromAsset, toAsset, fromAmount]);
+  }, [fromAsset, toAsset, fromAmount, resolvePrice]);
+
+  /** Symbols of the currently selected assets we have no price for. */
+  const unpricedSymbols = useMemo(() => {
+    const missing: string[] = [];
+    if (fromAsset && resolvePrice(fromAsset) === 0) missing.push(fromAsset.symbol);
+    if (toAsset && resolvePrice(toAsset) === 0) missing.push(toAsset.symbol);
+    return missing;
+  }, [fromAsset, toAsset, resolvePrice]);
+
+  // A disabled Swap button must never be unexplained: say whether we're still
+  // loading rates or genuinely have none for the selected pair.
+  const rateNotice: 'loading' | 'unavailable' | null =
+    rateStatus === 'loading' ? 'loading'
+    : unpricedSymbols.length > 0 ? 'unavailable'
+    : rateStatus === 'unavailable' && !fromAsset && !toAsset ? 'unavailable'
+    : null;
+
+  const retryRates = () => { setRateStatus('loading'); setRateAttempt(n => n + 1); };
 
   const reset = () => {
     setStep('swap'); setFromAsset(null); setToAsset(null); setFromAmount('');
@@ -354,6 +452,32 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
                     {' = '}
                     <span className="font-mono font-semibold text-orange-700 dark:text-orange-300/80">{exchangeInfo.rate.toFixed(4)} {toAsset.symbol}</span>
                   </span>
+                </div>
+              )}
+
+              {/* Why the Swap button is inert — never a silently disabled button */}
+              {!exchangeInfo && rateNotice === 'loading' && (
+                <div className="flex items-center gap-3 px-4 py-4 bg-neutral-50 dark:bg-white/4 border border-neutral-100 dark:border-white/5 rounded-2xl mb-5">
+                  <Loader2 className="w-4 h-4 text-neutral-400 dark:text-white/35 animate-spin shrink-0" />
+                  <span className="text-sm font-sans text-neutral-500 dark:text-white/45">
+                    Loading exchange rates…
+                  </span>
+                </div>
+              )}
+              {!exchangeInfo && rateNotice === 'unavailable' && (
+                <div className="flex items-center gap-3 px-4 py-4 bg-amber-50 dark:bg-amber-500/8 border border-amber-200 dark:border-amber-500/20 rounded-2xl mb-5">
+                  <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="flex-1 text-sm font-sans text-amber-700 dark:text-amber-300/80">
+                    {unpricedSymbols.length > 0
+                      ? `Exchange rates unavailable for ${unpricedSymbols.join(' and ')} — try again shortly.`
+                      : 'Exchange rates unavailable — try again shortly.'}
+                  </span>
+                  <button
+                    onClick={retryRates}
+                    className="text-sm font-mono font-semibold text-amber-700 dark:text-amber-300 hover:underline shrink-0"
+                  >
+                    Try again
+                  </button>
                 </div>
               )}
 

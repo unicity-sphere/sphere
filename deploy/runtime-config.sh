@@ -194,6 +194,10 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
   CONNECT="$CONNECT wss://nostr-relay.testnet.unicity.network"
   CONNECT="$CONNECT wss://relay.damus.io wss://relay.nostr.band wss://nos.lol"
   CONNECT="$CONNECT https://api.coingecko.com https://market-api.unicity.network"
+  # The market client derives its feed socket by rewriting the API scheme
+  # (SDK: apiUrl.replace(/^http/,'ws') + '/ws/feed'), and CSP treats wss:// as a
+  # DIFFERENT origin than https:// — the https entry above does not cover it.
+  CONNECT="$CONNECT wss://market-api.unicity.network"
   CONNECT="$CONNECT https://unicity-ipfs1.dyndns.org"
   CONNECT="$CONNECT https://o4511695062237184.ingest.de.sentry.io"
 
