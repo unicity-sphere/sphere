@@ -1,5 +1,4 @@
 import { useNavigate, Link } from 'react-router-dom';
-import { useRef, useCallback, useEffect } from 'react';
 import { ArrowRight } from 'lucide-react';
 import {
   DndContext,
@@ -20,7 +19,8 @@ import { DEV_PORTAL_URL } from '../../config/devPortal';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
 import { useGroupUnreadCount } from '../chat/hooks/useGroupUnreadCount';
-import { useFeaturedProjects, useProjects, useProjectMetricsBatch } from '../../hooks/useMarketplace';
+import { useFeaturedProjects, useProjectsBySlugs, useProjectMetricsBatch } from '../../hooks/useMarketplace';
+import { DragScrollRow } from '../common/DragScrollRow';
 import { useDesktopOrder, type DesktopOrderItem } from '../../hooks/useDesktopOrder';
 import type { ProjectSummary } from '../../services/marketplaceApi';
 import { DesktopIcon } from './DesktopIcon';
@@ -89,56 +89,32 @@ function SortableDesktopItem({ item, projectsBySlug, openAppIds, getBadge, onAge
   );
 }
 
-// Drag-scrollable container (same pattern as MediaGallery)
-function DragScroll({ children }: { children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-  const startX = useRef(0);
-  const sl = useRef(0);
-  const moved = useRef(false);
-
-  const stop = useCallback(() => {
-    dragging.current = false;
-    if (ref.current) ref.current.style.cursor = 'grab';
-    setTimeout(() => { moved.current = false; }, 0);
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('mouseup', stop);
-    return () => window.removeEventListener('mouseup', stop);
-  }, [stop]);
-
-  return (
-    <div
-      ref={ref}
-      onDragStart={e => e.preventDefault()}
-      onMouseDown={e => { e.preventDefault(); dragging.current = true; moved.current = false; startX.current = e.pageX; sl.current = ref.current?.scrollLeft ?? 0; if (ref.current) ref.current.style.cursor = 'grabbing'; }}
-      onMouseMove={e => { if (!dragging.current || !ref.current) return; e.preventDefault(); const w = (e.pageX - startX.current) * 1.2; ref.current.scrollLeft = sl.current - w; if (Math.abs(w) > 5) moved.current = true; }}
-      onMouseUp={stop}
-      onMouseLeave={stop}
-      onClickCapture={e => { if (moved.current) { e.preventDefault(); e.stopPropagation(); } }}
-      className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 select-none"
-      style={{ cursor: 'grab', userSelect: 'none' }}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function DesktopShortcuts() {
   const navigate = useNavigate();
   const { openTabs } = useDesktopState();
   const dmUnreadCount = useDmUnreadCount();
   const groupUnreadCount = useGroupUnreadCount();
   const { data: featuredProjects } = useFeaturedProjects();
-  const { data: projectsData } = useProjects();
-  const allProjects = projectsData?.projects;
   const { orderedIds, orderedItems, reorder } = useDesktopOrder();
 
-  // Batch live metrics for every project rendered on the desktop (featured + apps list)
+  // Resolve installed apps by SLUG, one lookup per installed app.
+  //
+  // This used to read the marketplace's project list — which returns a single
+  // page — and drop any icon whose project was not on it. The effect was
+  // silent and looked like data loss: an app the user had installed simply
+  // stopped appearing on their desktop once the catalog grew past one page,
+  // with no error and nothing to click. A desktop icon is a lookup by a slug
+  // the user already chose, not a listing, so it must not depend on where
+  // that project happens to fall in a paginated catalog.
+  const installedSlugs = orderedItems
+    .filter((item) => item.kind === 'app')
+    .map((item) => item.refId);
+  const projectsBySlug = useProjectsBySlugs(installedSlugs);
+
+  // Batch live metrics for every project rendered on the desktop (featured + installed)
   const allProjectIds = [...new Set([
     ...(featuredProjects ?? []).map((p) => p._id),
-    ...(allProjects ?? []).map((p) => p._id),
+    ...[...projectsBySlug.values()].map((p) => p._id),
   ])];
   const { data: metricsByProject = {} } = useProjectMetricsBatch(allProjectIds);
 
@@ -146,9 +122,6 @@ export function DesktopShortcuts() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
-
-  const projectsBySlug = new Map<string, ProjectSummary>();
-  for (const p of allProjects ?? []) projectsBySlug.set(p.slug, p);
 
   const openAppIds = new Set(openTabs.map((t) => t.appId));
 
@@ -186,13 +159,13 @@ export function DesktopShortcuts() {
                 View all <ArrowRight className="w-3 h-3" />
               </Link>
             </div>
-            <DragScroll>
+            <DragScrollRow label="featured projects" trackClassName="pb-2">
               {featuredProjects.map((project) => (
-                <div key={project.slug} className="shrink-0">
+                <div key={project.slug} className="shrink-0 snap-start">
                   <FeaturedProjectCard project={project} metrics={metricsByProject[project._id]} />
                 </div>
               ))}
-            </DragScroll>
+            </DragScrollRow>
           </section>
         )}
 

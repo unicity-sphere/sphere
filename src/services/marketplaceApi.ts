@@ -69,6 +69,20 @@ export interface CategoryCount {
   count: number;
 }
 
+/**
+ * Catalog-wide totals for the Explore hero. Counted server-side over every
+ * published project, because a hero that says "Total Projects" must not be
+ * derived from whichever page the browser happens to have loaded — that is
+ * how it came to read 20 while the catalog held 24.
+ */
+export interface MarketplaceStats {
+  totalProjects:   number;
+  totalUsers:      number;
+  totalCategories: number;
+  /** Per-type breakdown, so a caller can count only the types it surfaces. */
+  byType:          Record<string, number>;
+}
+
 // ── Fetch helpers ─────────────────────────────────────────────────────
 
 /** Central fetch wrapper — adds X-Client header and handles 503 maintenance gate. */
@@ -127,8 +141,17 @@ export function fetchProjectAchievements(slug: string): Promise<ProjectAchieveme
   return get(`/${slug}/achievements`);
 }
 
-export function fetchCategories(): Promise<CategoryCount[]> {
-  return get('/categories');
+/**
+ * `type` scopes the counts to one project type. Explore renders these chips
+ * under an Apps/Standalone tab, and unscoped counts would offer a filter that
+ * matches nothing on the tab the user is actually looking at.
+ */
+export function fetchCategories(type?: ProjectType): Promise<CategoryCount[]> {
+  return get(type ? `/categories?type=${encodeURIComponent(type)}` : '/categories');
+}
+
+export function fetchMarketplaceStats(): Promise<MarketplaceStats> {
+  return get('/stats');
 }
 
 // ── Public project metrics (live user/install/completion counts) ──────
@@ -159,11 +182,33 @@ export async function fetchProjectMetrics(projectId: string): Promise<ProjectMet
   return res.json();
 }
 
+/**
+ * Server-side cap on `ids` per request (MAX_BATCH_SIZE in sphere-api's
+ * routes/metrics/index.ts). Over it the API answers 400 and the caller gets
+ * NO metrics at all — every card silently falls back to its denormalized
+ * stats snapshot. Explore pages through the catalog, so the id list grows
+ * past 100 as soon as the catalog does; keep this in sync with the server.
+ */
+const METRICS_BATCH_LIMIT = 100;
+
 export async function fetchProjectMetricsBatch(projectIds: string[]): Promise<Record<string, ProjectMetrics>> {
   if (projectIds.length === 0) return {};
-  const res = await marketplaceFetch(`${API_BASE}/api/metrics/projects?ids=${projectIds.join(',')}`);
-  if (!res.ok) throw new Error(`Metrics API error: ${res.status}`);
-  return res.json();
+
+  // Chunked so a large catalog degrades into several small requests rather
+  // than one rejected one. Chunks run concurrently and merge into a single
+  // map, so callers see the same shape regardless of how many were needed.
+  const chunks: string[][] = [];
+  for (let i = 0; i < projectIds.length; i += METRICS_BATCH_LIMIT) {
+    chunks.push(projectIds.slice(i, i + METRICS_BATCH_LIMIT));
+  }
+
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    const res = await marketplaceFetch(`${API_BASE}/api/metrics/projects?ids=${chunk.join(',')}`);
+    if (!res.ok) throw new Error(`Metrics API error: ${res.status}`);
+    return res.json() as Promise<Record<string, ProjectMetrics>>;
+  }));
+
+  return Object.assign({}, ...results) as Record<string, ProjectMetrics>;
 }
 
 // ── Public project ratings (Steam-style reviews) ──────────────────────
