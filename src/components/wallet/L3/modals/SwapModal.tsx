@@ -25,6 +25,11 @@ const SUPPORTED_SWAP_COINS = ['bitcoin', 'ethereum', 'solana', 'unicity', 'tethe
  * This table is deliberately NOT a patch for a broken price lookup; only genuinely
  * unlisted coins belong here.
  */
+/** Unlisted-on-CoinGecko coins (Unicity's own) price at a $1.00 nominal so they
+ *  stay swappable — the long-standing behavior this modal was built around. */
+const UNLISTED_COIN_NOMINAL_USD = 1.0;
+const UNLISTED_COIN_NOMINAL_EUR = 0.92;
+
 const FALLBACK_PRICES: Record<string, { priceUsd: number; priceEur: number }> = {
   unicity:       { priceUsd: 1.0, priceEur: 0.92 },
   'unicity-usd': { priceUsd: 1.0, priceEur: 0.92 },
@@ -108,9 +113,16 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       for (const [coinId, priceId] of priceIdByCoinId) {
         const quoted = fetched.get(priceId);
         const fallback = FALLBACK_PRICES[priceId];
-        const priceUsd = quoted?.priceUsd && quoted.priceUsd > 0 ? quoted.priceUsd : fallback?.priceUsd ?? 0;
-        if (priceUsd <= 0) continue;  // unpriced — surfaced, never faked
-        const priceEur = quoted?.priceEur && quoted.priceEur > 0 ? quoted.priceEur : fallback?.priceEur ?? 0;
+        // Unicity's own coins are NOT listed on CoinGecko, so "no quote" is the
+        // normal case for them, not an error: the $1.00 nominal keeps unlisted
+        // tokens swappable (a deliberate product behavior — do not "fix" it into
+        // a refusal). A quote or an explicit fallback still wins when present.
+        const priceUsd = quoted?.priceUsd && quoted.priceUsd > 0
+          ? quoted.priceUsd
+          : fallback?.priceUsd ?? UNLISTED_COIN_NOMINAL_USD;
+        const priceEur = quoted?.priceEur && quoted.priceEur > 0
+          ? quoted.priceEur
+          : fallback?.priceEur ?? UNLISTED_COIN_NOMINAL_EUR;
         resolved.set(coinId, { priceUsd, priceEur, change24h: quoted?.change24h ?? 0 });
       }
 

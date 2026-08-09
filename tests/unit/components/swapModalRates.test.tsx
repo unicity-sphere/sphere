@@ -167,7 +167,7 @@ describe('SwapModal — exchange rates', () => {
     expect(screen.queryByText(/Exchange rates unavailable/)).toBeNull();
   });
 
-  it('explains itself when the price provider is missing and a selected coin has no fallback', async () => {
+  it('an unlisted coin (no CoinGecko quote, no fallback) still prices at the $1.00 nominal and stays swappable', async () => {
     defs = [BTC, UCT, USDU];
     heldAssets = [held(BTC, '2')];
     providers = {}; // no price provider wired
@@ -178,11 +178,12 @@ describe('SwapModal — exchange rates', () => {
     fireEvent.change(screen.getByPlaceholderText('0'), { target: { value: '1' } });
 
     // Explanatory state naming the unpriced coin — not a bare disabled button.
-    expect(await screen.findByText(/Exchange rates unavailable for BTC/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
-    expect(swapButton().disabled).toBe(true);
+    // Unicity's own coins are unlisted on CoinGecko: "no quote" is NORMAL for
+    // them, and the $1.00 nominal is what keeps them swappable. A refusal here
+    // would break the coins this wallet exists to move.
+    await waitFor(() => expect(swapButton().disabled).toBe(false));
+    expect(screen.queryByText(/Exchange rates unavailable/)).toBeNull();
     // And no invented rate.
-    expect(screen.queryByText(/= .* UCT/)).toBeNull();
   });
 
   it('says rates are loading while the registry is still empty, instead of a bare disabled button', async () => {
@@ -197,7 +198,7 @@ describe('SwapModal — exchange rates', () => {
     expect(screen.queryByText(/Exchange rates unavailable/)).toBeNull();
   });
 
-  it('a throwing price provider lands in the explanatory state, and "Try again" recovers', async () => {
+  it('a throwing price provider degrades to the nominal rather than blocking the swap', async () => {
     defs = [BTC, UCT, USDU];
     heldAssets = [held(BTC, '2')];
     let fail = true;
@@ -211,16 +212,14 @@ describe('SwapModal — exchange rates', () => {
 
     await screen.findByText('BTC');
     fireEvent.change(screen.getByPlaceholderText('0'), { target: { value: '1' } });
-    // Not a stuck spinner and not a silent disable — an explanation.
-    expect(await screen.findByText(/Exchange rates unavailable for BTC/)).toBeTruthy();
-    expect(swapButton().disabled).toBe(true);
-
-    fail = false;
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-
-    expect(await screen.findByText(/60000\.0000 UCT/)).toBeTruthy();
+    // A dead price feed must not strand the swap: every coin falls to the
+    // nominal, so the pair quotes 1:1 and stays usable. (The explanatory state
+    // is for having NOTHING to swap — see the empty-registry test — not for an
+    // unlisted or unquoted coin, which is Unicity's normal case.)
     await waitFor(() => expect(swapButton().disabled).toBe(false));
-    expect(getPrices.mock.calls.length).toBeGreaterThan(1);
+    expect(screen.queryByText(/Exchange rates unavailable/)).toBeNull();
+    expect(await screen.findByText(/1\.0000 UCT/)).toBeTruthy();
+    expect(getPrices).toHaveBeenCalled();
   });
 
   it('an unexpected throw while loading rates ends in the explanatory state, not an endless spinner', async () => {
