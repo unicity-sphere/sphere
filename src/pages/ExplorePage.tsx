@@ -12,6 +12,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { FeaturedProjectCard } from '../components/marketplace/FeaturedProjectCard';
 import { ProjectCard } from '../components/marketplace/ProjectCard';
 import { CategoryFilter } from '../components/marketplace/CategoryFilter';
+import { SortControl, type SortValue } from '../components/marketplace/SortControl';
 import { DragScrollRow } from '../components/common/DragScrollRow';
 import { MaintenanceScreen } from '../components/MaintenanceScreen';
 import { useMaintenanceStatus } from '../hooks/useMaintenanceStatus';
@@ -72,6 +73,10 @@ function HeroDivider() {
 export function ExplorePage() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string | null>(null);
+  // Sort deliberately survives a tab switch, unlike search and category: it is
+  // a preference about how to read the catalog, not a filter on which part of
+  // it you are looking at.
+  const [sort, setSort] = useState<SortValue>('relevant');
   const [activeType, setActiveType] = useState<typeof PROJECT_TYPES.APP | typeof PROJECT_TYPES.STANDALONE>(PROJECT_TYPES.APP);
   // Proactive maintenance status — the hook polls the allowlisted status endpoint
   // and also listens for `maintenance:forced`, so the marketplace queries (gated on
@@ -92,7 +97,7 @@ export function ExplorePage() {
   const {
     data, isLoading, isPlaceholderData,
     hasNextPage, fetchNextPage, isFetchingNextPage,
-  } = useInfiniteProjects({ type: activeType, category, search: debouncedSearch });
+  } = useInfiniteProjects({ type: activeType, category, search: debouncedSearch, sort });
   const { data: featured } = useFeaturedProjects(activeType);
   const { data: stats } = useMarketplaceStats();
   const { data: categoryCounts } = useCategories(activeType);
@@ -272,15 +277,24 @@ export function ExplorePage() {
       {/* Search + Filter */}
       <section className="px-4 sm:px-6 pb-8">
         <div className="space-y-4">
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400 dark:text-white/30" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={searchPlaceholder}
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white dark:bg-white/6 border border-neutral-200 dark:border-white/8 text-sm text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/50 transition-all"
-            />
+          {/* Search and sort share a row: both act on the whole catalog, and
+              both are answered by the same request. The category chips sit
+              below because they are a different kind of thing — they change
+              how many projects exist, these two do not. */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+            <div className="relative w-full max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400 dark:text-white/30" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white dark:bg-white/6 border border-neutral-200 dark:border-white/8 text-sm text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/50 transition-all"
+              />
+            </div>
+            <div className="sm:ml-auto">
+              <SortControl value={sort} onChange={setSort} />
+            </div>
           </div>
           <CategoryFilter
             categories={categories}

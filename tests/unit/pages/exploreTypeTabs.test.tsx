@@ -432,6 +432,61 @@ describe('Explore server-side filtering', () => {
   });
 });
 
+describe('Explore sort control', () => {
+  it('starts on the curated order', () => {
+    renderExplore();
+
+    expect(screen.getByRole('radio', { name: 'Relevant' }).getAttribute('aria-checked')).toBe('true');
+    expect(useInfiniteProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'relevant' }),
+    );
+  });
+
+  it('sends the chosen order to the server rather than reordering loaded cards', () => {
+    renderExplore();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Top' }));
+
+    // Reordering in the browser would only ever rank the loaded page, which
+    // is the same mistake the client-side search made.
+    expect(useInfiniteProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'top' }),
+    );
+  });
+
+  it('offers exactly the three orders the API implements', () => {
+    renderExplore();
+
+    const labels = screen.getAllByRole('radio').map(b => b.textContent);
+    expect(labels).toEqual(['Relevant', 'New', 'Top']);
+  });
+
+  it('keeps the chosen order across a tab switch, unlike search and category', () => {
+    renderExplore();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'New' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Standalone/i }));
+
+    // Sort is a preference about how to read the catalog, not a filter on
+    // which part of it you are looking at — so it survives the switch.
+    expect(useInfiniteProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: PROJECT_TYPES.STANDALONE, sort: 'new' }),
+    );
+    expect(screen.getByRole('radio', { name: 'New' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('marks only the active order as checked', () => {
+    renderExplore();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Top' }));
+
+    const checked = screen.getAllByRole('radio')
+      .filter(b => b.getAttribute('aria-checked') === 'true')
+      .map(b => b.textContent);
+    expect(checked).toEqual(['Top']);
+  });
+});
+
 /**
  * The chips were a hardcoded four (game/defi/social/tool) while the catalog
  * held eight categories, so utility/nft/trading/other were unreachable by any
