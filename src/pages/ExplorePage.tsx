@@ -1,7 +1,14 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Search, ArrowRight } from 'lucide-react';
-import { useProjects, useFeaturedProjects, useProjectMetricsBatch } from '../hooks/useMarketplace';
+import {
+  useInfiniteProjects,
+  useFeaturedProjects,
+  useProjectMetricsByGroups,
+  useMarketplaceStats,
+  useCategories,
+} from '../hooks/useMarketplace';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { FeaturedProjectCard } from '../components/marketplace/FeaturedProjectCard';
 import { ProjectCard } from '../components/marketplace/ProjectCard';
 import { CategoryFilter } from '../components/marketplace/CategoryFilter';
@@ -9,10 +16,16 @@ import { MaintenanceScreen } from '../components/MaintenanceScreen';
 import { useMaintenanceStatus } from '../hooks/useMaintenanceStatus';
 import { DEV_PORTAL_URL } from '../config/devPortal';
 import { PROJECT_TYPES } from '../utils/isStandalone';
+import type { ProjectSummary } from '../services/marketplaceApi';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const APP_CATEGORIES = ['game', 'defi', 'social', 'tool'];
+/**
+ * How long typing settles before it becomes a request. Search runs on the
+ * server now (it has to — the browser only ever holds the pages it loaded),
+ * so every keystroke would otherwise be its own round trip.
+ */
+const SEARCH_DEBOUNCE_MS = 300;
 
 // ─── Drag-scrollable Featured Carousel ────────────────────────────────────────
 
@@ -109,61 +122,77 @@ export function ExplorePage() {
   // the same status) never fire requests that would 503 during maintenance.
   const { data: maintenance } = useMaintenanceStatus();
 
-  // Data — both types are always fetched (not just the active one) so the type
-  // switch can show a real count on each side and so flipping tabs is instant,
-  // reading from the already-cached query instead of refetching.
-  const { data: appProjectsData, isLoading: appLoading } = useProjects({ type: PROJECT_TYPES.APP });
-  const { data: standaloneProjectsData, isLoading: standaloneLoading } = useProjects({ type: PROJECT_TYPES.STANDALONE });
-  const projectsData = activeType === PROJECT_TYPES.STANDALONE ? standaloneProjectsData : appProjectsData;
-  const isLoading = activeType === PROJECT_TYPES.STANDALONE ? standaloneLoading : appLoading;
-  const allItems = projectsData?.projects ?? [];
-  // Apps + standalone together — the hero stats describe the whole catalog,
-  // not just the active tab, so they must read identically on both tabs and
-  // never collapse just because the tab you happen to be on is empty.
-  const combinedItems = useMemo(
-    () => [...(appProjectsData?.projects ?? []), ...(standaloneProjectsData?.projects ?? [])],
-    [appProjectsData, standaloneProjectsData],
-  );
+  // Typing drives a SERVER-side search, so it is debounced before it reaches
+  // the query key. The raw value stays on the input so the box itself never
+  // lags behind the keyboard.
+  const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+
+  // Data — only the active tab is fetched. Both tabs used to be fetched on
+  // every mount so the hero could add them up; the hero now reads
+  // catalog-wide totals from the API instead, which is both correct and
+  // independent of what has been loaded. react-query keeps each tab's pages
+  // cached for staleTime, so flipping back to a tab is still instant — only
+  // the first visit costs a request.
+  const {
+    data, isLoading, isPlaceholderData,
+    hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useInfiniteProjects({ type: activeType, category, search: debouncedSearch });
   const { data: featured } = useFeaturedProjects(activeType);
+  const { data: stats } = useMarketplaceStats();
+  const { data: categoryCounts } = useCategories(activeType);
 
-  // Single batch request for live metrics across every project on this page —
-  // sourced from the combined list so hero stats and card metrics are equally
-  // live regardless of which tab is active.
-  const allProjectIds = useMemo(
-    () => [...new Set([...combinedItems, ...(featured ?? [])].map((p) => p._id))],
-    [combinedItems, featured],
-  );
-  const { data: metricsByProject = {} } = useProjectMetricsBatch(allProjectIds);
-
-  // Filtered items
-  const filtered = useMemo(() => {
-    let result = allItems;
-    if (category) result = result.filter((p) => p.category === category);
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (p) => p.name.toLowerCase().includes(q) || p.tags.some((t) => t.toLowerCase().includes(q)),
-      );
+  // Pages flattened into one list. Deduped by id: the server's sort is a
+  // total order, but a project published between two page requests still
+  // shifts the window, and a repeated card is worse than a missing one.
+  const items = useMemo(() => {
+    const seen = new Set<string>();
+    const flat: ProjectSummary[] = [];
+    for (const page of data?.pages ?? []) {
+      for (const project of page.projects) {
+        if (seen.has(project._id)) continue;
+        seen.add(project._id);
+        flat.push(project);
+      }
     }
-    return result;
-  }, [allItems, category, search]);
+    return flat;
+  }, [data]);
+
+  // How many projects match the current filters catalog-wide — not how many
+  // are on screen.
+  const matchingTotal = data?.pages[0]?.total ?? 0;
+
+  // Live metrics, grouped so each loaded page keeps its own cached request
+  // instead of re-fetching every project seen so far on each "Load more".
+  const metricGroups = useMemo(() => {
+    const groups = (data?.pages ?? []).map((page) => page.projects.map((p) => p._id));
+    if (featured?.length) groups.push(featured.map((p) => p._id));
+    return groups;
+  }, [data, featured]);
+  const metricsByProject = useProjectMetricsByGroups(metricGroups);
 
   // Featured items
   const featuredItems = featured ?? [];
 
-  // Hero stats — apps + standalone combined (never just the active tab), prefer
-  // live metrics, fall back to denormalized stats
-  const heroStats = useMemo(() => {
-    const projects = combinedItems.length;
-    const users = combinedItems.reduce((sum, p) => {
-      const live = metricsByProject[p._id]?.uniqueUsers;
-      return sum + (live ?? p.stats.totalUsers ?? 0);
-    }, 0);
-    const categoriesCount = new Set(combinedItems.map((p) => p.category)).size;
-    return { projects, users, categoriesCount };
-  }, [combinedItems, metricsByProject]);
+  // Hero stats — counted across the whole published catalog by the API.
+  // Deriving them from the loaded list is what made this row report the page
+  // size (20) while the catalog held 24, and paging would only have made that
+  // worse. `skill` projects are excluded from the project count on purpose:
+  // Explore surfaces apps and standalone only, and a total the tabs below it
+  // cannot reach is the same bug wearing a different number.
+  const heroStats = useMemo(() => ({
+    projects:
+      (stats?.byType?.[PROJECT_TYPES.APP] ?? 0) +
+      (stats?.byType?.[PROJECT_TYPES.STANDALONE] ?? 0),
+    users:           stats?.totalUsers ?? 0,
+    categoriesCount: stats?.totalCategories ?? 0,
+  }), [stats]);
 
-  const categories = APP_CATEGORIES;
+  // Chips come from the API, scoped to the active tab, so every chip offers a
+  // filter this tab can actually satisfy. They used to be a hardcoded four
+  // (game/defi/social/tool) while the catalog held eight categories, which
+  // left utility, nft, trading and other unreachable by any filter.
+  const categories = categoryCounts ?? [];
+  const categoriesTotal = categories.reduce((sum, c) => sum + c.count, 0);
   const itemLabel = activeType === PROJECT_TYPES.STANDALONE ? 'standalone projects' : 'projects';
   const searchPlaceholder = activeType === PROJECT_TYPES.STANDALONE ? 'Search standalone projects...' : 'Search projects...';
 
@@ -297,7 +326,12 @@ export function ExplorePage() {
               className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white dark:bg-white/6 border border-neutral-200 dark:border-white/8 text-sm text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500/50 transition-all"
             />
           </div>
-          <CategoryFilter categories={categories} active={category} onChange={setCategory} />
+          <CategoryFilter
+            categories={categories}
+            active={category}
+            onChange={setCategory}
+            totalCount={categoriesTotal}
+          />
         </div>
       </section>
 
@@ -318,7 +352,13 @@ export function ExplorePage() {
         <div>
           <h2 className="text-lg font-semibold mb-6">
             {category ? `${category.charAt(0).toUpperCase() + category.slice(1)} ${itemLabel}` : `All ${itemLabel}`}
-            {filtered.length > 0 && <span className="text-neutral-400 dark:text-white/35 font-normal ml-2">({filtered.length})</span>}
+            {/* The catalog-wide match count, not the number of loaded cards —
+                otherwise this bracket would just restate the page size. */}
+            {matchingTotal > 0 && (
+              <span data-testid="grid-total" className="text-neutral-400 dark:text-white/35 font-normal ml-2">
+                ({matchingTotal})
+              </span>
+            )}
           </h2>
 
           {isLoading ? (
@@ -327,20 +367,54 @@ export function ExplorePage() {
                 <div key={i} className="h-40 rounded-2xl bg-neutral-100 dark:bg-white/4 animate-pulse" />
               ))}
             </div>
-          ) : filtered.length > 0 ? (
-            <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-              {filtered.map((project, i) => (
-                <ProjectCard
-                  key={project.slug}
-                  project={project}
-                  index={i}
-                  metrics={metricsByProject[project._id]}
-                />
-              ))}
-            </div>
+          ) : items.length > 0 ? (
+            <>
+              {/* Dimmed while a settled search term is still in flight: the
+                  cards below are the PREVIOUS term's results, and pretending
+                  otherwise would read as "these match what you just typed". */}
+              <div
+                className={`grid gap-4 transition-opacity ${isPlaceholderData ? 'opacity-50' : 'opacity-100'}`}
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}
+              >
+                {items.map((project, i) => (
+                  <ProjectCard
+                    key={project.slug}
+                    project={project}
+                    index={i}
+                    metrics={metricsByProject[project._id]}
+                  />
+                ))}
+              </div>
+
+              {/* Paging is an explicit button rather than infinite scroll:
+                  this page ends in the developer CTA poster, and a list that
+                  grows on scroll would push that out of reach forever. It
+                  also states what is left, so "24 published but I see 20" is
+                  answerable from the screen. */}
+              {hasNextPage && (
+                <div className="mt-8 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => { void fetchNextPage(); }}
+                    // Disabled on placeholder data too: the next page number
+                    // is derived from results that are about to be replaced.
+                    disabled={isFetchingNextPage || isPlaceholderData}
+                    className="px-6 py-3 rounded-xl bg-neutral-100 dark:bg-white/6 border border-neutral-200 dark:border-white/10 text-sm font-semibold text-neutral-700 dark:text-white/80 hover:border-neutral-300 dark:hover:border-white/20 hover:text-neutral-900 dark:hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {isFetchingNextPage
+                      ? 'Loading…'
+                      : `Load more (${items.length} of ${matchingTotal})`}
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-center py-16">
-              <p className="text-neutral-400 dark:text-white/35 text-sm">No {itemLabel} found</p>
+              <p className="text-neutral-400 dark:text-white/35 text-sm">
+                {debouncedSearch
+                  ? `No ${itemLabel} match “${debouncedSearch}”`
+                  : `No ${itemLabel} found`}
+              </p>
             </div>
           )}
         </div>

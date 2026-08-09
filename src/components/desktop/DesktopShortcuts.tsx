@@ -20,7 +20,7 @@ import { DEV_PORTAL_URL } from '../../config/devPortal';
 import { useDesktopState } from '../../hooks/useDesktopState';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
 import { useGroupUnreadCount } from '../chat/hooks/useGroupUnreadCount';
-import { useFeaturedProjects, useProjects, useProjectMetricsBatch } from '../../hooks/useMarketplace';
+import { useFeaturedProjects, useProjectsBySlugs, useProjectMetricsBatch } from '../../hooks/useMarketplace';
 import { useDesktopOrder, type DesktopOrderItem } from '../../hooks/useDesktopOrder';
 import type { ProjectSummary } from '../../services/marketplaceApi';
 import { DesktopIcon } from './DesktopIcon';
@@ -131,14 +131,26 @@ export function DesktopShortcuts() {
   const dmUnreadCount = useDmUnreadCount();
   const groupUnreadCount = useGroupUnreadCount();
   const { data: featuredProjects } = useFeaturedProjects();
-  const { data: projectsData } = useProjects();
-  const allProjects = projectsData?.projects;
   const { orderedIds, orderedItems, reorder } = useDesktopOrder();
 
-  // Batch live metrics for every project rendered on the desktop (featured + apps list)
+  // Resolve installed apps by SLUG, one lookup per installed app.
+  //
+  // This used to read the marketplace's project list — which returns a single
+  // page — and drop any icon whose project was not on it. The effect was
+  // silent and looked like data loss: an app the user had installed simply
+  // stopped appearing on their desktop once the catalog grew past one page,
+  // with no error and nothing to click. A desktop icon is a lookup by a slug
+  // the user already chose, not a listing, so it must not depend on where
+  // that project happens to fall in a paginated catalog.
+  const installedSlugs = orderedItems
+    .filter((item) => item.kind === 'app')
+    .map((item) => item.refId);
+  const projectsBySlug = useProjectsBySlugs(installedSlugs);
+
+  // Batch live metrics for every project rendered on the desktop (featured + installed)
   const allProjectIds = [...new Set([
     ...(featuredProjects ?? []).map((p) => p._id),
-    ...(allProjects ?? []).map((p) => p._id),
+    ...[...projectsBySlug.values()].map((p) => p._id),
   ])];
   const { data: metricsByProject = {} } = useProjectMetricsBatch(allProjectIds);
 
@@ -146,9 +158,6 @@ export function DesktopShortcuts() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
-
-  const projectsBySlug = new Map<string, ProjectSummary>();
-  for (const p of allProjects ?? []) projectsBySlug.set(p.slug, p);
 
   const openAppIds = new Set(openTabs.map((t) => t.appId));
 
