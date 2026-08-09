@@ -1,5 +1,4 @@
 import { useNavigate, Link } from 'react-router-dom';
-import { useRef, useCallback, useEffect } from 'react';
 import { ArrowRight } from 'lucide-react';
 import {
   DndContext,
@@ -21,6 +20,7 @@ import { useDesktopState } from '../../hooks/useDesktopState';
 import { useDmUnreadCount } from '../chat/hooks/useDmUnreadCount';
 import { useGroupUnreadCount } from '../chat/hooks/useGroupUnreadCount';
 import { useFeaturedProjects, useProjectsBySlugs, useProjectMetricsBatch } from '../../hooks/useMarketplace';
+import { DragScrollRow } from '../common/DragScrollRow';
 import { useDesktopOrder, type DesktopOrderItem } from '../../hooks/useDesktopOrder';
 import type { ProjectSummary } from '../../services/marketplaceApi';
 import { DesktopIcon } from './DesktopIcon';
@@ -86,42 +86,6 @@ function SortableDesktopItem({ item, projectsBySlug, openAppIds, getBadge, onAge
       buttonRef={setActivatorNodeRef}
       buttonProps={{ ...attributes, ...listeners }}
     />
-  );
-}
-
-// Drag-scrollable container (same pattern as MediaGallery)
-function DragScroll({ children }: { children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-  const startX = useRef(0);
-  const sl = useRef(0);
-  const moved = useRef(false);
-
-  const stop = useCallback(() => {
-    dragging.current = false;
-    if (ref.current) ref.current.style.cursor = 'grab';
-    setTimeout(() => { moved.current = false; }, 0);
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('mouseup', stop);
-    return () => window.removeEventListener('mouseup', stop);
-  }, [stop]);
-
-  return (
-    <div
-      ref={ref}
-      onDragStart={e => e.preventDefault()}
-      onMouseDown={e => { e.preventDefault(); dragging.current = true; moved.current = false; startX.current = e.pageX; sl.current = ref.current?.scrollLeft ?? 0; if (ref.current) ref.current.style.cursor = 'grabbing'; }}
-      onMouseMove={e => { if (!dragging.current || !ref.current) return; e.preventDefault(); const w = (e.pageX - startX.current) * 1.2; ref.current.scrollLeft = sl.current - w; if (Math.abs(w) > 5) moved.current = true; }}
-      onMouseUp={stop}
-      onMouseLeave={stop}
-      onClickCapture={e => { if (moved.current) { e.preventDefault(); e.stopPropagation(); } }}
-      className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 select-none"
-      style={{ cursor: 'grab', userSelect: 'none' }}
-    >
-      {children}
-    </div>
   );
 }
 
@@ -195,13 +159,13 @@ export function DesktopShortcuts() {
                 View all <ArrowRight className="w-3 h-3" />
               </Link>
             </div>
-            <DragScroll>
+            <DragScrollRow label="featured projects" trackClassName="pb-2">
               {featuredProjects.map((project) => (
-                <div key={project.slug} className="shrink-0">
+                <div key={project.slug} className="shrink-0 snap-start">
                   <FeaturedProjectCard project={project} metrics={metricsByProject[project._id]} />
                 </div>
               ))}
-            </DragScroll>
+            </DragScrollRow>
           </section>
         )}
 

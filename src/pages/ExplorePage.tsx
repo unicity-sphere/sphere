@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Search, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, ArrowRight } from 'lucide-react';
 import {
   useInfiniteProjects,
   useFeaturedProjects,
@@ -12,6 +12,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { FeaturedProjectCard } from '../components/marketplace/FeaturedProjectCard';
 import { ProjectCard } from '../components/marketplace/ProjectCard';
 import { CategoryFilter } from '../components/marketplace/CategoryFilter';
+import { DragScrollRow } from '../components/common/DragScrollRow';
 import { MaintenanceScreen } from '../components/MaintenanceScreen';
 import { useMaintenanceStatus } from '../hooks/useMaintenanceStatus';
 import { DEV_PORTAL_URL } from '../config/devPortal';
@@ -27,141 +28,20 @@ import type { ProjectSummary, ProjectMetrics } from '../services/marketplaceApi'
  */
 const SEARCH_DEBOUNCE_MS = 300;
 
-// ─── Drag-scrollable Featured Carousel ────────────────────────────────────────
+// ─── Featured Carousel ────────────────────────────────────────────────────────
 
 function FeaturedCarousel({ items, metricsByProject }: {
   items: ProjectSummary[];
   metricsByProject: Record<string, ProjectMetrics>;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
-  const startX = useRef(0);
-  const scrollLeftRef = useRef(0);
-  const moved = useRef(false);
-
-  const stopDrag = useCallback(() => {
-    isDragging.current = false;
-    if (scrollRef.current) scrollRef.current.style.cursor = 'grab';
-    // Reset moved flag after a tick so onClickCapture can still block the current click
-    setTimeout(() => { moved.current = false; }, 0);
-  }, []);
-
-  // Global mouseup to prevent stuck drag when mouse leaves window
-  useEffect(() => {
-    window.addEventListener('mouseup', stopDrag);
-    return () => window.removeEventListener('mouseup', stopDrag);
-  }, [stopDrag]);
-
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    isDragging.current = true;
-    moved.current = false;
-    startX.current = e.pageX;
-    scrollLeftRef.current = scrollRef.current?.scrollLeft ?? 0;
-    if (scrollRef.current) scrollRef.current.style.cursor = 'grabbing';
-  }, []);
-
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging.current || !scrollRef.current) return;
-    e.preventDefault();
-    const walk = (e.pageX - startX.current) * 1.2;
-    scrollRef.current.scrollLeft = scrollLeftRef.current - walk;
-    if (Math.abs(walk) > 5) moved.current = true;
-  }, []);
-
-  // Whether there is more carousel in either direction. Drives the arrows and
-  // the edge fades — with `scrollbar-hide` and no peeking card, a full-width
-  // row of tiles reads as a finished grid, and a viewer has no way to learn
-  // that two thirds of the featured projects are one drag to the right.
-  const [overflow, setOverflow] = useState({ left: false, right: false });
-
-  const syncOverflow = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // 1px slack: fractional scroll widths otherwise leave the right arrow
-    // showing forever at the end of the track.
-    setOverflow({
-      left:  el.scrollLeft > 1,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
-    });
-  }, []);
-
-  useEffect(() => {
-    syncOverflow();
-    const el = scrollRef.current;
-    if (!el) return;
-    // ResizeObserver rather than a window listener: the carousel also changes
-    // width when the sidebar opens, which never resizes the window.
-    const observer = new ResizeObserver(syncOverflow);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [syncOverflow, items]);
-
-  /** One "page" of scroll = the visible width, less a sliver so a partially
-   *  seen card stays partially seen rather than jumping out of view. */
-  const scrollByPage = useCallback((direction: 1 | -1) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollBy({ left: direction * Math.max(240, el.clientWidth - 96), behavior: 'smooth' });
-  }, []);
-
   return (
-    <div className="relative">
-      {/* Edge fades — the cheapest honest signal that content continues past
-          the edge. Non-interactive so they never eat a click on a card. */}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-linear-to-r from-neutral-100 dark:from-[#060606] to-transparent transition-opacity duration-200 ${overflow.left ? 'opacity-100' : 'opacity-0'}`}
-      />
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-linear-to-l from-neutral-100 dark:from-[#060606] to-transparent transition-opacity duration-200 ${overflow.right ? 'opacity-100' : 'opacity-0'}`}
-      />
-
-      {/* Arrows are real buttons, not decoration: drag-to-scroll is invisible
-          to keyboard users and to anyone on a trackpad who never thinks to
-          try. Hidden entirely when there is nothing to scroll to. */}
-      {overflow.left && (
-        <button
-          type="button"
-          aria-label="Scroll featured projects left"
-          onClick={() => scrollByPage(-1)}
-          className="absolute left-1 top-1/2 -translate-y-1/2 z-20 grid place-items-center w-9 h-9 rounded-full bg-white/90 dark:bg-white/12 backdrop-blur border border-neutral-200 dark:border-white/15 text-neutral-700 dark:text-white shadow-lg hover:bg-white dark:hover:bg-white/20 transition-colors cursor-pointer"
-        >
-          <ChevronLeft className="w-5 h-5" />
-        </button>
-      )}
-      {overflow.right && (
-        <button
-          type="button"
-          aria-label="Scroll featured projects right"
-          onClick={() => scrollByPage(1)}
-          className="absolute right-1 top-1/2 -translate-y-1/2 z-20 grid place-items-center w-9 h-9 rounded-full bg-white/90 dark:bg-white/12 backdrop-blur border border-neutral-200 dark:border-white/15 text-neutral-700 dark:text-white shadow-lg hover:bg-white dark:hover:bg-white/20 transition-colors cursor-pointer"
-        >
-          <ChevronRight className="w-5 h-5" />
-        </button>
-      )}
-
-      <div
-        ref={scrollRef}
-        onScroll={syncOverflow}
-        onDragStart={e => e.preventDefault()}
-        onMouseDown={e => { e.preventDefault(); onMouseDown(e); }}
-        onMouseMove={onMouseMove}
-        onMouseUp={stopDrag}
-        onMouseLeave={stopDrag}
-        onClickCapture={(e) => { if (moved.current) { e.preventDefault(); e.stopPropagation(); } }}
-        // `snap-x` so a drag settles on a card edge instead of mid-card, which
-        // is the other half of reading as a carousel rather than a cut-off row.
-        className="flex gap-4 overflow-x-auto scrollbar-hide py-3 select-none snap-x snap-mandatory"
-        style={{ cursor: 'grab' }}
-      >
-        {items.map((project) => (
-          <div key={project.slug} className="shrink-0 snap-start">
-            <FeaturedProjectCard project={project} metrics={metricsByProject[project._id]} />
-          </div>
-        ))}
-      </div>
-    </div>
+    <DragScrollRow label="featured projects" trackClassName="py-3">
+      {items.map((project) => (
+        <div key={project.slug} className="shrink-0 snap-start">
+          <FeaturedProjectCard project={project} metrics={metricsByProject[project._id]} />
+        </div>
+      ))}
+    </DragScrollRow>
   );
 }
 
