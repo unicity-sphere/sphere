@@ -201,7 +201,7 @@ describe('SwapModal — exchange rates', () => {
   it('a throwing price provider degrades to the nominal rather than blocking the swap', async () => {
     defs = [BTC, UCT, USDU];
     heldAssets = [held(BTC, '2')];
-    let fail = true;
+    const fail = true;
     const getPrices = vi.fn(async () => {
       if (fail) throw new Error('coingecko down');
       return new Map([['bitcoin', { priceUsd: 60_000 }], ['unicity', { priceUsd: 1 }]]);
