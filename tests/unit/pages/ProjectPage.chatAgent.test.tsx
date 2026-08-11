@@ -81,6 +81,42 @@ describe('ProjectPage — chat agent action row', () => {
   });
 });
 
+// M1: the API makes a published chat agent with no agentAddress unlikely
+// (it's set at creation) but not impossible — a developer PUT can clear the
+// field later. Before this fix, both the ID line and the Message button
+// short-circuited to nothing for this case, leaving the action row entirely
+// empty with no explanation on screen.
+describe('ProjectPage — chat agent with no agentAddress yet', () => {
+  it('explains the agent has no Unicity ID yet instead of rendering an empty action row', () => {
+    renderProject({ type: 'chat-agent', agentAddress: null, appUrl: null });
+
+    expect(screen.queryByRole('link', { name: /message/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /copy unicity id/i })).toBeNull();
+    expect(screen.getAllByText(/hasn.t published a unicity id yet/i).length).toBeGreaterThan(0);
+  });
+});
+
+// M2: nametags are admitted up to 64 characters by the API, and the Message
+// button's label is the nametag itself — the copy line above it already
+// truncates (`truncate` in its className), so the button needs the same
+// treatment or a long nametag blows it out.
+describe('ProjectPage — chat agent with a long nametag', () => {
+  it('caps the Message button label instead of rendering it in full', async () => {
+    const longNametag = `@${'a'.repeat(64)}`;
+    renderProject({ type: 'chat-agent', agentAddress: longNametag, appUrl: null });
+
+    const link = await screen.findByRole('link', { name: /message/i });
+    // The accessible name still carries the full text (CSS truncation never
+    // touches textContent) — the actual assertion is that the label sits in
+    // its own capped, truncating wrapper rather than flowing free.
+    expect(link.textContent).toContain(longNametag);
+    const labelSpan = link.querySelector('span');
+    expect(labelSpan?.textContent).toBe(longNametag);
+    expect(labelSpan?.className).toContain('max-w-[16ch]');
+    expect(labelSpan?.className).toContain('truncate');
+  });
+});
+
 // A DIRECT:// address and a bare pubkey are both long opaque strings, unlike
 // a human-chosen @nametag — both must be middle-truncated for display (never
 // shown in full, never an inline slice), while the actual link target and

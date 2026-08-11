@@ -423,22 +423,33 @@ export function ProjectPage() {
                 the API refuses this type), so the copyable line here is the
                 agent's Unicity ID instead, reusing the same copy affordance
                 as the install-command block above. */}
-            {isChatAgent(project) && chatAgentAddress && (
-              <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
-                <span className="flex-1 truncate">{chatAgentLabel}</span>
-                <button
-                  type="button"
-                  aria-label="copy unicity id"
-                  onClick={async () => {
-                    // Same silent-by-design copy affordance as the install
-                    // command above — copyToClipboard never throws.
-                    await copyToClipboard(chatAgentAddress);
-                  }}
-                  className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
-                >
-                  copy
-                </button>
-              </div>
+            {isChatAgent(project) && (
+              chatAgentAddress ? (
+                <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
+                  <span className="flex-1 truncate">{chatAgentLabel}</span>
+                  <button
+                    type="button"
+                    aria-label="copy unicity id"
+                    onClick={async () => {
+                      // Same silent-by-design copy affordance as the install
+                      // command above — copyToClipboard never throws.
+                      await copyToClipboard(chatAgentAddress);
+                    }}
+                    className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
+                  >
+                    copy
+                  </button>
+                </div>
+              ) : (
+                // The API makes this unlikely (agentAddress is set at
+                // creation) but not impossible — a developer PUT can clear
+                // it later. Without this branch the action row below is
+                // entirely empty (no Message button either) with nothing on
+                // screen to explain why.
+                <p className="mb-3 text-xs text-neutral-400 dark:text-white/35">
+                  This agent hasn't published a Unicity ID yet.
+                </p>
+              )
             )}
           <div className="flex gap-2 shrink-0 flex-wrap">
             {project.type === PROJECT_TYPES.SKILL ? (
@@ -490,13 +501,25 @@ export function ProjectPage() {
                  Install, no Add to Desktop — the API refuses to install this
                  type, and there is nothing here to open in a frame. */
               <>
-                {chatAgentAddress && (
+                {chatAgentAddress ? (
                   <Link
                     to={`/agents/dm?peer=${encodeURIComponent(chatAgentAddress)}`}
                     className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all bg-orange-500 dark:bg-brand-orange hover:bg-orange-600 dark:hover:bg-brand-orange-dark text-white shadow-lg shadow-orange-500/20"
                   >
-                    <MessageCircle className="w-4 h-4" /> Message {chatAgentLabel}
+                    <MessageCircle className="w-4 h-4 shrink-0" />
+                    {/* Nametags are admitted up to 64 chars by the API — cap
+                        the label so a long one can't blow out the button.
+                        The copy line above already truncates the same way. */}
+                    Message <span className="inline-block align-bottom max-w-[16ch] truncate">{chatAgentLabel}</span>
                   </Link>
+                ) : (
+                  // Same "no Unicity ID yet" case as the copy line above —
+                  // without this, a chat agent with a cleared agentAddress
+                  // renders neither that line nor a Message button, leaving
+                  // the whole action row empty with no explanation.
+                  <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-medium text-sm border border-neutral-200 dark:border-white/8 text-neutral-400 dark:text-white/35">
+                    <MessageCircle className="w-4 h-4 shrink-0" /> No Unicity ID published yet
+                  </span>
                 )}
                 {isHttpsUrl(project.repoUrl) && (
                   <a
