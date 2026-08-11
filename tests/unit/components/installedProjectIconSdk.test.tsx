@@ -62,6 +62,63 @@ describe('InstalledProjectIcon for a standalone project', () => {
   });
 });
 
+// I1: a chat agent has nothing to launch — it is reached by messaging it,
+// not by opening it — but the pre-fix `isStandalone(project) ? null :
+// (appUrl ?? websiteUrl)` fallback happily framed its websiteUrl the moment
+// one existed. That is reachable in two ways: C1 made "Add to Desktop"
+// clickable for a chat agent card in the first place, and — sharper still —
+// a project a moderator moved `app -> chat-agent` after a user already
+// installed it: that migration promotes the old `appUrl` into `websiteUrl`
+// (the type change nulls `appUrl` specifically to stop it being launched),
+// so the framed page would be exactly the URL the migration was written to
+// retire, read from a stale localStorage record that never resynced.
+const CHAT_AGENT_PROJECT: ProjectSummary = {
+  ...STANDALONE_PROJECT,
+  type: PROJECT_TYPES.CHAT_AGENT,
+  repoUrl: null,
+  appUrl: null,
+  // The migrated-website scenario above: appUrl is null (as the type change
+  // requires), but websiteUrl still holds the old app's URL.
+  websiteUrl: 'https://aliemul.github.io/agent-guild/',
+  agentAddress: '@agent-guild',
+};
+
+describe('InstalledProjectIcon for a chat agent', () => {
+  it('opens the project page rather than an in-app tab, even with a websiteUrl set', () => {
+    const { container } = render(<InstalledProjectIcon project={CHAT_AGENT_PROJECT} />);
+    fireEvent.click(container.querySelector('button')!);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith('/apps/agent-guild');
+  });
+
+  it('never routes a chat agent through the in-app frame, even with a stray appUrl', () => {
+    const project: ProjectSummary = { ...CHAT_AGENT_PROJECT, appUrl: 'https://old-app.example.com' };
+    const { container } = render(<InstalledProjectIcon project={project} />);
+    fireEvent.click(container.querySelector('button')!);
+    expect(openTab).not.toHaveBeenCalled();
+    for (const [arg] of navigate.mock.calls) {
+      expect(String(arg)).not.toContain('/agents/custom');
+    }
+  });
+
+  it('offers Open Website, Marketplace Page and Remove, never Open in Tab', () => {
+    render(<InstalledProjectIcon project={CHAT_AGENT_PROJECT} />);
+    openContextMenu();
+    expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open repository' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Website' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Marketplace Page' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove from Desktop' })).toBeTruthy();
+  });
+
+  it('never offers Open in Tab for a chat agent even with a stray appUrl (branches on type first)', () => {
+    const project: ProjectSummary = { ...CHAT_AGENT_PROJECT, appUrl: 'https://old-app.example.com' };
+    render(<InstalledProjectIcon project={project} />);
+    openContextMenu();
+    expect(screen.queryByRole('button', { name: 'Open in Tab' })).toBeNull();
+  });
+});
+
 // This app is the wallet — the origin holding the user's keys — so a project
 // field (repoUrl/websiteUrl) reaching window.open is script execution if it
 // is ever anything other than https. window.open gets no JSX sanitisation at

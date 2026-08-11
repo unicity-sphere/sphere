@@ -7,7 +7,7 @@ import { useDesktopState } from '../../hooks/useDesktopState';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
 import type { ProjectSummary } from '../../services/marketplaceApi';
 import { isHttpsUrl } from '../../utils/isHttpsUrl';
-import { isStandalone } from '../../utils/isStandalone';
+import { isStandalone, isChatAgent } from '../../utils/isStandalone';
 
 interface InstalledProjectIconProps {
   project: ProjectSummary & { appUrl?: string | null; websiteUrl?: string | null };
@@ -51,6 +51,16 @@ export function InstalledProjectIcon({
   // through to the project page gives the user the repo and website buttons,
   // the description and the install command instead.
   //
+  // A `chat-agent` has nothing to launch either: it is reached by messaging
+  // it, not by opening it, and `appUrl` is null by construction for this
+  // type. A project that was migrated from `app` to `chat-agent` after this
+  // icon was already installed is a sharper version of the same bug: that
+  // migration promotes the old `appUrl` into `websiteUrl` (the type change
+  // nulls `appUrl` specifically to stop it being launched), so falling
+  // through to `project.websiteUrl` here would frame exactly the URL the
+  // migration was written to retire, and do it from stale localStorage data
+  // even once the server-side project has moved on.
+  //
   // This is the most dangerous sink in the app: openTab persists the value
   // into DesktopTab.url in localStorage, DesktopLayout turns it into
   // iframeUrl, and IframeAgent renders <iframe src={activeUrl}>. The frame
@@ -63,7 +73,8 @@ export function InstalledProjectIcon({
   // do NOT fall back to websiteUrl (same nullish-only fallback semantics as
   // before); if the result fails the check, treat it exactly like a project
   // with no launch URL at all.
-  const candidateLaunchUrl = isStandalone(project) ? null : (project.appUrl ?? project.websiteUrl);
+  const notLaunchable = isStandalone(project) || isChatAgent(project);
+  const candidateLaunchUrl = notLaunchable ? null : (project.appUrl ?? project.websiteUrl);
   const launchUrl = candidateLaunchUrl && isHttpsUrl(candidateLaunchUrl) ? candidateLaunchUrl : null;
 
   const handleClick = () => {
@@ -90,9 +101,15 @@ export function InstalledProjectIcon({
   // an entry that calls it — a non-https value gets no menu item at all,
   // rather than a menu item whose click would fail safe.
   const menuItems = [
-    // Branch on type first so this list can never disagree with launchUrl,
-    // which forbids framing for `standalone` unconditionally: a standalone
-    // record must never offer "Open in Tab", even if it carries a stray appUrl.
+    // Branch on type first so this list can never disagree with launchUrl
+    // above, which forbids framing for `standalone` and `chat-agent`
+    // unconditionally: neither record may ever offer "Open in Tab", even if
+    // it carries a stray appUrl (a chat agent's shouldn't exist, but stale
+    // localStorage data from a pre-migration install might still have one).
+    // A chat agent also gets no "Open repository" entry here — unlike
+    // standalone, its repo (when present) is a secondary link on the
+    // project page, not a desktop-icon action — so it falls to the
+    // "Open Website" / "Marketplace Page" / "Remove" entries below instead.
     ...(isStandalone(project)
       ? (project.repoUrl && isHttpsUrl(project.repoUrl)
           ? [{
@@ -101,6 +118,8 @@ export function InstalledProjectIcon({
               onClick: () => window.open(project.repoUrl!, '_blank', 'noopener,noreferrer'),
             }]
           : [])
+      : isChatAgent(project)
+      ? []
       : (project.appUrl && isHttpsUrl(project.appUrl)
           ? [{
               label: 'Open in Tab',
