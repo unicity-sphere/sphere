@@ -7,10 +7,10 @@ import type { ChatMode } from '../../types';
 
 export function ChatSection() {
   const [searchParams, setSearchParams] = useSearchParams();
-  // Priority: 1) join param -> global, 2) nametag param -> dm, 3) saved mode, 4) default dm
+  // Priority: 1) join param -> global, 2) nametag/peer param -> dm, 3) saved mode, 4) default dm
   const [chatMode, setChatMode] = useState<ChatMode>(() => {
     if (searchParams.get('join')) return 'global';
-    if (searchParams.get('nametag')) return 'dm';
+    if (searchParams.get('nametag') || searchParams.get('peer')) return 'dm';
     const saved = localStorage.getItem(STORAGE_KEYS.CHAT_MODE);
     return (saved === 'global' || saved === 'dm') ? saved : 'dm';
   });
@@ -34,6 +34,23 @@ export function ChatSection() {
         prev.delete('image');
         prev.delete('price');
         prev.delete('purchased');
+        return prev;
+      });
+    }
+  }, [searchParams, setSearchParams]);
+
+  // `peer` carries any identifier the SDK resolves — @nametag, DIRECT://, or a
+  // pubkey — and is passed through UNCHANGED. The older `nametag` param is
+  // lowercased and slugified above, which is right for a display name typed
+  // by a human and wrong for a DIRECT:// address or a hex key, so the two
+  // cannot share one param. startNewConversation normalizes whatever arrives.
+  useEffect(() => {
+    const peer = searchParams.get('peer');
+    if (peer) {
+      setPendingDmRecipient(peer);
+      setChatMode('dm');
+      setSearchParams((prev) => {
+        prev.delete('peer');
         return prev;
       });
     }

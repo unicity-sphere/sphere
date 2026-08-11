@@ -1,7 +1,7 @@
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronDown, ChevronLeft, ChevronRight, Star, Flag } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Users, Target, Trophy, Globe, Check, Download, X, ChevronDown, ChevronLeft, ChevronRight, Star, Flag, MessageCircle } from 'lucide-react';
 import { ProjectLogo } from '@unicitylabs/sphere-ui';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useProject, useProjectQuests, useProjectMetrics } from '../hooks/useMarketplace';
@@ -15,8 +15,9 @@ import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { useDesktopState } from '../hooks/useDesktopState';
 import { useInstalledProjects } from '../hooks/useInstalledProjects';
 import { isHttpsUrl } from '../utils/isHttpsUrl';
-import { isStandalone, supportsQuests, PROJECT_TYPES } from '../utils/isStandalone';
+import { isStandalone, isChatAgent, hasQuestSurface, supportsQuests, PROJECT_TYPES } from '../utils/isStandalone';
 import { copyToClipboard } from '../utils/copyToClipboard';
+import { truncateId } from '../utils/identifiers';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -237,16 +238,17 @@ export function ProjectPage() {
   const [projectReported, setProjectReported] = useState(false);
   const [projectReportOpen, setProjectReportOpen] = useState(false);
   // Whether to even fetch quests, and whether to show the Quests section
-  // below, are gated on `!isStandalone`, NOT on `supportsQuests` — this is
+  // below, are gated on `hasQuestSurface`, NOT on `supportsQuests` — this is
   // deliberately the wider check. `useProjectQuests`/the Quests section had
   // no type gate at all before this project-type work started, so an `app`
   // or `skill` project must keep fetching/showing quests exactly as before;
-  // only `standalone` (which structurally never has any) is new here. The
-  // narrower `supportsQuests` (app-only) governs the Quests/Completions stat
-  // TILES further down, which already excluded `skill` before this work —
-  // that's a different, pre-existing behaviour this file must not disturb.
+  // `standalone` and `chat-agent` (neither of which structurally has any)
+  // are excluded. The narrower `supportsQuests` (app-only) governs the
+  // Quests/Completions stat TILES further down, which already excluded
+  // `skill` before this work — that's a different, pre-existing behaviour
+  // this file must not disturb.
   // Fetch optimistically before `project` has loaded (unknown type yet).
-  const { data: quests } = useProjectQuests(slug ?? '', !project || !isStandalone(project));
+  const { data: quests } = useProjectQuests(slug ?? '', !project || hasQuestSurface(project));
   const { data: metrics } = useProjectMetrics(project?._id);
   // Quests are heavy content — collapsed by default, and collapsed per track.
   const [questsOpen, setQuestsOpen] = useState(false);
@@ -303,6 +305,13 @@ export function ProjectPage() {
       </div>
     );
   }
+
+  // A chat agent's Unicity ID (project.agentAddress) — shown in full for a
+  // @nametag, since that's already a short human-chosen name, and
+  // MetaMask-style middle-truncated (never an inline slice) for a pubkey or
+  // a DIRECT:// address, both of which are long opaque strings.
+  const chatAgentAddress = project.agentAddress ?? '';
+  const chatAgentLabel = chatAgentAddress.startsWith('@') ? chatAgentAddress : truncateId(chatAgentAddress);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-neutral-900 dark:text-white pb-12">
@@ -402,6 +411,27 @@ export function ProjectPage() {
                 </button>
               </div>
             )}
+            {/* Chat agent: no install command (there's nothing to install —
+                the API refuses this type), so the copyable line here is the
+                agent's Unicity ID instead, reusing the same copy affordance
+                as the install-command block above. */}
+            {isChatAgent(project) && chatAgentAddress && (
+              <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-white/6 font-mono text-xs">
+                <span className="flex-1 truncate">{chatAgentLabel}</span>
+                <button
+                  type="button"
+                  aria-label="copy unicity id"
+                  onClick={async () => {
+                    // Same silent-by-design copy affordance as the install
+                    // command above — copyToClipboard never throws.
+                    await copyToClipboard(chatAgentAddress);
+                  }}
+                  className="text-neutral-500 dark:text-white/45 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
+                >
+                  copy
+                </button>
+              </div>
+            )}
           <div className="flex gap-2 shrink-0 flex-wrap">
             {project.type === PROJECT_TYPES.SKILL ? (
               /* Skill: Install to Astrid */
@@ -432,6 +462,34 @@ export function ProjectPage() {
                 >
                   {installed ? <><Check className="w-4 h-4" /> On Desktop</> : <><Download className="w-4 h-4" /> Add to Desktop</>}
                 </button>
+                {isHttpsUrl(project.repoUrl) && (
+                  <a
+                    href={project.repoUrl!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border border-neutral-200 dark:border-white/8 text-neutral-600 dark:text-white/55 hover:text-neutral-900 dark:hover:text-white transition-colors"
+                  >
+                    Open repository <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </>
+            ) : isChatAgent(project) ? (
+              /* Chat agent: Message (a real in-app route, so Link rather than
+                 a plain <a> — an <a href> here would force a full browser
+                 navigation and lose DesktopLayout's mounted tabs) plus the
+                 repository link when present, same rationale as standalone's
+                 above (a framed GitHub page renders blank). No Open App, no
+                 Install, no Add to Desktop — the API refuses to install this
+                 type, and there is nothing here to open in a frame. */
+              <>
+                {chatAgentAddress && (
+                  <Link
+                    to={`/agents/dm?peer=${encodeURIComponent(chatAgentAddress)}`}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all bg-orange-500 dark:bg-brand-orange hover:bg-orange-600 dark:hover:bg-brand-orange-dark text-white shadow-lg shadow-orange-500/20"
+                  >
+                    <MessageCircle className="w-4 h-4" /> Message {chatAgentLabel}
+                  </Link>
+                )}
                 {isHttpsUrl(project.repoUrl) && (
                   <a
                     href={project.repoUrl!}
@@ -534,11 +592,11 @@ export function ProjectPage() {
       {/* Quests — collapsed by default; expanded view groups quests by track,
           each track collapsed as well. Only active tracks reach this list
           (the API filters out quests of DRAFT/ENDED tracks). Gated on
-          !isStandalone (see the useProjectQuests call above for why that's
-          the right predicate here, not supportsQuests) — a standalone
-          project's quest list is always empty, but gate on the type rather
-          than relying on that emptiness. */}
-      {!isStandalone(project) && quests && quests.length > 0 && (
+          hasQuestSurface (see the useProjectQuests call above for why that's
+          the right predicate here, not supportsQuests) — a standalone or
+          chat-agent project's quest list is always empty, but gate on the
+          type rather than relying on that emptiness. */}
+      {hasQuestSurface(project) && quests && quests.length > 0 && (
         <section className="px-4 sm:px-6 pb-8">
           <div className="max-w-5xl mx-auto">
             <button
