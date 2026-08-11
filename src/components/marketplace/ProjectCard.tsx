@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { MarketplaceProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
-import { isStandalone, supportsQuests } from '../../utils/isStandalone';
+import { isStandalone, isChatAgent, supportsQuests } from '../../utils/isStandalone';
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -23,23 +23,42 @@ export function ProjectCard({ project, metrics }: ProjectCardProps) {
   const positivePercent = metrics?.positivePercent ?? 0;
   const ratingCount = metrics?.ratingCount ?? 0;
 
+  // Overlay badge label — one span, extended from the original
+  // standalone-only badge to also cover chat-agent. The two predicates are
+  // mutually exclusive (both key off the same `type` field), so at most one
+  // label is ever produced. Text is the type's own label, never the bare
+  // word "Agent" — that word is reserved in this repo for AOS capsule
+  // agents (`/agents/:agentId`, `AgentsPage`), an unrelated concept.
+  const badgeLabel = isStandalone(project) ? 'STANDALONE' : isChatAgent(project) ? 'CHAT AGENT' : null;
+
+  // A chat agent's own tagline gives way to its @nametag in the card's
+  // subtitle slot: the catalog is a browse-by-identity list, and a short
+  // human-chosen nametag says more at a glance than free text. A pubkey or
+  // DIRECT:// address is deliberately NOT substituted here — unlike
+  // ProjectPage's dedicated, always-shown Unicity ID line, a long opaque hex
+  // string doesn't earn its place in a compact catalog subtitle, so those
+  // chat agents (and ones with no agentAddress yet) keep their authored
+  // tagline instead.
+  const agentAddress = project.agentAddress ?? '';
+  const tagline = isChatAgent(project) && agentAddress.startsWith('@') ? agentAddress : project.tagline;
+
   return (
     <Link to={`/apps/${project.slug}`} className="relative block">
       {/* sphere-ui's MarketplaceProjectCard doesn't know about project types, and
           its version is bumped by CI — adding a type-aware badge there would mean
           a release cycle plus a dependency bump in every consumer. Overlay it here
-          instead, driven off project.type via isStandalone (never off the
-          absence of appUrl). */}
-      {isStandalone(project) && (
+          instead, driven off project.type via isStandalone/isChatAgent (never off
+          the absence of appUrl or the presence of agentAddress). */}
+      {badgeLabel && (
         <span
           className="absolute top-3 left-3 z-20 px-2 py-0.5 rounded-md bg-black/40 backdrop-blur-sm text-white/80 text-[10px] font-mono uppercase tracking-wider pointer-events-none"
         >
-          STANDALONE
+          {badgeLabel}
         </span>
       )}
       <MarketplaceProjectCard
         name={project.name}
-        tagline={project.tagline}
+        tagline={tagline}
         logoUrl={project.logoUrl}
         bannerUrl={project.bannerUrl}
         accentColor={project.accentColor}
