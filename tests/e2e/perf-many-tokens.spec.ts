@@ -23,6 +23,28 @@ function visible(page: Page, text: string) {
 function visibleButton(page: Page, name: string) {
   return page.getByRole('button', { name, exact: true }).filter({ visible: true }).first();
 }
+/** The app renders mobile+desktop copies; click whichever one is actionable. */
+async function clickAnyCopy(page: Page, name: string): Promise<void> {
+  const all = page.getByRole('button', { name, exact: true });
+  const n = await all.count();
+  for (let i = 0; i < n; i += 1) {
+    try {
+      await all.nth(i).click({ timeout: 10_000 });
+      return;
+    } catch {
+      /* try the next copy */
+    }
+  }
+  throw new Error(`no clickable copy of button "${name}" among ${String(n)}`);
+}
+
+/** Balances render with locale grouping in the visible copy ("1,000.0000") and
+ *  without it in the hidden duplicate — accept either. */
+function amountRe(n: number): RegExp {
+  const grouped = String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',?');
+  return new RegExp(`${grouped}\\.0000 UCT`);
+}
+
 function modalScreen(page: Page, text: string) {
   return page
     .locator('div.absolute.inset-0.z-10')
@@ -45,6 +67,11 @@ test('measure a send that consumes many source tokens', async () => {
   page.on('console', (m) => {
     const text = m.text();
     if (text.includes('[pv2-perf]')) perf.push(text.replace(/.*\[pv2-perf\]\s*/, ''));
+    if (m.type() === 'error') console.log(`[browser-error] ${text.slice(0, 300)}`);
+  });
+  page.on('pageerror', (e) => console.log(`[page-error] ${String(e).slice(0, 300)}`));
+  page.on('requestfailed', (r) => {
+    console.log(`[req-failed] ${r.url().slice(0, 120)} ${String(r.failure()?.errorText)}`);
   });
 
   // ── onboard ────────────────────────────────────────────────────────────────
@@ -55,14 +82,47 @@ test('measure a send that consumes many source tokens', async () => {
   const cont = page.getByRole('button', { name: 'Continue' });
   await expect(cont).toBeEnabled({ timeout: 60_000 });
   await cont.click();
+  // Scrape the 12 words off the show screen — the flow now re-asks for them.
+  const grid = page.locator('div.grid.grid-cols-3 > div').filter({ visible: true });
+  await expect(grid.first()).toBeVisible({ timeout: 180_000 });
+  const words = (await grid.allInnerTexts()).map((cell) =>
+    cell.replace(/^\s*\d+\.\s*/, '').trim()
+  );
+  expect(words).toHaveLength(12);
+
   await page.getByRole('button', { name: "I've Saved My Recovery Phrase" }).click({ timeout: 180_000 });
+
+  // "Confirm Recovery Phrase": type them back.
+  await expect(page.getByText('Confirm Recovery Phrase')).toBeVisible({ timeout: 60_000 });
+  const inputs = page.getByPlaceholder('word');
+  for (let i = 0; i < 12; i += 1) await inputs.nth(i).fill(words[i]);
+  await page.getByRole('button', { name: 'Confirm' }).click();
+
+  // The post-mnemonic screens (password, backup download, subscription plan)
+  // vary in order and timing between runs, so advance on whatever is present
+  // until the wallet itself shows the nametag.
+  const walletReady = page.getByText(`@${TAG}`).filter({ visible: true }).first();
+  const deadline = Date.now() + 300_000;
+  while (Date.now() < deadline) {
+    if (await walletReady.isVisible().catch(() => false)) break;
+    for (const label of ['Skip', 'Enter Wallet', 'Continue', 'Done', 'Close']) {
+      const b = page.getByRole('button', { name: label, exact: true });
+      if ((await b.count().catch(() => 0)) === 0) continue;
+      const clicked = await clickAnyCopy(page, label).then(() => true).catch(() => false);
+      if (clicked) break;
+    }
+    await page.waitForTimeout(1_000);
+  }
+
   await expect(page.getByText(`@${TAG}`).filter({ visible: true }).first()).toBeVisible({ timeout: 180_000 });
 
   // ── top up N times: each mint is one more UCT source token ────────────────
   for (let i = 1; i <= TOPUPS; i += 1) {
     await visibleButton(page, 'Top Up').click();
     await visible(page, 'Get test tokens').click();
-    await expect(visible(page, `${String(i * 100)}.0000 UCT`)).toBeVisible({ timeout: 240_000 });
+    await expect(
+      page.getByText(amountRe(i * 100)).filter({ visible: true }).first()
+    ).toBeVisible({ timeout: 240_000 });
     console.log(`[perf] top-up ${String(i)}/${String(TOPUPS)} settled`);
   }
 
