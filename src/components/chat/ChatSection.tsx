@@ -49,10 +49,13 @@ export function ChatSection() {
     if (peer) {
       setPendingDmRecipient(peer);
       setChatMode('dm');
+      // `replace: true` — same rationale as DMChatSection's own ?peer=
+      // effect: a push here would make this strip itself a Back-button stop,
+      // bouncing the user between the deep link and its stripped form.
       setSearchParams((prev) => {
         prev.delete('peer');
         return prev;
-      });
+      }, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 

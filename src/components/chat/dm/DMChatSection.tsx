@@ -79,10 +79,16 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
     const peer = searchParams.get('peer');
     if (peer) {
       setUrlPendingRecipient(peer);
+      // `replace: true` — this strip must not itself become a Back-button
+      // stop. A push here turns .../dm?peer=X -> .../dm into two history
+      // entries; pressing Back would land back on the `?peer=` entry, whose
+      // effect fires again and pushes forward a second time, bouncing the
+      // user in place and making the page before the deep link (e.g.
+      // ProjectPage's Message button) unreachable by Back.
       setSearchParams((prev) => {
         prev.delete('peer');
         return prev;
-      });
+      }, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
