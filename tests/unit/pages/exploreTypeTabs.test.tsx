@@ -203,6 +203,22 @@ describe('Explore type tabs', () => {
     expect(indicator().style.width).toBe(widthAtStart);
   });
 
+  /**
+   * I2: the tablist became a 3-column grid for the "Chat agents" tab without
+   * shrinking the padding that fit fine at two columns, and without
+   * `whitespace-nowrap` — jsdom doesn't lay out real pixel widths, so this
+   * can't assert the overflow itself, but it pins the two classes the fix
+   * actually depends on, on every tab button, not just the longest label.
+   */
+  it('keeps every tab label on one line with tighter horizontal padding at the narrow breakpoint', () => {
+    renderExplore();
+    for (const name of ['Apps', 'Standalone', 'Chat agents']) {
+      const tab = screen.getByRole('tab', { name });
+      expect(tab.className).toContain('whitespace-nowrap');
+      expect(tab.className).toContain('px-3');
+    }
+  });
+
   it('scopes the category chips to the active tab', () => {
     renderExplore();
     expect(useCategories).toHaveBeenLastCalledWith(PROJECT_TYPES.APP);

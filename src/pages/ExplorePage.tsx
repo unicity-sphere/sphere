@@ -182,8 +182,14 @@ export function ExplorePage() {
   // The active tab's own entry — everything about "which kind of catalog is
   // this" (copy, item noun, indicator position) reads from it instead of a
   // per-type ternary, so adding a tab never means adding a branch here.
-  const activeTabIndex = EXPLORE_TABS.findIndex((tab) => tab.key === activeType);
-  const activeTab = EXPLORE_TABS[activeTabIndex] ?? EXPLORE_TABS[0];
+  // Clamped to 0 rather than left at -1: `activeType` is always one of
+  // EXPLORE_TABS' own keys in practice (state only ever gets set from a tab
+  // button's own `tab.key`), so `findIndex` returning -1 is defensive-only —
+  // but an unclamped -1 would still drive the sliding indicator's transform
+  // below to `translateX(calc(-100% + -0.25rem))`, sliding it fully off the
+  // left edge of the track instead of degrading to the first tab.
+  const activeTabIndex = Math.max(0, EXPLORE_TABS.findIndex((tab) => tab.key === activeType));
+  const activeTab = EXPLORE_TABS[activeTabIndex];
   const itemLabel = activeTab.itemLabel;
   const searchPlaceholder = `Search ${itemLabel}...`;
 
@@ -299,8 +305,8 @@ export function ExplorePage() {
                   onClick={() => { setActiveType(tab.key); setCategory(null); setSearch(''); }}
                   className={
                     isActive
-                      ? 'relative z-10 rounded-full px-6 sm:px-8 py-2 sm:py-2.5 text-sm font-semibold text-black cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2'
-                      : 'relative z-10 rounded-full px-6 sm:px-8 py-2 sm:py-2.5 text-sm font-semibold text-neutral-500 dark:text-white/60 hover:text-neutral-900 dark:hover:text-white cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2 transition-colors'
+                      ? 'relative z-10 rounded-full px-3 sm:px-6 md:px-8 py-2 sm:py-2.5 text-sm font-semibold text-black whitespace-nowrap cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2'
+                      : 'relative z-10 rounded-full px-3 sm:px-6 md:px-8 py-2 sm:py-2.5 text-sm font-semibold text-neutral-500 dark:text-white/60 hover:text-neutral-900 dark:hover:text-white whitespace-nowrap cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-orange-500/60 focus-visible:ring-offset-2 transition-colors'
                   }
                 >
                   {tab.label}
