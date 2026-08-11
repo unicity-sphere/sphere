@@ -12,6 +12,7 @@ export const PROJECT_TYPES = {
   APP: 'app',
   SKILL: 'skill',
   STANDALONE: 'standalone',
+  CHAT_AGENT: 'chat-agent',
 } as const;
 
 export type ProjectType = (typeof PROJECT_TYPES)[keyof typeof PROJECT_TYPES];
@@ -42,6 +43,26 @@ export function isStandalone(project: { type: ProjectType | null | undefined }):
 }
 
 /**
+ * True when a project's `type` is `PROJECT_TYPES.CHAT_AGENT` — an agent the
+ * user reaches by messaging it over Sphere DMs, identified by its Unicity ID
+ * (`agentAddress`), rather than by an App URL (`app`/`skill`) or a public
+ * source repository (`standalone`).
+ *
+ * Named `isChatAgent`, deliberately not `isAgent`: the bare word "Agent" is
+ * already reserved in this repo for AOS capsule agents — this wallet's own
+ * `/agents/:agentId` chat/iframe routes and the marketing `AgentsPage` — an
+ * unrelated concept. Reusing that name here would make the two impossible to
+ * tell apart at a glance.
+ *
+ * `type` is nullable for the same reason as `isStandalone` above: the schema
+ * default is `app` and pre-migration documents may have none at all, so an
+ * absent type must resolve to `app` here too, which is never a chat agent.
+ */
+export function isChatAgent(project: { type: ProjectType | null | undefined }): boolean {
+  return (project.type ?? PROJECT_TYPES.APP) === PROJECT_TYPES.CHAT_AGENT;
+}
+
+/**
  * True when projects of this `type` participate in the quest system — have
  * quests, quest-derived stats (active quests / completions), etc.
  *
@@ -65,4 +86,21 @@ export function isStandalone(project: { type: ProjectType | null | undefined }):
  */
 export function supportsQuests(type: ProjectType | null | undefined): boolean {
   return (type ?? PROJECT_TYPES.APP) === PROJECT_TYPES.APP;
+}
+
+/**
+ * Whether this project type has a quest surface to fetch and render at all.
+ *
+ * This is the WIDER of the two quest questions and the one the Quests section
+ * and its query use: before chat agents existed the gate here was
+ * `!isStandalone`, chosen deliberately so `app` and `skill` keep fetching and
+ * showing quests exactly as they did before any type gating existed. A chat
+ * agent structurally has none, so it joins standalone on the excluded side —
+ * without changing what `app`/`skill` see.
+ *
+ * NOT interchangeable with `supportsQuests` (app-only), which governs the
+ * quest/completion stat TILES and already excluded `skill` before this work.
+ */
+export function hasQuestSurface(project: { type: ProjectType | null | undefined }): boolean {
+  return !isStandalone(project) && !isChatAgent(project);
 }

@@ -21,6 +21,8 @@ export interface ProjectSummary {
   repoUrl: string | null;
   installCommand: string | null;
   pricing?: { model: string; priceUCT: number | null };
+  /** Unicity ID to DM for `chat-agent` projects; absent for the other types. */
+  agentAddress?: string | null;
 }
 
 export interface PaginatedProjects {
