@@ -17,7 +17,7 @@ import { useInstalledProjects } from '../hooks/useInstalledProjects';
 import { isHttpsUrl } from '../utils/isHttpsUrl';
 import { isStandalone, isChatAgent, hasQuestSurface, supportsQuests, PROJECT_TYPES } from '../utils/isStandalone';
 import { copyToClipboard } from '../utils/copyToClipboard';
-import { truncateId } from '../utils/identifiers';
+import { truncateId, stripDirectScheme } from '../utils/identifiers';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 type MediaItem = { type: string; url: string; caption?: string };
@@ -309,9 +309,17 @@ export function ProjectPage() {
   // A chat agent's Unicity ID (project.agentAddress) — shown in full for a
   // @nametag, since that's already a short human-chosen name, and
   // MetaMask-style middle-truncated (never an inline slice) for a pubkey or
-  // a DIRECT:// address, both of which are long opaque strings.
+  // a DIRECT:// address, both of which are long opaque strings. The scheme
+  // has to come off BEFORE truncating: truncateId slices the first/last N
+  // literal characters, so an untouched "DIRECT://02ab...9012" would show as
+  // "DIRECT...9012" — all scheme, no address. stripDirectScheme is a no-op
+  // on a bare pubkey, so it's safe to always apply here. Only the LABEL is
+  // truncated; the href and the copied value below always use the full,
+  // untouched chatAgentAddress.
   const chatAgentAddress = project.agentAddress ?? '';
-  const chatAgentLabel = chatAgentAddress.startsWith('@') ? chatAgentAddress : truncateId(chatAgentAddress);
+  const chatAgentLabel = chatAgentAddress.startsWith('@')
+    ? chatAgentAddress
+    : truncateId(stripDirectScheme(chatAgentAddress));
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-neutral-900 dark:text-white pb-12">

@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // vi.mock factories are hoisted above regular top-level `const`s, so the mocks
 // referenced inside the factory below must themselves be created via
 // vi.hoisted to avoid a TDZ ReferenceError when ProjectPage's import of
 // useMarketplace is resolved.
-const { useProject, useProjectQuests } = vi.hoisted(() => ({
+const { useProject, useProjectQuests, copyToClipboard } = vi.hoisted(() => ({
   useProject: vi.fn(),
   useProjectQuests: vi.fn(),
+  copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../../../src/hooks/useMarketplace', () => ({
@@ -16,6 +17,10 @@ vi.mock('../../../src/hooks/useMarketplace', () => ({
   useProjectQuests:   (...args: unknown[]) => useProjectQuests(...args),
   useProjectMetrics:  () => ({ data: undefined }),
 }));
+// Spied so the DIRECT:// / pubkey truncation tests below can assert the FULL
+// (untruncated, unstripped) address is what actually gets copied — the
+// truncation is display-only.
+vi.mock('../../../src/utils/copyToClipboard', () => ({ copyToClipboard }));
 vi.mock('../../../src/hooks/useDesktopState', () => ({
   useDesktopState: () => ({ openTab: vi.fn() }),
 }));
@@ -73,5 +78,44 @@ describe('ProjectPage — chat agent action row', () => {
   it('does not fetch or render quests for a chat agent', () => {
     renderProject({ type: 'chat-agent', agentAddress: '@bot' });
     expect(useProjectQuests).toHaveBeenCalledWith(expect.any(String), false);
+  });
+});
+
+// A DIRECT:// address and a bare pubkey are both long opaque strings, unlike
+// a human-chosen @nametag — both must be middle-truncated for display (never
+// shown in full, never an inline slice), while the actual link target and
+// the copied value stay the full, untouched address underneath.
+describe('ProjectPage — chat agent address truncation (DIRECT:// / pubkey)', () => {
+  const PUBKEY = '02ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef569012';
+  const DIRECT_ADDR = `DIRECT://${PUBKEY}`;
+
+  it('strips the DIRECT:// scheme before truncating, so the label shows real address bytes, not the scheme', async () => {
+    renderProject({ type: 'chat-agent', agentAddress: DIRECT_ADDR, appUrl: null });
+
+    // truncateId slices literal characters, so truncating "DIRECT://02ab...9012"
+    // without stripping the scheme first would read "DIRECT...9012" — the
+    // label must instead show the pubkey's own first 6 / last 4 characters.
+    const link = await screen.findByRole('link', { name: /message 02ab12\.\.\.9012/i });
+    expect(link.textContent).not.toMatch(/DIRECT\.\.\./i);
+  });
+
+  it('keeps the full DIRECT:// address (with scheme) in href and in the copied value', async () => {
+    renderProject({ type: 'chat-agent', agentAddress: DIRECT_ADDR, appUrl: null });
+
+    const link = await screen.findByRole('link', { name: /message 02ab12\.\.\.9012/i });
+    expect(link.getAttribute('href')).toBe(`/agents/dm?peer=${encodeURIComponent(DIRECT_ADDR)}`);
+
+    fireEvent.click(screen.getByRole('button', { name: /copy unicity id/i }));
+    expect(copyToClipboard).toHaveBeenCalledWith(DIRECT_ADDR);
+  });
+
+  it('middle-truncates a bare pubkey (no scheme to strip) the same way', async () => {
+    renderProject({ type: 'chat-agent', agentAddress: PUBKEY, appUrl: null });
+
+    const link = await screen.findByRole('link', { name: /message 02ab12\.\.\.9012/i });
+    expect(link.getAttribute('href')).toBe(`/agents/dm?peer=${encodeURIComponent(PUBKEY)}`);
+
+    fireEvent.click(screen.getByRole('button', { name: /copy unicity id/i }));
+    expect(copyToClipboard).toHaveBeenCalledWith(PUBKEY);
   });
 });
