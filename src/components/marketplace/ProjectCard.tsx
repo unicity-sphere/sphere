@@ -18,6 +18,19 @@ interface ProjectCardProps {
 export function ProjectCard({ project, metrics }: ProjectCardProps) {
   const { isInstalled, toggle } = useInstalledProjects();
   const installed = isInstalled(project.slug);
+  // A chat agent is never installable — the API rejects an install call for
+  // this type outright (400: "Chat agents aren't installable — message the
+  // agent instead"). useInstalledProjects.install has no onError/rollback,
+  // so a click that reaches it anyway writes an optimistic slug straight
+  // into localStorage and the query cache before the request even fires;
+  // for a locked/unauthenticated wallet the server is never consulted
+  // either, so that tile would be permanent. installState must be 'none'
+  // for this type so sphere-ui never renders the "Add to Desktop" overlay
+  // button in the first place (it gates on `installState !== 'none'`), and
+  // onInstallClick must be withheld too, not just harmlessly unreachable —
+  // a future sphere-ui version could wire its own affordance to the click
+  // handler's mere presence.
+  const installable = !isChatAgent(project);
   const users = metrics?.uniqueUsers ?? project.stats.totalUsers;
   const quests = metrics?.activeQuests ?? project.stats.activeQuests;
   const positivePercent = metrics?.positivePercent ?? 0;
@@ -76,8 +89,8 @@ export function ProjectCard({ project, metrics }: ProjectCardProps) {
         quests={supportsQuests(project.type) ? quests : undefined}
         positivePercent={positivePercent}
         ratingCount={ratingCount}
-        installState={installed ? 'installed' : 'available'}
-        onInstallClick={() => toggle(project.slug)}
+        installState={installable ? (installed ? 'installed' : 'available') : 'none'}
+        onInstallClick={installable ? () => toggle(project.slug) : undefined}
       />
     </Link>
   );
