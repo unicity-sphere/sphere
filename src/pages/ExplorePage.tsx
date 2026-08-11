@@ -30,6 +30,23 @@ import type { ProjectSummary, ProjectMetrics } from '../services/marketplaceApi'
  */
 const SEARCH_DEBOUNCE_MS = 300;
 
+/**
+ * The type switch, as one list instead of hand-tuned per-position markup.
+ * Everything the tab bar and the rest of the page need per type — the query
+ * value, the button label, the caption under the switch, and the noun used
+ * everywhere from "All {itemLabel}" to the search placeholder — lives here,
+ * so a future fourth tab costs one entry in this array, not a new branch in
+ * every place below that currently reads `activeType === ...`.
+ *
+ * Order is displayed left to right and also IS the tab index the sliding
+ * indicator positions itself by (see the toggle section below).
+ */
+const EXPLORE_TABS = [
+  { key: PROJECT_TYPES.APP,        label: 'Apps',        caption: 'Open in Sphere',              itemLabel: 'projects' },
+  { key: PROJECT_TYPES.STANDALONE, label: 'Standalone',  caption: 'Run on your own machine',      itemLabel: 'standalone projects' },
+  { key: PROJECT_TYPES.CHAT_AGENT, label: 'Chat agents', caption: 'Message them from your wallet', itemLabel: 'chat agents' },
+] as const;
+
 // ─── Featured Carousel ────────────────────────────────────────────────────────
 
 function FeaturedCarousel({ items, metricsByProject }: {
@@ -78,7 +95,7 @@ export function ExplorePage() {
   // a preference about how to read the catalog, not a filter on which part of
   // it you are looking at.
   const [sort, setSort] = useState<SortValue>('relevant');
-  const [activeType, setActiveType] = useState<typeof PROJECT_TYPES.APP | typeof PROJECT_TYPES.STANDALONE>(PROJECT_TYPES.APP);
+  const [activeType, setActiveType] = useState<(typeof EXPLORE_TABS)[number]['key']>(EXPLORE_TABS[0].key);
   // Proactive maintenance status — the hook polls the allowlisted status endpoint
   // and also listens for `maintenance:forced`, so the marketplace queries (gated on
   // the same status) never fire requests that would 503 during maintenance.
@@ -143,12 +160,14 @@ export function ExplorePage() {
   // Deriving them from the loaded list is what made this row report the page
   // size (20) while the catalog held 24, and paging would only have made that
   // worse. `skill` projects are excluded from the project count on purpose:
-  // Explore surfaces apps and standalone only, and a total the tabs below it
-  // cannot reach is the same bug wearing a different number.
+  // Explore surfaces apps, standalone and chat agents — exactly the types
+  // EXPLORE_TABS lists — and a total the tabs below it cannot reach is the
+  // same bug wearing a different number. Chat agents, unlike skill, DO get a
+  // tab (see EXPLORE_TABS above), so they belong in this total for the same
+  // reason app and standalone already did — summing over the tab list itself
+  // rather than naming each type again keeps that in sync automatically.
   const heroStats = useMemo(() => ({
-    projects:
-      (stats?.byType?.[PROJECT_TYPES.APP] ?? 0) +
-      (stats?.byType?.[PROJECT_TYPES.STANDALONE] ?? 0),
+    projects: EXPLORE_TABS.reduce((sum, tab) => sum + (stats?.byType?.[tab.key] ?? 0), 0),
     users:           stats?.totalUsers ?? 0,
     categoriesCount: stats?.totalCategories ?? 0,
   }), [stats]);
@@ -159,8 +178,14 @@ export function ExplorePage() {
   // left utility, nft, trading and other unreachable by any filter.
   const categories = categoryCounts ?? [];
   const categoriesTotal = categories.reduce((sum, c) => sum + c.count, 0);
-  const itemLabel = activeType === PROJECT_TYPES.STANDALONE ? 'standalone projects' : 'projects';
-  const searchPlaceholder = activeType === PROJECT_TYPES.STANDALONE ? 'Search standalone projects...' : 'Search projects...';
+
+  // The active tab's own entry — everything about "which kind of catalog is
+  // this" (copy, item noun, indicator position) reads from it instead of a
+  // per-type ternary, so adding a tab never means adding a branch here.
+  const activeTabIndex = EXPLORE_TABS.findIndex((tab) => tab.key === activeType);
+  const activeTab = EXPLORE_TABS[activeTabIndex] ?? EXPLORE_TABS[0];
+  const itemLabel = activeTab.itemLabel;
+  const searchPlaceholder = `Search ${itemLabel}...`;
 
   if (maintenance?.enabled) {
     return <MaintenanceScreen message={maintenance.message} />;
@@ -206,10 +231,11 @@ export function ExplorePage() {
             Games, DeFi, tools and agents — all running on the Sphere SDK.
           </motion.p>
 
-          {/* Catalog-wide totals — computed from apps + standalone combined (see
-              combinedItems above), so this row is identical no matter which tab
-              is active and never collapses just because the active tab is empty.
-              Always rendered (no `> 0` gate) — a real zero, not a vanished row. */}
+          {/* Catalog-wide totals — computed from every EXPLORE_TABS type summed
+              together (see heroStats above), so this row is identical no matter
+              which tab is active and never collapses just because the active
+              tab is empty. Always rendered (no `> 0` gate) — a real zero, not a
+              vanished row. */}
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -226,34 +252,43 @@ export function ExplorePage() {
       </section>
 
       {/* Type switch — the top-level split of the catalog: an app opens inside
-          Sphere, a standalone project is installed and run on your own machine.
+          Sphere, a standalone project is installed and run on your own machine,
+          and a chat agent is messaged from the wallet rather than opened at all.
           A real segmented control, sized and faced like UI chrome (Geist, control
           scale) rather than the hero's display type — the hero already owns that
           register, and a filled block set in Anton at display size just reads as
           a second banner. The hero's totals row (above) carries the counting;
-          this control only ever shows the two labels. */}
+          this control only ever shows the tab labels themselves. */}
       <section className="px-4 sm:px-6 pb-10">
         <div className="flex justify-center">
           <div
             role="tablist"
             aria-label="Project type"
-            className="relative grid grid-cols-2 gap-1 rounded-full border border-neutral-200 dark:border-white/12 bg-neutral-50 dark:bg-white/4 p-1"
+            className="relative grid gap-1 rounded-full border border-neutral-200 dark:border-white/12 bg-neutral-50 dark:bg-white/4 p-1"
+            style={{ gridTemplateColumns: `repeat(${EXPLORE_TABS.length}, minmax(0, 1fr))` }}
           >
             {/* Sliding thumb — an absolutely-positioned pill sized to exactly one
                 grid column, translated by its own width + the gap to reach the
-                other column. Instant (no slide) under prefers-reduced-motion. */}
+                active column. Width and offset are computed from the tab count
+                and the active index (rather than baked into per-position
+                Tailwind classes), so a future tab only means a new EXPLORE_TABS
+                entry:
+                  - width: the track minus its own padding (0.25rem each side)
+                    and the (N-1) gaps between N columns (0.25rem each), i.e.
+                    (N+1) * 0.25rem of non-pill space total, split N ways.
+                  - offset: translateX at N% of the pill's OWN width moves it
+                    exactly N columns (all columns are equal width), plus N
+                    gaps of 0.25rem to clear the gutters crossed along the way.
+                Instant (no slide) under prefers-reduced-motion. */}
             <span
               aria-hidden
-              className={
-                activeType === PROJECT_TYPES.STANDALONE
-                  ? 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-[calc(100%+0.25rem)] rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
-                  : 'absolute inset-y-1 left-1 w-[calc((100%-0.75rem)/2)] translate-x-0 rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
-              }
+              className="absolute inset-y-1 left-1 rounded-full bg-orange-500 dark:bg-brand-orange shadow-md shadow-black/25 transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+              style={{
+                width: `calc((100% - ${(EXPLORE_TABS.length + 1) * 0.25}rem) / ${EXPLORE_TABS.length})`,
+                transform: `translateX(calc(${activeTabIndex * 100}% + ${activeTabIndex * 0.25}rem))`,
+              }}
             />
-            {([
-              { key: PROJECT_TYPES.APP, label: 'Apps' },
-              { key: PROJECT_TYPES.STANDALONE, label: 'Standalone' },
-            ]).map(tab => {
+            {EXPLORE_TABS.map(tab => {
               const isActive = activeType === tab.key;
               return (
                 <button
@@ -275,7 +310,7 @@ export function ExplorePage() {
           </div>
         </div>
         <p className="mt-3 text-center text-xs sm:text-sm text-neutral-400 dark:text-white/40">
-          {activeType === PROJECT_TYPES.STANDALONE ? 'Run on your own machine' : 'Open in Sphere'}
+          {activeTab.caption}
         </p>
       </section>
 
