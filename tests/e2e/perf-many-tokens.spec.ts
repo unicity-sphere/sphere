@@ -6,14 +6,24 @@
  * the environment the complaint came from — this drives the real UI and reads
  * the [pv2-perf] phase timings the preview SDK emits.
  *
- *   PERF_TOPUPS=20 SMOKE_BASE_URL=... npx playwright test perf-many-tokens
+ * OPT-IN: skipped unless PERF_TOPUPS is set, so `npm run test:e2e` neither runs
+ * it nor mints tokens against a real backend.
+ *
+ *   docker run --rm --network host --shm-size=1g -v "$PWD":/w -w /w \
+ *     -e SMOKE_BASE_URL=http://localhost:4173 -e PERF_TOPUPS=20 \
+ *     mcr.microsoft.com/playwright:v1.60.0-jammy \
+ *     npx playwright test perf-many-tokens --reporter=list
  */
 import { test, expect, chromium, type Page } from '@playwright/test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const TOPUPS = Number(process.env.PERF_TOPUPS ?? 20);
+// Opt-in ONLY. `npm run test:e2e` discovers everything under tests/e2e, and this
+// harness is not a test: it mints PERF_TOPUPS tokens against a REAL backend and
+// takes minutes. Without the opt-in it would also target the wrong server, since
+// it drives its own context rather than the config's webServer.
+const TOPUPS = Number(process.env.PERF_TOPUPS ?? 0);
 const RECIPIENT = process.env.PERF_RECIPIENT ?? 'api-4';
 const TAG = `perf${String(Date.now()).slice(-7)}`;
 
@@ -54,10 +64,16 @@ function modalScreen(page: Page, text: string) {
 }
 
 test('measure a send that consumes many source tokens', async () => {
+  test.skip(
+    TOPUPS <= 0,
+    'preview-only perf harness: set PERF_TOPUPS=<n> to run (needs a build against real backends)'
+  );
   test.setTimeout(30 * 60_000);
   const dir = mkdtempSync(join(tmpdir(), 'perf-profile-'));
   const context = await chromium.launchPersistentContext(dir, {
-    baseURL: process.env.SMOKE_BASE_URL || 'http://localhost:4173',
+    // Playwright's configured baseURL is not applied to a context we launch
+    // ourselves, so mirror the config's resolution rather than hardcoding a port.
+    baseURL: process.env.SMOKE_BASE_URL ?? 'http://localhost:4317',
     headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
