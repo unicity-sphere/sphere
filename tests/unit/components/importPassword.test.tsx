@@ -16,7 +16,7 @@
  *      surfaces an error and does NOT lose the wallet — Skip still works.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -180,9 +180,14 @@ describe('encrypted file import auto-applies its decrypt password (#449 Task C)'
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file] } });
 
-    // Encrypted detection happens after the async file read. Wait budget is
-    // global (tests/setup.ts) — this file flaked at 1079ms and again at
-    // 3069ms on loaded CI runners while passing locally every time.
+    // #487 flake, and no timeout could ever fix it: handleFileSelect sets
+    // selectedFile SYNCHRONOUSLY — which is what renders the Import button —
+    // but only sets isEncrypted AFTER awaiting file.text(). Waiting for the
+    // button therefore says nothing about detection, and a click that lands
+    // first takes the unencrypted branch, so the password prompt never shows.
+    // Nothing in the UI reflects detection, so flush the pending read instead:
+    // file.text() is a resolved stub here, so one flush is deterministic.
+    await act(async () => {});
     await waitFor(() => expect(screen.getByRole('button', { name: /^import$/i })).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
 
