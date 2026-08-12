@@ -89,6 +89,17 @@ vi.mock('../../../src/sdk', async () => {
   return {
     formatAmount,
     useAssets: () => ({ assets: [ASSET] }),
+    // SendModal prices its live send-progress legs from the inventory.
+    useTokens: () => ({
+      tokens: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      tokenCount: 0,
+      hasTokens: false,
+      confirmedTokens: [],
+      pendingTokens: [],
+    }),
     useTransfer: () => ({
       transfer: transferMock,
       isLoading: false,

@@ -7,7 +7,8 @@ import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../connect/duplicateSendGuard';
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
-import { useAssets, useTransfer, formatAmount } from '../../../../sdk';
+import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
+import { useSendProgress } from '../../../../sdk/hooks/payments/useSendProgress';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
@@ -48,6 +49,7 @@ function sendTargetPubkey(
 export function SendModal({ isOpen, onClose }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
+  const { tokens: inventoryTokens } = useTokens();
   const { sphere, subscriptionKeyStatus } = useSphereContext();
   const { openUpgrade } = useUpgrade();
   const utilization = useUtilization();
@@ -82,6 +84,14 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [amountInput, setAmountInput] = useState('');
+
+  // Live progress for a multi-token send (sphere-sdk#749 reports each certified
+  // leg). Priced from our own inventory — the SDK does not carry amounts.
+  const sendTotal =
+    selectedAsset && amountInput
+      ? (safeParseTokenAmount(amountInput, selectedAsset.decimals) ?? 0n)
+      : 0n;
+  const progress = useSendProgress(step === 'processing', sendTotal, inventoryTokens);
   const [memoInput, setMemoInput] = useState('');
   // sphere-sdk 0.10.6 (#621/#622): the send certified on-chain but the recipient's delivery is
   // deferred (full inbox / 429, or a transient outage). The spend is FINAL — surface "delivery
@@ -758,12 +768,55 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
             </motion.div>
           )}
 
-          {/* 4. PROCESSING */}
+          {/* 4. PROCESSING — a multi-token send certifies one token at a time, so
+              show what has actually settled instead of an opaque spinner. The bar
+              tracks CERTIFICATION; the mailbox deposit that follows is a single
+              batched call, so it is labelled as its own phase rather than faked. */}
           {step === 'processing' && (
-            <motion.div key="proc" className="flex-1 flex flex-col items-center justify-center text-center py-10">
+            <motion.div key="proc" className="flex-1 flex flex-col items-center justify-center text-center py-10 px-6">
               <Loader2 className="w-12 h-12 text-orange-500 animate-spin mx-auto mb-4" />
-              <h3 className="text-neutral-900 dark:text-white font-medium text-lg">Sending Transaction...</h3>
-              <p className="text-neutral-500 text-sm mt-2">Certifying on Unicity and delivering to the recipient's mailbox</p>
+              <h3 className="text-neutral-900 dark:text-white font-medium text-lg">
+                {progress.fraction !== null && progress.fraction >= 1
+                  ? 'Delivering to recipient...'
+                  : 'Sending Transaction...'}
+              </h3>
+
+              {progress.certifiedTokens > 0 && selectedAsset ? (
+                <div className="w-full max-w-xs mt-4">
+                  <div
+                    className="h-2 w-full rounded-full bg-neutral-200 dark:bg-white/10 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round((progress.fraction ?? 0) * 100)}
+                    aria-label="Transfer progress"
+                  >
+                    <motion.div
+                      className="h-full bg-orange-500"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${String(Math.round((progress.fraction ?? 0) * 100))}%` }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-xs mt-2 text-neutral-500 dark:text-white/45">
+                    <span>
+                      {formatAmount(progress.certifiedAmount.toString(), selectedAsset.decimals)} of{' '}
+                      {formatAmount(sendTotal.toString(), selectedAsset.decimals)} {selectedAsset.symbol}
+                    </span>
+                    <span>{progress.certifiedTokens} token{progress.certifiedTokens === 1 ? '' : 's'}</span>
+                  </div>
+                  {sendTotal > progress.certifiedAmount && (
+                    <div className="text-xs mt-1 text-neutral-400 dark:text-white/35">
+                      {formatAmount((sendTotal - progress.certifiedAmount).toString(), selectedAsset.decimals)}{' '}
+                      {selectedAsset.symbol} remaining
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-neutral-500 text-sm mt-2">
+                  Certifying on Unicity and delivering to the recipient&apos;s mailbox
+                </p>
+              )}
             </motion.div>
           )}
 
