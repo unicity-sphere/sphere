@@ -62,6 +62,36 @@ export function DMChatSection({ pendingRecipient, onPendingRecipientHandled }: D
     }
   }, [searchParams, setSearchParams]);
 
+  // Handle ?peer= URL param for DM navigation — carries any identifier the
+  // SDK resolves (@nametag, DIRECT://, or a pubkey) verbatim. Unlike
+  // ?nametag= above, it is never lowercased or slugified: that transform is
+  // right for a human-typed display name and wrong for a DIRECT:// address
+  // or a hex key.
+  //
+  // This mirrors the ?nametag= handling right above it rather than relying
+  // on the `pendingRecipient` prop: DesktopLayout renders this component
+  // directly for the "dm" tab (see its `case 'dm'`), bypassing ChatSection
+  // entirely, so ChatSection's own ?peer=/?nametag= forwarding never runs
+  // for the real /agents/dm route — the param has to be read here too, or a
+  // ?peer= deep link (e.g. ProjectPage's Message action) silently does
+  // nothing when clicked.
+  useEffect(() => {
+    const peer = searchParams.get('peer');
+    if (peer) {
+      setUrlPendingRecipient(peer);
+      // `replace: true` — this strip must not itself become a Back-button
+      // stop. A push here turns .../dm?peer=X -> .../dm into two history
+      // entries; pressing Back would land back on the `?peer=` entry, whose
+      // effect fires again and pushes forward a second time, bouncing the
+      // user in place and making the page before the deep link (e.g.
+      // ProjectPage's Message button) unreachable by Back.
+      setSearchParams((prev) => {
+        prev.delete('peer');
+        return prev;
+      }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   // Auto-focus input when message is sent (desktop only)
   useEffect(() => {
     if (!isSending && selectedConversation && window.innerWidth >= 1024) {

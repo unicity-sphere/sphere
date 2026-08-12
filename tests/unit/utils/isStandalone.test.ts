@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { PROJECT_TYPES, isStandalone, supportsQuests } from '../../../src/utils/isStandalone';
+import {
+  PROJECT_TYPES,
+  isStandalone,
+  supportsQuests,
+  isChatAgent,
+  hasQuestSurface,
+} from '../../../src/utils/isStandalone';
 
 describe('isStandalone', () => {
   it('is true only for a standalone project', () => {
@@ -49,5 +55,21 @@ describe('supportsQuests', () => {
   it('treats an absent type as app (true), not as "not app"', () => {
     expect(supportsQuests(null)).toBe(true);
     expect(supportsQuests(undefined)).toBe(true);
+  });
+
+  it('recognises chat agents and keeps supportsQuests app-only', () => {
+    expect(isChatAgent({ type: 'chat-agent' })).toBe(true);
+    expect(isChatAgent({ type: null })).toBe(false);
+    expect(supportsQuests('chat-agent')).toBe(false);
+    expect(supportsQuests('app')).toBe(true);
+  });
+});
+
+describe('hasQuestSurface', () => {
+  it('excludes standalone and chat agents only', () => {
+    expect(hasQuestSurface({ type: 'app' })).toBe(true);
+    expect(hasQuestSurface({ type: 'skill' })).toBe(true);
+    expect(hasQuestSurface({ type: 'standalone' })).toBe(false);
+    expect(hasQuestSurface({ type: 'chat-agent' })).toBe(false);
   });
 });

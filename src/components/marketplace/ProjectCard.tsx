@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { MarketplaceProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
 import { useInstalledProjects } from '../../hooks/useInstalledProjects';
-import { isStandalone, supportsQuests } from '../../utils/isStandalone';
+import { isStandalone, isChatAgent, supportsQuests } from '../../utils/isStandalone';
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -18,28 +18,60 @@ interface ProjectCardProps {
 export function ProjectCard({ project, metrics }: ProjectCardProps) {
   const { isInstalled, toggle } = useInstalledProjects();
   const installed = isInstalled(project.slug);
+  // A chat agent is never installable — the API rejects an install call for
+  // this type outright (400: "Chat agents aren't installable — message the
+  // agent instead"). useInstalledProjects.install has no onError/rollback,
+  // so a click that reaches it anyway writes an optimistic slug straight
+  // into localStorage and the query cache before the request even fires;
+  // for a locked/unauthenticated wallet the server is never consulted
+  // either, so that tile would be permanent. installState must be 'none'
+  // for this type so sphere-ui never renders the "Add to Desktop" overlay
+  // button in the first place (it gates on `installState !== 'none'`), and
+  // onInstallClick must be withheld too, not just harmlessly unreachable —
+  // a future sphere-ui version could wire its own affordance to the click
+  // handler's mere presence.
+  const installable = !isChatAgent(project);
   const users = metrics?.uniqueUsers ?? project.stats.totalUsers;
   const quests = metrics?.activeQuests ?? project.stats.activeQuests;
   const positivePercent = metrics?.positivePercent ?? 0;
   const ratingCount = metrics?.ratingCount ?? 0;
+
+  // Overlay badge label — one span, extended from the original
+  // standalone-only badge to also cover chat-agent. The two predicates are
+  // mutually exclusive (both key off the same `type` field), so at most one
+  // label is ever produced. Text is the type's own label, never the bare
+  // word "Agent" — that word is reserved in this repo for AOS capsule
+  // agents (`/agents/:agentId`, `AgentsPage`), an unrelated concept.
+  const badgeLabel = isStandalone(project) ? 'STANDALONE' : isChatAgent(project) ? 'CHAT AGENT' : null;
+
+  // A chat agent's own tagline gives way to its @nametag in the card's
+  // subtitle slot: the catalog is a browse-by-identity list, and a short
+  // human-chosen nametag says more at a glance than free text. A pubkey or
+  // DIRECT:// address is deliberately NOT substituted here — unlike
+  // ProjectPage's dedicated, always-shown Unicity ID line, a long opaque hex
+  // string doesn't earn its place in a compact catalog subtitle, so those
+  // chat agents (and ones with no agentAddress yet) keep their authored
+  // tagline instead.
+  const agentAddress = project.agentAddress ?? '';
+  const tagline = isChatAgent(project) && agentAddress.startsWith('@') ? agentAddress : project.tagline;
 
   return (
     <Link to={`/apps/${project.slug}`} className="relative block">
       {/* sphere-ui's MarketplaceProjectCard doesn't know about project types, and
           its version is bumped by CI — adding a type-aware badge there would mean
           a release cycle plus a dependency bump in every consumer. Overlay it here
-          instead, driven off project.type via isStandalone (never off the
-          absence of appUrl). */}
-      {isStandalone(project) && (
+          instead, driven off project.type via isStandalone/isChatAgent (never off
+          the absence of appUrl or the presence of agentAddress). */}
+      {badgeLabel && (
         <span
           className="absolute top-3 left-3 z-20 px-2 py-0.5 rounded-md bg-black/40 backdrop-blur-sm text-white/80 text-[10px] font-mono uppercase tracking-wider pointer-events-none"
         >
-          STANDALONE
+          {badgeLabel}
         </span>
       )}
       <MarketplaceProjectCard
         name={project.name}
-        tagline={project.tagline}
+        tagline={tagline}
         logoUrl={project.logoUrl}
         bannerUrl={project.bannerUrl}
         accentColor={project.accentColor}
@@ -57,8 +89,8 @@ export function ProjectCard({ project, metrics }: ProjectCardProps) {
         quests={supportsQuests(project.type) ? quests : undefined}
         positivePercent={positivePercent}
         ratingCount={ratingCount}
-        installState={installed ? 'installed' : 'available'}
-        onInstallClick={() => toggle(project.slug)}
+        installState={installable ? (installed ? 'installed' : 'available') : 'none'}
+        onInstallClick={installable ? () => toggle(project.slug) : undefined}
       />
     </Link>
   );

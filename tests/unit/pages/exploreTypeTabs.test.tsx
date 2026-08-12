@@ -134,6 +134,91 @@ describe('Explore type tabs', () => {
     expect(useFeaturedProjects).toHaveBeenLastCalledWith(PROJECT_TYPES.STANDALONE);
   });
 
+  // The third tab: an agent reached over Sphere DMs rather than an App URL
+  // (app/skill) or a public repo (standalone). Named "Chat agents", never
+  // bare "Agent" — that word already means something else in this repo
+  // (AOS capsule agents, /agents/:agentId, AgentsPage).
+  it('offers a Chat agents tab and queries chat-agent when picked', () => {
+    renderExplore();
+    expect(screen.getByRole('tab', { name: 'Apps' })).toBeDefined();
+    expect(screen.getByRole('tab', { name: 'Standalone' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat agents' }));
+
+    expect(useInfiniteProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: PROJECT_TYPES.CHAT_AGENT }),
+    );
+    expect(useFeaturedProjects).toHaveBeenLastCalledWith(PROJECT_TYPES.CHAT_AGENT);
+    expect(useCategories).toHaveBeenLastCalledWith(PROJECT_TYPES.CHAT_AGENT);
+  });
+
+  it('shows the chat agent caption and item noun once that tab is active', () => {
+    renderExplore();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat agents' }));
+
+    expect(screen.getByText('Message them from your wallet')).toBeDefined();
+    expect(screen.getByPlaceholderText('Search chat agents...')).toBeDefined();
+  });
+
+  it('clears the search box and category filter when switching into the chat agents tab too', () => {
+    useCategories.mockImplementation(() => ({ data: [{ category: 'tool', count: 3 }] }));
+    renderExplore();
+
+    fireEvent.change(screen.getByPlaceholderText('Search projects...'), { target: { value: 'agent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat agents' }));
+
+    expect(screen.getByPlaceholderText('Search chat agents...')).toHaveProperty('value', '');
+  });
+
+  /**
+   * The sliding indicator's width and offset are computed from the active
+   * index and EXPLORE_TABS.length rather than baked into per-position
+   * classes (previously exactly two hand-tuned positions). This checks all
+   * three positions, not just the first and last, since a formula that only
+   * happens to work at the endpoints is exactly the kind of bug a geometry
+   * refactor can introduce silently.
+   */
+  it('positions the sliding indicator correctly for each of the three tabs', () => {
+    const { container } = renderExplore();
+    const indicator = () => container.querySelector('[role="tablist"] > span[aria-hidden]') as HTMLElement;
+
+    // Width is derived once from the tab count (jsdom's CSS engine reformats
+    // the calc() division into an equivalent decimal-multiplication form when
+    // serializing it back to a string, so this pins the width as an
+    // INVARIANT across tabs instead of a literal string tied to that
+    // reformatting — the real assertion below is the per-tab offset).
+    const widthAtStart = indicator().style.width;
+    expect(widthAtStart).toContain('1rem'); // (3 tabs + 1) * 0.25rem of non-pill space
+
+    expect(indicator().style.transform).toBe('translateX(calc(0% + 0rem))');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Standalone' }));
+    expect(indicator().style.transform).toBe('translateX(calc(100% + 0.25rem))');
+    expect(indicator().style.width).toBe(widthAtStart);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat agents' }));
+    expect(indicator().style.transform).toBe('translateX(calc(200% + 0.5rem))');
+    expect(indicator().style.width).toBe(widthAtStart);
+  });
+
+  /**
+   * I2: the tablist became a 3-column grid for the "Chat agents" tab without
+   * shrinking the padding that fit fine at two columns, and without
+   * `whitespace-nowrap` — jsdom doesn't lay out real pixel widths, so this
+   * can't assert the overflow itself, but it pins the two classes the fix
+   * actually depends on, on every tab button, not just the longest label.
+   */
+  it('keeps every tab label on one line with tighter horizontal padding at the narrow breakpoint', () => {
+    renderExplore();
+    for (const name of ['Apps', 'Standalone', 'Chat agents']) {
+      const tab = screen.getByRole('tab', { name });
+      expect(tab.className).toContain('whitespace-nowrap');
+      expect(tab.className).toContain('px-3');
+    }
+  });
+
   it('scopes the category chips to the active tab', () => {
     renderExplore();
     expect(useCategories).toHaveBeenLastCalledWith(PROJECT_TYPES.APP);
@@ -231,6 +316,18 @@ describe('Explore hero totals', () => {
 
     expect(screen.getByTestId('hero-stat-projects').textContent).toContain('24');
     expect(screen.getByTestId('hero-stat-projects').textContent).not.toContain('29');
+  });
+
+  it('counts chat agents in the hero total alongside app and standalone, skill still excluded', () => {
+    // Chat agents DO get a tab (unlike skill), so — by the same logic as the
+    // test above — they belong in the reachable total: 3 + 2 + 4 = 9.
+    useMarketplaceStats.mockImplementation(() => ({
+      data: buildStats({ byType: { app: 3, skill: 1, standalone: 2, 'chat-agent': 4 } }),
+    }));
+
+    renderExplore();
+
+    expect(screen.getByTestId('hero-stat-projects').textContent).toContain('9');
   });
 
   it('uses singular wording for a hero stat only when its value is exactly one', () => {

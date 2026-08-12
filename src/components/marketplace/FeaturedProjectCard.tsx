@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { FeaturedProjectCard as UiFeaturedProjectCard } from '@unicitylabs/sphere-ui';
 import type { ProjectSummary, ProjectMetrics } from '../../services/marketplaceApi';
-import { isStandalone, supportsQuests } from '../../utils/isStandalone';
+import { isStandalone, isChatAgent, supportsQuests } from '../../utils/isStandalone';
 
 interface FeaturedProjectCardProps {
   project: ProjectSummary;
@@ -15,6 +15,16 @@ export function FeaturedProjectCard({ project, metrics }: FeaturedProjectCardPro
   const positivePercent = metrics?.positivePercent ?? 0;
   const ratingCount = metrics?.ratingCount ?? 0;
 
+  // See ProjectCard.tsx's identical comments for the reasoning behind both
+  // of these: one overlay span extended to cover chat-agent alongside
+  // standalone (mutually exclusive, so at most one label renders; text is
+  // the type's own label, never the bare word "Agent" — reserved elsewhere
+  // in this repo for AOS capsule agents), and the tagline-slot @nametag
+  // substitution that deliberately excludes pubkey/DIRECT:// addresses.
+  const badgeLabel = isStandalone(project) ? 'STANDALONE' : isChatAgent(project) ? 'CHAT AGENT' : null;
+  const agentAddress = project.agentAddress ?? '';
+  const tagline = isChatAgent(project) && agentAddress.startsWith('@') ? agentAddress : project.tagline;
+
   return (
     <Link to={`/apps/${project.slug}`} draggable={false} className="relative block">
       {/* Same overlay as ProjectCard.tsx (sphere-ui doesn't know about project
@@ -22,18 +32,18 @@ export function FeaturedProjectCard({ project, metrics }: FeaturedProjectCardPro
           release cycle plus a dependency bump in every consumer). This card's
           banner ribbon ("Featured") sits at top-3 right-3, and the logo/title
           sit in a separate row below the banner — top-3 left-3 is free on both
-          counts. Driven off project.type via isStandalone (never off the
-          absence of appUrl). */}
-      {isStandalone(project) && (
+          counts. Driven off project.type via isStandalone/isChatAgent (never
+          off the absence of appUrl or the presence of agentAddress). */}
+      {badgeLabel && (
         <span
           className="absolute top-3 left-3 z-20 px-2 py-0.5 rounded-md bg-black/40 backdrop-blur-sm text-white/80 text-[10px] font-mono uppercase tracking-wider pointer-events-none"
         >
-          STANDALONE
+          {badgeLabel}
         </span>
       )}
       <UiFeaturedProjectCard
         name={project.name}
-        tagline={project.tagline}
+        tagline={tagline}
         logoUrl={project.logoUrl}
         bannerUrl={project.bannerUrl}
         accentColor={project.accentColor}
