@@ -11,6 +11,14 @@ export interface ToastData {
   transfer?: TransferToastData;
 }
 
+/**
+ * Hard cap on simultaneously visible toasts. A multi-token receive delivers
+ * entry-by-entry and fires many `transfer:incoming` toasts in quick succession
+ * (issue #490); without a cap they stack straight up the screen and cover the
+ * wallet. Older toasts beyond the cap collapse into a single "+N more" chip.
+ */
+const MAX_VISIBLE_TOASTS = 3;
+
 const icons: Record<ToastType, React.ReactNode> = {
   info: <Info className="w-5 h-5" />,
   success: <CheckCircle className="w-5 h-5" />,
@@ -114,12 +122,21 @@ export function ToastContainer() {
     };
   }, [addToast]);
 
+  // Only the newest MAX_VISIBLE_TOASTS render; the rest collapse into the
+  // "+N more" chip. Each toast keeps its own auto-dismiss timer, so as the
+  // visible ones expire the queued (older) ones surface or the count ticks
+  // down — a burst can never grow the stack past the cap and cover the UI.
+  const visible = toasts.slice(-MAX_VISIBLE_TOASTS);
+  const overflowCount = toasts.length - visible.length;
+
   return (
     <div className="fixed bottom-4 right-4 z-100001 flex flex-col gap-2 pointer-events-none">
       <AnimatePresence>
-        {toasts.map((toast) => (
+        {/* Reversed so the newest toast renders on top of the bottom-anchored stack. */}
+        {[...visible].reverse().map((toast) => (
           <motion.div
             key={toast.id}
+            data-testid="toast"
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
@@ -144,6 +161,18 @@ export function ToastContainer() {
             )}
           </motion.div>
         ))}
+        {overflowCount > 0 && (
+          <motion.div
+            key="toast-overflow"
+            data-testid="toast-overflow"
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="pointer-events-none self-end rounded-full border border-white/10 bg-neutral-900/90 px-3 py-1 text-xs font-medium text-neutral-400 backdrop-blur-sm shadow-lg"
+          >
+            +{overflowCount} more
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
