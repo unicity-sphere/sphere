@@ -18,6 +18,13 @@ export interface ShowToastDetail {
   type?: ToastType;
   duration?: number;
   transfer?: TransferToastData;
+  /**
+   * Stable identity for coalescing. Two toasts sharing a groupId are the same
+   * notification: the later one replaces the earlier in place and restarts its
+   * timer, rather than stacking. Used for incoming payments, which arrive as
+   * one event per token.
+   */
+  groupId?: string;
 }
 
 export interface ShowToastOptions {
@@ -56,11 +63,11 @@ export function showToast(
   );
 }
 
-export function showTransferToast(transfer: TransferToastData, duration = 6000) {
+export function showTransferToast(transfer: TransferToastData, duration = 6000, groupId?: string) {
   const message = `${transfer.sender} sent you ${transfer.amount} ${transfer.symbol}`;
   window.dispatchEvent(
     new CustomEvent<ShowToastDetail>('show-toast', {
-      detail: { message, type: 'success', duration, transfer },
+      detail: { message, type: 'success', duration, transfer, ...(groupId !== undefined ? { groupId } : {}) },
     })
   );
 }

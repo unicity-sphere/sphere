@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Info, AlertTriangle, CheckCircle, XCircle, ArrowDownLeft } from 'lucide-react';
 import type { ToastType, ShowToastDetail, TransferToastData } from './toast-utils';
@@ -12,10 +12,9 @@ export interface ToastData {
 }
 
 /**
- * Hard cap on simultaneously visible toasts. A multi-token receive delivers
- * entry-by-entry and fires many `transfer:incoming` toasts in quick succession
- * (issue #490); without a cap they stack straight up the screen and cover the
- * wallet. Older toasts beyond the cap collapse into a single "+N more" chip.
+ * Safety net only. Coalescing (below) collapses a multi-token receive into one
+ * toast, so this engages just for genuinely unrelated bursts — it must never be
+ * the thing standing between the user and their wallet (issue #490).
  */
 const MAX_VISIBLE_TOASTS = 3;
 
@@ -89,25 +88,50 @@ function TransferToast({ data, onClose }: { data: TransferToastData; onClose: ()
 
 export function ToastContainer() {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  /** Per-toast dismiss timers, so a coalesced update can restart its own. */
+  const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const addToast = useCallback((detail: ShowToastDetail) => {
-    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // A caller-supplied groupId makes the toast REPLACE its live predecessor
+    // instead of stacking on it. A 54-token payment arrives as 54 separate
+    // events (the SDK announces per token, not per payment), so without this
+    // the wallet disappears behind a wall of near-identical toasts; with it the
+    // user gets one toast whose amount climbs as the tokens land.
+    const id = detail.groupId ?? `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const duration = detail.duration ?? 4000;
     const toast: ToastData = {
       id,
       message: detail.message,
       type: detail.type || 'info',
-      duration: detail.duration ?? 4000,
+      duration,
       transfer: detail.transfer,
     };
 
-    setToasts((prev) => [...prev, toast]);
+    setToasts((prev) => {
+      const at = prev.findIndex((t) => t.id === id);
+      if (at === -1) return [...prev, toast];
+      // Update in place: keeping the array position (and the React key) stable
+      // is what stops the stack re-animating on every arrival.
+      const next = [...prev];
+      next[at] = toast;
+      return next;
+    });
 
-    if (toast.duration && toast.duration > 0) {
-      setTimeout(() => removeToast(id), toast.duration);
+    const timers = timersRef.current;
+    const existing = timers.get(id);
+    if (existing !== undefined) clearTimeout(existing);
+    if (duration > 0) {
+      timers.set(
+        id,
+        setTimeout(() => {
+          timers.delete(id);
+          removeToast(id);
+        }, duration),
+      );
     }
   }, [removeToast]);
 
@@ -122,10 +146,8 @@ export function ToastContainer() {
     };
   }, [addToast]);
 
-  // Only the newest MAX_VISIBLE_TOASTS render; the rest collapse into the
-  // "+N more" chip. Each toast keeps its own auto-dismiss timer, so as the
-  // visible ones expire the queued (older) ones surface or the count ticks
-  // down — a burst can never grow the stack past the cap and cover the UI.
+  // Coalescing means this rarely engages; it remains so that unrelated bursts
+  // still cannot grow the stack past the cap and cover the UI.
   const visible = toasts.slice(-MAX_VISIBLE_TOASTS);
   const overflowCount = toasts.length - visible.length;
 

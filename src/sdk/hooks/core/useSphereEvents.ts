@@ -15,12 +15,18 @@ interface SDKDirectMessage {
   recipientPubkey: string;
 }
 
+/** How long a coalesced incoming-payment toast stays up while more tokens land. */
+const INCOMING_TOAST_MS = 6000;
+
 export function useSphereEvents(): void {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
+  /** Running total per (sender, symbol) behind one coalesced incoming toast (#490). */
+  const incomingTotalsRef = useRef<Map<string, { smallest: bigint; decimals: number }>>(new Map());
+  const incomingGroupTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // One deferred-delivery toast per transfer — the SDK re-emits the
   // delivery:deferred attention code on every replay pass that hits the
   // recipient's full mailbox again.
@@ -65,25 +71,39 @@ export function useSphereEvents(): void {
       const symbol = firstToken?.symbol ?? '?';
       const decimals = firstToken?.decimals ?? 0;
 
-      // Sum all token amounts for the total (all tokens share the same coin type)
-      let amount: string;
-      if (transfer.tokens.length <= 1) {
-        amount = firstToken ? formatAmount(firstToken.amount, decimals) : '?';
-      } else {
-        const totalSmallest = transfer.tokens.reduce(
-          (sum, t) => sum + BigInt(t.amount || '0'),
-          0n,
-        );
-        amount = formatAmount(totalSmallest.toString(), decimals);
-      }
+      // The SDK announces one event per TOKEN, not per payment, so a 54-token
+      // payment would otherwise fire 54 near-identical toasts and bury the
+      // wallet (#490). Accumulate per (sender, symbol) and drive a single
+      // toast whose amount climbs as the tokens land — which also gives the
+      // user live progress instead of a wall of noise.
+      const groupKey = `incoming:${transfer.senderPubkey || sender}:${symbol}`;
+      const carried = incomingTotalsRef.current.get(groupKey);
+      const totalSmallest =
+        (carried?.smallest ?? 0n) + transfer.tokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
+      incomingTotalsRef.current.set(groupKey, { smallest: totalSmallest, decimals });
+      // The group is only alive while its toast is: clear it a beat after the
+      // toast's own dismissal so a later, unrelated payment starts from zero.
+      const stale = incomingGroupTimersRef.current.get(groupKey);
+      if (stale !== undefined) clearTimeout(stale);
+      incomingGroupTimersRef.current.set(
+        groupKey,
+        setTimeout(() => {
+          incomingTotalsRef.current.delete(groupKey);
+          incomingGroupTimersRef.current.delete(groupKey);
+        }, INCOMING_TOAST_MS + 500),
+      );
 
-      showTransferToast({
-        sender,
-        amount,
-        symbol,
-        iconUrl: firstToken?.iconUrl,
-        memo: transfer.memo,
-      });
+      showTransferToast(
+        {
+          sender,
+          amount: formatAmount(totalSmallest.toString(), decimals),
+          symbol,
+          iconUrl: firstToken?.iconUrl,
+          memo: transfer.memo,
+        },
+        INCOMING_TOAST_MS,
+        groupKey,
+      );
     };
     // transfer:updated replaces transfer:confirmed / transfer:delivery_pending /
     // transfer:failed on the v2 vertical — any outcome refreshes the payment queries.
