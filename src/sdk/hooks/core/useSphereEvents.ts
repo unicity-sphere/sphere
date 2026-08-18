@@ -90,8 +90,22 @@ export function useSphereEvents(): void {
         setTimeout(() => {
           incomingTotalsRef.current.delete(groupKey);
           incomingGroupTimersRef.current.delete(groupKey);
+          // By now the drain has flushed and the real balance has caught up, so
+          // the progress line would only duplicate it.
+          queryClient.setQueryData(SPHERE_KEYS.incoming.progress, null);
         }, INCOMING_TOAST_MS + 500),
       );
+
+      // The confirmed balance cannot move until the drain's acks flush
+      // (ACK_BATCH_SIZE=200, so once at the end for a big receive) and the
+      // server inventory is re-pulled. Publish the running total so the wallet
+      // can show the money arriving instead of sitting at its old value.
+      queryClient.setQueryData(SPHERE_KEYS.incoming.progress, {
+        amount: formatAmount(totalSmallest.toString(), decimals),
+        symbol,
+        sender,
+        at: Date.now(),
+      });
 
       showTransferToast(
         {

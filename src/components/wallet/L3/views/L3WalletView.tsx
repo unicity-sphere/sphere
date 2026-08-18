@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useIdentity, useAssets, useTokens } from '../../../../sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow } from '../../shared/components';
 import { SendModal } from '../modals/SendModal';
@@ -77,12 +78,18 @@ function BalanceDisplay({
 function WalletStatusLine({
   isLoadingAssets,
   pendingCount,
+  incoming,
 }: {
   isLoadingAssets: boolean;
   pendingCount: number;
+  incoming: IncomingProgress | null;
 }) {
   const items: { label: string; spinning?: boolean }[] = [];
 
+  // First: a receive in flight. The confirmed balance above cannot move until
+  // the drain finishes, so this is the only thing telling the user their money
+  // is actually arriving.
+  if (incoming) items.push({ label: `Receiving ${incoming.amount} ${incoming.symbol} from ${incoming.sender}`, spinning: true });
   if (isLoadingAssets) items.push({ label: 'Loading assets', spinning: true });
   if (pendingCount > 0) items.push({ label: `${pendingCount} pending transfer${pendingCount > 1 ? 's' : ''}` });
 
@@ -147,6 +154,7 @@ export function L3WalletView({
   // SDK hooks
   const { identity, isLoading: isLoadingIdentity } = useIdentity();
   const { assets: sdkAssets, isLoading: isLoadingAssets } = useAssets();
+  const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
   const { sphere, deleteWallet } = useSphereContext();
 
@@ -293,6 +301,7 @@ export function L3WalletView({
         <WalletStatusLine
           isLoadingAssets={isLoadingAssets}
           pendingCount={0}
+          incoming={incomingProgress}
         />
       </div>
     );
@@ -316,6 +325,7 @@ export function L3WalletView({
           <WalletStatusLine
             isLoadingAssets={isLoadingAssets}
             pendingCount={pendingTokens.length}
+            incoming={incomingProgress}
           />
         </div>
 

@@ -14,6 +14,16 @@ export const SPHERE_KEYS = {
     addresses: ['sphere', 'identity', 'addresses'] as const,
   },
 
+  /**
+   * Live incoming-receive progress, written straight into the cache from the
+   * `transfer:incoming` events. Deliberately NOT under `payments.*`: the
+   * receive path invalidates that whole subtree on every token, which would
+   * throw away the progress we are writing.
+   */
+  incoming: {
+    progress: ['sphere', 'incoming', 'progress'] as const,
+  },
+
   payments: {
     all: ['sphere', 'payments'] as const,
 
