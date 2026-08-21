@@ -110,7 +110,15 @@ vi.mock('../../../src/sdk', async () => {
   };
 });
 
-const prewarmSendMock = vi.fn(async () => undefined);
+interface PrewarmRequest {
+  coinId: string;
+  amount: string;
+  recipient: string;
+}
+const prewarmRequests: PrewarmRequest[] = [];
+const prewarmSendMock = vi.fn(async (request: PrewarmRequest): Promise<void> => {
+  prewarmRequests.push(request);
+});
 const discardPrewarmMock = vi.fn();
 
 const fakeSphere = {
@@ -209,6 +217,7 @@ async function pressSend() {
 
 beforeEach(() => {
   prewarmSendMock.mockClear();
+  prewarmRequests.length = 0;
   discardPrewarmMock.mockClear();
   transferMock.mockReset();
   transferMock.mockResolvedValue({ id: 'tid', status: 'completed', tokens: [], tokenTransfers: [] });
@@ -399,12 +408,9 @@ describe('SendModal — confirm-screen prewarm (sphere-sdk#753)', () => {
 
     // Warming is the confirm screen's whole contribution to send latency; if it
     // does not happen, the 3.4 s blob read simply moves back after the button.
-    expect(prewarmSendMock).toHaveBeenCalled();
-    const request = prewarmSendMock.mock.calls[0]?.[0] as { amount: string; recipient: string };
     // The amount must match handleSend's, or the preview selects other tokens
     // and every warmed blob misses.
-    expect(request.amount).toBe('10');
-    expect(request.recipient).toBe('bob');
+    expect(prewarmRequests).toEqual([{ coinId: COIN, amount: '10', recipient: 'bob' }]);
   });
 
   it('does not warm before the confirm screen — an abandoned draft must not fetch', async () => {
