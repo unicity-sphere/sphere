@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from './useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
+import { diag } from '../../diag';
 import { formatAmount } from '../../index';
 import { showToast, showTransferToast } from '../../../components/ui/toast-utils';
 import { CHAT_KEYS, GROUP_CHAT_KEYS, type DmReceivedDetail } from '../../../components/chat/data/chatTypes';
@@ -50,9 +51,13 @@ export function useSphereEvents(): void {
     // init / sync, so we coalesce them into a single invalidation pass.
     // Uses the parent key so TanStack fires one notification (not four).
     const invalidatePayments = () => {
-      if (invalidateTimerRef.current) return; // already scheduled
+      if (invalidateTimerRef.current) {
+        diag('invalidate:coalesced');
+        return; // already scheduled
+      }
       invalidateTimerRef.current = setTimeout(() => {
         invalidateTimerRef.current = null;
+        diag('invalidate:fired');
         queryClient.invalidateQueries({
           queryKey: SPHERE_KEYS.payments.all,
         });
@@ -60,6 +65,7 @@ export function useSphereEvents(): void {
     };
 
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
+      diag('event:transfer:incoming');
       invalidatePayments();
 
       // Deduplicate: Nostr relays may re-deliver the same transfer on reconnect
@@ -158,7 +164,10 @@ export function useSphereEvents(): void {
 
     // inventory:updated replaces sync:completed / sync:remote-update — the
     // wallet-api inventory mirror changed, re-read tokens()/assets().
-    const handleInventoryUpdated = invalidatePayments;
+    const handleInventoryUpdated = () => {
+      diag('event:inventory:updated');
+      invalidatePayments();
+    };
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
     const handleDmReceived = (dm: SDKDirectMessage) => {

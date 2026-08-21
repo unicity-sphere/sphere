@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useSphereContext } from '../core/useSphere';
 import { useRegistryReady } from './useRegistryReady';
 import { SPHERE_KEYS } from '../../queryKeys';
+import { diag } from '../../diag';
 import { TokenRegistry, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import type { Asset } from '../..';
 
@@ -33,7 +34,9 @@ export function useAssets(): UseAssetsReturn {
     queryFn: async (): Promise<Asset[]> => {
       const payments = getPayments(sphere);
       if (!payments) return [];
-      return await payments.assets();
+      const result = await payments.assets();
+      diag(`assets:refetch total=${result.map((a) => a.totalAmount).join(',') || 'none'}`);
+      return result;
     },
     enabled: !!sphere,
     staleTime: 30_000,
