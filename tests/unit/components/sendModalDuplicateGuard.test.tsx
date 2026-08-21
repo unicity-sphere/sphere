@@ -110,11 +110,22 @@ vi.mock('../../../src/sdk', async () => {
   };
 });
 
+const prewarmSendMock = vi.fn(async () => undefined);
+const discardPrewarmMock = vi.fn();
+
 const fakeSphere = {
   on: vi.fn(),
   off: vi.fn(),
   resolve: resolveMock,
-  payments: { pendingTransfers: pendingTransfersMock, resumeNow: vi.fn(), send: vi.fn() },
+  payments: {
+    pendingTransfers: pendingTransfersMock,
+    resumeNow: vi.fn(),
+    send: vi.fn(),
+    // sphere-sdk#753: the confirm screen warms source blobs. A double missing
+    // these is not a lighter double, it is a different interface.
+    prewarmSend: prewarmSendMock,
+    discardPrewarm: discardPrewarmMock,
+  },
 };
 
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
@@ -168,7 +179,7 @@ const sendAnywayButton = () =>
 
 /** asset → details → Review. Lands on the confirm step, or the duplicate warning. */
 async function review({ recipient = 'bob', amount = '10' } = {}) {
-  render(<SendModal isOpen onClose={vi.fn()} />);
+  const rendered = render(<SendModal isOpen onClose={vi.fn()} />);
   fireEvent.click(screen.getByText('UCT'));
   await advanceUntil(() => screen.queryByPlaceholderText("Recipient's Unicity ID") !== null);
   fireEvent.change(screen.getByPlaceholderText("Recipient's Unicity ID"), {
@@ -180,6 +191,7 @@ async function review({ recipient = 'bob', amount = '10' } = {}) {
     await Promise.resolve();
     await Promise.resolve();
   });
+  return rendered;
 }
 
 /** Wait out the settle window, then press Send on the confirm step. */
@@ -196,6 +208,8 @@ async function pressSend() {
 }
 
 beforeEach(() => {
+  prewarmSendMock.mockClear();
+  discardPrewarmMock.mockClear();
   transferMock.mockReset();
   transferMock.mockResolvedValue({ id: 'tid', status: 'completed', tokens: [], tokenTransfers: [] });
   pendingTransfersMock.mockReset();
@@ -375,5 +389,43 @@ describe('SendModal — duplicate payment guard', () => {
 
     expect(transferMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Sending again pays TWICE.')).toBeNull();
+  });
+});
+
+describe('SendModal — confirm-screen prewarm (sphere-sdk#753)', () => {
+  it('warms the sources the send will spend, for the amount the send will use', async () => {
+    await review({ amount: '10' });
+    await advanceUntil(() => sendButton() !== null);
+
+    // Warming is the confirm screen's whole contribution to send latency; if it
+    // does not happen, the 3.4 s blob read simply moves back after the button.
+    expect(prewarmSendMock).toHaveBeenCalled();
+    const request = prewarmSendMock.mock.calls[0]?.[0] as { amount: string; recipient: string };
+    // The amount must match handleSend's, or the preview selects other tokens
+    // and every warmed blob misses.
+    expect(request.amount).toBe('10');
+    expect(request.recipient).toBe('bob');
+  });
+
+  it('does not warm before the confirm screen — an abandoned draft must not fetch', async () => {
+    render(<SendModal isOpen onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('UCT'));
+    await advanceUntil(() => screen.queryByPlaceholderText("Recipient's Unicity ID") !== null);
+    fireEvent.change(screen.getByPlaceholderText('Amount'), { target: { value: '10' } });
+
+    expect(prewarmSendMock).not.toHaveBeenCalled();
+  });
+
+  it('discards when the confirm screen goes away, so a cancelled send holds nothing', async () => {
+    const { unmount } = await review();
+    await advanceUntil(() => sendButton() !== null);
+    expect(prewarmSendMock).toHaveBeenCalled();
+    expect(discardPrewarmMock).not.toHaveBeenCalled();
+
+    // Closing the modal is the same teardown as backing out or unmounting: the
+    // warmed set must not outlive the screen that asked for it.
+    unmount();
+
+    expect(discardPrewarmMock).toHaveBeenCalled();
   });
 });
