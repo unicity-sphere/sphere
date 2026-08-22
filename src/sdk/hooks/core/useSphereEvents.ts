@@ -18,11 +18,19 @@ interface SDKDirectMessage {
 
 /** How long a coalesced incoming-payment toast stays up while more tokens land. */
 const INCOMING_TOAST_MS = 6000;
+/** Coarse because a history refetch re-walks every page (useTransactionHistory). */
+const HISTORY_INVALIDATE_MS = 2500;
+
+const HISTORY_KEY = SPHERE_KEYS.payments.transactions.history;
+function isHistoryKey(key: readonly unknown[]): boolean {
+  return key.length >= HISTORY_KEY.length && HISTORY_KEY.every((part, i) => key[i] === part);
+}
 
 export function useSphereEvents(): void {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
   /** Running total per (sender, symbol) behind one coalesced incoming toast (#490). */
@@ -50,6 +58,15 @@ export function useSphereEvents(): void {
     // Debounced payment invalidation — SDK fires bursts of events during
     // init / sync, so we coalesce them into a single invalidation pass.
     // Uses the parent key so TanStack fires one notification (not four).
+    //
+    // EXCEPT the transaction history, which is refreshed on its own much slower
+    // timer below. useTransactionHistory walks the cursor to completeness — up
+    // to 50 sequential pages — so sweeping it up here cost one full re-walk per
+    // received token. Measured on a 54-token receive: 388 GET /v1/history in
+    // 34 s, ~7 per token, saturating the browser's ~6 connections per origin and
+    // leaving the drain's own claims queued ~590 ms each against 54 ms of server
+    // time. The balance keys are cheap and must stay responsive; history is
+    // expensive and nobody needs it re-read 54 times in half a minute.
     const invalidatePayments = () => {
       if (invalidateTimerRef.current) {
         diag('invalidate:coalesced');
@@ -60,8 +77,24 @@ export function useSphereEvents(): void {
         diag('invalidate:fired');
         queryClient.invalidateQueries({
           queryKey: SPHERE_KEYS.payments.all,
+          predicate: (query) => !isHistoryKey(query.queryKey),
         });
       }, 300);
+    };
+
+    /** History costs a full paged re-walk, so it coalesces on a far slower timer. */
+    const invalidateHistory = () => {
+      if (historyTimerRef.current) {
+        diag('history-invalidate:coalesced');
+        return;
+      }
+      historyTimerRef.current = setTimeout(() => {
+        historyTimerRef.current = null;
+        diag('history-invalidate:fired');
+        queryClient.invalidateQueries({
+          queryKey: SPHERE_KEYS.payments.transactions.history,
+        });
+      }, HISTORY_INVALIDATE_MS);
     };
 
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
@@ -210,11 +243,9 @@ export function useSphereEvents(): void {
     };
 
     // Invalidate history query immediately when SDK saves a new history entry
-    const handleHistoryUpdated = () => {
-      queryClient.invalidateQueries({
-        queryKey: SPHERE_KEYS.payments.transactions.history,
-      });
-    };
+    // Emitted once PER RECORD (sphere-sdk History.post), i.e. once per received
+    // token — never invalidate straight through.
+    const handleHistoryUpdated = invalidateHistory;
 
     // transfer:attention replaces split:checkpoint-stuck / delivery:undeliverable /
     // delivery:deferred — one event, toast keyed by `code`:
@@ -284,6 +315,10 @@ export function useSphereEvents(): void {
       if (invalidateTimerRef.current) {
         clearTimeout(invalidateTimerRef.current);
         invalidateTimerRef.current = null;
+      }
+      if (historyTimerRef.current) {
+        clearTimeout(historyTimerRef.current);
+        historyTimerRef.current = null;
       }
       sphere.off('transfer:incoming', handleIncomingTransfer);
       sphere.off('transfer:updated', handleTransferUpdated);
