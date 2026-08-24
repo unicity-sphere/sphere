@@ -29,36 +29,7 @@ import { INTENT_SETTLE_MS } from '../../../src/components/connect/settleWindow';
  * fourth test on. Nothing under test depends on the animation: the shield is
  * armed by the control's MOUNT, which is exactly what this stub preserves.
  */
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  const cache = new Map<string, React.ElementType>();
-  const MOTION_ONLY = new Set([
-    'initial', 'animate', 'exit', 'transition', 'variants', 'layout', 'layoutId', 'drag',
-    'whileHover', 'whileTap', 'whileFocus', 'whileDrag', 'whileInView', 'onAnimationComplete',
-  ]);
-  const strip = (props: Record<string, unknown>) =>
-    Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_ONLY.has(key)));
-  const motion = new Proxy({} as Record<string, React.ElementType>, {
-    get(_target, tag) {
-      if (typeof tag !== 'string') return undefined;
-      if (!cache.has(tag)) {
-        // Cached per tag: a fresh component identity on every property read
-        // would remount the whole subtree each render (and re-arm the shield
-        // forever).
-        const Component = ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
-          React.createElement(tag, strip(props), children);
-        Component.displayName = `motion.${tag}`;
-        cache.set(tag, Component);
-      }
-      return cache.get(tag);
-    },
-  });
-  return {
-    motion,
-    AnimatePresence: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-  };
-});
+vi.mock('framer-motion', async () => (await import('../../support/framerMotionStub')).framerMotionStub());
 
 const COIN = 'c'.repeat(64);
 const OTHER_COIN = 'd'.repeat(64);

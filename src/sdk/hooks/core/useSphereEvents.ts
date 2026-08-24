@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from './useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
@@ -20,6 +20,28 @@ interface SDKDirectMessage {
 const INCOMING_TOAST_MS = 6000;
 /** Coarse because a history refetch re-walks every page (useTransactionHistory). */
 const HISTORY_INVALIDATE_MS = 2500;
+
+const PAYMENTS_INVALIDATE_MS = 300;
+
+/** Leading-edge coalesce: first call schedules, the rest of the burst rides it. */
+function coalesce(
+  timer: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  ms: number,
+  label: string,
+  run: () => void
+): () => void {
+  return () => {
+    if (timer.current) {
+      diag(`${label}:coalesced`);
+      return;
+    }
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      diag(`${label}:fired`);
+      run();
+    }, ms);
+  };
+}
 
 const HISTORY_KEY = SPHERE_KEYS.payments.transactions.history;
 function isHistoryKey(key: readonly unknown[]): boolean {
@@ -55,47 +77,22 @@ export function useSphereEvents(): void {
   useEffect(() => {
     if (!sphere) return;
 
-    // Debounced payment invalidation — SDK fires bursts of events during
-    // init / sync, so we coalesce them into a single invalidation pass.
-    // Uses the parent key so TanStack fires one notification (not four).
-    //
-    // EXCEPT the transaction history, which is refreshed on its own much slower
-    // timer below. useTransactionHistory walks the cursor to completeness — up
-    // to 50 sequential pages — so sweeping it up here cost one full re-walk per
-    // received token. Measured on a 54-token receive: 388 GET /v1/history in
-    // 34 s, ~7 per token, saturating the browser's ~6 connections per origin and
-    // leaving the drain's own claims queued ~590 ms each against 54 ms of server
-    // time. The balance keys are cheap and must stay responsive; history is
-    // expensive and nobody needs it re-read 54 times in half a minute.
-    const invalidatePayments = () => {
-      if (invalidateTimerRef.current) {
-        diag('invalidate:coalesced');
-        return; // already scheduled
-      }
-      invalidateTimerRef.current = setTimeout(() => {
-        invalidateTimerRef.current = null;
-        diag('invalidate:fired');
-        queryClient.invalidateQueries({
-          queryKey: SPHERE_KEYS.payments.all,
-          predicate: (query) => !isHistoryKey(query.queryKey),
-        });
-      }, 300);
-    };
+    // Coalesced invalidation: the SDK fires bursts during init/sync and one
+    // event per token during a receive. The parent key fires one notification
+    // rather than four — EXCEPT the transaction history, which is refreshed on
+    // its own far slower timer because useTransactionHistory walks the cursor to
+    // completeness (up to 50 sequential pages). Sweeping it up here cost one full
+    // re-walk per received token: 388 GET /v1/history in a 34 s receive.
+    const invalidatePayments = coalesce(invalidateTimerRef, PAYMENTS_INVALIDATE_MS, 'invalidate', () => {
+      queryClient.invalidateQueries({
+        queryKey: SPHERE_KEYS.payments.all,
+        predicate: (query) => !isHistoryKey(query.queryKey),
+      });
+    });
 
-    /** History costs a full paged re-walk, so it coalesces on a far slower timer. */
-    const invalidateHistory = () => {
-      if (historyTimerRef.current) {
-        diag('history-invalidate:coalesced');
-        return;
-      }
-      historyTimerRef.current = setTimeout(() => {
-        historyTimerRef.current = null;
-        diag('history-invalidate:fired');
-        queryClient.invalidateQueries({
-          queryKey: SPHERE_KEYS.payments.transactions.history,
-        });
-      }, HISTORY_INVALIDATE_MS);
-    };
+    const invalidateHistory = coalesce(historyTimerRef, HISTORY_INVALIDATE_MS, 'history-invalidate', () => {
+      queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.transactions.history });
+    });
 
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
       diag('event:transfer:incoming');
@@ -312,13 +309,10 @@ export function useSphereEvents(): void {
     sphere.on('transfer:attention', handleTransferAttention);
 
     return () => {
-      if (invalidateTimerRef.current) {
-        clearTimeout(invalidateTimerRef.current);
-        invalidateTimerRef.current = null;
-      }
-      if (historyTimerRef.current) {
-        clearTimeout(historyTimerRef.current);
-        historyTimerRef.current = null;
+      for (const timer of [invalidateTimerRef, historyTimerRef]) {
+        if (timer.current === null) continue;
+        clearTimeout(timer.current);
+        timer.current = null;
       }
       sphere.off('transfer:incoming', handleIncomingTransfer);
       sphere.off('transfer:updated', handleTransferUpdated);

@@ -15,33 +15,7 @@ import type { ShowToastDetail } from '../../../src/components/ui/toast-utils';
  * frame loop competes with fake timers — nothing under test depends on the
  * animation, only on which toasts are in the DOM.
  */
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  const cache = new Map<string, React.ElementType>();
-  const MOTION_ONLY = new Set([
-    'initial', 'animate', 'exit', 'transition', 'variants', 'layout', 'layoutId', 'drag',
-    'whileHover', 'whileTap', 'whileFocus', 'whileDrag', 'whileInView', 'onAnimationComplete',
-  ]);
-  const strip = (props: Record<string, unknown>) =>
-    Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_ONLY.has(key)));
-  const motion = new Proxy({} as Record<string, React.ElementType>, {
-    get(_target, tag) {
-      if (typeof tag !== 'string') return undefined;
-      if (!cache.has(tag)) {
-        const Component = ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
-          React.createElement(tag, strip(props), children);
-        Component.displayName = `motion.${tag}`;
-        cache.set(tag, Component);
-      }
-      return cache.get(tag);
-    },
-  });
-  return {
-    motion,
-    AnimatePresence: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-  };
-});
+vi.mock('framer-motion', async () => (await import('../../support/framerMotionStub')).framerMotionStub());
 
 const CAP = 3;
 
