@@ -393,6 +393,20 @@ describe('SendModal — confirm-screen prewarm (sphere-sdk#753)', () => {
     expect(prewarmSendMock).not.toHaveBeenCalled();
   });
 
+  it('keeps the warm when the send commits, because send() reads it after the quota check', async () => {
+    await review({ amount: '10' });
+    await advanceUntil(() => sendButton() !== null);
+    expect(prewarmSendMock).toHaveBeenCalled();
+
+    await pressSend();
+
+    // confirm→processing is the ONE exit that must not discard: useTransfer awaits
+    // checkSendQuota() before payments.send() reads the warm, so discarding on the
+    // step change throws away precisely what the confirm screen warmed it for.
+    expect(transferMock).toHaveBeenCalledTimes(1);
+    expect(discardPrewarmMock).not.toHaveBeenCalled();
+  });
+
   it('discards when the confirm screen goes away, so a cancelled send holds nothing', async () => {
     const { unmount } = await review();
     await advanceUntil(() => sendButton() !== null);
