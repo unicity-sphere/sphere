@@ -164,8 +164,25 @@ jobs:
           # free-tier quota (5k errors, 50 replays per month).
           VITE_SENTRY_DSN: ''
 
+      # A branch deleted mid-build has ALREADY had its preview removed by the
+      # cleanup job, and that job will not run again. Publishing now — or worse,
+      # retrying into the post-cleanup gh-pages — resurrects a directory nothing
+      # will ever clean up. The rejected push used to prevent that by accident;
+      # once the push retries, the guard has to be explicit. Checked against the
+      # REAL ref, not the sanitised directory name.
+      - name: Check the source branch still exists
+        id: ref_check
+        run: |
+          if git ls-remote --exit-code --heads origin "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_REF_NAME was deleted during the build — not publishing, so the cleanup stands"
+          fi
+
       - name: Deploy branch to GitHub Pages
         id: publish
+        if: steps.ref_check.outputs.exists == 'true'
         continue-on-error: true
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -178,8 +195,19 @@ jobs:
       # landed during our ~2-min build rejects this push. It re-fetches gh-pages
       # on every invocation, so simply running it again fast-forwards. Same
       # inputs deliberately: this is a retry, not a fallback with other rules.
-      - name: Deploy branch to GitHub Pages (retry after a rival push)
+      - name: Re-check the source branch before retrying
+        id: ref_recheck
         if: steps.publish.outcome == 'failure'
+        run: |
+          if git ls-remote --exit-code --heads origin "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_REF_NAME was deleted while this deploy was pushing — not retrying"
+          fi
+
+      - name: Deploy branch to GitHub Pages (retry after a rival push)
+        if: steps.publish.outcome == 'failure' && steps.ref_recheck.outputs.exists == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
