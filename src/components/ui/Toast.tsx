@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Info, AlertTriangle, CheckCircle, XCircle, ArrowDownLeft } from 'lucide-react';
 import type { ToastType, ShowToastDetail, TransferToastData } from './toast-utils';
@@ -10,6 +10,13 @@ export interface ToastData {
   duration?: number;
   transfer?: TransferToastData;
 }
+
+/**
+ * Safety net only. Coalescing (below) collapses a multi-token receive into one
+ * toast, so this engages just for genuinely unrelated bursts — it must never be
+ * the thing standing between the user and their wallet (issue #490).
+ */
+const MAX_VISIBLE_TOASTS = 3;
 
 const icons: Record<ToastType, React.ReactNode> = {
   info: <Info className="w-5 h-5" />,
@@ -81,25 +88,50 @@ function TransferToast({ data, onClose }: { data: TransferToastData; onClose: ()
 
 export function ToastContainer() {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  /** Per-toast dismiss timers, so a coalesced update can restart its own. */
+  const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const addToast = useCallback((detail: ShowToastDetail) => {
-    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // A caller-supplied groupId makes the toast REPLACE its live predecessor
+    // instead of stacking on it. A 54-token payment arrives as 54 separate
+    // events (the SDK announces per token, not per payment), so without this
+    // the wallet disappears behind a wall of near-identical toasts; with it the
+    // user gets one toast whose amount climbs as the tokens land.
+    const id = detail.groupId ?? `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const duration = detail.duration ?? 4000;
     const toast: ToastData = {
       id,
       message: detail.message,
       type: detail.type || 'info',
-      duration: detail.duration ?? 4000,
+      duration,
       transfer: detail.transfer,
     };
 
-    setToasts((prev) => [...prev, toast]);
+    setToasts((prev) => {
+      const at = prev.findIndex((t) => t.id === id);
+      if (at === -1) return [...prev, toast];
+      // Update in place: keeping the array position (and the React key) stable
+      // is what stops the stack re-animating on every arrival.
+      const next = [...prev];
+      next[at] = toast;
+      return next;
+    });
 
-    if (toast.duration && toast.duration > 0) {
-      setTimeout(() => removeToast(id), toast.duration);
+    const timers = timersRef.current;
+    const existing = timers.get(id);
+    if (existing !== undefined) clearTimeout(existing);
+    if (duration > 0) {
+      timers.set(
+        id,
+        setTimeout(() => {
+          timers.delete(id);
+          removeToast(id);
+        }, duration),
+      );
     }
   }, [removeToast]);
 
@@ -114,12 +146,19 @@ export function ToastContainer() {
     };
   }, [addToast]);
 
+  // Coalescing means this rarely engages; it remains so that unrelated bursts
+  // still cannot grow the stack past the cap and cover the UI.
+  const visible = toasts.slice(-MAX_VISIBLE_TOASTS);
+  const overflowCount = toasts.length - visible.length;
+
   return (
     <div className="fixed bottom-4 right-4 z-100001 flex flex-col gap-2 pointer-events-none">
       <AnimatePresence>
-        {toasts.map((toast) => (
+        {/* Reversed so the newest toast renders on top of the bottom-anchored stack. */}
+        {[...visible].reverse().map((toast) => (
           <motion.div
             key={toast.id}
+            data-testid="toast"
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
@@ -144,6 +183,18 @@ export function ToastContainer() {
             )}
           </motion.div>
         ))}
+        {overflowCount > 0 && (
+          <motion.div
+            key="toast-overflow"
+            data-testid="toast-overflow"
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="pointer-events-none self-end rounded-full border border-white/10 bg-neutral-900/90 px-3 py-1 text-xs font-medium text-neutral-400 backdrop-blur-sm shadow-lg"
+          >
+            +{overflowCount} more
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

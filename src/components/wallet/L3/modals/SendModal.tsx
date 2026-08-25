@@ -92,6 +92,39 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
       ? (safeParseTokenAmount(amountInput, selectedAsset.decimals) ?? 0n)
       : 0n;
   const progress = useSendProgress(step === 'processing', sendTotal, inventoryTokens);
+  /**
+   * Set at the commit point, so the confirm→processing exit keeps the warm.
+   * Deliberately NOT `sendAttemptRef`: that one guards re-entrancy and merely
+   * happens to span this moment, so a change to its lifetime would silently
+   * un-warm every send.
+   */
+  const sendStartedRef = useRef(false);
+
+  // sphere-sdk#753: a send OPENS by reading every source blob it will spend —
+  // 3.4 s of a 43.8 s 54-token send on staging, all of it after the button. The
+  // confirm screen sitting in front of it is idle on the wire, so warm there and
+  // the read lands on think-time instead. Reserves nothing, so a send the user
+  // abandons cannot pin their balance; the cleanup discards on back, close, or
+  // unmount, and the SDK drops a warm still in flight when that happens.
+  useEffect(() => {
+    if (step !== 'confirm' || !selectedAsset) return;
+    sendStartedRef.current = false;
+    const payments = getPayments(sphere);
+    if (!payments) return;
+    const amount = safeParseTokenAmount(amountInput, selectedAsset.decimals);
+    if (amount === null || amount <= 0n) return;
+    // Best-effort: a warm that fails must not become an unhandled rejection, and
+    // must not disturb a send that can simply do the read itself.
+    void payments
+      .prewarmSend({ coinId: selectedAsset.coinId, amount: amount.toString(), recipient })
+      .catch(() => undefined);
+    // Leaving confirm because the SEND started is the one exit that must NOT
+    // discard: send() has not read the warm yet — useTransfer awaits the quota
+    // check first — so discarding here throws away exactly what it was for.
+    return () => {
+      if (!sendStartedRef.current) payments.discardPrewarm();
+    };
+  }, [step, selectedAsset, amountInput, recipient, sphere]);
   const [memoInput, setMemoInput] = useState('');
   // sphere-sdk 0.10.6 (#621/#622): the send certified on-chain but the recipient's delivery is
   // deferred (full inbox / 429, or a transient outage). The spend is FINAL — surface "delivery
@@ -387,6 +420,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
         }
       }
 
+      sendStartedRef.current = true;
       setStep('processing');
       const result = await transfer({
         coinId: selectedAsset.coinId,

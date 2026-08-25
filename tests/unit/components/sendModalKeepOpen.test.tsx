@@ -70,6 +70,9 @@ function makeFakeSphere(pendingRows: PendingTransfer[]) {
       pendingTransfers: vi.fn(async () => pendingRows.map((r) => ({ ...r }))),
       resumeNow: vi.fn(async () => {}),
       send: vi.fn(),
+      // sphere-sdk#753: the confirm screen warms source blobs before the send.
+      prewarmSend: vi.fn(async () => undefined),
+      discardPrewarm: vi.fn(),
     },
     _emit: (evt: string, data: unknown) => {
       listeners.get(evt)?.forEach((fn) => fn(data));

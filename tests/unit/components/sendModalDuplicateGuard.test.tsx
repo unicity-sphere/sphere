@@ -29,36 +29,7 @@ import { INTENT_SETTLE_MS } from '../../../src/components/connect/settleWindow';
  * fourth test on. Nothing under test depends on the animation: the shield is
  * armed by the control's MOUNT, which is exactly what this stub preserves.
  */
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  const cache = new Map<string, React.ElementType>();
-  const MOTION_ONLY = new Set([
-    'initial', 'animate', 'exit', 'transition', 'variants', 'layout', 'layoutId', 'drag',
-    'whileHover', 'whileTap', 'whileFocus', 'whileDrag', 'whileInView', 'onAnimationComplete',
-  ]);
-  const strip = (props: Record<string, unknown>) =>
-    Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_ONLY.has(key)));
-  const motion = new Proxy({} as Record<string, React.ElementType>, {
-    get(_target, tag) {
-      if (typeof tag !== 'string') return undefined;
-      if (!cache.has(tag)) {
-        // Cached per tag: a fresh component identity on every property read
-        // would remount the whole subtree each render (and re-arm the shield
-        // forever).
-        const Component = ({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) =>
-          React.createElement(tag, strip(props), children);
-        Component.displayName = `motion.${tag}`;
-        cache.set(tag, Component);
-      }
-      return cache.get(tag);
-    },
-  });
-  return {
-    motion,
-    AnimatePresence: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-  };
-});
+vi.mock('framer-motion', async () => (await import('../../support/framerMotionStub')).framerMotionStub());
 
 const COIN = 'c'.repeat(64);
 const OTHER_COIN = 'd'.repeat(64);
@@ -110,11 +81,30 @@ vi.mock('../../../src/sdk', async () => {
   };
 });
 
+interface PrewarmRequest {
+  coinId: string;
+  amount: string;
+  recipient: string;
+}
+const prewarmRequests: PrewarmRequest[] = [];
+const prewarmSendMock = vi.fn(async (request: PrewarmRequest): Promise<void> => {
+  prewarmRequests.push(request);
+});
+const discardPrewarmMock = vi.fn();
+
 const fakeSphere = {
   on: vi.fn(),
   off: vi.fn(),
   resolve: resolveMock,
-  payments: { pendingTransfers: pendingTransfersMock, resumeNow: vi.fn(), send: vi.fn() },
+  payments: {
+    pendingTransfers: pendingTransfersMock,
+    resumeNow: vi.fn(),
+    send: vi.fn(),
+    // sphere-sdk#753: the confirm screen warms source blobs. A double missing
+    // these is not a lighter double, it is a different interface.
+    prewarmSend: prewarmSendMock,
+    discardPrewarm: discardPrewarmMock,
+  },
 };
 
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
@@ -168,7 +158,7 @@ const sendAnywayButton = () =>
 
 /** asset → details → Review. Lands on the confirm step, or the duplicate warning. */
 async function review({ recipient = 'bob', amount = '10' } = {}) {
-  render(<SendModal isOpen onClose={vi.fn()} />);
+  const rendered = render(<SendModal isOpen onClose={vi.fn()} />);
   fireEvent.click(screen.getByText('UCT'));
   await advanceUntil(() => screen.queryByPlaceholderText("Recipient's Unicity ID") !== null);
   fireEvent.change(screen.getByPlaceholderText("Recipient's Unicity ID"), {
@@ -180,6 +170,7 @@ async function review({ recipient = 'bob', amount = '10' } = {}) {
     await Promise.resolve();
     await Promise.resolve();
   });
+  return rendered;
 }
 
 /** Wait out the settle window, then press Send on the confirm step. */
@@ -196,6 +187,9 @@ async function pressSend() {
 }
 
 beforeEach(() => {
+  prewarmSendMock.mockClear();
+  prewarmRequests.length = 0;
+  discardPrewarmMock.mockClear();
   transferMock.mockReset();
   transferMock.mockResolvedValue({ id: 'tid', status: 'completed', tokens: [], tokenTransfers: [] });
   pendingTransfersMock.mockReset();
@@ -375,5 +369,54 @@ describe('SendModal — duplicate payment guard', () => {
 
     expect(transferMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Sending again pays TWICE.')).toBeNull();
+  });
+});
+
+describe('SendModal — confirm-screen prewarm (sphere-sdk#753)', () => {
+  it('warms the sources the send will spend, for the amount the send will use', async () => {
+    await review({ amount: '10' });
+    await advanceUntil(() => sendButton() !== null);
+
+    // Warming is the confirm screen's whole contribution to send latency; if it
+    // does not happen, the 3.4 s blob read simply moves back after the button.
+    // The amount must match handleSend's, or the preview selects other tokens
+    // and every warmed blob misses.
+    expect(prewarmRequests).toEqual([{ coinId: COIN, amount: '10', recipient: 'bob' }]);
+  });
+
+  it('does not warm before the confirm screen — an abandoned draft must not fetch', async () => {
+    render(<SendModal isOpen onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('UCT'));
+    await advanceUntil(() => screen.queryByPlaceholderText("Recipient's Unicity ID") !== null);
+    fireEvent.change(screen.getByPlaceholderText('Amount'), { target: { value: '10' } });
+
+    expect(prewarmSendMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the warm when the send commits, because send() reads it after the quota check', async () => {
+    await review({ amount: '10' });
+    await advanceUntil(() => sendButton() !== null);
+    expect(prewarmSendMock).toHaveBeenCalled();
+
+    await pressSend();
+
+    // confirm→processing is the ONE exit that must not discard: useTransfer awaits
+    // checkSendQuota() before payments.send() reads the warm, so discarding on the
+    // step change throws away precisely what the confirm screen warmed it for.
+    expect(transferMock).toHaveBeenCalledTimes(1);
+    expect(discardPrewarmMock).not.toHaveBeenCalled();
+  });
+
+  it('discards when the confirm screen goes away, so a cancelled send holds nothing', async () => {
+    const { unmount } = await review();
+    await advanceUntil(() => sendButton() !== null);
+    expect(prewarmSendMock).toHaveBeenCalled();
+    expect(discardPrewarmMock).not.toHaveBeenCalled();
+
+    // Closing the modal is the same teardown as backing out or unmounting: the
+    // warmed set must not outlive the screen that asked for it.
+    unmount();
+
+    expect(discardPrewarmMock).toHaveBeenCalled();
   });
 });

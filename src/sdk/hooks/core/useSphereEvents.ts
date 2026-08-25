@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSphereContext } from './useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
+import { diag } from '../../diag';
 import { formatAmount } from '../../index';
 import { showToast, showTransferToast } from '../../../components/ui/toast-utils';
 import { CHAT_KEYS, GROUP_CHAT_KEYS, type DmReceivedDetail } from '../../../components/chat/data/chatTypes';
@@ -15,12 +16,50 @@ interface SDKDirectMessage {
   recipientPubkey: string;
 }
 
+/** How long a coalesced incoming-payment toast stays up while more tokens land. */
+const INCOMING_TOAST_MS = 6000;
+/** Coarse because a history refetch re-walks every page (useTransactionHistory). */
+const HISTORY_INVALIDATE_MS = 2500;
+
+const PAYMENTS_INVALIDATE_MS = 300;
+
+/** Leading-edge coalesce: first call schedules, the rest of the burst rides it. */
+function coalesce(
+  timer: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  ms: number,
+  label: string,
+  run: () => void
+): () => void {
+  return () => {
+    if (timer.current) {
+      diag(`${label}:coalesced`);
+      return;
+    }
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      diag(`${label}:fired`);
+      run();
+    }, ms);
+  };
+}
+
+const HISTORY_KEY = SPHERE_KEYS.payments.transactions.history;
+function isHistoryKey(key: readonly unknown[]): boolean {
+  return key.length >= HISTORY_KEY.length && HISTORY_KEY.every((part, i) => key[i] === part);
+}
+
 export function useSphereEvents(): void {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track seen transfer IDs to prevent duplicate toasts from Nostr re-deliveries
   const seenTransferIdsRef = useRef<Set<string>>(new Set());
+  /** Running total per (sender, symbol) behind one coalesced incoming toast (#490). */
+  const incomingTotalsRef = useRef<Map<string, { smallest: bigint; decimals: number }>>(new Map());
+  const incomingGroupTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  /** Which group the single global progress slot is currently showing (#490). */
+  const progressOwnerRef = useRef<string | null>(null);
   // One deferred-delivery toast per transfer — the SDK re-emits the
   // delivery:deferred attention code on every replay pass that hits the
   // recipient's full mailbox again.
@@ -40,20 +79,25 @@ export function useSphereEvents(): void {
   useEffect(() => {
     if (!sphere) return;
 
-    // Debounced payment invalidation — SDK fires bursts of events during
-    // init / sync, so we coalesce them into a single invalidation pass.
-    // Uses the parent key so TanStack fires one notification (not four).
-    const invalidatePayments = () => {
-      if (invalidateTimerRef.current) return; // already scheduled
-      invalidateTimerRef.current = setTimeout(() => {
-        invalidateTimerRef.current = null;
-        queryClient.invalidateQueries({
-          queryKey: SPHERE_KEYS.payments.all,
-        });
-      }, 300);
-    };
+    // Coalesced invalidation: the SDK fires bursts during init/sync and one
+    // event per token during a receive. The parent key fires one notification
+    // rather than four — EXCEPT the transaction history, which is refreshed on
+    // its own far slower timer because useTransactionHistory walks the cursor to
+    // completeness (up to 50 sequential pages). Sweeping it up here cost one full
+    // re-walk per received token: 388 GET /v1/history in a 34 s receive.
+    const invalidatePayments = coalesce(invalidateTimerRef, PAYMENTS_INVALIDATE_MS, 'invalidate', () => {
+      queryClient.invalidateQueries({
+        queryKey: SPHERE_KEYS.payments.all,
+        predicate: (query) => !isHistoryKey(query.queryKey),
+      });
+    });
+
+    const invalidateHistory = coalesce(historyTimerRef, HISTORY_INVALIDATE_MS, 'history-invalidate', () => {
+      queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.transactions.history });
+    });
 
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
+      diag('event:transfer:incoming');
       invalidatePayments();
 
       // Deduplicate: Nostr relays may re-deliver the same transfer on reconnect
@@ -65,25 +109,63 @@ export function useSphereEvents(): void {
       const symbol = firstToken?.symbol ?? '?';
       const decimals = firstToken?.decimals ?? 0;
 
-      // Sum all token amounts for the total (all tokens share the same coin type)
-      let amount: string;
-      if (transfer.tokens.length <= 1) {
-        amount = firstToken ? formatAmount(firstToken.amount, decimals) : '?';
-      } else {
-        const totalSmallest = transfer.tokens.reduce(
-          (sum, t) => sum + BigInt(t.amount || '0'),
-          0n,
-        );
-        amount = formatAmount(totalSmallest.toString(), decimals);
-      }
+      // The SDK announces one event per TOKEN, not per payment, so a 54-token
+      // payment would otherwise fire 54 near-identical toasts and bury the
+      // wallet (#490). Accumulate per (sender, asset) and drive a single
+      // toast whose amount climbs as the tokens land — which also gives the
+      // user live progress instead of a wall of noise.
+      // Keyed on coinId, never symbol: two assets can share a display symbol
+      // while differing in decimals, and summing those would render a number
+      // that is wrong rather than merely merged.
+      const assetKey = firstToken?.coinId ?? symbol;
+      const groupKey = `incoming:${transfer.senderPubkey || sender}:${assetKey}`;
+      const carried = incomingTotalsRef.current.get(groupKey);
+      const totalSmallest =
+        (carried?.smallest ?? 0n) + transfer.tokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
+      incomingTotalsRef.current.set(groupKey, { smallest: totalSmallest, decimals });
+      // The group is only alive while its toast is: clear it a beat after the
+      // toast's own dismissal so a later, unrelated payment starts from zero.
+      const stale = incomingGroupTimersRef.current.get(groupKey);
+      if (stale !== undefined) clearTimeout(stale);
+      incomingGroupTimersRef.current.set(
+        groupKey,
+        setTimeout(() => {
+          incomingTotalsRef.current.delete(groupKey);
+          incomingGroupTimersRef.current.delete(groupKey);
+          // Progress is a single global slot, so only the group currently shown
+          // in it may clear it — otherwise an earlier group's timer wipes a
+          // later group's live progress while its tokens are still landing.
+          if (progressOwnerRef.current !== groupKey) return;
+          progressOwnerRef.current = null;
+          // By now the drain has flushed and the real balance has caught up, so
+          // the progress line would only duplicate it.
+          queryClient.setQueryData(SPHERE_KEYS.incoming.progress, null);
+        }, INCOMING_TOAST_MS + 500),
+      );
 
-      showTransferToast({
-        sender,
-        amount,
+      // The confirmed balance cannot move until the drain's acks flush
+      // (ACK_BATCH_SIZE=200, so once at the end for a big receive) and the
+      // server inventory is re-pulled. Publish the running total so the wallet
+      // can show the money arriving instead of sitting at its old value.
+      progressOwnerRef.current = groupKey;
+      queryClient.setQueryData(SPHERE_KEYS.incoming.progress, {
+        amount: formatAmount(totalSmallest.toString(), decimals),
         symbol,
-        iconUrl: firstToken?.iconUrl,
-        memo: transfer.memo,
+        sender,
+        at: Date.now(),
       });
+
+      showTransferToast(
+        {
+          sender,
+          amount: formatAmount(totalSmallest.toString(), decimals),
+          symbol,
+          iconUrl: firstToken?.iconUrl,
+          memo: transfer.memo,
+        },
+        INCOMING_TOAST_MS,
+        groupKey,
+      );
     };
     // transfer:updated replaces transfer:confirmed / transfer:delivery_pending /
     // transfer:failed on the v2 vertical — any outcome refreshes the payment queries.
@@ -124,7 +206,10 @@ export function useSphereEvents(): void {
 
     // inventory:updated replaces sync:completed / sync:remote-update — the
     // wallet-api inventory mirror changed, re-read tokens()/assets().
-    const handleInventoryUpdated = invalidatePayments;
+    const handleInventoryUpdated = () => {
+      diag('event:inventory:updated');
+      invalidatePayments();
+    };
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
     const handleDmReceived = (dm: SDKDirectMessage) => {
@@ -167,11 +252,9 @@ export function useSphereEvents(): void {
     };
 
     // Invalidate history query immediately when SDK saves a new history entry
-    const handleHistoryUpdated = () => {
-      queryClient.invalidateQueries({
-        queryKey: SPHERE_KEYS.payments.transactions.history,
-      });
-    };
+    // Emitted once PER RECORD (sphere-sdk History.post), i.e. once per received
+    // token — never invalidate straight through.
+    const handleHistoryUpdated = invalidateHistory;
 
     // transfer:attention replaces split:checkpoint-stuck / delivery:undeliverable /
     // delivery:deferred — one event, toast keyed by `code`:
@@ -238,9 +321,10 @@ export function useSphereEvents(): void {
     sphere.on('transfer:attention', handleTransferAttention);
 
     return () => {
-      if (invalidateTimerRef.current) {
-        clearTimeout(invalidateTimerRef.current);
-        invalidateTimerRef.current = null;
+      for (const timer of [invalidateTimerRef, historyTimerRef]) {
+        if (timer.current === null) continue;
+        clearTimeout(timer.current);
+        timer.current = null;
       }
       sphere.off('transfer:incoming', handleIncomingTransfer);
       sphere.off('transfer:updated', handleTransferUpdated);
