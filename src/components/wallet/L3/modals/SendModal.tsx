@@ -113,7 +113,11 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     if (!payments) return;
     const amount = safeParseTokenAmount(amountInput, selectedAsset.decimals);
     if (amount === null || amount <= 0n) return;
-    void payments.prewarmSend({ coinId: selectedAsset.coinId, amount: amount.toString(), recipient });
+    // Best-effort: a warm that fails must not become an unhandled rejection, and
+    // must not disturb a send that can simply do the read itself.
+    void payments
+      .prewarmSend({ coinId: selectedAsset.coinId, amount: amount.toString(), recipient })
+      .catch(() => undefined);
     // Leaving confirm because the SEND started is the one exit that must NOT
     // discard: send() has not read the warm yet — useTransfer awaits the quota
     // check first — so discarding here throws away exactly what it was for.
