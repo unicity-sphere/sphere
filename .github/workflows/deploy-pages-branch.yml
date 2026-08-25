@@ -28,14 +28,22 @@ permissions:
 # Trade-off vs. the old design: the global group serialized ALL gh-pages pushes,
 # so they never raced. These per-op groups let pushes of DIFFERENT refs overlap,
 # and peaceiris pushes non-force with no retry (verified against the action
-# source). So two near-simultaneous deploys (two branches whose ~2-min builds
-# finish together) — or the run's two sequential pushes, build-and-deploy then
-# deploy-redirect, when a foreign push interleaves — can fail with a re-runnable
-# non-fast-forward error (re-run the workflow). That is never a folder-restore
-# and never a silent no-ship: a loud, recoverable failure replacing #369's
-# invisible one. (A deploy-vs-cleanup overlap is rarer still: a deploy pushes
-# only after its build, by which point a seconds-fast cleanup has already landed
-# and the deploy fast-forwards cleanly.)
+# source) — so overlapping writers reject each other with a non-fast-forward.
+#
+# That was originally accepted as "loud and re-runnable", but it is not rare and
+# it is not cheap: a squash-merge that also deletes the PR branch fires BOTH a
+# push and a delete, so main's deploy races the cleanup on essentially every
+# merge. On 2026-08-25 the cleanup won and main's deploy lost (run 32879676902),
+# which left Pages serving the previous bundle until someone noticed the red
+# tick — a silent-stale outcome differing from #369 mainly in that a tick went
+# red somewhere.
+#
+# So every writer now retries instead: the two peaceiris steps run again on
+# rejection (the action re-fetches gh-pages per invocation, so the retry
+# fast-forwards) and the cleanup job rebases and retries its own push. The
+# writers touch disjoint directories, so a rebase never conflicts. The disjoint
+# concurrency groups above stay exactly as #369 left them — serializing the
+# groups is what silently cancelled deploys, and that must not come back.
 concurrency:
   group: pages-${{ github.event_name == 'delete' && format('cleanup-{0}-{1}', github.event.ref_type, github.event.ref) || format('deploy-{0}', github.ref_name) }}
   cancel-in-progress: true
@@ -50,6 +58,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: gh-pages
+          # Full history: the push below rebases onto whatever a rival writer
+          # landed, and `git pull --rebase` is not reliable on checkout's default
+          # depth-1 clone. This job runs only on branch deletion, so the extra
+          # fetch is rare.
+          fetch-depth: 0
 
       - name: Get branch name
         id: branch
@@ -67,7 +80,18 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
             git commit -m "Remove ${{ steps.branch.outputs.name }} (branch deleted)"
-            git push
+            # gh-pages has several unsynchronised writers (this cleanup, the
+            # branch deploy, the redirect deploy), so a non-fast-forward here is
+            # ordinary, not exceptional. Rebase onto whatever landed and retry;
+            # the writers touch disjoint directories, so the rebase is clean.
+            for attempt in 1 2 3 4 5; do
+              if git push; then exit 0; fi
+              echo "push rejected (attempt $attempt) — rebasing onto the newer gh-pages"
+              git pull --rebase origin gh-pages
+              sleep $((RANDOM % 5 + 1))
+            done
+            echo "::error::gh-pages push still rejected after 5 attempts"
+            exit 1
           else
             echo "Directory ${{ steps.branch.outputs.name }} does not exist, skipping"
           fi
@@ -141,6 +165,21 @@ jobs:
           VITE_SENTRY_DSN: ''
 
       - name: Deploy branch to GitHub Pages
+        id: publish
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: ${{ steps.branch.outputs.name }}
+          keep_files: true
+
+      # peaceiris pushes non-force and does not retry, so a rival writer that
+      # landed during our ~2-min build rejects this push. It re-fetches gh-pages
+      # on every invocation, so simply running it again fast-forwards. Same
+      # inputs deliberately: this is a retry, not a fallback with other rules.
+      - name: Deploy branch to GitHub Pages (retry after a rival push)
+        if: steps.publish.outcome == 'failure'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -205,6 +244,16 @@ jobs:
           SPA_EOF
 
       - name: Deploy redirect
+        id: publish_redirect
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./redirect
+          keep_files: true  # Don't delete branch subdirectories
+
+      - name: Deploy redirect (retry after a rival push)
+        if: steps.publish_redirect.outcome == 'failure'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
