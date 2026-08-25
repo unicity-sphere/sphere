@@ -58,6 +58,8 @@ export function useSphereEvents(): void {
   /** Running total per (sender, symbol) behind one coalesced incoming toast (#490). */
   const incomingTotalsRef = useRef<Map<string, { smallest: bigint; decimals: number }>>(new Map());
   const incomingGroupTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  /** Which group the single global progress slot is currently showing (#490). */
+  const progressOwnerRef = useRef<string | null>(null);
   // One deferred-delivery toast per transfer — the SDK re-emits the
   // delivery:deferred attention code on every replay pass that hits the
   // recipient's full mailbox again.
@@ -109,10 +111,14 @@ export function useSphereEvents(): void {
 
       // The SDK announces one event per TOKEN, not per payment, so a 54-token
       // payment would otherwise fire 54 near-identical toasts and bury the
-      // wallet (#490). Accumulate per (sender, symbol) and drive a single
+      // wallet (#490). Accumulate per (sender, asset) and drive a single
       // toast whose amount climbs as the tokens land — which also gives the
       // user live progress instead of a wall of noise.
-      const groupKey = `incoming:${transfer.senderPubkey || sender}:${symbol}`;
+      // Keyed on coinId, never symbol: two assets can share a display symbol
+      // while differing in decimals, and summing those would render a number
+      // that is wrong rather than merely merged.
+      const assetKey = firstToken?.coinId ?? symbol;
+      const groupKey = `incoming:${transfer.senderPubkey || sender}:${assetKey}`;
       const carried = incomingTotalsRef.current.get(groupKey);
       const totalSmallest =
         (carried?.smallest ?? 0n) + transfer.tokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
@@ -126,6 +132,11 @@ export function useSphereEvents(): void {
         setTimeout(() => {
           incomingTotalsRef.current.delete(groupKey);
           incomingGroupTimersRef.current.delete(groupKey);
+          // Progress is a single global slot, so only the group currently shown
+          // in it may clear it — otherwise an earlier group's timer wipes a
+          // later group's live progress while its tokens are still landing.
+          if (progressOwnerRef.current !== groupKey) return;
+          progressOwnerRef.current = null;
           // By now the drain has flushed and the real balance has caught up, so
           // the progress line would only duplicate it.
           queryClient.setQueryData(SPHERE_KEYS.incoming.progress, null);
@@ -136,6 +147,7 @@ export function useSphereEvents(): void {
       // (ACK_BATCH_SIZE=200, so once at the end for a big receive) and the
       // server inventory is re-pulled. Publish the running total so the wallet
       // can show the money arriving instead of sitting at its old value.
+      progressOwnerRef.current = groupKey;
       queryClient.setQueryData(SPHERE_KEYS.incoming.progress, {
         amount: formatAmount(totalSmallest.toString(), decimals),
         symbol,

@@ -37,6 +37,7 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
 }));
 
 import { useSphereEvents } from '../../../src/sdk/hooks/core/useSphereEvents';
+import { formatAmount } from '../../../src/sdk/index';
 import { SPHERE_KEYS } from '../../../src/sdk/queryKeys';
 
 let assetFetches = 0;
@@ -138,5 +139,74 @@ describe('receive burst — history must not be re-walked per token', () => {
 
     // Coalescing must not mean discarding: a receive DOES add history rows.
     expect(historyFetches).toBeGreaterThan(before);
+  });
+});
+
+/**
+ * The 54-token receive is coalesced into ONE climbing toast, keyed per group.
+ * Both cases below are about that key and the single global progress slot it
+ * writes to — a group that merges what it shouldn't, or clears what it doesn't
+ * own, shows the user a number that is wrong rather than merely untidy.
+ */
+describe('incoming coalescing — group identity', () => {
+  const token = (coinId: string, amount: string) => ({ coinId, symbol: 'UCT', decimals: 0, amount });
+  const progressOf = (client: QueryClient): { amount: string } | null =>
+    (client.getQueryData(SPHERE_KEYS.incoming.progress) as { amount: string } | null) ?? null;
+
+  it('keeps two assets apart when they share a display symbol', async () => {
+    const { wrapper, client } = harness();
+    renderHook(() => useWallet(), { wrapper });
+
+    await act(async () => {
+      emit('transfer:incoming', {
+        id: 'a1',
+        senderPubkey: 'PK',
+        senderNametag: 'peer',
+        tokens: [token('coin-a', '100')],
+      });
+    });
+    await act(async () => {
+      emit('transfer:incoming', {
+        id: 'b1',
+        senderPubkey: 'PK',
+        senderNametag: 'peer',
+        tokens: [token('coin-b', '7')],
+      });
+    });
+
+    // coin-b's own total, not 107: same sender, same symbol, different asset.
+    expect(progressOf(client)?.amount).toBe(formatAmount('7', 0));
+  });
+
+  it('does not let an expiring group clear another group’s live progress', async () => {
+    const { wrapper, client } = harness();
+    renderHook(() => useWallet(), { wrapper });
+
+    await act(async () => {
+      emit('transfer:incoming', {
+        id: 'a1',
+        senderPubkey: 'PK-A',
+        senderNametag: 'A',
+        tokens: [token('coin-a', '10')],
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    await act(async () => {
+      emit('transfer:incoming', {
+        id: 'b1',
+        senderPubkey: 'PK-B',
+        senderNametag: 'B',
+        tokens: [token('coin-b', '20')],
+      });
+    });
+    // Past A's 6.5 s window, still inside B's — B is mid-receive.
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(progressOf(client)).not.toBeNull();
+    expect(progressOf(client)?.amount).toBe(formatAmount('20', 0));
   });
 });
