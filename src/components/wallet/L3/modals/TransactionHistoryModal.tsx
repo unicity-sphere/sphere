@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUpRight, ArrowDownLeft, Loader2, Clock, ChevronDown, Copy, Check } from 'lucide-react';
 import { useTransactionHistory } from '../../../../sdk';
-import { TokenRegistry } from '@unicitylabs/sphere-sdk';
+import { TokenRegistry, type TransactionHistoryEntry } from '@unicitylabs/sphere-sdk';
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
@@ -27,6 +27,22 @@ function useCopyToClipboard() {
   }, []);
 
   return { copiedKey, copy };
+}
+
+/**
+ * Direction of a history row. Only SENT leaves the wallet. RECEIVED is an
+ * incoming transfer and MINT is a self-mint credit — which is what "Top Up"
+ * writes (one row per coin in the basket) and what a Swap's receive leg writes,
+ * the swap being a send to the stub plus a self-mint. Deciding direction with a
+ * bare `=== 'RECEIVED'` dropped both into the outgoing branch, so money
+ * arriving was presented as "Sent −" (#488).
+ *
+ * The unlisted SPLIT of the legacy record type is deliberately not incoming:
+ * the payments facade never emits it, and an unexpected value from the server
+ * must not be signed as a credit.
+ */
+function isIncoming(type: TransactionHistoryEntry['type']): boolean {
+  return type === 'RECEIVED' || type === 'MINT';
 }
 
 /** Truncate middle of string: "abcdef...uvwxyz" */
@@ -117,6 +133,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
 
       return {
         ...entry,
+        incoming: isIncoming(entry.type),
         formattedAmount: formatRawAmount(entry.amount, decimals),
         formattedTokenIds: entry.tokenIds?.map(t => ({
           ...t,
@@ -191,11 +208,11 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                         </div>
                       )}
                       <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center border-2 border-neutral-50 dark:border-white/10 ${
-                        entry.type === 'RECEIVED'
+                        entry.incoming
                           ? 'bg-emerald-500'
                           : 'bg-orange-500'
                       }`}>
-                        {entry.type === 'RECEIVED' ? (
+                        {entry.incoming ? (
                           <ArrowDownLeft className="w-3 h-3 text-white" />
                         ) : (
                           <ArrowUpRight className="w-3 h-3 text-white" />
@@ -206,7 +223,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                     {/* Title & Subtitle */}
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-neutral-900 dark:text-white">
-                        {entry.type === 'RECEIVED' ? 'Received' : 'Sent'}
+                        {entry.incoming ? 'Received' : 'Sent'}
                         {peerLabel && (
                           <span className="text-neutral-500 dark:text-white/45 font-normal ml-1">
                             {entry.type === 'RECEIVED' ? 'from' : 'to'} {peerLabel}
@@ -226,11 +243,11 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                     {/* Amount + chevron */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       <div className={`text-sm font-semibold ${
-                        entry.type === 'RECEIVED'
+                        entry.incoming
                           ? 'text-emerald-600 dark:text-emerald-400'
                           : 'text-neutral-900 dark:text-white'
                       }`}>
-                        {entry.type === 'RECEIVED' ? '+' : '-'}{entry.formattedAmount} {entry.symbol}
+                        {entry.incoming ? '+' : '-'}{entry.formattedAmount} {entry.symbol}
                       </div>
                       <ChevronDown className={`w-4 h-4 text-neutral-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                     </div>
