@@ -40,10 +40,15 @@ permissions:
 #
 # So every writer now retries instead: the two peaceiris steps run again on
 # rejection (the action re-fetches gh-pages per invocation, so the retry
-# fast-forwards) and the cleanup job rebases and retries its own push. The
-# writers touch disjoint directories, so a rebase never conflicts. The disjoint
-# concurrency groups above stay exactly as #369 left them — serializing the
-# groups is what silently cancelled deploys, and that must not come back.
+# fast-forwards) and the cleanup job rebases and retries its own push. Writers
+# for DIFFERENT branches touch disjoint directories and rebase cleanly; the one
+# pair that does not is a deploy and a cleanup of the SAME branch, which these
+# groups deliberately leave unserialized — that rebase can conflict, or replay a
+# stale deletion onto a rewritten tree. The composed system still converges,
+# because the deploy's own post-publish step removes the directory once it sees
+# the branch is gone. The disjoint concurrency groups above stay exactly as #369
+# left them — serializing the groups is what silently cancelled deploys, and that
+# must not come back.
 concurrency:
   group: pages-${{ github.event_name == 'delete' && format('cleanup-{0}-{1}', github.event.ref_type, github.event.ref) || format('deploy-{0}', github.ref_name) }}
   cancel-in-progress: true
@@ -73,17 +78,23 @@ jobs:
           echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
       - name: Remove branch directory
+        # Through env, not ${{ }} interpolation — see the deploy job's copy: a branch
+        # name is attacker-influenced text that reaches `rm -rf`.
+        env:
+          PREVIEW_DIR: ${{ steps.branch.outputs.name }}
         run: |
-          if [ -d "${{ steps.branch.outputs.name }}" ]; then
-            rm -rf "${{ steps.branch.outputs.name }}"
+          if [ -d "$PREVIEW_DIR" ]; then
+            rm -rf "$PREVIEW_DIR"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "Remove ${{ steps.branch.outputs.name }} (branch deleted)"
+            git commit -m "Remove $PREVIEW_DIR (branch deleted)"
             # gh-pages has several unsynchronised writers (this cleanup, the
             # branch deploy, the redirect deploy), so a non-fast-forward here is
-            # ordinary, not exceptional. Rebase onto whatever landed and retry;
-            # the writers touch disjoint directories, so the rebase is clean.
+            # ordinary, not exceptional. Rebase onto whatever landed and retry.
+            # A deploy of THIS branch is the one writer this can conflict with;
+            # that rebase fails loudly and the deploy's own post-publish removal
+            # converges the result.
             # Steps run under `bash -e`, so a bare `git pull` that fails would abort
             # the step mid-loop — no further attempts, and no error line either.
             # Every fallible command in here is therefore tested, not left bare.
@@ -100,7 +111,7 @@ jobs:
             echo "::error::gh-pages push still rejected after 5 attempts"
             exit 1
           else
-            echo "Directory ${{ steps.branch.outputs.name }} does not exist, skipping"
+            echo "Directory $PREVIEW_DIR does not exist, skipping"
           fi
 
   build-and-deploy:
@@ -257,14 +268,25 @@ jobs:
       # ever remove what we just wrote. Undo our own publish instead. Idempotent:
       # the cleanup getting there first is the expected case, not a conflict.
       - name: Remove the preview if the branch vanished while we were publishing
+        id: preview
         if: steps.publish.outcome == 'success' || steps.publish_retry.outcome == 'success'
+        # Through env, not ${{ }} interpolation: a branch name is attacker-influenced
+        # text that git permits `$`, backticks and quotes in, and it reaches `rm -rf`
+        # below. Interpolated, the shell would expand it a second time.
+        env:
+          PREVIEW_DIR: ${{ steps.branch.outputs.name }}
         run: |
+          # `stands` is what the summary below reports, and it is decided HERE
+          # rather than from the publish outcome: this step can undo a publish that
+          # succeeded, so "the action returned success" stopped being the same
+          # question as "is there a preview at that URL".
+          stands() { echo "stands=$1" >> "$GITHUB_OUTPUT"; }
           set +e
           git ls-remote --exit-code --heads origin "refs/heads/$GITHUB_REF_NAME" >/dev/null 2>&1
           status=$?
           set -e
           case "$status" in
-            0) echo "$GITHUB_REF_NAME still exists — the preview stands"; exit 0 ;;
+            0) echo "$GITHUB_REF_NAME still exists — the preview stands"; stands true; exit 0 ;;
             2) echo "::notice::$GITHUB_REF_NAME was deleted while this deploy was publishing — removing the preview it just wrote" ;;
             *)
               echo "::error::could not determine whether $GITHUB_REF_NAME still exists (git ls-remote exit $status)"
@@ -272,24 +294,43 @@ jobs:
               ;;
           esac
 
-          dir="${{ steps.branch.outputs.name }}"
+          # `stands false` is a fact the moment the branch is gone, so it is safe here
+          # and fail-safe: it only ever SUPPRESSES a claim. The 🗑️ summary line is the
+          # opposite — it ASSERTS a removal — so it is written only where the removal
+          # is established, never here. Getting that backwards is how a run ends up
+          # reporting "removed" over a preview that is still served.
+          stands false
+          removed() {
+            echo "🗑️ Preview for \`$GITHUB_REF_NAME\` removed — the branch was deleted during the deploy." >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          dir="$PREVIEW_DIR"
           work="$(mktemp -d)"
           # Deliberately NOT a shallow clone: the retry below rebases, and
           # `git pull --rebase` is unreliable on a depth-1 history.
-          git clone --branch gh-pages \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "$work"
+          # Every fallible command below is tested rather than left bare: under
+          # `bash -e` a bare failure aborts the step with no annotation at all, which
+          # is the one outcome worse than a loud one — same rule as the cleanup job.
+          if ! git clone --branch gh-pages \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "$work"; then
+            echo "::error::could not clone gh-pages; a deleted branch's preview is still published"
+            exit 1
+          fi
           cd "$work"
           if [ ! -d "$dir" ]; then
             echo "$dir is already gone — the cleanup job got there first"
+            removed
             exit 0
           fi
           rm -rf "$dir"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Remove $dir (branch deleted during deploy)"
+          if ! git add -A || ! git commit -m "Remove $dir (branch deleted during deploy)"; then
+            echo "::error::could not commit the removal; a deleted branch's preview is still published"
+            exit 1
+          fi
           for attempt in 1 2 3 4 5; do
-            if git push; then exit 0; fi
+            if git push; then removed; exit 0; fi
             if [ "$attempt" -eq 5 ]; then break; fi
             echo "push rejected (attempt $attempt) — rebasing onto the newer gh-pages"
             if ! git pull --rebase origin gh-pages; then
@@ -301,10 +342,12 @@ jobs:
           echo "::error::could not remove $dir after 5 attempts; a deleted branch's preview is still published"
           exit 1
 
-      # Only claim a deployment when something was actually published: a skipped
-      # publish (branch deleted) would otherwise be summarised with a URL that 404s.
+      # Only claim a deployment when a preview actually stands. Reading the publish
+      # outcome is not enough: the step above can undo a successful publish, and a
+      # skipped publish leaves this output empty — both must stay unsummarised, or
+      # the run advertises a URL that 404s.
       - name: Output deployment URL
-        if: steps.publish.outcome == 'success' || steps.publish_retry.outcome == 'success'
+        if: steps.preview.outputs.stands == 'true'
         run: |
           echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
