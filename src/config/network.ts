@@ -162,22 +162,29 @@ function readStoredNetwork(): string | null {
  * is available again" notice on a promise nothing can keep, and would leave
  * every future boot reporting a downgrade from a network that no longer exists.
  *
- * Deliberately narrow — membership in the SDK table, not availability. A stored
- * 'mainnet' on a deployment that has not rolled it out, or 'testnet2' on one
- * that lost its backend, are real networks and are left exactly as they are.
+ * Scoped to RETIRED ids, not to "unknown to this bundle". Those are different
+ * things: gh-pages serves several builds at once, so an older bundle can be
+ * loaded after a newer one, and a network the newer SDK added is unknown HERE
+ * while being a perfectly good standing choice. Deleting it would destroy that
+ * intent silently. An unknown-but-not-retired value simply falls back for this
+ * session and survives for the bundle that understands it.
  */
-function forgetUnknownStoredNetwork(): void {
+const RETIRED_NETWORK_IDS: ReadonlySet<string> = new Set([
+  // Removed by sphere-sdk#765 along with the v1 cutover. It was only ever
+  // reachable through the console escape hatch, which is gone with it.
+  'dev',
+]);
+
+function forgetRetiredStoredNetwork(): void {
   const stored = readStoredNetwork();
-  // hasOwnProperty, not `in`: 'constructor'/'toString' would pass an `in` test
-  // against the SDK's plain object and survive as a "known" network.
-  if (stored === null || Object.prototype.hasOwnProperty.call(NETWORKS, stored)) return;
+  if (stored === null || !RETIRED_NETWORK_IDS.has(stored)) return;
   try {
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_NETWORK);
   } catch {
     // Storage blocked — a failed read already resolves to the build default.
   }
 }
-forgetUnknownStoredNetwork();
+forgetRetiredStoredNetwork();
 
 /**
  * The Unicity network this SESSION runs on. Single source of truth — used by
@@ -200,7 +207,7 @@ export const SPHERE_NETWORK: NetworkType = resolveActiveNetwork(readStoredNetwor
  * standing intent, so the wallet returns to their network by itself once the
  * deployment can serve it again; the notice is what keeps that from being a
  * surprise in either direction. The one exception is a network the SDK no
- * longer has at all, which forgetUnknownStoredNetwork() above has already
+ * longer has at all, which forgetRetiredStoredNetwork() above has already
  * dropped — there is nothing to return to, so there is nothing to explain.
  */
 export const NETWORK_DOWNGRADED_FROM: string | null = (() => {

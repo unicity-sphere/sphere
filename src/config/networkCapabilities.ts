@@ -45,7 +45,7 @@ export function canSelfMint(network: string): boolean {
  * badge made it lie in exactly that case. testMoneyMatchesSelfMint() below pins
  * that they agree, so any divergence has to be written down rather than drifting.
  */
-const TEST_MONEY_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+const TEST_MONEY_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet']);
 
 export function isTestMoney(network: string): boolean {
   return TEST_MONEY_NETWORKS.has(network);

@@ -206,13 +206,20 @@ observable in the pinned SDK, so check it there rather than in a plan doc.
   `https://gateway.mainnet.unicity.network` (the old
   `aggregator.unicity.network/rpc` placeholder was a v1 host that no longer
   resolves);
-- ~~a **mainnet token registry**~~ — shipped: `unicity-ids.mainnet.json`, but
-  it so far defines only the non-fungible base type, so fungible mainnet coins
-  miss the registry and fall back to `decimals: 0` and a six-hex-char symbol.
-  Presentation only — the money path treats `coinId` as opaque bytes — but it is
-  a visible wrongness in balances until the registry is filled in;
+- **fungible definitions in the mainnet token registry** — **still outstanding.**
+  `unicity-ids.mainnet.json` is published but currently holds exactly ONE entry,
+  the non-fungible base type. Every fungible mainnet coin therefore misses the
+  registry and falls back to `decimals: 0` and a six-hex-char symbol.
+
+  This is not merely cosmetic, which is why it is a blocker rather than a
+  footnote: `PaymentRequestIntentModal` reads `def?.decimals ?? 0` and formats
+  the approval amount from it, so a user would be asked to approve a **raw
+  base-unit number with no symbol** — `100000000` where they expect `1.00 UCT` —
+  on real money. Balances and the send confirmation degrade the same way.
+  Do not flip the rollout switch until the registry defines the fungible coins
+  the deployment expects to carry;
 - a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET` — **still
-  outstanding, and now the only blocker on the SDK/protocol side.** Without it
+  outstanding.** Without it
   `Sphere.init` cannot compose a mainnet money path at all.
 
 Note also that mainnet shares testnet's Nostr relay until a dedicated one is

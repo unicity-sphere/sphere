@@ -274,6 +274,20 @@ describe("a wallet left on 'dev' by the console escape hatch", () => {
     expect(mod.isSwitchableNetwork('dev')).toBe(false);
   });
 
+  it('KEEPS a stored network this bundle does not know — it may be a NEWER one', async () => {
+    // gh-pages serves several builds at once, so an OLDER bundle can load after a
+    // newer one. A network the newer SDK added is unknown here but is a perfectly
+    // good standing choice; deleting it would destroy that intent silently. Only
+    // RETIRED ids are forgotten. This session still falls back — it cannot run a
+    // network it has no table entry for — but the choice survives for the bundle
+    // that understands it.
+    localStorage.setItem('sphere_active_network', 'testnet9');
+    const mod = await loadNetworkModule();
+
+    expect(localStorage.getItem('sphere_active_network')).toBe('testnet9');
+    expect(mod.SPHERE_NETWORK).toBe(mod.DEFAULT_NETWORK);
+  });
+
   it('resolves to a network the SDK table can actually be indexed with', async () => {
     // The assertion the white screen would have failed: every module that
     // renders the network name does exactly this lookup, at module scope.

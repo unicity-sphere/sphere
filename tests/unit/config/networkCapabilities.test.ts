@@ -78,7 +78,7 @@ describe('isTestMoney — the badge colour, not the minting gate', () => {
     // They are separate QUESTIONS over separate sets: a test network could have
     // minting switched off and would still hold play money. This pins that nobody
     // has split them by accident; the day they legitimately differ, edit this test.
-    for (const n of ['testnet2', 'testnet', 'dev', 'mainnet', '', 'some-future-network']) {
+    for (const n of ['testnet2', 'testnet', 'mainnet', '', 'some-future-network']) {
       expect(testMoneyMatchesSelfMint(n)).toBe(true);
     }
   });
