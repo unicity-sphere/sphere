@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // public networks so the policy is exercised independently of the SDK table.
 vi.mock('../../../src/config/network', () => ({
   SUPPORTED_NETWORKS: [
-    { id: 'testnet2', label: 'Testnet2', available: true },
+    { id: 'testnet2', label: 'Testnet', available: true },
     { id: 'mainnet', label: 'Mainnet', available: false, unavailableReason: 'not-onboarded' },
   ],
 }));
@@ -81,7 +81,7 @@ describe('unavailableLabel — the badge must not flatten opposite causes', () =
 });
 
 describe('rowState', () => {
-  const testnet2 = { id: 'testnet2', label: 'Testnet2', available: true } as const;
+  const testnet2 = { id: 'testnet2', label: 'Testnet', available: true } as const;
   const mainnet = { id: 'mainnet', label: 'Mainnet', available: false } as const;
 
   it('marks the active network as current', () => {

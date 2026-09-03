@@ -21,7 +21,7 @@ vi.mock('../../../src/config/network', () => ({
   },
   get SUPPORTED_NETWORKS() {
     return [
-      { id: 'testnet2', label: 'Testnet2', available: true },
+      { id: 'testnet2', label: 'Testnet', available: true },
       { id: 'mainnet', label: 'Mainnet', available: false, unavailableReason: netState.mainnetReason },
     ];
   },
@@ -44,7 +44,7 @@ function renderModal() {
 describe('NetworkModal', () => {
   it('renders the supported networks with the current one marked', () => {
     renderModal();
-    expect(screen.getByRole('button', { name: /Testnet2/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Testnet/ })).toBeDefined();
     expect(screen.getByText('Current')).toBeDefined();
   });
 
@@ -66,10 +66,10 @@ describe('NetworkModal', () => {
   // which it renders an unlisted current row.
 
   it('confirms before switching and calls setActiveNetwork', () => {
-    netState.active = 'mainnet'; // makes Testnet2 an available, non-current target
+    netState.active = 'mainnet'; // makes Testnet an available, non-current target
     renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Testnet/ }));
     expect(
       screen.getByText(
         'Balances, history and subscription keys are separate per network. The app will reload.',
@@ -84,7 +84,7 @@ describe('NetworkModal', () => {
     netState.active = 'mainnet';
     renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Testnet/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByText(/separate per network/i)).toBeNull();
@@ -108,7 +108,7 @@ describe('NetworkModal', () => {
     // concludes their funds are gone.
     netState.downgradedFrom = 'mainnet';
     renderModal();
-    expect(screen.getByText(/mainnet is not available here, so the wallet is on Testnet2/)).toBeDefined();
+    expect(screen.getByText(/mainnet is not available here, so the wallet is on Testnet/)).toBeDefined();
     expect(screen.getByText(/assets on mainnet are\s+untouched/)).toBeDefined();
   });
 });

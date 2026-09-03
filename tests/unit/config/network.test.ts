@@ -281,7 +281,7 @@ describe("a wallet left on 'dev' by the console escape hatch", () => {
     const mod = await loadNetworkModule();
 
     expect(NETWORKS[mod.SPHERE_NETWORK]).toBeDefined();
-    expect(NETWORKS[mod.SPHERE_NETWORK].name).toBe('Testnet2');
+    expect(NETWORKS[mod.SPHERE_NETWORK].name).toBe('Testnet');
   });
 
   it('forgets the stored value, so nothing is promised that cannot be kept', async () => {
@@ -325,11 +325,11 @@ describe("a wallet left on 'dev' by the console escape hatch", () => {
 
 describe('shouldAnnounceMainnet — invite once, never move anyone', () => {
   const LIVE = [
-    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'testnet2' as const, label: 'Testnet', available: true },
     { id: 'mainnet' as const, label: 'Mainnet', available: true },
   ];
   const NOT_LIVE = [
-    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'testnet2' as const, label: 'Testnet', available: true },
     { id: 'mainnet' as const, label: 'Mainnet', available: false, unavailableReason: 'not-onboarded' as const },
   ];
 
