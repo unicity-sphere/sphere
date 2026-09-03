@@ -49,8 +49,8 @@ export function MainnetAnnouncementModal({ isOpen, onClose }: MainnetAnnouncemen
           </h3>
           <p className="text-sm leading-relaxed text-neutral-500 dark:text-white/50 max-w-xs">
             Real assets on the Unicity network. Your {currentLabel} wallet stays exactly as it is —
-            each network keeps its own balances, history and keys, and you can switch back whenever
-            you want.
+            each network keeps its own assets, balances and history, and you can switch back
+            whenever you want.
           </p>
         </div>
 

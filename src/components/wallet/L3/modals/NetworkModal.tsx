@@ -68,11 +68,18 @@ export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
           </div>
         )}
 
-        {/* Isolation note — the load-bearing fact: networks are separate worlds. */}
+        {/* Isolation note. Deliberately does NOT say "keys": the seed, the derived
+            keypair and the DIRECT:// address are the SAME on every network
+            (deriveDirectAddress takes no network; base path m/44'/0'/0'), and the
+            mnemonic/master key are global storage keys, not network-scoped. Claiming
+            otherwise implies a testnet key cannot reach mainnet funds — it is the same
+            key. What IS per-network is server-side inventory and the pv2g2:{network}
+            scoped KV. */}
         <div className="flex items-start gap-3 px-4 py-3 rounded-2xl bg-neutral-50 dark:bg-white/4">
           <Layers className="w-4 h-4 mt-0.5 shrink-0 text-neutral-400 dark:text-white/35" />
           <p className="text-xs leading-relaxed text-neutral-500 dark:text-white/50">
-            Each network keeps its own balances, history and keys. Switching reloads the wallet.
+            Each network keeps its own assets, balances and history. Switching reloads the
+            wallet and discards all existing connections to dApps.
           </p>
         </div>
 
