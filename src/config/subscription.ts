@@ -1,4 +1,5 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import { chargesRealMoney } from './networkCapabilities';
 import { SPHERE_NETWORK } from './network';
 import { SUBSCRIPTION_ENABLED, runtimeSetting as setting } from './runtimeConfig';
 
@@ -50,12 +51,17 @@ export const SUBSCRIPTION_MOCK =
   import.meta.env.VITE_SUBSCRIPTION_MOCK === 'true';
 
 /**
- * Whether PAID plans can be purchased. Off by default on testnet — paid plans
- * render as "Coming on Mainnet" (visible but not selectable); only the free
- * plan is usable. Flip to 'true' for mainnet once the store is live.
+ * Whether PAID plans can be purchased. Paid plans otherwise render as "Coming on
+ * Mainnet" (visible but not selectable); only the free plan is usable.
+ *
+ * Gated on the ACTIVE network as well as the deployment flag (#497 item 2). The
+ * flag alone was deployment-wide while the gateway it buys from is per-network,
+ * and one deployment may serve both — so a user who switched to a test network
+ * could still pay real money for a key that belongs to it. The network term is
+ * an AND, not a replacement: an operator must still opt in.
  */
 export const PAID_PLANS_ENABLED =
   setting(
     'PAID_PLANS_ENABLED',
     import.meta.env.VITE_PAID_PLANS_ENABLED as string | undefined,
-  ) === 'true';
+  ) === 'true' && chargesRealMoney(SPHERE_NETWORK);
