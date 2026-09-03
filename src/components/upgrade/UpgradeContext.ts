@@ -2,9 +2,9 @@ import { createContext, useContext } from 'react';
 
 /**
  * Why the plan screen was opened. Drives the banner above the line-up
- * (UpgradeReasonBanner) — 'settings', 'entry' and undefined show none.
+ * (UpgradeReasonBanner) — 'settings' and undefined show none.
  */
-export type UpgradeReason = 'quota' | 'expired' | 'settings' | 'entry';
+export type UpgradeReason = 'quota' | 'expired' | 'settings';
 
 export interface UpgradeContextValue {
   openUpgrade: (reason?: UpgradeReason) => void;
