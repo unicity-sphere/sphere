@@ -79,16 +79,17 @@ describe("per-network resolution", () => {
     expect(isWalletApiEnabled("mainnet")).toBe(false);
   });
 
-  it("'dev' is never wallet-api served — no URL for it, and no #351 throw", () => {
+  it("a network outside SUPPORTED_NETWORKS is never wallet-api served — and no #351 throw", () => {
     vi.stubEnv("VITE_WALLET_API_URL", "https://wallet-api.staging.unicity.network");
     vi.stubEnv("VITE_REQUIRE_WALLET_API", "true");
-    // Title corrected: dev does NOT "compose local custody" — that composition
-    // no longer exists, and Sphere.init throws INVALID_CONFIG on a bundle with
-    // no walletApi config. What is pinned here is only that dev is exempt from
-    // the #351 assert, because arming it would break the very deployment used
-    // to verify switching (Pages sets REQUIRE_WALLET_API).
-    expect(getWalletApiBaseUrl("dev")).toBeNull();
-    expect(isWalletApiEnabled("dev")).toBe(false);
+    // Subject changed from 'dev' (the network sphere-sdk 0.16.0-dev.1 deleted)
+    // to 'testnet', now the only NetworkType with no RUNTIME_KEY entry. The
+    // invariant is the same one and it is the load-bearing half: a network the
+    // switcher cannot select gets no URL AND does not arm the #351 assert, so
+    // a REQUIRE_WALLET_API deployment is not thrown by merely being asked
+    // about a network it never offers.
+    expect(getWalletApiBaseUrl("testnet")).toBeNull();
+    expect(isWalletApiEnabled("testnet")).toBe(false);
   });
 });
 
@@ -178,7 +179,7 @@ describe("getEngineOverride", () => {
     vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
     vi.stubEnv("VITE_TRUSTBASE_URL", "/local-agg/trustbase.json");
 
-    expect(getEngineOverride("dev")).toBeNull();
+    expect(getEngineOverride("testnet")).toBeNull();
     expect(getEngineOverride("mainnet")).toBeNull();
     // ...and still applies where it was configured.
     expect(getEngineOverride(DEFAULT_NET)).not.toBeNull();
@@ -187,7 +188,7 @@ describe("getEngineOverride", () => {
   it("still validates the pairing before scoping (a half-set override is a bug anywhere)", () => {
     vi.stubEnv("VITE_AGGREGATOR_URL", "/local-agg");
     vi.stubEnv("VITE_TRUSTBASE_URL", "");
-    expect(() => getEngineOverride("dev")).toThrow(/must be set together/);
+    expect(() => getEngineOverride("testnet")).toThrow(/must be set together/);
   });
 });
 describe('a whitespace-only URL is a MISSING url, not a configured one', () => {

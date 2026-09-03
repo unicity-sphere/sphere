@@ -16,7 +16,7 @@ import {
 } from '../../../src/components/wallet/L3/modals/networkRows';
 
 describe('buildNetworkRows', () => {
-  it('offers exactly the public networks — never dev', () => {
+  it('offers exactly the public networks', () => {
     const rows = buildNetworkRows('testnet2');
     expect(rows.map((r) => r.id)).toEqual(['testnet2', 'mainnet']);
   });
@@ -27,19 +27,14 @@ describe('buildNetworkRows', () => {
     expect(rows.map((r) => r.id)).toEqual(['testnet2', 'mainnet']);
   });
 
-  it('appends a console-set active network as a current-only row', () => {
-    // 'dev' is reachable only via the console escape hatch; the screen must
-    // still show where the wallet actually is. Label comes from the real SDK
-    // NETWORKS table: dev = 'Development'. `available` is false because the row
-    // describes selectability, and the current network is never selectable.
-    const rows = buildNetworkRows('dev');
-    expect(rows.map((r) => r.id)).toEqual(['testnet2', 'mainnet', 'dev']);
-    expect(rows.find((r) => r.id === 'dev')).toEqual({
-      id: 'dev',
-      label: 'Development',
-      available: false,
-    });
-  });
+  // DELETED with the sphere-sdk 0.16.0-dev.1 bump: 'appends a console-set
+  // active network as a current-only row'. It exercised buildNetworkRows('dev'),
+  // and 'dev' is no longer a NetworkType. The append branch itself survives as
+  // a guarantee of the pure function, but nothing in the app can reach it: the
+  // sole caller passes SPHERE_NETWORK, which resolveActiveNetwork can only ever
+  // set to a SUPPORTED_NETWORKS id, and the one remaining NetworkType outside
+  // that list — the 'testnet' alias — is refused by isSwitchableNetwork. Pinning
+  // it with the alias would assert a state the wallet cannot be in.
 });
 
 describe('unavailableLabel — the badge must not flatten opposite causes', () => {
@@ -94,7 +89,7 @@ describe('rowState', () => {
   });
 
   it('marks an available non-current network as selectable', () => {
-    expect(rowState(testnet2, 'dev')).toBe('selectable');
+    expect(rowState(testnet2, 'mainnet')).toBe('selectable');
   });
 
   it('marks an unavailable network as unavailable', () => {

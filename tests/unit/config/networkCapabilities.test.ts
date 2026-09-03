@@ -9,9 +9,9 @@ import {
 
 describe('canSelfMint — fail-closed allowlist', () => {
   it('allows the test networks', () => {
+    // 'testnet' stays: it is a real SDK alias of testnet2, not a leftover.
     expect(canSelfMint('testnet2')).toBe(true);
     expect(canSelfMint('testnet')).toBe(true);
-    expect(canSelfMint('dev')).toBe(true);
   });
 
   it('denies mainnet', () => {
@@ -20,6 +20,10 @@ describe('canSelfMint — fail-closed allowlist', () => {
 
   it('denies unknown, empty, cased and padded values', () => {
     expect(canSelfMint('')).toBe(false);
+    // 'dev' was on the allowlist until sphere-sdk 0.16.0-dev.1 deleted the
+    // network. The parameter is a plain `string`, so a stale entry would keep
+    // granting mint to a name nothing can resolve — no compiler would object.
+    expect(canSelfMint('dev')).toBe(false);
     expect(canSelfMint('testnet3')).toBe(false);
     expect(canSelfMint('some-future-network')).toBe(false);
     expect(canSelfMint('MAINNET')).toBe(false);
@@ -40,7 +44,6 @@ describe('allowsSharedAggregatorKey — fail-closed allowlist', () => {
     // worthless money and is published on purpose.
     expect(allowsSharedAggregatorKey('testnet2')).toBe(true);
     expect(allowsSharedAggregatorKey('testnet')).toBe(true);
-    expect(allowsSharedAggregatorKey('dev')).toBe(true);
   });
 
   it('refuses the shared key on mainnet', () => {
@@ -50,6 +53,7 @@ describe('allowsSharedAggregatorKey — fail-closed allowlist', () => {
 
   it('denies unknown, empty, cased and padded values', () => {
     expect(allowsSharedAggregatorKey('')).toBe(false);
+    expect(allowsSharedAggregatorKey('dev')).toBe(false); // network deleted in 0.16.0-dev.1
     expect(allowsSharedAggregatorKey('some-future-network')).toBe(false);
     expect(allowsSharedAggregatorKey('MAINNET')).toBe(false);
     expect(allowsSharedAggregatorKey(' testnet2')).toBe(false);

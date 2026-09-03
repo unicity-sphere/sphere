@@ -75,17 +75,14 @@ function resolveUrl(value: string): string {
  * WHERE the failure lands — a named, actionable error at buildProviders rather
  * than the SDK's generic INVALID_CONFIG a step later.
  *
- * Armed only for networks the switcher can select (SUPPORTED_NETWORKS). 'dev'
- * is exempt on purpose: it is a console-only local escape hatch with no
- * deployed backend, and arming it there would break the very deployment used
- * to verify switching (the Pages build sets VITE_REQUIRE_WALLET_API=true).
- * What the exemption does NOT do is make dev work. Dev composes no wallet-api
- * config, so Sphere.init still throws INVALID_CONFIG on it; all the exemption
- * changes is which error the developer sees — the SDK's generic one, instead of
- * this module's more specific one. (Removing the hatch is a separate change,
- * owned by the SDK-bump PR.) Note the availability
- * gate largely SUBSUMES this assert: a network is only selectable when a URL
- * exists for it, so in practice this now guards the build-default network.
+ * Armed only for networks the switcher can select (SUPPORTED_NETWORKS), which
+ * since the 0.16.0-dev.1 bump is exactly {testnet2, mainnet}. The exemption
+ * used to exist for the console-only 'dev' hatch; the SDK deleted that network
+ * and src/config/network.ts deleted the hatch, so what remains outside the list
+ * is the 'testnet' alias — never a resolvable active network, so the assert is
+ * never asked about it in practice. Note the availability gate largely SUBSUMES
+ * this assert: a network is only selectable when a URL exists for it, so in
+ * practice this now guards the build-default network.
  */
 export function getWalletApiBaseUrl(network: NetworkType): string | null {
   const raw = walletApiUrlFor(network);

@@ -1,28 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
- * The rest of the network suite runs against the PINNED SDK, where
- * NETWORKS.mainnet carries no networkId — so `unavailableReasonFor` returns
- * 'not-onboarded' on its first line and the later gates are unreachable for
- * mainnet. Those tests therefore cannot tell "mainnet is refused for the reason
- * I meant" from "mainnet is refused because the SDK has not onboarded it".
+ * THE DAY LANDED. This file was written against a mocked SDK table, because the
+ * then-pinned SDK gave NETWORKS.mainnet no networkId: `unavailableReasonFor`
+ * returned 'not-onboarded' on its first line, so the later gates were
+ * unreachable for mainnet and the rest of the suite could not tell "refused for
+ * the reason I meant" from "refused because the SDK has not onboarded it".
  *
- * This file removes that blind spot: it mocks the SDK table to the shape a
- * mainnet-onboarding SDK will ship (a networkId), and pins what the wallet must
- * do on the day that lands. Every case here is what a user would see the moment
- * the SDK bump merges, which is exactly when it is too late to find out.
+ * sphere-sdk 0.16.0-dev.1 ships mainnet for real — networkId 1, a live gateway
+ * and its own token registry — so the mock has been REMOVED rather than left in
+ * place as a no-op that would quietly go on describing a table the SDK no
+ * longer has. Every case below now runs against the real one, which is what the
+ * file was written to be ready for: it pins that the SDK bump alone is not a
+ * launch, and that each remaining gate is the deployment's to open.
  */
-vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@unicitylabs/sphere-sdk')>();
-  return {
-    ...actual,
-    NETWORKS: {
-      ...actual.NETWORKS,
-      // The one thing an onboarding SDK adds: a canonical network id.
-      mainnet: { ...actual.NETWORKS.mainnet, networkId: 1 },
-    },
-  };
-});
 
 function setRuntimeConfig(config: Record<string, string>): void {
   (window as unknown as { __SPHERE_RUNTIME_CONFIG__?: unknown }).__SPHERE_RUNTIME_CONFIG__ = config;
@@ -59,8 +50,8 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe('the day the SDK onboards mainnet', () => {
-  it('offers mainnet once the SDK knows it, the deployment serves it and rollout is on', async () => {
+describe('mainnet, now that the SDK has onboarded it', () => {
+  it('offers mainnet now the SDK knows it, the deployment serves it and rollout is on', async () => {
     setRuntimeConfig(MAINNET_LIVE);
     const mod = await loadNetworkModule();
     const mainnet = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'mainnet');
@@ -68,7 +59,7 @@ describe('the day the SDK onboards mainnet', () => {
     expect(mainnet?.unavailableReason).toBeUndefined();
   });
 
-  it('still withholds it while the rollout switch is off — an SDK bump is not a launch', async () => {
+  it('withholds it while the rollout switch is off — an SDK bump is not a launch', async () => {
     setRuntimeConfig({ ...MAINNET_LIVE, MAINNET_ROLLOUT_ENABLED: '' });
     const mod = await loadNetworkModule();
     const mainnet = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'mainnet');
@@ -76,7 +67,7 @@ describe('the day the SDK onboards mainnet', () => {
     expect(mainnet?.unavailableReason).toBe('not-rolled-out');
   });
 
-  it('still withholds it where this deployment has no mainnet backend', async () => {
+  it('withholds it where this deployment has no mainnet backend', async () => {
     setRuntimeConfig({ ...MAINNET_LIVE, WALLET_API_URL_MAINNET: '' });
     const mod = await loadNetworkModule();
     const mainnet = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'mainnet');
@@ -84,8 +75,8 @@ describe('the day the SDK onboards mainnet', () => {
     expect(mainnet?.unavailableReason).toBe('not-served-here');
   });
 
-  it('still refuses it on the shared build-time aggregator key', async () => {
-    // The reason the pinned-SDK suite could never actually observe: without
+  it('refuses it on the shared build-time aggregator key', async () => {
+    // The reason the pre-bump suite could never actually observe: without
     // per-wallet subscription keys, buildProviders throws for a real-value
     // network, so the row must not be offered at all.
     setRuntimeConfig({ ...MAINNET_LIVE, SUBSCRIPTION_ENABLED: '' });
@@ -127,7 +118,7 @@ describe('a live mainnet still offers no Top Up or Swap', () => {
     await loadNetworkModule();
     const caps = await import('../../../src/config/networkCapabilities');
     // Availability and mint permission are independent axes: onboarding mainnet
-    // must never be what turns Top Up and Swap back on.
+    // must not be what turns Top Up and Swap back on.
     expect(caps.canSelfMint('mainnet')).toBe(false);
     expect(caps.allowsSharedAggregatorKey('mainnet')).toBe(false);
   });

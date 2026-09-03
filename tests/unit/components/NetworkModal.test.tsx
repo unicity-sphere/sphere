@@ -58,17 +58,15 @@ describe('NetworkModal', () => {
     expect(screen.queryByText(/separate per network/i)).toBeNull();
   });
 
-  it('appends the active dev network as an extra current row', () => {
-    netState.active = 'dev';
-    renderModal();
-    // Label comes from the real SDK NETWORKS table: dev = 'Development'
-    const devRow = screen.getByRole('button', { name: /Development/ }) as HTMLButtonElement;
-    expect(devRow.disabled).toBe(true); // current row is not re-selectable
-    expect(screen.getByText('Current')).toBeDefined();
-  });
+  // DELETED with the sphere-sdk 0.16.0-dev.1 bump: 'appends the active dev
+  // network as an extra current row'. It drove buildNetworkRows' append branch
+  // through netState.active = 'dev', and 'dev' is no longer a NetworkType — nor
+  // can any NetworkType outside SUPPORTED_NETWORKS become the active network
+  // (see the note in networkRows.test.ts). The screen has no state left in
+  // which it renders an unlisted current row.
 
   it('confirms before switching and calls setActiveNetwork', () => {
-    netState.active = 'dev'; // makes Testnet2 an available, non-current target
+    netState.active = 'mainnet'; // makes Testnet2 an available, non-current target
     renderModal();
 
     fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));
@@ -83,7 +81,7 @@ describe('NetworkModal', () => {
   });
 
   it('cancel dismisses the confirmation without switching', () => {
-    netState.active = 'dev';
+    netState.active = 'mainnet';
     renderModal();
 
     fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));

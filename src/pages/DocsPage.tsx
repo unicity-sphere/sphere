@@ -447,7 +447,7 @@ sphere.on('transfer:incoming', (transfer) => {
                 code={`import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 
 const providers = createBrowserProviders({
-  network: 'testnet',           // 'mainnet' | 'testnet' | 'dev'
+  network: 'testnet',           // 'mainnet' | 'testnet' | 'testnet2'
   price: {
     platform: 'coingecko',      // fiat price provider
     cacheTtlMs: 5 * 60_000,    // cache prices for 5 minutes

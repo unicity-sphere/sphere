@@ -7,7 +7,11 @@ import { allowsSharedAggregatorKey } from './networkCapabilities';
 
 /** Why a network is not offered — drives honest UI copy, never a lie. */
 export type UnavailableReason =
-  /** The SDK has not onboarded it (no trust base / networkId yet). */
+  /**
+   * The SDK has not onboarded it (no trust base / networkId yet). No network
+   * in SUPPORTED_NETWORKS is in this state since sphere-sdk 0.16.0-dev.1 gave
+   * mainnet a networkId; it is kept as the gate a NEXT network arrives behind.
+   */
   | 'not-onboarded'
   /** Live, but THIS deployment has no backend for it. */
   | 'not-served-here'
@@ -89,13 +93,23 @@ export const SUPPORTED_NETWORKS: readonly SupportedNetwork[] = (
 });
 
 /**
- * True when `id` may be activated at runtime: any UI-available network, plus
- * 'dev' as a developer escape hatch (set via the browser console) — the only
- * other network that constructs providers today; end-to-end switch
- * verification needs it while testnet2 is the single live network.
+ * True when `id` may be activated at runtime: exactly the UI-available
+ * networks, and nothing else.
+ *
+ * The 'dev' escape hatch that used to live here is GONE. It was justified by
+ * dev being "the only other network that constructs providers today", and
+ * sphere-sdk 0.16.0-dev.1 both voided that (mainnet now constructs) and deleted
+ * 'dev' from NETWORKS entirely. Keeping it would have been the worst kind of
+ * dead code: the parameter is a `string` behind a type predicate, so the hatch
+ * handed callers a `NetworkType` that is NOT a key of NETWORKS, and the very
+ * next `NETWORKS[SPHERE_NETWORK].name` (NetworkBadge, NetworkModal, the mainnet
+ * announcement) throws at render — a white screen for anyone who had used the
+ * hatch, with no compile error anywhere to warn about it.
+ *
+ * The soundness of the predicate now rests on SUPPORTED_NETWORKS being built
+ * from literal NetworkType ids, so a true answer is always a real table key.
  */
 export function isSwitchableNetwork(id: string): id is NetworkType {
-  if (id === 'dev') return true;
   return SUPPORTED_NETWORKS.some((n) => n.id === id && n.available);
 }
 
@@ -118,10 +132,11 @@ export const DEFAULT_NETWORK: NetworkType = (() => {
 
 /**
  * Maps a persisted raw value to the network this session should run on.
- * Anything unknown or unavailable (e.g. 'mainnet' before SDK onboarding, the
- * legacy 'testnet' alias, or a hand-edited garbage value) falls back to the
- * deployment default, so a bad localStorage value can never brick the app into
- * a network whose providers refuse to construct.
+ * Anything unknown or unavailable — a network the SDK dropped ('dev'), one this
+ * deployment does not serve, the legacy 'testnet' alias, or a hand-edited
+ * garbage value — falls back to the deployment default, so a bad localStorage
+ * value can never brick the app into a network whose providers refuse to
+ * construct, nor into one that is not a key of NETWORKS at all.
  */
 export function resolveActiveNetwork(stored: string | null): NetworkType {
   return stored !== null && isSwitchableNetwork(stored) ? stored : DEFAULT_NETWORK;
@@ -136,6 +151,35 @@ function readStoredNetwork(): string | null {
 }
 
 /**
+ * Forget a persisted choice that names a network the SDK does not have.
+ *
+ * NETWORK_DOWNGRADED_FROM deliberately KEEPS an unavailable choice (see below):
+ * it is the user's standing intent, and the wallet returns to it by itself once
+ * the deployment can serve it again. That reasoning holds only for a network
+ * that still exists. sphere-sdk 0.16.0-dev.1 deleted 'dev' from NETWORKS, so
+ * every wallet that used the old console hatch holds a value that can never
+ * become available: keeping it would pin a permanent "…it reopens there once it
+ * is available again" notice on a promise nothing can keep, and would leave
+ * every future boot reporting a downgrade from a network that no longer exists.
+ *
+ * Deliberately narrow — membership in the SDK table, not availability. A stored
+ * 'mainnet' on a deployment that has not rolled it out, or 'testnet2' on one
+ * that lost its backend, are real networks and are left exactly as they are.
+ */
+function forgetUnknownStoredNetwork(): void {
+  const stored = readStoredNetwork();
+  // hasOwnProperty, not `in`: 'constructor'/'toString' would pass an `in` test
+  // against the SDK's plain object and survive as a "known" network.
+  if (stored === null || Object.prototype.hasOwnProperty.call(NETWORKS, stored)) return;
+  try {
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_NETWORK);
+  } catch {
+    // Storage blocked — a failed read already resolves to the build default.
+  }
+}
+forgetUnknownStoredNetwork();
+
+/**
  * The Unicity network this SESSION runs on. Single source of truth — used by
  * SphereProvider (main.tsx) and for deriving per-network service URLs
  * (src/config/subscription.ts, src/services/subscriptionApi.ts). Resolved
@@ -148,14 +192,16 @@ export const SPHERE_NETWORK: NetworkType = resolveActiveNetwork(readStoredNetwor
 /**
  * Set when the persisted choice could NOT be honoured and this session fell
  * back — e.g. the user picked mainnet and the deployment later stopped serving
- * it, or the SDK has not onboarded it (yet or any more).
+ * it, or the rollout switch went back off.
  *
  * This MUST be surfaced. Networks are isolated worlds, so a silent fallback
  * shows the user an empty wallet on another network and reads as "my funds are
  * gone". The stored value is deliberately NOT repaired: it is the user's
  * standing intent, so the wallet returns to their network by itself once the
  * deployment can serve it again; the notice is what keeps that from being a
- * surprise in either direction.
+ * surprise in either direction. The one exception is a network the SDK no
+ * longer has at all, which forgetUnknownStoredNetwork() above has already
+ * dropped — there is nothing to return to, so there is nothing to explain.
  */
 export const NETWORK_DOWNGRADED_FROM: string | null = (() => {
   const stored = readStoredNetwork();
@@ -173,10 +219,10 @@ export interface NetworkChangedMessage {
 
 /**
  * Switch the active network: persist the choice, tell other tabs, reload.
- * Throws on a non-switchable id (mainnet until the SDK onboards it) so a
- * caller bug can never persist a network the app cannot boot. `opts.reload`
- * is a test seam — jsdom cannot mock window.location.reload; production
- * callers omit it.
+ * Throws on a non-switchable id (a network this deployment cannot serve, or
+ * mainnet before the rollout switch) so a caller bug can never persist a
+ * network the app cannot boot. `opts.reload` is a test seam — jsdom cannot
+ * mock window.location.reload; production callers omit it.
  */
 /**
  * Whether to invite this wallet onto mainnet.

@@ -41,8 +41,8 @@ export function WalletActions({ onTopUp, onSwap, onSend, sendDisabled }: WalletA
         onClick={onSwap}
         disabled={!mintAllowed}
         // Not "on Mainnet": canSelfMint is a fail-closed allowlist of TEST
-        // networks, so this fires on the dev hatch and on any future network
-        // name too — naming mainnet would be wrong copy on all of them.
+        // networks, so this fires on any future network name too — naming
+        // mainnet would be wrong copy on all of them.
         title={mintAllowed ? undefined : 'Not available on this network'}
         className="relative px-2 py-2.5 sm:px-3 sm:py-3 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] hover:bg-neutral-200 dark:hover:bg-[rgba(255,255,255,0.1)] text-neutral-900 dark:text-white text-xs sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
       >

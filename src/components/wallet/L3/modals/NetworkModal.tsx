@@ -20,14 +20,13 @@ interface NetworkModalProps {
 
 /**
  * One-line, user-facing description of each network. Keyed by id with a plain
- * fallback so an unlisted network (e.g. the 'dev' escape hatch) still reads
- * sensibly. Written from the holder's side: what the network is, not how it's
- * wired.
+ * fallback so a network without copy (the 'testnet' alias, or the next network
+ * the SDK adds) still reads sensibly rather than rendering an empty line.
+ * Written from the holder's side: what the network is, not how it's wired.
  */
 const NETWORK_BLURB: Partial<Record<NetworkType, string>> = {
   testnet2: 'Test network — tokens hold no real value',
   mainnet: 'Real assets on the live Unicity network',
-  dev: 'Local development network',
 };
 
 function blurbFor(id: NetworkType): string {

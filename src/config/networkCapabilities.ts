@@ -14,8 +14,13 @@
  * Networks that carry test money only. Every capability below is granted from
  * this one allowlist, so a new network is denied everything until it is listed
  * deliberately. Exact match by design: a typo'd network unlocks nothing.
+ *
+ * 'testnet' stays: it is a real alias of testnet2 in the SDK table, so a wallet
+ * can genuinely be asked about it. 'dev' is gone — sphere-sdk 0.16.0-dev.1
+ * deleted that network, and since the parameter is a plain `string` a stale
+ * entry would silently keep granting mint to a name nothing can resolve.
  */
-const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet']);
 
 /** User-facing error for gated mint attempts (hook throws + Connect intent reject). */
 // Top Up only. NOT a statement that the network cannot mint: a dApp intent or
