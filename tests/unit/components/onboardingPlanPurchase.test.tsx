@@ -159,19 +159,28 @@ describe('plan screen (sphere#496)', () => {
     const onContinue = vi.fn();
     renderOnboarding({ onContinue });
 
-    // Walking past the paid cards has to say which plan the user keeps.
-    expect(screen.queryByRole('button', { name: /^enter wallet$/i })).toBeNull();
+    // Walking past the paid cards has to say which plan the user keeps — the
+    // footer CTA is never the plan-less "Enter Wallet" while plans are on sale.
+    expect(screen.queryByText(/^enter wallet$/i)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /continue with free plan/i }));
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
-  it('gives onboarding no dismissal, and the dialog one', () => {
-    const onboarding = renderOnboarding();
-    expect(screen.queryByRole('button', { name: /close/i })).toBeNull();
+  it('keeps one chrome, and labels the corner button for what it does', () => {
+    const onContinue = vi.fn();
+    const onboarding = renderOnboarding({ onContinue });
+
+    // Same header in both modes, but onboarding has nothing to close — its
+    // corner button goes into the wallet, and says so.
+    expect(screen.queryByRole('button', { name: /^close$/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /enter wallet/i }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
 
     onboarding.unmount();
-    renderDialog();
-    expect(screen.queryByRole('button', { name: /close/i })).not.toBeNull();
+    const onClose = vi.fn();
+    renderDialog(onClose);
+    fireEvent.click(screen.getByRole('button', { name: /^close$/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('declines from the checkout step into the wallet during onboarding', () => {

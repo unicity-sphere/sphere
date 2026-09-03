@@ -126,11 +126,10 @@ function PlansHero({ onboarding, currentName }: { onboarding?: PlanScreenOnboard
     );
   }
 
+  // No icon tile here: the shared header bar already carries the mark, and a
+  // second one made onboarding look like a different screen.
   return (
     <div className="mb-8 text-center">
-      <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-500/10">
-        <Sparkles className="h-7 w-7 text-orange-500" />
-      </div>
       <h2 className="text-2xl font-bold sm:text-3xl">
         {onboarding.created ? 'Your plan is ready' : 'Subscription restored'}
       </h2>
@@ -433,23 +432,28 @@ export function PlanScreen({ isOpen, reason, onboarding, onClose }: PlanScreenPr
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
         >
-          {/* Dialog header — onboarding has no dismissal, so it gets none. */}
-          {!onboarding && (
-            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-orange-500" />
-                <span className="text-lg font-semibold">{PAID_PLANS_ENABLED ? 'Choose your plan' : 'Your plan'}</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleClose}
-                aria-label="Close"
-                className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-black/5 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-white"
-              >
-                <X className="h-5 w-5" />
-              </button>
+          {/*
+            Same chrome in both modes — the screen must not read as two
+            different designs. Only the corner button's MEANING changes: a
+            dialog closes, onboarding has nothing behind it, so it does what
+            its footer does and goes into the wallet (the free plan is already
+            active, so nothing is lost either way). It is labelled for what it
+            does rather than "Close".
+          */}
+          <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-orange-500" />
+              <span className="text-lg font-semibold">{PAID_PLANS_ENABLED ? 'Choose your plan' : 'Your plan'}</span>
             </div>
-          )}
+            <button
+              type="button"
+              onClick={onboarding ? onboarding.onContinue : handleClose}
+              aria-label={onboarding ? 'Enter wallet' : 'Close'}
+              className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-black/5 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-white"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
           <motion.div
             className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-8"
