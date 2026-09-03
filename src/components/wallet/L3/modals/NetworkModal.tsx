@@ -11,6 +11,7 @@ import {
   type SupportedNetwork,
 } from '../../../../config/network';
 import { buildNetworkRows, rowState, unavailableLabel, type RowState } from './networkRows';
+import { isTestMoney } from '../../../../config/networkCapabilities';
 
 interface NetworkModalProps {
   isOpen: boolean;
@@ -33,11 +34,24 @@ function blurbFor(id: NetworkType): string {
   return NETWORK_BLURB[id] ?? `${id} network`;
 }
 
-const TILE: Record<RowState, string> = {
-  current: 'bg-green-500/10 text-green-500',
-  selectable: 'bg-blue-500/10 text-blue-500',
-  unavailable: 'bg-neutral-500/10 text-neutral-400 dark:text-white/30',
-};
+/**
+ * Colour says what KIND of money a network holds — never which row is selected.
+ *
+ * Selection had green and "selectable" had blue, so the SAME testnet showed green
+ * here and amber on the balance badge, which reads as a status change (green =
+ * connected, amber = something wrong) rather than as one network. Colour now means
+ * one thing wallet-wide: amber = test money, emerald = real. Which row is current
+ * is carried by the check and the word "Current", which is what they are for.
+ *
+ * Unavailable stays neutral: that is a different axis — the network cannot be used
+ * at all — and grey collides with neither meaning.
+ */
+const UNAVAILABLE_TILE = 'bg-neutral-500/10 text-neutral-400 dark:text-white/30';
+
+function tileFor(state: RowState, id: NetworkType): string {
+  if (state === 'unavailable') return UNAVAILABLE_TILE;
+  return isTestMoney(id) ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500';
+}
 
 export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
   const [pending, setPending] = useState<SupportedNetwork | null>(null);
@@ -101,7 +115,7 @@ export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
                       : ''
                 }`}
               >
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${TILE[state]}`}>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${tileFor(state, row.id)}`}>
                   <Globe className="w-6 h-6" />
                 </div>
 
@@ -115,7 +129,7 @@ export function NetworkModal({ isOpen, onClose }: NetworkModalProps) {
                 </div>
 
                 {state === 'current' && (
-                  <span className="flex items-center gap-1 text-xs font-semibold text-green-600 dark:text-green-400 shrink-0">
+                  <span className="flex items-center gap-1 text-xs font-semibold text-neutral-600 dark:text-white/70 shrink-0">
                     <Check className="w-4 h-4" />
                     Current
                   </span>

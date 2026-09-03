@@ -3,6 +3,8 @@ import {
   allowsSharedAggregatorKey,
   canSelfMint,
   MINT_UNAVAILABLE_MESSAGE,
+  isTestMoney,
+  testMoneyMatchesSelfMint,
 } from '../../../src/config/networkCapabilities';
 
 describe('canSelfMint — fail-closed allowlist', () => {
@@ -49,5 +51,29 @@ describe('allowsSharedAggregatorKey — fail-closed allowlist', () => {
     expect(allowsSharedAggregatorKey('some-future-network')).toBe(false);
     expect(allowsSharedAggregatorKey('MAINNET')).toBe(false);
     expect(allowsSharedAggregatorKey(' testnet2')).toBe(false);
+  });
+});
+describe('isTestMoney — the badge colour, not the minting gate', () => {
+  it('is true for the test networks and false for mainnet', () => {
+    expect(isTestMoney('testnet2')).toBe(true);
+    expect(isTestMoney('testnet')).toBe(true);
+    expect(isTestMoney('mainnet')).toBe(false);
+  });
+
+  it('fails closed on anything unknown — an unlabelled network is not play money', () => {
+    // Getting this backwards paints real money amber ("tokens hold no real value"),
+    // which is the asymmetry the badge exists to protect.
+    expect(isTestMoney('')).toBe(false);
+    expect(isTestMoney('Testnet2')).toBe(false); // exact match only — no case folding
+    expect(isTestMoney('some-future-network')).toBe(false);
+  });
+
+  it('agrees with canSelfMint today — so a divergence has to be written down', () => {
+    // They are separate QUESTIONS over separate sets: a test network could have
+    // minting switched off and would still hold play money. This pins that nobody
+    // has split them by accident; the day they legitimately differ, edit this test.
+    for (const n of ['testnet2', 'testnet', 'dev', 'mainnet', '', 'some-future-network']) {
+      expect(testMoneyMatchesSelfMint(n)).toBe(true);
+    }
   });
 });

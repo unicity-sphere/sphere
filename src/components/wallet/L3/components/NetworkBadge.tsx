@@ -1,6 +1,6 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import { SPHERE_NETWORK } from '../../../../config/network';
-import { canSelfMint } from '../../../../config/networkCapabilities';
+import { isTestMoney } from '../../../../config/networkCapabilities';
 
 /**
  * Which network the balance above belongs to.
@@ -17,20 +17,20 @@ import { canSelfMint } from '../../../../config/networkCapabilities';
  */
 export function NetworkBadge() {
   const label = NETWORKS[SPHERE_NETWORK].name;
-  const isTestMoney = canSelfMint(SPHERE_NETWORK);
+  const testMoney = isTestMoney(SPHERE_NETWORK);
 
   return (
     <div
       className="flex items-center justify-center gap-1.5 mt-1"
       title={
-        isTestMoney
+        testMoney
           ? `${label} — test network, tokens hold no real value`
           : `${label} — live network, real assets`
       }
     >
       <span
         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-          isTestMoney ? 'bg-amber-500' : 'bg-emerald-500'
+          testMoney ? 'bg-amber-500' : 'bg-emerald-500'
         }`}
       />
       <span className="text-[10px] font-mono tracking-wide text-neutral-400 dark:text-[rgba(255,255,255,0.35)]">

@@ -29,6 +29,27 @@ export function canSelfMint(network: string): boolean {
 }
 
 /**
+ * Fail-closed allowlist: true when the money on this network is play money.
+ *
+ * A SEPARATE question from canSelfMint, and a separate set on purpose even though
+ * the two coincide today. "May the wallet mint here" and "is this real value" are
+ * different: a test network could have minting switched off, and the badge would
+ * then have to keep saying the tokens are worthless. Borrowing canSelfMint for the
+ * badge made it lie in exactly that case. testMoneyMatchesSelfMint() below pins
+ * that they agree, so any divergence has to be written down rather than drifting.
+ */
+const TEST_MONEY_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+
+export function isTestMoney(network: string): boolean {
+  return TEST_MONEY_NETWORKS.has(network);
+}
+
+/** The two allowlists agree today; exported so a test can pin it. */
+export function testMoneyMatchesSelfMint(network: string): boolean {
+  return isTestMoney(network) === canSelfMint(network);
+}
+
+/**
  * Whether ONE shared, build-time aggregator key (VITE_AGGREGATOR_API_KEY) may
  * serve every wallet on this network.
  *
