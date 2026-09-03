@@ -123,7 +123,7 @@ export function ConnectIntentHandler() {
     pendingIntent !== null &&
     pendingIntent.action === 'send' &&
     duplicateSend.status !== 'checking' &&
-    validateIntent(pendingIntent.action, pendingIntent.params) === null
+    validateIntent(pendingIntent.action, pendingIntent.params, network) === null
       ? `${pendingIntent.id}:${duplicateSend.status}`
       : null;
 

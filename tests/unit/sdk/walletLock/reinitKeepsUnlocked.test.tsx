@@ -99,7 +99,7 @@ afterEach(() => {
 
 describe('re-init keeps an unlocked encrypted wallet unlocked (graceful lock §8.5)', () => {
   it('reinitialize() does not relock', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('locked').textContent).toBe('true'));
 
     await act(async () => { await ctx!.unlock('correct horse battery staple'); });
@@ -117,7 +117,7 @@ describe('re-init keeps an unlocked encrypted wallet unlocked (graceful lock §8
   });
 
   it('the COLD load still passes no password (plaintext wallets must be untouched)', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('locked').textContent).toBe('true'));
 
     expect(initSpy.calls.length).toBe(1);

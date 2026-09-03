@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, ShieldCheck, Lock, Globe } from 'lucide-react';
+import { Settings, Download, LogOut, Key, AtSign, Link, CreditCard, Globe, ShieldCheck, Lock } from 'lucide-react';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, MenuButton } from '../../ui';
 import { LookupModal } from './LookupModal';

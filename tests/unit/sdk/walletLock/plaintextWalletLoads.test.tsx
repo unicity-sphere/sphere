@@ -117,7 +117,7 @@ describe('existing plaintext wallet', () => {
   it('loads without a password and never locks', async () => {
     render(
       <Wrapper>
-        <SphereProvider>
+        <SphereProvider network="testnet2">
           <Probe />
         </SphereProvider>
       </Wrapper>,

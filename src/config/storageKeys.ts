@@ -41,6 +41,16 @@ export const STORAGE_KEYS = {
   // from identity via the SGW /auth flow). Cleared on wallet deletion.
   SUBSCRIPTION_API_KEY: 'sphere_subscription_api_key',
 
+  // Active network choice (runtime network switcher). Read ONCE at module
+  // load by src/config/network.ts; written by setActiveNetwork(), which then
+  // reloads the page. Carries the sphere_ prefix on purpose: wallet deletion
+  // (clearAllSphereData) also resets the network choice to the build default.
+  ACTIVE_NETWORK: 'sphere_active_network',
+
+  // Set once the user has been told mainnet is live — whether they switched or
+  // declined. The announcement is an invitation, so it must never nag.
+  MAINNET_ANNOUNCED: 'sphere_mainnet_announced',
+
   // Idle auto-lock timeout, encrypted at rest with the wallet password
   // (encodeLockSettings/decodeLockSettings — src/sdk/walletLock/lockSettings.ts)
   // so cold-storage tampering can't silently disable/shorten it. Written by
@@ -61,16 +71,6 @@ export const STORAGE_KEYS = {
   // message — cannot come back holding a decrypted Sphere. Carries no secret,
   // only a timestamp (graceful lock §8.4).
   LOCK_EPOCH: 'sphere_lock_epoch',
-
-  // Active network choice (runtime network switcher). Read ONCE at module
-  // load by src/config/network.ts; written by setActiveNetwork(), which then
-  // reloads the page. Carries the sphere_ prefix on purpose: wallet deletion
-  // (clearAllSphereData) also resets the network choice to the build default.
-  ACTIVE_NETWORK: 'sphere_active_network',
-
-  // Set once the user has been told mainnet is live — whether they switched or
-  // declined. The announcement is an invitation, so it must never nag.
-  MAINNET_ANNOUNCED: 'sphere_mainnet_announced',
 } as const;
 
 const STORAGE_PREFIX = 'sphere_';

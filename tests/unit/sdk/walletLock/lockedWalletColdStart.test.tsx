@@ -135,7 +135,7 @@ describe('cold-start of a password-protected wallet (#449 critical fix regressio
   it('ends locked (UnlockScreen), NOT on an error screen, and does not retry', async () => {
     render(
       <Wrapper>
-        <SphereProvider>
+        <SphereProvider network="testnet2">
           <Probe />
         </SphereProvider>
       </Wrapper>,

@@ -9,7 +9,6 @@ import { RegisterNametagModal } from './shared/components/RegisterNametagModal';
 import { NewAddressModal } from './shared/modals/NewAddressModal';
 import { AddressSelector } from './shared/components';
 import { CreateWalletFlow } from './onboarding/CreateWalletFlow';
-import { UnlockScreen } from './onboarding/components/UnlockScreen';
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import {
   DEFAULT_NETWORK,
@@ -20,6 +19,7 @@ import {
   shouldAnnounceMainnet,
 } from '../../config/network';
 import { MainnetAnnouncementModal } from './L3/modals/MainnetAnnouncementModal';
+import { UnlockScreen } from './onboarding/components/UnlockScreen';
 
 const PANEL_SHELL = "bg-white dark:bg-modal-bg/50 backdrop-blur-xl overflow-hidden h-full relative lg:border-l lg:border-neutral-100 dark:lg:border-brand-orange-border flex flex-col rounded-2xl";
 
@@ -32,11 +32,6 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
   // #413: derive-address flow — hosted at panel level (like RegisterNametagModal)
   // so the slide-in screen paints above the wallet content in DOM order.
   const [isNewAddressOpen, setIsNewAddressOpen] = useState(false);
-  // #449: once the user picks "forgot password → restore from recovery
-  // phrase" on the UnlockScreen, drop them straight into onboarding's restore
-  // flow instead of the unlock prompt. Reset when the wallet unlocks/restores
-  // (isLocked flips false) so a future lock starts fresh at the unlock screen.
-  const [restoreFromLock, setRestoreFromLock] = useState(false);
   // Mainnet invitation — decided once, at mount, from values that only change
   // on reload anyway (the network is fixed for a page's lifetime). Reading the
   // "already asked" flag in the initialiser keeps it out of the render path.
@@ -47,6 +42,12 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
       announced: isMainnetAnnounced(),
     }),
   );
+
+  // #449: once the user picks "forgot password → restore from recovery
+  // phrase" on the UnlockScreen, drop them straight into onboarding's restore
+  // flow instead of the unlock prompt. Reset when the wallet unlocks/restores
+  // (isLocked flips false) so a future lock starts fresh at the unlock screen.
+  const [restoreFromLock, setRestoreFromLock] = useState(false);
   const { isLoading: isWalletLoading, walletExists, error: walletError } = useWalletStatus();
   const { identity, nametag, isLoading: isLoadingIdentity } = useIdentity();
   const { initProgress, isLocked } = useSphereContext();

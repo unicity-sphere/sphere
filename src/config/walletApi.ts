@@ -96,15 +96,14 @@ export function getWalletApiBaseUrl(network: NetworkType): string | null {
 }
 
 /**
- * True when the asset path rides wallet-api for `network` (drives IPFS-off, UI
- * hints). Never throws (no #351 assert) so render paths are safe: the assert
+ * True when the asset path rides wallet-api for `network` (drives UI hints).
+ * Never throws (no #351 assert) so render paths are safe: the assert
  * fires once, at provider composition (`buildProviders`), where
  * SphereProvider catches it and surfaces a visible initialization error.
  *
  * Per-network on purpose: a deployment-wide flag would disagree with the
  * composition once URLs are per-network — reporting "wallet-api on" for a
- * network that actually composed local custody would force IPFS token sync off
- * beside local custody (and the reverse on dev).
+ * network that actually composed local custody (and the reverse on dev).
  */
 export function isWalletApiEnabled(network: NetworkType): boolean {
   return hasWalletApiUrl(network);

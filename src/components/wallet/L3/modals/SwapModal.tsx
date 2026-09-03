@@ -90,6 +90,9 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   // PR body; the SDK-side fix is tracked separately.
   useEffect(() => {
     if (!isOpen) return;
+    // The swap's "to" leg is a self-mint, so this screen renders nothing where
+    // minting is forbidden (see the early return below) — never quote rates for it.
+    if (!mintAllowed) return;
     if (!registryReady) { setRateStatus('loading'); return; }
 
     let cancelled = false;
@@ -166,13 +169,10 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
 
     // Any throw here (registry read, unexpected provider error) must land in the
     // explanatory state — never leave the modal spinning on "loading" forever.
-    // Gated on mintAllowed: the swap mint leg is refused off test networks.
-    if (mintAllowed) {
-      loadSwappableCoins().catch((e) => {
-        console.warn('Failed to load swap rates:', e);
-        if (!cancelled) setRateStatus('unavailable');
-      });
-    }
+    loadSwappableCoins().catch((e) => {
+      console.warn('Failed to load swap rates:', e);
+      if (!cancelled) setRateStatus('unavailable');
+    });
     return () => { cancelled = true; };
   }, [isOpen, mintAllowed, providers?.price, assets, registryReady, rateAttempt]);
 

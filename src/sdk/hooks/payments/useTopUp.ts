@@ -50,14 +50,14 @@ export function useTopUp(): UseTopUpReturn {
 
   const mutation = useMutation({
     mutationFn: async (): Promise<TopUpResult[]> => {
-      const payments = getPayments(sphere);
-      if (!payments) throw new Error('Wallet not initialized');
       // The entry point is hidden on networks that forbid self-mint (see
       // WalletActions), but the hook must fail closed too — a self-mint on
       // mainnet would create real coinIds for free (networkCapabilities.ts).
       if (!canSelfMint(network)) {
         throw new Error(MINT_UNAVAILABLE_MESSAGE);
       }
+      const payments = getPayments(sphere);
+      if (!payments) throw new Error('Wallet not initialized');
       // Self-mint is a certification_request — gate it on the subscription key
       // like a send, so it can't go out keyless in the provisioning window.
       requireSubscriptionKey();

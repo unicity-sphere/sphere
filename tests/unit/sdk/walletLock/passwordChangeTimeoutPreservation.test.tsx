@@ -144,7 +144,7 @@ function Probe() {
 function renderProvider() {
   render(
     <Wrapper>
-      <SphereProvider>
+      <SphereProvider network="testnet2">
         <Probe />
       </SphereProvider>
     </Wrapper>,

@@ -101,8 +101,11 @@ vi.mock('../../../src/sdk', () => ({
   useTransfer: () => ({ transfer: vi.fn(), isLoading: false, error: null, lastResult: null, reset: vi.fn() }),
 }));
 
+// SwapModal's "to" leg is a self-mint, so the screen renders nothing where the
+// active network forbids minting (networkCapabilities.ts). These are rate tests:
+// pin them to a test network so what they assert about is what they exercise.
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
-  useSphereContext: () => ({ sphere: {}, providers }),
+  useSphereContext: () => ({ sphere: {}, providers, network: 'testnet2' }),
 }));
 
 vi.mock('../../../src/sdk/payments', () => ({
