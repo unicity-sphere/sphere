@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { UpgradeContext, type UpgradeReason } from './UpgradeContext';
 import { PlanScreen } from './PlanScreen';
 import { PlanDowngradeWatcher } from './PlanDowngradeWatcher';
-import { FreePlanEntryWatcher } from './FreePlanEntryWatcher';
 import { AddressKeyPromptModal } from '../subscription/AddressKeyPromptModal';
 
 export function UpgradeProvider({ children }: { children: ReactNode }) {
@@ -20,7 +19,6 @@ export function UpgradeProvider({ children }: { children: ReactNode }) {
     <UpgradeContext.Provider value={value}>
       {children}
       <PlanDowngradeWatcher openUpgrade={openUpgrade} />
-      <FreePlanEntryWatcher openUpgrade={openUpgrade} />
       <AddressKeyPromptModal />
       {/* Same component onboarding renders — here in its dialog mode. */}
       <PlanScreen isOpen={isOpen} reason={reason} onClose={() => setIsOpen(false)} />

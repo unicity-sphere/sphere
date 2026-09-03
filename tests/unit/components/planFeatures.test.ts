@@ -9,6 +9,7 @@ import {
   keepPlanLabel,
   continueWithPlanLabel,
   planGridList,
+  isFreePlanName,
 } from '@/components/subscription/planFeatures';
 import type { PlanInfo } from '@/services/subscriptionApi';
 
@@ -130,6 +131,16 @@ describe('planGridList', () => {
 
   it('returns the store list untouched when there is no current plan', () => {
     expect(planGridList(null, [basic])).toEqual([basic]);
+  });
+});
+
+describe('isFreePlanName', () => {
+  it('recognises the gateway free tier by name, since utilization carries no price', () => {
+    expect(isFreePlanName('free')).toBe(true);
+    expect(isFreePlanName(' Free ')).toBe(true);
+    expect(isFreePlanName('premium')).toBe(false);
+    expect(isFreePlanName(null)).toBe(false);
+    expect(isFreePlanName(undefined)).toBe(false);
   });
 });
 

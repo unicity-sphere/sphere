@@ -17,6 +17,7 @@ import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
 import { getStoredSubscriptionKey, setStoredSubscriptionKey } from "../../../../config/storageKeys";
 import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
+import { isFreePlanName } from "../../../subscription/planFeatures";
 
 /** Cap onboarding's subscription provisioning; on expiry we use the env key. */
 const PROVISION_TIMEOUT_MS = 8000;
@@ -781,6 +782,14 @@ export function useOnboardingFlow(
         setStoredSubscriptionKey(result.apiKey);
         // Durable per-identity copy; non-fatal if it fails (cache still set).
         await saveWalletKey(active, network, result.apiKey).catch(() => {});
+        // A restored wallet whose key is already on a PAID plan has nothing to
+        // decide here — walk it straight into the wallet instead of showing an
+        // upgrade line-up it has already bought past. A fresh wallet is always
+        // provisioned onto free, so this only ever fires on restore.
+        if (!isFreePlanName(result.plan)) {
+          finishFinalize();
+          return;
+        }
         setPlanName(result.plan);
         setPlanCreated(result.created);
         setStep("planCapabilities");
