@@ -1,10 +1,15 @@
 /**
  * wallet-api composition config (S4 provider swap).
  *
- * The ASSET path moves to the wallet-api backend when this deployment has a
- * URL for the ACTIVE network; messaging, DMs and nametags stay on Nostr. With
- * no URL for that network, the app keeps the legacy local-custody composition
- * (IndexedDB + Nostr asset delivery) unchanged.
+ * The ASSET path rides the wallet-api backend whenever the wallet can run at
+ * all; messaging, DMs and nametags stay on Nostr. With no URL for the active
+ * network there is NO composition to fall back to: sphere-sdk 0.15.0's
+ * Sphere.init calls resolvePaymentsV2Composition() before anything else and
+ * throws INVALID_CONFIG without a `walletApi` config, and the Nostr asset rail
+ * that used to back local custody (kinds 31113/31115/31116) no longer exists in
+ * the SDK. A missing URL therefore means the wallet cannot start on that
+ * network — which is why the availability gate in network.ts hides such a
+ * network outright rather than letting a user select it.
  *
  * Which URL applies is a PER-NETWORK question — the SDK client is bound to the
  * active network and a backend configured for another one refuses its sign-in.
@@ -25,10 +30,11 @@
  * Two former hazards documented here are now gone, and the notes are kept only
  * to stop them being reintroduced:
  *  - getWalletApiBaseUrl's null branch used to be compile-eliminated (it tested
- *    a baked literal directly), which made legacy local custody unreachable in
- *    Docker images and returned the app's own origin instead. It now tests the
- *    result of walletApiUrlFor(), a function call the bundler cannot fold, so
- *    the branch survives and legacy composition works again.
+ *    a baked literal directly), so a Docker image silently pointed the wallet at
+ *    its own origin instead of returning null. It now tests the result of
+ *    walletApiUrlFor(), a function call the bundler cannot fold, so the branch
+ *    survives and an unconfigured network reads as null — which is a refusal
+ *    (the #351 assert, or the SDK's INVALID_CONFIG), not a fallback.
  *  - isWalletApiRequired() used to fold to a hardcoded `true` and vanish, which
  *    silently armed both the #351 throw and the availability gate while the
  *    start-up check still believed the flag was off. It now reads the runtime
@@ -59,35 +65,43 @@ function resolveUrl(value: string): string {
 
 /**
  * Backend base URL for `network`, or null when this deployment does not serve
- * it (which composes the legacy local-custody bundle).
+ * it — a network the wallet cannot run at all (Sphere.init refuses to compose
+ * money without a `walletApi` config; see the module docstring).
  *
  * #351 assert (2026-06-12 incident): a bundle that DECLARES wallet-api custody
  * but has no URL for the network it is about to run must fail at provider
- * composition instead of silently composing local custody — a missing URL
- * CHANGES the custody model, not just degrades a feature.
+ * composition. When #351 was filed the failure it prevented was a SILENT swap
+ * to local custody; that fallback is gone, so what the assert buys now is
+ * WHERE the failure lands — a named, actionable error at buildProviders rather
+ * than the SDK's generic INVALID_CONFIG a step later.
  *
  * Armed only for networks the switcher can select (SUPPORTED_NETWORKS). 'dev'
  * is exempt on purpose: it is a console-only local escape hatch with no
  * deployed backend, and arming it there would break the very deployment used
- * to verify switching (the Pages build sets VITE_REQUIRE_WALLET_API=true) —
- * dev correctly falls back to local custody instead. Note the availability
+ * to verify switching (the Pages build sets VITE_REQUIRE_WALLET_API=true).
+ * What the exemption does NOT do is make dev work. Dev composes no wallet-api
+ * config, so Sphere.init still throws INVALID_CONFIG on it; all the exemption
+ * changes is which error the developer sees — the SDK's generic one, instead of
+ * this module's more specific one. (Removing the hatch is a separate change,
+ * owned by the SDK-bump PR.) Note the availability
  * gate largely SUBSUMES this assert: a network is only selectable when a URL
  * exists for it, so in practice this now guards the build-default network.
  */
 export function getWalletApiBaseUrl(network: NetworkType): string | null {
   const raw = walletApiUrlFor(network);
   // Unlike the previous single-env version, this null branch is NOT foldable:
-  // `raw` comes from a function call rather than a baked literal, so legacy
-  // local custody is reachable in Docker bundles again.
+  // `raw` comes from a function call rather than a baked literal, so a Docker
+  // bundle reports "no URL for this network" truthfully instead of folding to
+  // the app's own origin.
   if (raw === null) {
     if (isWalletApiRequired() && SUPPORTED_NETWORKS.some((n) => n.id === network)) {
       throw new Error(
         `This build declares wallet-api custody (VITE_REQUIRE_WALLET_API) but has no ` +
-          `wallet-api URL for network "${network}", so composing the legacy local-custody ` +
-          `bundle instead would silently change the custody model. Set ` +
+          `wallet-api URL for network "${network}", and there is no local-custody ` +
+          `composition to fall back to — the wallet cannot start on it. Set ` +
           `WALLET_API_URL_${network.toUpperCase()} on the container env (or ` +
-          `VITE_WALLET_API_URL for the build default network), or unset ` +
-          `VITE_REQUIRE_WALLET_API for an intentionally legacy deployment.`,
+          `VITE_WALLET_API_URL for the build default network). Unsetting ` +
+          `VITE_REQUIRE_WALLET_API only moves this failure later, into Sphere.init.`,
       );
     }
     return null;
@@ -103,7 +117,7 @@ export function getWalletApiBaseUrl(network: NetworkType): string | null {
  *
  * Per-network on purpose: a deployment-wide flag would disagree with the
  * composition once URLs are per-network — reporting "wallet-api on" for a
- * network that actually composed local custody (and the reverse on dev).
+ * network that in fact has no backend here (and the reverse on dev).
  */
 export function isWalletApiEnabled(network: NetworkType): boolean {
   return hasWalletApiUrl(network);

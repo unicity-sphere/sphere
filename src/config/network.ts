@@ -2,7 +2,7 @@ import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { STORAGE_KEYS } from './storageKeys';
 import { SUBSCRIPTION_ENABLED, runtimeFlag, runtimeSetting } from './runtimeConfig';
-import { FALLBACK_NETWORK, hasWalletApiUrl, isWalletApiRequired } from './walletApiNetworks';
+import { FALLBACK_NETWORK, hasWalletApiUrl } from './walletApiNetworks';
 import { allowsSharedAggregatorKey } from './networkCapabilities';
 
 /** Why a network is not offered — drives honest UI copy, never a lie. */
@@ -56,9 +56,13 @@ const MAINNET_ROLLOUT_ENABLED = runtimeFlag(
  */
 function unavailableReasonFor(id: NetworkType, entry: NetworkTableEntry): UnavailableReason | undefined {
   if (entry.networkId == null) return 'not-onboarded';
-  // Legacy local-custody deployments serve every network locally, so only
-  // wallet-api deployments are gated on having a URL.
-  if (isWalletApiRequired() && !hasWalletApiUrl(id)) return 'not-served-here';
+  // Unconditional: there is no local-custody fallback to serve a network with.
+  // Sphere.init calls resolvePaymentsV2Composition() before anything else and
+  // throws INVALID_CONFIG without a `walletApi` config, so a network with no URL
+  // cannot boot on ANY deployment — REQUIRE_WALLET_API only decides whether the
+  // #351 assert fires earlier, not whether the wallet works. Gating on the flag
+  // let a rollout-on deployment offer a row that strands the user at init.
+  if (!hasWalletApiUrl(id)) return 'not-served-here';
   // buildProviders REFUSES a real-value network on the shared build-time
   // aggregator key (it ships readable to every visitor). Offering a network
   // that provider composition is guaranteed to throw on would strand the user

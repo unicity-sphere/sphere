@@ -128,9 +128,12 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
  * group chat and nametags stay on the Nostr transport in the base bundle.
  *
  * Fail-closed (#351): on builds with VITE_REQUIRE_WALLET_API set,
- * getWalletApiBaseUrl() throws when VITE_WALLET_API_URL is missing — the
- * error is caught by initialize() and surfaced as a visible init error
- * instead of silently composing the legacy local-custody bundle.
+ * getWalletApiBaseUrl() throws when there is no URL for the active network —
+ * the error is caught by initialize() and surfaced as a visible init error.
+ * With the flag off this returns the bundle WITHOUT a `walletApi` config, and
+ * Sphere.init then throws INVALID_CONFIG itself: there is no local-custody
+ * composition to fall back to any more, so the flag chooses which error the
+ * user sees, not whether the wallet works.
  */
 function buildProviders(network: NetworkType, apiKey?: string): SphereAppProviders {
   // Fail closed on the static-key mode where it is unsafe. VITE_AGGREGATOR_API_KEY

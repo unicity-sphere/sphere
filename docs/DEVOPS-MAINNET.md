@@ -1,7 +1,8 @@
 # Mainnet deployment — DevOps handoff
 
 Exactly which variables to set, where, and what each one does. Written against
-`main` + `feat/network-switcher` as of 2026-07-15.
+`main` + `feat/network-switcher`, revised 2026-09-02 against the pinned SDK
+(`@unicitylabs/sphere-sdk@0.15.0`).
 
 ---
 
@@ -22,9 +23,20 @@ A wallet only offers a network when **all three** are true:
 the SDK knows the network   AND   this deployment has its wallet-api URL   AND   (mainnet only) the rollout switch is on
 ```
 
-Today the first condition is still false — SDK 0.11.14 has no mainnet
-`networkId` — so mainnet stays greyed out no matter what you set. Setting the
-vars early is safe and does nothing.
+Today the first condition is still false: the pinned SDK (**0.15.0**, see
+`package.json`) ships no mainnet `networkId` in its `NETWORKS` table, so mainnet
+renders greyed out as "Coming soon" whatever you set.
+
+**Do not read that as "the vars are inert."** The SDK gate is the one gate this
+deployment does not control, and the one that disappears on its own: the next
+SDK bump that onboards mainnet satisfies condition (a) with no change in this
+repo. From that moment the only thing still holding mainnet is
+`MAINNET_ROLLOUT_ENABLED`. So:
+
+- setting `WALLET_API_URL_MAINNET` early is safe — on its own it only makes the
+  deployment *capable* of serving mainnet;
+- setting `MAINNET_ROLLOUT_ENABLED=true` early is **not** safe. It arms a
+  go-live that an unrelated dependency bump would then trigger silently.
 
 ## Why per-network URLs at all
 
@@ -77,9 +89,16 @@ The app now **refuses to start** on a real-value network with subscriptions off,
 rather than leak the key.
 
 ### What you must NOT configure — it follows the network by itself
-The aggregator gateway URL **and the SGW base URL**, Nostr relays, IPFS
-gateways, token registry, trust base, `networkId`. These come from the SDK's
-per-network table. Adding env vars for them re-breaks the switcher.
+`NETWORKS[network]` in SDK 0.15.0 carries exactly five things: `name`,
+`networkId` (only on networks it has onboarded), `aggregatorUrl`, `nostrRelays`,
+`groupRelays`, `tokenRegistryUrl`. Two more values follow the network without
+being fields in it: the **SGW base URL**, which the app derives from
+`aggregatorUrl` because the SGW *is* the gateway (`src/config/subscription.ts`),
+and the **trust base**, which the SDK embeds per network. None of them takes an
+env var, and adding one re-breaks the switcher.
+
+(An earlier revision of this list also named *IPFS gateways*. That was wrong:
+the SDK's network table has no IPFS field and the wallet makes no IPFS calls.)
 
 ## Mainnet SGW (subscription gateway)
 
@@ -96,9 +115,16 @@ means **no wallet can provision a key** — it fails client-side with "network
 mismatch", which looks like a wallet bug, not a config one.
 
 ## Fail-closed behaviour — the container refuses to start if:
+- **there is no wallet-api URL for _any_ network** — unconditional, regardless
+  of `REQUIRE_WALLET_API`. There is no local-custody mode left to fall back to:
+  `Sphere.init` refuses to compose money without a wallet-api config
+  (`INVALID_CONFIG`), so such a container would start cleanly and then fail in
+  every browser;
 - `REQUIRE_WALLET_API` is truthy but neither `WALLET_API_URL_TESTNET2` nor the
-  legacy `WALLET_API_URL` is set (#351: a missing URL silently changes the
-  custody model);
+  legacy `WALLET_API_URL` is set (#351). Since the fallback disappeared this
+  flag no longer decides *whether* such a deployment breaks, only *where*: with
+  it set the failure is a named error at provider composition instead of the
+  SDK's generic one a step later;
 - `MAINNET_ROLLOUT_ENABLED=true` but `WALLET_API_URL_MAINNET` is empty on a
   wallet-api deployment (you would believe mainnet is live while the row stays
   greyed out);
@@ -112,6 +138,12 @@ offering fewer networks is legitimate. The container logs which networks it
 offers at start — grep for `wallet-api networks offered:` when a network is
 unexpectedly greyed out. That log is the intended first stop for
 "why can't I select mainnet".
+
+If that line lists **no networks**, the container cannot run a wallet at all,
+even though it started: every network it could offer is either missing a URL or
+held by the rollout switch, and there is no custody model that works without a
+wallet-api backend. The commonest way to get there is a mainnet-only task
+definition with `MAINNET_ROLLOUT_ENABLED` left off.
 
 Flags are compared against **exactly `true`**; `TRUE`, `1`, `yes` mean off (the
 script warns).
@@ -132,7 +164,13 @@ keep the old config.
    dies at once.
 3. **Do not commit a mainnet `AGGREGATOR_API_KEY`** — and prefer not to set it
    at all on mainnet (see above).
-4. **Do not add a `NETWORK` variable** to the sed contract expecting it to
+4. **Never set `VITE_AGGREGATOR_URL` / `VITE_TRUSTBASE_URL` in a deployed
+   image.** They are a local/e2e stack override. A gateway and the trust base it
+   serves are one pair, so the override describes exactly one network — the
+   deployment's start network, and `getEngineOverride` now ignores it on every
+   other one rather than mixing trust bases across a switch. Set in a deployed
+   image it would still override the start network's real gateway.
+5. **Do not add a `NETWORK` variable** to the sed contract expecting it to
    work — Vite const-folds branch conditions against baked literals. Values that
    gate a branch belong on `window.__SPHERE_RUNTIME_CONFIG__` (as the new
    per-network vars do). Network *selection* itself is a persisted user choice
@@ -142,15 +180,32 @@ keep the old config.
 
 Do not flip `MAINNET_ROLLOUT_ENABLED` before these land — both are money-safety:
 
-- **Network-scoped relay cursors** (SDK) — without it, switching networks can
-  permanently skip incoming token transfers.
+- ~~**Network-scoped relay cursors** (SDK)~~ — **moot, and moot because the
+  mechanism was DELETED, not because it was fixed.** Tokens no longer travel
+  over Nostr relays at all: the asset event kinds (31113/31115/31116) are gone
+  from the SDK, and delivery is the wallet-api mailbox. Its cursor lives in the
+  per-(network, address) KV under `pv2g2:{network}:{chainPubkey}:cursor:*`, so
+  it is network-scoped by construction and no switch can share one. Written out
+  rather than deleted so nobody re-adds the blocker: there is no relay cursor
+  left to scope.
 - **Self-mint gating** (wallet) — done on `feat/network-switcher`: Top Up, Swap
   and the Connect `mint` intent are refused off test networks. Without it, the
   moment a mainnet trust base ships anyone could mint real coinIds for free.
 
-Plus the SDK/protocol side: mainnet trust base + `networkId`, a v2 mainnet
-gateway, and a mainnet token registry. See
-`docs/superpowers/plans/2026-07-15-mainnet-readiness-roadmap.md`.
+Plus the SDK/protocol side, none of which this repo can supply — each one is
+observable in the pinned SDK, so check it there rather than in a plan doc:
+
+- a mainnet **`networkId`** and a mainnet **trust base** — `NETWORKS.mainnet`
+  still has no `networkId`, which is what keeps the row greyed out today;
+- a **mainnet gateway** — `NETWORKS.mainnet.aggregatorUrl` is still the
+  placeholder `https://aggregator.unicity.network/rpc`;
+- a **mainnet token registry** — `NETWORKS.mainnet.tokenRegistryUrl` still
+  points at `unicity-ids.testnet.json`;
+- a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET`.
+
+(This used to link `docs/superpowers/plans/2026-07-15-mainnet-readiness-roadmap.md`.
+That pointer is dropped: `docs/superpowers/` is gitignored, so the file was never
+committed and the link resolved to nothing for anyone who cloned the repo.)
 
 ## Smoke checklist for a mainnet deployment
 
@@ -166,11 +221,3 @@ gateway, and a mainnet token registry. See
    presence on mainnet is a release blocker.
 6. Send a small amount between two wallets; confirm receipt.
 
-## Known gap (tracked, not shipped)
-
-`VITE_AGGREGATOR_URL` / `VITE_TRUSTBASE_URL` (`getEngineOverride`) are still
-one-per-deployment with no network dimension, and are applied to whatever
-network is active. They are only set for local/e2e stacks today (never in the
-deployed images), which bounds the risk — but a `dev`-hatch switch could mix one
-network's gateway with another's trust base. Do not set them in a deployed
-environment.

@@ -83,10 +83,13 @@ log() { echo "sphere-runtime-config: $*" >&2; }
 
 # ── Fail-closed (#351) ───────────────────────────────────────────────────────
 # A bundle that DECLARES wallet-api custody (REQUIRE_WALLET_API truthy) but has
-# no backend URL must not boot: silently composing the legacy local-custody
-# bundle would change the custody model, not just degrade a feature (the
-# 2026-06-12 incident). Truthiness matches src/config/walletApi.ts exactly:
-# only '', 'false', '0' count as off.
+# no backend URL must not boot. When #351 was filed (the 2026-06-12 incident)
+# the danger was a SILENT swap to the legacy local-custody bundle — a changed
+# custody model, not a degraded feature. That fallback is gone (see the
+# unconditional check below), so today this check only makes the same failure
+# loud and early, at the start network, before a browser reaches Sphere.init.
+# Truthiness matches src/config/walletApi.ts exactly: only '', 'false', '0'
+# count as off.
 case "${REQUIRE_WALLET_API-}" in
   '' | false | 0) require_wallet_api=0 ;;
   *)              require_wallet_api=1 ;;
@@ -106,8 +109,8 @@ case "$start_network" in
 esac
 if [ "$require_wallet_api" = 1 ] && [ -z "$start_url" ]; then
   log "ERROR: REQUIRE_WALLET_API is set but there is no wallet-api URL for the start"
-  log "       network '$start_network' — refusing to start (every fresh visitor would"
-  log "       silently get the legacy custody model, #351)."
+  log "       network '$start_network' — refusing to start (#351: every fresh visitor"
+  log "       would land on a network this deployment cannot compose money for)."
   exit 1
 fi
 # A network is only OFFERED when it has a URL, so mainnet cannot be selected
@@ -120,17 +123,30 @@ if [ "${MAINNET_ROLLOUT_ENABLED-}" = "true" ] && [ -z "${WALLET_API_URL_MAINNET-
   log "       would silently do nothing)."
   exit 1
 fi
-# No wallet-api URL for ANY network is legitimate (legacy local custody), but
-# it is far more often a mistake, so say it out loud. Gate on all of them being
-# empty: a deployment that sets only the per-network vars is correctly
-# configured and must not be warned at. (The old warning also claimed the app
-# would target its own origin — that was true while getWalletApiBaseUrl's
-# unset-branch was compile-eliminated against the placeholder; per-network
-# resolution goes through a function call now, so the branch survives and
-# legacy local custody is reachable again.)
+# No wallet-api URL for ANY network is NOT a legacy deployment — it is a dead
+# container. There is no local-custody fallback left to compose: sphere-sdk
+# 0.15.0's Sphere.init calls resolvePaymentsV2Composition() before anything else
+# and throws INVALID_CONFIG ("Sphere requires a wallet-api composition for
+# money") without a `walletApi` config, and the Nostr asset rail that used to
+# back local custody (event kinds 31113/31115/31116) no longer exists in the
+# SDK at all. So this container would pass every start-up check and then die in
+# every browser, on every network, whatever REQUIRE_WALLET_API says — which is
+# why this is unconditional and the #351 check above is not: that flag now only
+# decides whether the failure surfaces earlier, at provider composition.
+# Gate on all of them being empty: a deployment that sets only the per-network
+# vars is correctly configured and must not be failed. (The old text here was a
+# WARNING and also claimed the app would target its own origin — that part was
+# accurate while getWalletApiBaseUrl's unset-branch was compile-eliminated
+# against the placeholder; per-network resolution goes through a function call
+# now, so the branch survives and returns null. Null is the INVALID_CONFIG
+# above, not a fallback.)
 if [ -z "${WALLET_API_URL_TESTNET2-}" ] && [ -z "${WALLET_API_URL_MAINNET-}" ]; then
-  log "WARNING: no wallet-api URL for any network — composing the legacy"
-  log "         local-custody bundle. Intentional only for a legacy deployment."
+  log "ERROR: no wallet-api URL for any network — refusing to start. The SDK has"
+  log "       no local-custody fallback: Sphere.init throws INVALID_CONFIG without"
+  log "       a wallet-api composition, so this image would boot and then fail in"
+  log "       every browser. Set WALLET_API_URL_TESTNET2 (or the legacy"
+  log "       WALLET_API_URL) and/or WALLET_API_URL_MAINNET."
+  exit 1
 fi
 
 # ── Subscription flag sanity ─────────────────────────────────────────────────
@@ -220,9 +236,16 @@ log "wrote $WEBROOT/runtime-config.js"
 
 # ── Announce the capability set ──────────────────────────────────────────────
 # Offering fewer networks is legitimate (a testnet deployment need not serve
-# mainnet), so a missing URL is NOT an error. But silence is the worst outcome:
-# "why is mainnet greyed out" is otherwise unanswerable from the container. Say
-# out loud which networks this container can actually offer.
+# mainnet), so ONE missing URL is not an error — all of them missing is, and is
+# refused above. Silence is the worst outcome either way: "why is mainnet greyed
+# out" is otherwise unanswerable from the container. Say out loud which networks
+# this container can actually offer.
+#
+# NOTE: an empty list here still means a dead wallet even though the refusal
+# above passed — e.g. only WALLET_API_URL_MAINNET set with the rollout switch
+# off. The refusal deliberately does not cover that (it would entangle the
+# rollout switch); this line is the operator's signal, and the mainnet smoke
+# checklist in docs/DEVOPS-MAINNET.md checks it explicitly.
 offered=""
 [ -n "${WALLET_API_URL_TESTNET2-}" ] && offered="$offered testnet2"
 if [ -n "${WALLET_API_URL_MAINNET-}" ]; then
@@ -232,7 +255,7 @@ if [ -n "${WALLET_API_URL_MAINNET-}" ]; then
     log "NOTE: WALLET_API_URL_MAINNET is set but MAINNET_ROLLOUT_ENABLED is not 'true' — mainnet stays unselectable."
   fi
 fi
-[ -z "$offered" ] && offered=" (none — wallet-api custody unavailable)"
+[ -z "$offered" ] && offered=" (none — this container cannot run a wallet on any network)"
 log "wallet-api networks offered:$offered"
 
 # Visibility: warn (don't fail) when a public var is unset — it substitutes to

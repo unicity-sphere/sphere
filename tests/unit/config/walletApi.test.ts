@@ -79,25 +79,31 @@ describe("per-network resolution", () => {
     expect(isWalletApiEnabled("mainnet")).toBe(false);
   });
 
-  it("'dev' is never wallet-api served — it composes local custody", () => {
+  it("'dev' is never wallet-api served — no URL for it, and no #351 throw", () => {
     vi.stubEnv("VITE_WALLET_API_URL", "https://wallet-api.staging.unicity.network");
     vi.stubEnv("VITE_REQUIRE_WALLET_API", "true");
-    // Exempt from the #351 assert on purpose: arming it would break the very
-    // deployment used to verify switching (Pages sets REQUIRE_WALLET_API).
+    // Title corrected: dev does NOT "compose local custody" — that composition
+    // no longer exists, and Sphere.init throws INVALID_CONFIG on a bundle with
+    // no walletApi config. What is pinned here is only that dev is exempt from
+    // the #351 assert, because arming it would break the very deployment used
+    // to verify switching (Pages sets REQUIRE_WALLET_API).
     expect(getWalletApiBaseUrl("dev")).toBeNull();
     expect(isWalletApiEnabled("dev")).toBe(false);
   });
 });
 
 describe("VITE_REQUIRE_WALLET_API composition assert (#351)", () => {
-  it("flag unset + URL unset → legacy composition allowed (null, no throw)", () => {
+  // "no throw" here means only that THIS module stays quiet; the SDK still
+  // refuses a walletApi-less composition at Sphere.init. There is no legacy
+  // local-custody composition for the null to select any more.
+  it("flag unset + URL unset → null, and this module does not throw", () => {
     vi.stubEnv("VITE_REQUIRE_WALLET_API", "");
     vi.stubEnv("VITE_WALLET_API_URL", "");
     expect(isWalletApiRequired()).toBe(false);
     expect(getWalletApiBaseUrl(DEFAULT_NET)).toBeNull();
   });
 
-  it("flag set + URL unset → throws naming the var to set (never silently legacy)", () => {
+  it("flag set + URL unset → throws naming the var to set", () => {
     vi.stubEnv("VITE_REQUIRE_WALLET_API", "true");
     vi.stubEnv("VITE_WALLET_API_URL", "");
     expect(isWalletApiRequired()).toBe(true);

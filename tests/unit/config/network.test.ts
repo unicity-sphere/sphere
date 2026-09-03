@@ -45,20 +45,28 @@ describe('SUPPORTED_NETWORKS — the availability gate', () => {
     expect(mainnet?.unavailableReason).toBe('not-onboarded');
   });
 
-  it('marks testnet2 available on a legacy local-custody deployment', async () => {
+  it('marks testnet2 available once the deployment serves it', async () => {
+    setRuntimeConfig({ WALLET_API_URL_TESTNET2: 'https://wallet-api.example' });
     const mod = await loadNetworkModule();
     const testnet2 = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'testnet2');
     expect(testnet2?.available).toBe(true);
     expect(testnet2?.unavailableReason).toBeUndefined();
   });
 
-  it('does NOT gate on a wallet-api URL when the deployment is not wallet-api', async () => {
-    // Local-custody deployments serve every network locally, so a missing URL
-    // must not hide a network there.
+  it('gates on the wallet-api URL even when REQUIRE_WALLET_API is off', async () => {
+    // This used to assert the opposite — that a missing URL must not hide a
+    // network, because a local-custody deployment served every network itself.
+    // There is no local-custody fallback any more: Sphere.init calls
+    // resolvePaymentsV2Composition() before anything else and throws
+    // INVALID_CONFIG without a `walletApi` config. So a network with no URL
+    // cannot boot on ANY deployment, and offering the row only strands the user
+    // at init — which is exactly what this gate exists to prevent.
     vi.stubEnv('VITE_REQUIRE_WALLET_API', '');
     setRuntimeConfig({ WALLET_API_URL_TESTNET2: '' });
     const mod = await loadNetworkModule();
-    expect(mod.SUPPORTED_NETWORKS.find((n) => n.id === 'testnet2')?.available).toBe(true);
+    const testnet2 = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'testnet2');
+    expect(testnet2?.available).toBe(false);
+    expect(testnet2?.unavailableReason).toBe('not-served-here');
   });
 
   it('reports not-served-here when a wallet-api deployment has no URL for the network', async () => {
@@ -92,6 +100,7 @@ describe('SUPPORTED_NETWORKS — the availability gate', () => {
 
 describe('isSwitchableNetwork', () => {
   it('accepts an available network', async () => {
+    setRuntimeConfig({ WALLET_API_URL_TESTNET2: 'https://wallet-api.example' });
     const mod = await loadNetworkModule();
     expect(mod.isSwitchableNetwork('testnet2')).toBe(true);
   });
@@ -295,6 +304,7 @@ describe('setActiveNetwork', () => {
   });
 
   it('no-ops when the network is already active', async () => {
+    setRuntimeConfig({ WALLET_API_URL_TESTNET2: 'https://wallet-api.example' });
     const mod = await loadNetworkModule();
     const reload = vi.fn();
     mod.setActiveNetwork(mod.SPHERE_NETWORK, { reload });
