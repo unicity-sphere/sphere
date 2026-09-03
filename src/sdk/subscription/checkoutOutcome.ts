@@ -1,6 +1,6 @@
 /**
  * Maps a settled checkout poll onto the single UI action it warrants. Kept
- * pure (UpgradeModal only executes the action) so the branching — the part the
+ * pure (PlanScreen only executes the action) so the branching — the part the
  * gateway contract change actually altered — is unit-testable without
  * mounting the modal.
  */

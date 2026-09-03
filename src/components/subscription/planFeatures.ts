@@ -17,10 +17,73 @@ export function isFreePlan(plan: PlanInfo): boolean {
   return plan.priceCents <= 0;
 }
 
+/**
+ * The gateway's free tier, identified by NAME. Utilization carries no price,
+ * so the name is the only signal available to callers holding a
+ * UtilizationInfo (the store's own cards use isFreePlan instead). 'free' is
+ * what /auth/verify provisions and reports.
+ */
+export function isFreePlanName(name: string | null | undefined): boolean {
+  return (name ?? '').trim().toLowerCase() === 'free';
+}
+
 /** Card price from the store's fiat cents: 500 → "$5.00"; 0 → "Free". */
 export function formatPlanPrice(plan: PlanInfo): string {
   if (plan.priceCents <= 0) return 'Free';
   return `$${(plan.priceCents / 100).toFixed(2)}`;
+}
+
+/** Store plan names arrive lowercase ('free', 'basic') — title them for prose. */
+function capitalizePlan(name: string): string {
+  const trimmed = name.trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/**
+ * Label for the action that DECLINES a purchase and keeps the plan the wallet
+ * already has. Naming the plan makes the decline a real choice rather than a
+ * bare dismissal — the corner X and "Back to plans" say nothing about what
+ * happens to the current subscription. Falls back to plan-agnostic wording
+ * while utilization hasn't resolved a plan name.
+ */
+export function keepPlanLabel(currentPlanName: string | null): string {
+  if (!currentPlanName?.trim()) return 'Maybe later';
+  return `Keep my ${capitalizePlan(currentPlanName)} plan`;
+}
+
+/**
+ * Label for onboarding's footer button, which both declines the offer and
+ * enters the wallet. It only frames itself as a plan choice while paid plans
+ * are actually purchasable — with the store off (testnet) there is nothing to
+ * decline, so the plain "Enter Wallet" wording stays.
+ */
+export function continueWithPlanLabel(
+  currentPlanName: string | null,
+  paidPlansEnabled: boolean,
+): string {
+  if (!paidPlansEnabled || !currentPlanName?.trim()) return 'Enter Wallet';
+  return `Continue with ${capitalizePlan(currentPlanName)} plan`;
+}
+
+/**
+ * The card list for a plan surface: the wallet's current plan followed by the
+ * store catalogue.
+ *
+ * The store list only excludes the FREE plan, so a wallet already on a PAID
+ * plan would otherwise get TWO cards for it — and the synthetic one would
+ * misprice that plan as "Free", since syntheticCurrentPlan hardcodes
+ * priceCents 0 (it was built for the free tier). When the store already
+ * carries the current plan, its card wins: same name, real price, and
+ * PlansGrid marks it current anyway. The synthetic card's limits come from
+ * utilization rather than the catalogue, so this trades a per-wallet limit
+ * readout for a correct price — the right way round for a purchase surface.
+ */
+export function planGridList(current: PlanInfo | null, storePlans: PlanInfo[]): PlanInfo[] {
+  if (!current) return storePlans;
+  const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  return storePlans.some((p) => sameName(p.name, current.name))
+    ? storePlans
+    : [current, ...storePlans];
 }
 
 /** Feature checklist derived purely from the plan's fields. */

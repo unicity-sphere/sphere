@@ -8,9 +8,9 @@ import { usagePercent, formatExpiry, msUntil, formatCountdown } from '../../../.
 import { getStoredSubscriptionKey } from '../../../../config/storageKeys';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { provisionOrRecoverKey } from '../../../../services/subscriptionApi';
-import { validatePastedKey } from '../../../../sdk/subscription/keyCheck';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
+import { EnterApiKeyRow } from '../../../subscription/EnterApiKeyRow';
 
 interface SubscriptionModalProps {
   isOpen: boolean;
@@ -128,7 +128,10 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
 
         {apiKey && <ApiKeyRow apiKey={apiKey} />}
 
-        <EnterKeyRow />
+        <EnterApiKeyRow
+          label="Use a different key"
+          note="Keys are transferable — you can use a key someone shared with you. Applied on your main address it becomes the wallet-wide key; on another address it applies to that address only."
+        />
       </div>
 
       <div className="px-5 pb-6">
@@ -217,85 +220,6 @@ function ApiKeyRow({ apiKey }: { apiKey: string }) {
       <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-white/40">
         Your wallet's own key — including any plan bought for it — is recovered when you restore the
         wallet. Keys pasted from elsewhere aren't; keep a copy of those.
-      </p>
-    </div>
-  );
-}
-
-const ENTER_KEY_RE = /^sk_[0-9a-f]{32}$/;
-
-/**
- * Paste-a-key affordance: keys are bearer tokens (shareable per the gateway
- * model), so a user can adopt one given to them — or restore a purchased key
- * after a device move. Default semantics: on the root address the key becomes
- * wallet-wide, on any other address it becomes that address's own key.
- */
-function EnterKeyRow() {
-  const { applySubscriptionKey } = useSphereContext();
-  const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const apply = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const key = value.trim();
-      // Definitive unknown/revoked keys reject inline; a failed lookup fails
-      // open (the gateway still gates real usage).
-      const verdict = await validatePastedKey(key);
-      if (!verdict.valid) {
-        setError(verdict.message ?? 'This key is not valid.');
-        return;
-      }
-      await applySubscriptionKey(key);
-      await queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.subscription.all });
-      setOpen(false);
-      setValue('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to apply the key');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="text-sm text-neutral-500 underline dark:text-white/45"
-      >
-        Use a different key
-      </button>
-    );
-  }
-
-  return (
-    <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-white/4 space-y-2.5">
-      <div className="flex items-center gap-2 text-sm text-neutral-600 dark:text-white/60">
-        <KeyRound className="w-4 h-4" /> Enter an API key
-      </div>
-      <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="sk_…"
-        className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-orange-500 dark:border-white/10 dark:bg-white/5"
-      />
-      {error && <p className="text-sm text-red-500">{error}</p>}
-      <div className="flex gap-2">
-        <Button variant="primary" size="sm" loading={busy} disabled={!ENTER_KEY_RE.test(value.trim())} onClick={apply}>
-          Apply
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => { setOpen(false); setError(null); }}>
-          Cancel
-        </Button>
-      </div>
-      <p className="text-[11px] text-neutral-500 dark:text-white/40">
-        Keys are transferable — you can use a key someone shared with you. Applied on your main
-        address it becomes the wallet-wide key; on another address it applies to that address only.
       </p>
     </div>
   );

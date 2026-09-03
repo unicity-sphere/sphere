@@ -13,7 +13,15 @@ import { validatePastedKey } from '../../sdk/subscription/keyCheck';
 import { loadWalletKey } from '../../sdk/subscription/keyVault';
 import { rememberPlan } from '../../sdk/subscription/planMemory';
 import { getOrderStatus, ackOrderKeyDelivery, type PlanInfo } from '../../services/subscriptionApi';
-import { syntheticCurrentPlan, formatPlanPrice, isPlanSelectable } from '../subscription/planFeatures';
+import {
+  syntheticCurrentPlan,
+  formatPlanPrice,
+  isPlanSelectable,
+  keepPlanLabel,
+  continueWithPlanLabel,
+  planGridList,
+} from '../subscription/planFeatures';
+import { EnterApiKeyRow } from '../subscription/EnterApiKeyRow';
 import { getStoredSubscriptionKey } from '../../config/storageKeys';
 import { SUBSCRIPTION_MOCK, PAID_PLANS_ENABLED } from '../../config/subscription';
 import { showToast } from '../ui/toast-utils';
@@ -31,9 +39,27 @@ function maskKey(key: string): string {
 
 type Step = 'plans' | 'email' | 'awaiting' | 'claim' | 'success' | 'error';
 
-interface UpgradeModalProps {
+/**
+ * Onboarding turns the plan screen into a STEP of wallet creation rather than
+ * a dismissible dialog: no close X (there is nothing behind it yet), the
+ * header names the plan just provisioned, and the way out is entering the
+ * wallet on the current plan.
+ */
+export interface PlanScreenOnboarding {
+  /** Plan NAME from finalize — header fallback until utilization resolves. */
+  planName: string | null;
+  /** Fresh wallet (true) vs restored one (false) — header copy only. */
+  created: boolean;
+  isBusy?: boolean;
+  /** Enter the wallet keeping whatever plan is current. */
+  onContinue: () => void;
+}
+
+interface PlanScreenProps {
   isOpen: boolean;
   reason?: UpgradeReason;
+  /** Present = onboarding mode. See PlanScreenOnboarding. */
+  onboarding?: PlanScreenOnboarding;
   onClose: () => void;
 }
 
@@ -65,7 +91,106 @@ export function UpgradeReasonBanner({ reason }: { reason?: UpgradeReason }) {
   return null;
 }
 
-export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
+/**
+ * The quiet "no thanks" that keeps the wallet's existing plan. Styled like
+ * onboarding's Skip (a full-width borderless button under the primary CTA) so
+ * the decline is as reachable as the purchase without competing with it.
+ */
+function KeepPlanButton({ planName, onClick }: { planName: string | null; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-xl px-5 py-2.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-white/45 dark:hover:bg-white/6 dark:hover:text-white"
+    >
+      {keepPlanLabel(planName)}
+    </button>
+  );
+}
+
+/**
+ * Heading above the line-up. Onboarding confirms what was just provisioned;
+ * the dialog sells the upgrade. With paid plans off the dialog has nothing to
+ * pitch, so it keeps its bare header bar.
+ */
+function PlansHero({ onboarding, currentName }: { onboarding?: PlanScreenOnboarding; currentName: string | null }) {
+  if (!onboarding) {
+    if (!PAID_PLANS_ENABLED) return null;
+    return (
+      <div className="mb-8 text-center">
+        <h2 className="text-2xl font-bold sm:text-3xl">Unlock more commitments</h2>
+        <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
+          Pick the plan that fits how much you transact.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-8 text-center">
+      <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-500/10">
+        <Sparkles className="h-7 w-7 text-orange-500" />
+      </div>
+      <h2 className="text-2xl font-bold sm:text-3xl">
+        {onboarding.created ? 'Your plan is ready' : 'Subscription restored'}
+      </h2>
+      <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
+        {!currentName
+          ? 'Your subscription is active.'
+          : PAID_PLANS_ENABLED
+            ? `You're on the ${currentName} plan — upgrade now, or any time from Settings.`
+            : `You're all set on the ${currentName} plan.`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Below the line-up: onboarding's way into the wallet (which is also its
+ * decline — see continueWithPlanLabel) plus the paste-a-key affordance, or the
+ * dialog's named decline. Nothing when the dialog has no offer to decline.
+ */
+function PlansFooter({
+  onboarding,
+  currentName,
+  onDecline,
+}: {
+  onboarding?: PlanScreenOnboarding;
+  currentName: string | null;
+  onDecline: () => void;
+}) {
+  if (!onboarding) {
+    if (!PAID_PLANS_ENABLED) return null;
+    return (
+      <div className="mx-auto mt-10 w-full max-w-xs">
+        <KeepPlanButton planName={currentName} onClick={onDecline} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto mt-10 w-full max-w-xs">
+      <Button variant="primary" fullWidth loading={onboarding.isBusy} onClick={onboarding.onContinue}>
+        {continueWithPlanLabel(currentName, PAID_PLANS_ENABLED)}
+      </Button>
+      <EnterApiKeyRow
+        tone="quiet"
+        walletWide
+        label="Already have a key? Paste it now"
+        note="Applied to this wallet, so every address uses it. You can swap it later in Settings → Subscription."
+        appliedNote="Key applied — your plan above reflects it."
+      />
+    </div>
+  );
+}
+
+/**
+ * THE plan surface. One component serves every entry point — onboarding's
+ * post-creation step, Settings → Subscription's "Upgrade plan", the quota /
+ * expiry prompts, and the free-plan offer on wallet entry — so the line-up,
+ * the purchase steps and the decline are written once (sphere#496).
+ */
+export function PlanScreen({ isOpen, reason, onboarding, onClose }: PlanScreenProps) {
   const plans = usePlans(isOpen);
   const util = useUtilization();
   const checkout = useCheckout();
@@ -107,13 +232,13 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
   }, [sphere]);
 
   const currentPlanName = util.data?.plan?.name ?? null;
+  // Onboarding can render before utilization resolves — fall back to the plan
+  // name finalize just provisioned so the copy is never plan-less.
+  const currentName = currentPlanName ?? onboarding?.planName ?? null;
 
   // plans step: grid gets [synthetic current card, ...store plans]
   const freePlan = useMemo(() => (util.data ? syntheticCurrentPlan(util.data) : null), [util.data]);
-  const gridPlans = useMemo(
-    () => (freePlan ? [freePlan, ...(plans.data ?? [])] : (plans.data ?? [])),
-    [plans.data, freePlan],
-  );
+  const gridPlans = useMemo(() => planGridList(freePlan, plans.data ?? []), [plans.data, freePlan]);
 
   const subscriptionStatus = util.data?.status ?? null;
   // A lapsed plan's own store card becomes the renew path (same key, fresh 30 days).
@@ -260,7 +385,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     }
   };
 
-  const handleClose = () => {
+  const resetPurchase = () => {
     checkoutAbortRef.current?.abort(); // stop any in-flight checkout poll
     checkoutAbortRef.current = null;
     setStep('plans');
@@ -276,34 +401,55 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
     setUpgradeTargetKey(null);
     setUpgradedMaskedKey(null);
     setUpgradeRejected(false);
+  };
+
+  const handleClose = () => {
+    resetPurchase();
     onClose();
   };
+
+  /**
+   * "No thanks". In a dialog that means closing it; during onboarding there is
+   * nothing to close — declining is entering the wallet on the current plan.
+   */
+  const decline = onboarding ? onboarding.onContinue : handleClose;
+
+  /** Post-purchase exit: into the wallet during onboarding, else close. */
+  const finishSuccess = onboarding ? onboarding.onContinue : handleClose;
 
   return createPortal(
     <AnimatePresence>
       {isOpen && (
         <motion.div
-          className="fixed inset-0 z-100 overflow-y-auto bg-white/95 backdrop-blur-sm dark:bg-neutral-950/92"
+          // Onboarding renders this inside the wallet-creation panel, so it
+          // sits just below the app-root dialog layer rather than on it.
+          className={`fixed inset-0 overflow-y-auto backdrop-blur-sm ${
+            onboarding
+              ? 'z-90 bg-white/97 dark:bg-neutral-950/95'
+              : 'z-100 bg-white/95 dark:bg-neutral-950/92'
+          }`}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
         >
-          {/* Header */}
-          <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-orange-500" />
-              <span className="text-lg font-semibold">{PAID_PLANS_ENABLED ? 'Choose your plan' : 'Your plan'}</span>
+          {/* Dialog header — onboarding has no dismissal, so it gets none. */}
+          {!onboarding && (
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 sm:px-8">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-orange-500" />
+                <span className="text-lg font-semibold">{PAID_PLANS_ENABLED ? 'Choose your plan' : 'Your plan'}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleClose}
+                aria-label="Close"
+                className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-black/5 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleClose}
-              aria-label="Close"
-              className="rounded-full p-2 text-neutral-400 transition-colors hover:bg-black/5 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-white"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+          )}
 
           <motion.div
             className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-8"
@@ -314,6 +460,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
           >
             {step === 'plans' && !PAID_PLANS_ENABLED && (
               <>
+                <PlansHero onboarding={onboarding} currentName={currentName} />
                 <UpgradeReasonBanner reason={reason} />
                 {util.isLoading ? (
                   <div className="py-20 text-center text-neutral-400">
@@ -322,17 +469,13 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                 ) : (
                   <CurrentPlanShowcase util={util.data ?? null} />
                 )}
+                <PlansFooter onboarding={onboarding} currentName={currentName} onDecline={decline} />
               </>
             )}
 
             {step === 'plans' && PAID_PLANS_ENABLED && (
               <>
-                <div className="mb-8 text-center">
-                  <h2 className="text-2xl font-bold sm:text-3xl">Unlock more commitments</h2>
-                  <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
-                    Pick the plan that fits how much you transact.
-                  </p>
-                </div>
+                <PlansHero onboarding={onboarding} currentName={currentName} />
 
                 <UpgradeReasonBanner reason={reason} />
 
@@ -349,11 +492,13 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                 {!plans.isLoading && !plans.isError && (
                   <PlansGrid
                     plans={gridPlans}
-                    currentPlanName={currentPlanName}
+                    currentPlanName={currentName}
                     renewableCurrent={renewableCurrent}
                     onSelect={handleSelect}
                   />
                 )}
+
+                <PlansFooter onboarding={onboarding} currentName={currentName} onDecline={decline} />
               </>
             )}
 
@@ -400,6 +545,12 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
                 >
                   Continue to payment
                 </Button>
+                {/*
+                  Declining has to be a named action, not just the corner X —
+                  onboarding drops the user straight onto this step, so "no
+                  thanks" must say what they keep (sphere#496).
+                */}
+                <KeepPlanButton planName={currentName} onClick={decline} />
                 <button
                   type="button"
                   className="text-sm text-neutral-500 underline dark:text-white/45"
@@ -455,7 +606,7 @@ export function UpgradeModal({ isOpen, reason, onClose }: UpgradeModalProps) {
             )}
 
             {step === 'success' && (
-              <UpgradeSuccess plan={selectedPlan} apiKey={newApiKey} upgradedMaskedKey={upgradedMaskedKey} onDone={handleClose} />
+              <UpgradeSuccess plan={selectedPlan} apiKey={newApiKey} upgradedMaskedKey={upgradedMaskedKey} onDone={finishSuccess} />
             )}
 
             {step === 'error' && (

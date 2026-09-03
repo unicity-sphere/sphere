@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { UpgradeReasonBanner } from '@/components/upgrade/UpgradeModal';
+import { UpgradeReasonBanner } from '@/components/upgrade/PlanScreen';
 
 describe('UpgradeReasonBanner', () => {
   it('renders the quota banner for reason "quota"', () => {
