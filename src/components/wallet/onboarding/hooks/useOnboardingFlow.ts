@@ -15,7 +15,7 @@ import type { DerivedAddressInfo } from "../components/AddressSelectionScreen";
 import type { NametagAvailability } from "../components/NametagScreen";
 import { provisionOrRecoverKey } from "../../../../services/subscriptionApi";
 import { SUBSCRIPTION_ENABLED } from "../../../../config/subscription";
-import { setStoredSubscriptionKey } from "../../../../config/storageKeys";
+import { getStoredSubscriptionKey, setStoredSubscriptionKey } from "../../../../config/storageKeys";
 import { saveWalletKey } from "../../../../sdk/subscription/keyVault";
 
 /** Cap onboarding's subscription provisioning; on expiry we use the env key. */
@@ -113,7 +113,7 @@ export interface UseOnboardingFlowReturn {
   // Subscription plan-capabilities state (post-finalize provisioning)
   planName: string | null;
   planCreated: boolean;
-  handlePlanCapabilitiesContinue: () => void;
+  handlePlanCapabilitiesContinue: () => Promise<void>;
 
   // Address selection state (multi-select)
   derivedAddresses: DerivedAddressInfo[];
@@ -952,10 +952,30 @@ export function useOnboardingFlow(
     }
   }, [setWalletPassword, doFinalizeWallet]);
 
-  // Action: Continue from the plan-capabilities screen into the wallet
-  const handlePlanCapabilitiesContinue = useCallback(() => {
+  // Action: Continue from the plan-capabilities screen into the wallet.
+  //
+  // A plan bought ON that screen (sphere#496) normally comes back as an
+  // in-place upgrade of the key we just provisioned — same key string, nothing
+  // to persist. But when the gateway mints a FRESH key instead (pre-upgrade
+  // gateway, or the user's "buy a new key instead"), PlanScreen's
+  // applySubscriptionKey can only reach the boot cache in the restore/import
+  // flow: SphereProvider defers setSphere() to finalizeWallet, so the context
+  // instance the vault write needs isn't there yet. Mirror the cached key into
+  // the vault with the instance we DO hold, and await it — finishFinalize()
+  // immediately triggers setupSubscriptionKey → resolveActiveKey, which reads
+  // the vault and would otherwise restore the older free key.
+  const handlePlanCapabilitiesContinue = useCallback(async () => {
+    const active = importedSphereRef.current ?? sphere;
+    const key = getStoredSubscriptionKey();
+    if (SUBSCRIPTION_ENABLED && active && key) {
+      setIsBusy(true);
+      // Best-effort: the boot cache already carries the key, so a failed vault
+      // write must not strand the user on the onboarding screen.
+      await saveWalletKey(active, network, key).catch(() => {});
+      setIsBusy(false);
+    }
     finishFinalize();
-  }, [finishFinalize]);
+  }, [sphere, network, finishFinalize]);
 
   // Action: Download wallet backup file. Reuses the SAME password chosen
   // moments earlier on the setPassword step (createBackupPasswordRef) to

@@ -1,21 +1,19 @@
 /**
- * Shown after wallet creation/restore, before entering the wallet. Presents the
- * full plan line-up (the provisioned free plan marked as "current") as a
- * full-screen sheet, then an "Enter Wallet" CTA. Portaled to the document body
- * so it covers the viewport regardless of the onboarding panel it renders in.
+ * Onboarding's plan step. Shown after wallet creation/restore, before entering
+ * the wallet.
+ *
+ * Deliberately thin: the plan line-up, the purchase steps and the decline are
+ * ONE component (PlanScreen) shared with Settings → Subscription, the quota /
+ * expiry prompts and the free-plan offer on wallet entry (sphere#496). This
+ * file only supplies the onboarding framing — which plan was just provisioned,
+ * whether it was created or restored, and what "continue" means here.
  */
-import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
-import { Sparkles } from 'lucide-react';
-import { Button } from '../../ui';
-import { PlansGrid } from '../../../subscription/PlansGrid';
-import { CurrentPlanShowcase } from '../../../subscription/CurrentPlanShowcase';
-import { usePlans, useUtilization } from '../../../../sdk/hooks/subscription';
-import { syntheticCurrentPlan } from '../../../subscription/planFeatures';
-import { PAID_PLANS_ENABLED } from '../../../../config/subscription';
+import { useEffect } from 'react';
+import { PlanScreen } from '../../../upgrade/PlanScreen';
+import { markFreePlanEntryOffered } from '../../../upgrade/freePlanEntryOffer';
 
 interface PlanCapabilitiesScreenProps {
-  /** Plan NAME provisioned during finalize (fallback header copy if utilization hasn't loaded yet). */
+  /** Plan NAME provisioned during finalize (header fallback until utilization loads). */
   planName: string | null;
   created: boolean;
   onContinue: () => void;
@@ -23,57 +21,21 @@ interface PlanCapabilitiesScreenProps {
 }
 
 export function PlanCapabilitiesScreen({ planName, created, onContinue, isBusy }: PlanCapabilitiesScreenProps) {
-  // Onboarding only reaches this screen when the subscription feature is on, so
-  // usePlans(true) fetches the full list (mock-backed under VITE_SUBSCRIPTION_MOCK).
-  const plans = usePlans(true);
-  // Key was persisted right before this screen renders — utilization gives the
-  // authoritative synthetic "current" card (with real limits). Non-blocking on
-  // failure: the header/grid still render from planName / the store list alone.
-  const util = useUtilization();
-  const current = util.data ? syntheticCurrentPlan(util.data) : null;
-  const list = [...(current ? [current] : []), ...(plans.data ?? [])];
-  const currentName = current?.name ?? planName;
+  // Onboarding IS this app load's plan offer. Without claiming it, declining
+  // here finalizes the wallet, walletExists flips, and FreePlanEntryWatcher
+  // immediately reopens the very same screen as a dialog — one click after
+  // the user said no.
+  useEffect(() => {
+    markFreePlanEntryOffered();
+  }, []);
 
-  return createPortal(
-    <motion.div
-      key="planCapabilities"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.15 }}
-      className="fixed inset-0 z-90 overflow-y-auto bg-white/97 backdrop-blur-sm dark:bg-neutral-950/95"
-    >
-      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 py-10 sm:px-8">
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-500/10">
-            <Sparkles className="h-7 w-7 text-orange-500" />
-          </div>
-          <h2 className="text-2xl font-bold sm:text-3xl">
-            {created ? 'Your plan is ready' : 'Subscription restored'}
-          </h2>
-          <p className="mt-1.5 text-sm text-neutral-500 dark:text-white/45">
-            {!currentName
-              ? 'Your subscription is active.'
-              : PAID_PLANS_ENABLED
-                ? `You're on the ${currentName} plan — here's everything you can upgrade to.`
-                : `You're all set on the ${currentName} plan.`}
-          </p>
-        </div>
-
-        {PAID_PLANS_ENABLED
-          ? list.length > 0 && <PlansGrid plans={list} currentPlanName={currentName} />
-          : <CurrentPlanShowcase util={util.data ?? null} />}
-
-        <div className="mx-auto mt-10 w-full max-w-xs">
-          <Button variant="primary" fullWidth loading={isBusy} onClick={onContinue}>
-            Enter Wallet
-          </Button>
-          <p className="mt-3 text-center text-xs text-neutral-500 dark:text-white/40">
-            Already have a key? Paste it later in Settings → Subscription.
-          </p>
-        </div>
-      </div>
-    </motion.div>,
-    document.body,
+  return (
+    <PlanScreen
+      isOpen
+      // Onboarding has no dismissal: every exit — declining, finishing a
+      // purchase — is entering the wallet.
+      onClose={onContinue}
+      onboarding={{ planName, created, isBusy, onContinue }}
+    />
   );
 }

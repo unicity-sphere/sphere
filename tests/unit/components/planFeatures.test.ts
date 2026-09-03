@@ -6,6 +6,9 @@ import {
   isPlanSelectable,
   planFeatures,
   syntheticCurrentPlan,
+  keepPlanLabel,
+  continueWithPlanLabel,
+  planGridList,
 } from '@/components/subscription/planFeatures';
 import type { PlanInfo } from '@/services/subscriptionApi';
 
@@ -101,5 +104,50 @@ describe('syntheticCurrentPlan', () => {
   it('returns null when utilization has no plan', () => {
     const util = { status: 'inactive', activeUntil: null, plan: null, utilization: {} } as never;
     expect(syntheticCurrentPlan(util)).toBeNull();
+  });
+});
+
+describe('planGridList', () => {
+  const free: PlanInfo = { ...basic, planId: -1, name: 'free', priceCents: 0 };
+  const premiumStore: PlanInfo = { ...basic, planId: 9, name: 'premium', priceCents: 3000 };
+
+  it('keeps the synthetic current card when the store has no card for it', () => {
+    // The store excludes the free plan, so the free current card is the only one.
+    expect(planGridList(free, [basic, premiumStore])).toEqual([free, basic, premiumStore]);
+  });
+
+  it('drops the synthetic card when the store already sells that plan', () => {
+    // Otherwise a paid wallet gets two premium cards and the synthetic one
+    // (priceCents 0 by construction) prices premium as "Free".
+    const syntheticPremium: PlanInfo = { ...premiumStore, planId: -1, priceCents: 0 };
+    expect(planGridList(syntheticPremium, [basic, premiumStore])).toEqual([basic, premiumStore]);
+  });
+
+  it('matches the store plan case-insensitively', () => {
+    const syntheticPremium: PlanInfo = { ...premiumStore, planId: -1, name: ' Premium ', priceCents: 0 };
+    expect(planGridList(syntheticPremium, [premiumStore])).toEqual([premiumStore]);
+  });
+
+  it('returns the store list untouched when there is no current plan', () => {
+    expect(planGridList(null, [basic])).toEqual([basic]);
+  });
+});
+
+describe('decline labels (sphere#496)', () => {
+  it('names the kept plan so the decline is a choice, not a dismissal', () => {
+    expect(keepPlanLabel('free')).toBe('Keep my Free plan');
+    expect(keepPlanLabel('premium')).toBe('Keep my Premium plan');
+  });
+
+  it('falls back to plan-agnostic wording when no plan name is known yet', () => {
+    expect(keepPlanLabel(null)).toBe('Maybe later');
+    expect(keepPlanLabel('  ')).toBe('Maybe later');
+  });
+
+  it("frames onboarding's footer as a plan choice only while paid plans are on sale", () => {
+    expect(continueWithPlanLabel('free', true)).toBe('Continue with Free plan');
+    // Store off (testnet): there is nothing to decline, so the wizard wording stays.
+    expect(continueWithPlanLabel('free', false)).toBe('Enter Wallet');
+    expect(continueWithPlanLabel(null, true)).toBe('Enter Wallet');
   });
 });

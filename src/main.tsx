@@ -37,7 +37,7 @@ createRoot(document.getElementById('root')!, {
               ConnectIntentHandler (and its modals, e.g. SendIntentModal →
               useTransfer → useUpgrade) as a SIBLING of children, so anything
               those modals consume has to be mounted above ConnectProvider.
-              UpgradeModal itself only needs SphereProvider + react-query,
+              PlanScreen itself only needs SphereProvider + react-query,
               which are both still ancestors here. */}
           <UpgradeProvider>
             <ConnectProvider>
