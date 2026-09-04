@@ -121,8 +121,8 @@ describe('the day the SDK onboards mainnet', () => {
   });
 });
 
-describe('a live mainnet still mints nothing', () => {
-  it('keeps self-mint closed on mainnet even once it is fully selectable', async () => {
+describe('a live mainnet still offers no Top Up or Swap', () => {
+  it("keeps Sphere's OWN mint-backed features closed on mainnet once selectable", async () => {
     setRuntimeConfig(MAINNET_LIVE);
     await loadNetworkModule();
     const caps = await import('../../../src/config/networkCapabilities');

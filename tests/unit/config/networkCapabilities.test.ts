@@ -28,7 +28,9 @@ describe('canSelfMint — fail-closed allowlist', () => {
   });
 
   it('exposes the shared user-facing message', () => {
-    expect(MINT_UNAVAILABLE_MESSAGE).toBe('Minting is not available on this network');
+    // Names the FEATURE, not the network's capability: minting on mainnet is
+    // exactly what a subscriber does with their own key via a dApp or the SDK.
+    expect(MINT_UNAVAILABLE_MESSAGE).toBe('Top Up is only available on test networks');
   });
 });
 

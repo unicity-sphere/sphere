@@ -18,7 +18,9 @@
 const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
 
 /** User-facing error for gated mint attempts (hook throws + Connect intent reject). */
-export const MINT_UNAVAILABLE_MESSAGE = 'Minting is not available on this network';
+// Top Up only. NOT a statement that the network cannot mint: a dApp intent or
+// direct sphere-sdk use mints on any network with the user's own gateway key.
+export const MINT_UNAVAILABLE_MESSAGE = 'Top Up is only available on test networks';
 
 /**
  * Fail-closed allowlist: true only for known test networks. Any other value —

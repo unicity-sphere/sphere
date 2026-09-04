@@ -6,85 +6,25 @@ import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { SendIntentModal } from './SendIntentModal';
 import { PaymentRequestIntentModal } from './PaymentRequestIntentModal';
-import { useConnectContext } from './ConnectContext';
+import { validateIntent } from './intentValidation';
+import { useConnectContext} from './ConnectContext';
 import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
-import { canSelfMint, MINT_UNAVAILABLE_MESSAGE } from '../../config/networkCapabilities';
 import { useSubscriptionKeyGuard } from '../../sdk/hooks/subscription';
 import { useDuplicateSendGuard } from './duplicateSendGuard';
 import { truncateId } from '../../utils/identifiers';
 
 /** Intents this wallet actually implements. Anything else is rejected cleanly. */
-const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'receive']);
 
-type IntentError = { code: number; message: string };
 
 /** Canonical coinId: even-length lowercase hex (same shape the mint intent requires). */
-const COIN_ID_RE = /^([0-9a-f]{2})+$/;
 
-/**
- * Validate dApp-supplied intent params up front. Returns a structured error to
- * reject with (INVALID_PARAMS / METHOD_NOT_FOUND), or null when the intent is
- * supported and well-formed. `mint` does its own engine-specific validation in
- * its handler, so it is only checked for support here.
- */
-function validateIntent(
-  action: string,
-  params: Record<string, unknown>,
-  network: string,
-): IntentError | null {
-  if (!SUPPORTED_INTENTS.has(action)) {
-    return {
-      code: ERROR_CODES.METHOD_NOT_FOUND,
-      message: `Intent "${action}" is not supported by this wallet`,
-    };
-  }
-  // Minting is a network capability, not a permission: on a network that
-  // forbids self-mint the wallet cannot serve this intent at all, so it is
-  // reported as unsupported here — before any confirmation modal is shown.
-  if (action === 'mint' && !canSelfMint(network)) {
-    return { code: ERROR_CODES.METHOD_NOT_FOUND, message: MINT_UNAVAILABLE_MESSAGE };
-  }
-  if (action === 'send' || action === 'payment_request') {
-    if (typeof params.to !== 'string' || params.to.trim() === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };
-    }
-    // amount is in BASE UNITS (smallest indivisible unit) — a positive integer
-    // string, exactly like the `mint` intent. Whole-token/decimal amounts are
-    // rejected: every major wallet carries dApp-requested amounts in base units
-    // (exactness, no float), and the dApp converts at its own UI edge.
-    const amountStr = params.amount == null ? '' : String(params.amount).trim();
-    if (!/^\d+$/.test(amountStr) || BigInt(amountStr) <= 0n) {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'amount must be a positive integer string in base units' };
-    }
-    if (typeof params.coinId !== 'string' || !COIN_ID_RE.test(params.coinId)) {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'coinId must be lowercase even-length hex' };
-    }
-    return null;
-  }
-  if (action === 'dm') {
-    if (typeof params.to !== 'string' || params.to.trim() === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };
-    }
-    if (typeof params.message !== 'string' || params.message === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "message"' };
-    }
-    return null;
-  }
-  if (action === 'sign_message') {
-    if (typeof params.message !== 'string' || params.message === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "message"' };
-    }
-    return null;
-  }
-  return null;
-}
 
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
     useConnectContext();
-  const { sphere, network } = useSphereContext();
+  const { sphere } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
   const { sendDM, isLoading: isSendingDM } = useSendDM();
   const [dmError, setDmError] = useState<string | null>(null);
@@ -104,7 +44,7 @@ export function ConnectIntentHandler() {
   // Runs once per pending intent.
   useEffect(() => {
     if (!pendingIntent) return;
-    const error = validateIntent(pendingIntent.action, pendingIntent.params, network);
+    const error = validateIntent(pendingIntent.action, pendingIntent.params);
     if (error) rejectIntent(pendingIntent.id, error.code, error.message);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingIntent]);
@@ -123,7 +63,7 @@ export function ConnectIntentHandler() {
     pendingIntent !== null &&
     pendingIntent.action === 'send' &&
     duplicateSend.status !== 'checking' &&
-    validateIntent(pendingIntent.action, pendingIntent.params, network) === null
+    validateIntent(pendingIntent.action, pendingIntent.params) === null
       ? `${pendingIntent.id}:${duplicateSend.status}`
       : null;
 
@@ -148,7 +88,7 @@ export function ConnectIntentHandler() {
   const { action, params } = pendingIntent;
 
   // Malformed / unsupported intents are rejected by the effect above — render nothing.
-  if (validateIntent(action, params, network)) return null;
+  if (validateIntent(action, params)) return null;
 
   const handleClose = () => {
     rejectIntent(intentId, ERROR_CODES.USER_REJECTED, 'User cancelled');
