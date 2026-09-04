@@ -2,7 +2,7 @@
 
 Exactly which variables to set, where, and what each one does. Written against
 `main` + `feat/network-switcher`, revised 2026-09-03 against the pinned SDK
-(`@unicitylabs/sphere-sdk@0.16.0-dev.1` — the bump that onboarded mainnet).
+(`@unicitylabs/sphere-sdk@0.16.0` — the bump that onboarded mainnet).
 
 ---
 
@@ -25,7 +25,7 @@ the SDK knows the network   AND   this deployment has its wallet-api URL   AND  
 
 **The first condition is now TRUE.** Up to `0.15.0` the pinned SDK shipped no
 mainnet `networkId`, so mainnet rendered greyed out as "Coming soon" whatever
-you set. `0.16.0-dev.1` onboards it — `networkId: 1`, an embedded mainnet trust
+you set. `0.16.0` onboards it — `networkId: 1`, an embedded mainnet trust
 base, the live `gateway.mainnet.unicity.network` and its own token registry — so
 that gate opened **by itself**, with no change in this repo. Exactly the "it
 disappears on its own" this section warned about; it has now happened.
@@ -92,7 +92,7 @@ The app now **refuses to start** on a real-value network with subscriptions off,
 rather than leak the key.
 
 ### What you must NOT configure — it follows the network by itself
-`NETWORKS[network]` in SDK 0.16.0-dev.1 carries exactly six things: `name`,
+`NETWORKS[network]` in SDK 0.16.0 carries exactly six things: `name`,
 `networkId` (now present on every network in the table), `aggregatorUrl`,
 `nostrRelays`, `groupRelays`, `tokenRegistryUrl`. Two more values follow the network without
 being fields in it: the **SGW base URL**, which the app derives from
@@ -197,7 +197,7 @@ Do not flip `MAINNET_ROLLOUT_ENABLED` before these land — both are money-safet
 
 Plus the SDK/protocol side, none of which this repo can supply — each one is
 observable in the pinned SDK, so check it there rather than in a plan doc.
-**Four of the five landed in `0.16.0-dev.1`:**
+**Four of the five landed in `0.16.0`:**
 
 - ~~a mainnet **`networkId`** and a mainnet **trust base**~~ — shipped:
   `networkId: 1`, root trust base embedded in `assets/trustbase.ts` and pinned
@@ -206,18 +206,20 @@ observable in the pinned SDK, so check it there rather than in a plan doc.
   `https://gateway.mainnet.unicity.network` (the old
   `aggregator.unicity.network/rpc` placeholder was a v1 host that no longer
   resolves);
-- **fungible definitions in the mainnet token registry** — **still outstanding.**
-  `unicity-ids.mainnet.json` is published but currently holds exactly ONE entry,
-  the non-fungible base type. Every fungible mainnet coin therefore misses the
-  registry and falls back to `decimals: 0` and a six-hex-char symbol.
+- **fungible definitions in the mainnet token registry** — **deliberately empty,
+  and NOT a rollout blocker.** `unicity-ids.mainnet.json` holds exactly one
+  entry, the non-fungible base type. Mainnet launches with no fungible assets at
+  all; ids arrive with bridging, once real crypto can be brought in from other
+  networks. A wallet on mainnet therefore shows an empty balance, which is the
+  expected state rather than a fault.
 
-  This is not merely cosmetic, which is why it is a blocker rather than a
-  footnote: `PaymentRequestIntentModal` reads `def?.decimals ?? 0` and formats
-  the approval amount from it, so a user would be asked to approve a **raw
-  base-unit number with no symbol** — `100000000` where they expect `1.00 UCT` —
-  on real money. Balances and the send confirmation degrade the same way.
-  Do not flip the rollout switch until the registry defines the fungible coins
-  the deployment expects to carry;
+  It becomes a prerequisite **at bridging time**, and the reason is worth
+  recording now so it is not rediscovered then: `PaymentRequestIntentModal`
+  reads `def?.decimals ?? 0` and formats the approval amount from it, so the
+  first fungible id that exists without a registry entry would have a user
+  approve a **raw base-unit number with no symbol** — `100000000` where they
+  mean `1.00 UCT` — on real money. Balances and the send confirmation degrade
+  the same way. Define the coins before shipping the bridge, not after;
 - a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET` — **still
   outstanding.** Without it
   `Sphere.init` cannot compose a mainnet money path at all.
