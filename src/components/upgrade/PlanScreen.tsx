@@ -22,7 +22,7 @@ import {
   planGridList,
 } from '../subscription/planFeatures';
 import { EnterApiKeyRow } from '../subscription/EnterApiKeyRow';
-import { getStoredSubscriptionKey } from '../../config/storageKeys';
+import { getStoredSubscriptionKey } from '../../config/subscriptionKeyCache';
 import { SUBSCRIPTION_MOCK, PAID_PLANS_ENABLED } from '../../config/subscription';
 import { showToast } from '../ui/toast-utils';
 import { useQueryClient } from '@tanstack/react-query';

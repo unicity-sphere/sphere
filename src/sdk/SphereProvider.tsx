@@ -59,6 +59,7 @@ import {
 } from '../config/walletApi';
 import { getActiveOracleApiKey } from './oracleKey';
 import { SUBSCRIPTION_ENABLED } from '../config/subscription';
+import { allowsSharedAggregatorKey } from '../config/networkCapabilities';
 import { resolveActiveKey, saveWalletKey, saveAddressKey, loadWalletKey } from './subscription/keyVault';
 import { validatePastedKey } from './subscription/keyCheck';
 import { isPaidPlan } from './subscription/usage';
@@ -81,9 +82,9 @@ import type {
 import {
   clearAllSphereData,
   getOrCreateWalletApiDeviceId,
-  setStoredSubscriptionKey,
   STORAGE_KEYS,
 } from '../config/storageKeys';
+import { setStoredSubscriptionKey } from '../config/subscriptionKeyCache';
 import { migrateApprovedSessions } from '../utils/connected-sites';
 
 // One-time migration from old approved sessions format (idempotent)
@@ -127,11 +128,30 @@ async function disconnectTransport(providers: BrowserProviders): Promise<void> {
  * group chat and nametags stay on the Nostr transport in the base bundle.
  *
  * Fail-closed (#351): on builds with VITE_REQUIRE_WALLET_API set,
- * getWalletApiBaseUrl() throws when VITE_WALLET_API_URL is missing — the
- * error is caught by initialize() and surfaced as a visible init error
- * instead of silently composing the legacy local-custody bundle.
+ * getWalletApiBaseUrl() throws when there is no URL for the active network —
+ * the error is caught by initialize() and surfaced as a visible init error.
+ * With the flag off this returns the bundle WITHOUT a `walletApi` config, and
+ * Sphere.init then throws INVALID_CONFIG itself: there is no local-custody
+ * composition to fall back to any more, so the flag chooses which error the
+ * user sees, not whether the wallet works.
  */
 function buildProviders(network: NetworkType, apiKey?: string): SphereAppProviders {
+  // Fail closed on the static-key mode where it is unsafe. VITE_AGGREGATOR_API_KEY
+  // is compiled into the bundle every visitor downloads, so on a real-value
+  // network it would hand this deployment's aggregator quota to anyone with
+  // devtools. runtime-config.sh only WARNS on a near-miss flag ('TRUE', '1'),
+  // and it REQUIRES a key in that mode — so a typo'd flag plus a real key is a
+  // silent leak. Throw here (like the #351 custody assert) so it surfaces as a
+  // visible init error instead.
+  if (!allowsSharedAggregatorKey(network) && !SUBSCRIPTION_ENABLED) {
+    throw new Error(
+      `Refusing to run on "${network}" with subscriptions disabled: the static ` +
+        'VITE_AGGREGATOR_API_KEY ships inside the JS bundle, so it is readable by ' +
+        'every visitor and is not a secret on any client. Set SUBSCRIPTION_ENABLED ' +
+        "to exactly 'true' so each wallet provisions its own per-wallet key.",
+    );
+  }
+
   const base = createBrowserProviders({
     network,
     // v2 token engine: aggregator URL + trust base come from the network
@@ -146,7 +166,7 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     market: true,
   });
 
-  const engineOverride = getEngineOverride();
+  const engineOverride = getEngineOverride(network);
   const withEngine = engineOverride
     ? createSphereProviders(base, {
         engine: createUnicityAggregatorProvider({
@@ -157,7 +177,7 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
       })
     : base;
 
-  const walletApiBaseUrl = getWalletApiBaseUrl();
+  const walletApiBaseUrl = getWalletApiBaseUrl(network);
   if (!walletApiBaseUrl) return withEngine;
   // Post-flip (sdk 0.14.1): createWalletApiProviders attaches a plain
   // `walletApi` transport CONFIG (WalletApiTransportConfig) — the session,
@@ -224,13 +244,16 @@ async function withPasswordOpLock(
 
 interface SphereProviderProps {
   children: ReactNode;
-  network?: NetworkType;
+  /**
+   * The active network. Required: a default here would be a SECOND build
+   * default that can silently drift from the one src/config/network.ts
+   * resolves — and module-scope consts (the SGW base URL, the SGW challenge
+   * pin, per-network wallet-api resolution) all derive from that one.
+   */
+  network: NetworkType;
 }
 
-export function SphereProvider({
-  children,
-  network = 'testnet2',
-}: SphereProviderProps) {
+export function SphereProvider({ children, network }: SphereProviderProps) {
   const queryClient = useQueryClient();
   const [sphere, setSphere] = useState<Sphere | null>(null);
   const [providers, setProviders] = useState<SphereAppProviders | null>(null);
@@ -1311,7 +1334,7 @@ export function SphereProvider({
     reinitialize: initialize,
     applySubscriptionKey,
     subscriptionKeyStatus,
-    walletApiEnabled: isWalletApiEnabled(),
+    walletApiEnabled: isWalletApiEnabled(network),
   };
 
   return (

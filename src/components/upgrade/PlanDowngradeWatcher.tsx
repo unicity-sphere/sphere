@@ -9,7 +9,7 @@
  */
 import { useEffect } from 'react';
 import { useUtilization } from '../../sdk/hooks/subscription';
-import { getStoredSubscriptionKey } from '../../config/storageKeys';
+import { getStoredSubscriptionKey } from '../../config/subscriptionKeyCache';
 import { SUBSCRIPTION_ENABLED } from '../../config/subscription';
 import { getLastKnownPlan, rememberPlan, isPaidToFreeDowngrade } from '../../sdk/subscription/planMemory';
 import type { UpgradeReason } from './UpgradeContext';

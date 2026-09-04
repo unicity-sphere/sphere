@@ -14,8 +14,13 @@ import { ServicesProvider } from './contexts/ServicesProvider'
 import { ConnectProvider } from './components/connect'
 import { UpgradeProvider } from './components/upgrade'
 import { SPHERE_NETWORK } from './config/network'
+import { installNetworkSync } from './sdk/networkSync'
 import { ToastContainer } from './components/ui/Toast'
 import { ErrorFallback } from './components/ui/ErrorFallback'
+
+// Reload this tab when another tab switches the active network so every open
+// tab runs the same network after a switch.
+installNetworkSync(SPHERE_NETWORK)
 
 createRoot(document.getElementById('root')!, {
   // React 19 root hooks: report errors that crash above the ErrorBoundary

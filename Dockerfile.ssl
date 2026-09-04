@@ -16,7 +16,6 @@ COPY . .
 # runtime env contract. Override an ARG only to pin a literal at build time.
 ARG VITE_SPHERE_API_URL=__RUNTIME_SPHERE_API_URL__
 ARG VITE_WALLET_API_URL=__RUNTIME_WALLET_API_URL__
-ARG VITE_REQUIRE_WALLET_API=__RUNTIME_REQUIRE_WALLET_API__
 ARG VITE_AGGREGATOR_API_KEY=__RUNTIME_AGGREGATOR_API_KEY__
 ARG VITE_DEV_PORTAL_URL=__RUNTIME_DEV_PORTAL_URL__
 # Subscription vars have NO placeholders on purpose — they are runtime-provided

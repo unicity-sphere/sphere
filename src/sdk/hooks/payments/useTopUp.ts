@@ -4,6 +4,7 @@ import { useSphereContext } from '../core/useSphere';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { TokenRegistry, parseTokenAmount } from '@unicitylabs/sphere-sdk';
+import { canSelfMint, MINT_UNAVAILABLE_MESSAGE } from '../../../config/networkCapabilities';
 
 /** Per-coin result of a top-up mint, for partial-success display. */
 export interface TopUpResult {
@@ -43,12 +44,18 @@ const AMOUNTS: Record<string, number> = {
  * does NOT drive which coins are minted. No faucet, no nametag required.
  */
 export function useTopUp(): UseTopUpReturn {
-  const { sphere } = useSphereContext();
+  const { sphere, network } = useSphereContext();
   const { assertReady: requireSubscriptionKey } = useSubscriptionKeyGuard();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: async (): Promise<TopUpResult[]> => {
+      // The entry point is hidden on networks that forbid self-mint (see
+      // WalletActions), but the hook must fail closed too — a self-mint on
+      // mainnet would create real coinIds for free (networkCapabilities.ts).
+      if (!canSelfMint(network)) {
+        throw new Error(MINT_UNAVAILABLE_MESSAGE);
+      }
       const payments = getPayments(sphere);
       if (!payments) throw new Error('Wallet not initialized');
       // Self-mint is a certification_request — gate it on the subscription key

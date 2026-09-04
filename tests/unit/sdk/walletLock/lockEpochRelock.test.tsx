@@ -90,7 +90,7 @@ afterEach(() => {
 
 describe('lock epoch relock (graceful lock §8.4)', () => {
   it('locks a resuming tab when another tab locked while it was away', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     // Another tab locked one hour into the future relative to this tab's session
@@ -106,7 +106,7 @@ describe('lock epoch relock (graceful lock §8.4)', () => {
   });
 
   it('leaves a resuming tab alone when no lock is on record', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     await act(async () => {
@@ -119,7 +119,7 @@ describe('lock epoch relock (graceful lock §8.4)', () => {
   });
 
   it('records the epoch on lock and has none while the wallet is live', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
     // A fresh, live session must not leave a stale marker behind.
     expect(readLockEpoch()).toBeNull();

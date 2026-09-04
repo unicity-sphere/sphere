@@ -6,7 +6,8 @@ import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { SendIntentModal } from './SendIntentModal';
 import { PaymentRequestIntentModal } from './PaymentRequestIntentModal';
-import { useConnectContext } from './ConnectContext';
+import { validateIntent } from './intentValidation';
+import { useConnectContext} from './ConnectContext';
 import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
@@ -15,60 +16,10 @@ import { useDuplicateSendGuard } from './duplicateSendGuard';
 import { truncateId } from '../../utils/identifiers';
 
 /** Intents this wallet actually implements. Anything else is rejected cleanly. */
-const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'receive']);
 
-type IntentError = { code: number; message: string };
 
 /** Canonical coinId: even-length lowercase hex (same shape the mint intent requires). */
-const COIN_ID_RE = /^([0-9a-f]{2})+$/;
 
-/**
- * Validate dApp-supplied intent params up front. Returns a structured error to
- * reject with (INVALID_PARAMS / METHOD_NOT_FOUND), or null when the intent is
- * supported and well-formed. `mint` does its own engine-specific validation in
- * its handler, so it is only checked for support here.
- */
-function validateIntent(action: string, params: Record<string, unknown>): IntentError | null {
-  if (!SUPPORTED_INTENTS.has(action)) {
-    return {
-      code: ERROR_CODES.METHOD_NOT_FOUND,
-      message: `Intent "${action}" is not supported by this wallet`,
-    };
-  }
-  if (action === 'send' || action === 'payment_request') {
-    if (typeof params.to !== 'string' || params.to.trim() === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };
-    }
-    // amount is in BASE UNITS (smallest indivisible unit) — a positive integer
-    // string, exactly like the `mint` intent. Whole-token/decimal amounts are
-    // rejected: every major wallet carries dApp-requested amounts in base units
-    // (exactness, no float), and the dApp converts at its own UI edge.
-    const amountStr = params.amount == null ? '' : String(params.amount).trim();
-    if (!/^\d+$/.test(amountStr) || BigInt(amountStr) <= 0n) {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'amount must be a positive integer string in base units' };
-    }
-    if (typeof params.coinId !== 'string' || !COIN_ID_RE.test(params.coinId)) {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'coinId must be lowercase even-length hex' };
-    }
-    return null;
-  }
-  if (action === 'dm') {
-    if (typeof params.to !== 'string' || params.to.trim() === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };
-    }
-    if (typeof params.message !== 'string' || params.message === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "message"' };
-    }
-    return null;
-  }
-  if (action === 'sign_message') {
-    if (typeof params.message !== 'string' || params.message === '') {
-      return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "message"' };
-    }
-    return null;
-  }
-  return null;
-}
 
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =

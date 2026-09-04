@@ -114,7 +114,7 @@ afterEach(() => {
 
 describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   it('locks EVERY registered host with setLocked(), never revoking their sessions', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     const hostA = makeFakeHost('A');
@@ -134,7 +134,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('tells every host BEFORE destroying the Sphere (ordering contract)', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     const hostA = makeFakeHost('A');
@@ -152,7 +152,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('is exactly-once: a second lock() (same-tab broadcast loopback) is a no-op', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     const host = makeFakeHost('A');
@@ -169,7 +169,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('clears the react-query cache so balances/history/DMs are not readable behind the lock screen', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     queryClient.setQueryData(['balance'], { total: '1000' });
@@ -181,7 +181,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('PRESERVES the UI-state caches, so the lock does not kill the Wallet button', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     // React Query doubles as this app's UI store. DesktopLayout consumes no Sphere hook, so a
@@ -206,7 +206,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('still broadcasts from a MANUAL lock (PR #456 prerequisite, guarded)', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     const onLock = vi.fn();
@@ -224,7 +224,7 @@ describe('SphereProvider.lock() fan-out (graceful lock §8.4)', () => {
   });
 
   it('locks a tab whose Sphere is momentarily null — a re-init must not swallow a cross-tab lock', async () => {
-    render(<Wrapper><SphereProvider><Probe /></SphereProvider></Wrapper>);
+    render(<Wrapper><SphereProvider network="testnet2"><Probe /></SphereProvider></Wrapper>);
     await waitFor(() => expect(screen.getByTestId('sphere').textContent).toBe('present'));
 
     const host = makeFakeHost('A');

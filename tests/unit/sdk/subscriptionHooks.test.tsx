@@ -26,8 +26,8 @@ vi.mock('@/services/subscriptionApi', () => ({
   ]),
   createStoreCheckout: vi.fn(async () => ({ orderId: 'order_1', redirectUrl: 'https://pay.example.test/gateway?token=abc' })),
 }));
-vi.mock('@/config/storageKeys', async (orig) => ({
-  ...(await orig<typeof import('@/config/storageKeys')>()),
+vi.mock('@/config/subscriptionKeyCache', async (orig) => ({
+  ...(await orig<typeof import('@/config/subscriptionKeyCache')>()),
   getStoredSubscriptionKey: vi.fn(),
 }));
 vi.mock('@/config/subscription', async (orig) => ({
@@ -37,7 +37,7 @@ vi.mock('@/config/subscription', async (orig) => ({
 
 import { usePlans, useUtilization, useCheckout } from '@/sdk/hooks/subscription';
 import { getStorePlans, createStoreCheckout } from '@/services/subscriptionApi';
-import { getStoredSubscriptionKey } from '@/config/storageKeys';
+import { getStoredSubscriptionKey } from '@/config/subscriptionKeyCache';
 
 function wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

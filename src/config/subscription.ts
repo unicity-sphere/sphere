@@ -1,5 +1,6 @@
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import { SPHERE_NETWORK } from './network';
+import { SUBSCRIPTION_ENABLED, runtimeSetting as setting } from './runtimeConfig';
 
 /**
  * Subscription gateway (SGW) config. When SUBSCRIPTION_ENABLED is false the
@@ -15,45 +16,13 @@ import { SPHERE_NETWORK } from './network';
  * SGW compose stack is reached via the same-origin `/sgw` vite proxy
  * (SGW_PROXY_TARGET, see vite.config.ts).
  *
- * WHY the flags read window.__SPHERE_RUNTIME_CONFIG__ and not a
- * `__RUNTIME_*__` sed placeholder: the Docker image is built once and
- * promoted across environments, so the flags must be swappable at container
- * start. The sed-placeholder mechanism cannot carry a FEATURE FLAG — Rollup
- * statically evaluates branch conditions during tree-shaking, following
- * const bindings across modules, so every `if (SUBSCRIPTION_ENABLED)` in the
- * app gets pruned against the baked literal (`'__RUNTIME_…__' === 'true'` →
- * false) and the feature is compile-time OFF no matter what the container
- * substitutes (this actually happened; see also the note in
- * src/config/walletApi.ts). Reading from a window global set before the
- * bundle loads (public/runtime-config.js, rewritten at container start by
- * deploy/runtime-config.sh) keeps the value genuinely unknown at build time,
- * so no branch can fold. Dev and GitHub Pages builds ship the default empty
- * config and fall back to the VITE_* env baked at build time.
+ * The flags come from window.__SPHERE_RUNTIME_CONFIG__ rather than a
+ * `__RUNTIME_*__` sed placeholder because a placeholder cannot carry a value a
+ * branch decides on — every `if (SUBSCRIPTION_ENABLED)` would be pruned against
+ * the baked literal at build time (this actually happened). The rule, the fold
+ * directions and the mechanism now live in src/config/runtimeConfig.ts; read
+ * that before adding a value here.
  */
-
-interface SphereRuntimeConfig {
-  SUBSCRIPTION_ENABLED?: string;
-  PAID_PLANS_ENABLED?: string;
-}
-
-/**
- * Runtime value if present and non-empty, else the build-time env value.
- * Empty string means "not set on the container env" (runtime-config.sh always
- * writes all keys), so it must not shadow a value baked at build time.
- */
-function setting(
-  key: keyof SphereRuntimeConfig,
-  envValue: string | undefined,
-): string | undefined {
-  const config =
-    typeof window === 'undefined'
-      ? undefined
-      : (window as { __SPHERE_RUNTIME_CONFIG__?: SphereRuntimeConfig })
-          .__SPHERE_RUNTIME_CONFIG__;
-  const value = config?.[key];
-  if (value === undefined || value === '') return envValue;
-  return value;
-}
 
 function resolveSubscriptionApiUrl(): string {
   const raw = import.meta.env.VITE_SUBSCRIPTION_API_URL as string | undefined;
@@ -62,12 +31,12 @@ function resolveSubscriptionApiUrl(): string {
 }
 export const SUBSCRIPTION_API_URL = resolveSubscriptionApiUrl();
 
-/** Exactly 'true' enables; anything else (including 'TRUE', '1') is off. */
-export const SUBSCRIPTION_ENABLED =
-  setting(
-    'SUBSCRIPTION_ENABLED',
-    import.meta.env.VITE_SUBSCRIPTION_ENABLED as string | undefined,
-  ) === 'true';
+/**
+ * Exactly 'true' enables; anything else (including 'TRUE', '1') is off.
+ * Defined in runtimeConfig.ts (a leaf) because the network availability gate
+ * needs it too and cannot import this module — see the note there.
+ */
+export { SUBSCRIPTION_ENABLED };
 
 /**
  * When true, the SGW client returns canned data instead of hitting the

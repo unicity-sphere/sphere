@@ -9,6 +9,16 @@ import { RegisterNametagModal } from './shared/components/RegisterNametagModal';
 import { NewAddressModal } from './shared/modals/NewAddressModal';
 import { AddressSelector } from './shared/components';
 import { CreateWalletFlow } from './onboarding/CreateWalletFlow';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import {
+  DEFAULT_NETWORK,
+  SPHERE_NETWORK,
+  SUPPORTED_NETWORKS,
+  isMainnetAnnounced,
+  resetActiveNetwork,
+  shouldAnnounceMainnet,
+} from '../../config/network';
+import { MainnetAnnouncementModal } from './L3/modals/MainnetAnnouncementModal';
 import { UnlockScreen } from './onboarding/components/UnlockScreen';
 
 const PANEL_SHELL = "bg-white dark:bg-modal-bg/50 backdrop-blur-xl overflow-hidden h-full relative lg:border-l lg:border-neutral-100 dark:lg:border-brand-orange-border flex flex-col rounded-2xl";
@@ -22,6 +32,17 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
   // #413: derive-address flow — hosted at panel level (like RegisterNametagModal)
   // so the slide-in screen paints above the wallet content in DOM order.
   const [isNewAddressOpen, setIsNewAddressOpen] = useState(false);
+  // Mainnet invitation — decided once, at mount, from values that only change
+  // on reload anyway (the network is fixed for a page's lifetime). Reading the
+  // "already asked" flag in the initialiser keeps it out of the render path.
+  const [isMainnetAnnouncementOpen, setIsMainnetAnnouncementOpen] = useState(() =>
+    shouldAnnounceMainnet({
+      active: SPHERE_NETWORK,
+      networks: SUPPORTED_NETWORKS,
+      announced: isMainnetAnnounced(),
+    }),
+  );
+
   // #449: once the user picks "forgot password → restore from recovery
   // phrase" on the UnlockScreen, drop them straight into onboarding's restore
   // flow instead of the unlock prompt. Reset when the wallet unlocks/restores
@@ -80,14 +101,33 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
               {walletError.message || 'Please reload the page'}
             </p>
           </div>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => window.location.reload()}
-            className="px-5 py-2 bg-linear-to-r from-orange-500 to-orange-600 dark:from-brand-orange dark:to-brand-orange-dark text-white text-sm font-medium rounded-xl"
-          >
-            Reload
-          </motion.button>
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => window.location.reload()}
+              className="px-5 py-2 bg-linear-to-r from-orange-500 to-orange-600 dark:from-brand-orange dark:to-brand-orange-dark text-white text-sm font-medium rounded-xl"
+            >
+              Reload
+            </motion.button>
+
+            {/* A wallet stranded on a network that cannot start has no way back:
+                reloading only repeats the failure, and the Settings screen that
+                would switch networks lives behind this very panel. The switcher
+                gate cannot prevent every case either — it can only check what
+                the SDK advertises, while the refusal can come from deeper (a
+                missing trust base). So offer the way out here. */}
+            {SPHERE_NETWORK !== DEFAULT_NETWORK && (
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => resetActiveNetwork()}
+                className="px-5 py-2 bg-neutral-100 dark:bg-white/6 hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-700 dark:text-white text-sm font-medium rounded-xl"
+              >
+                Switch to {NETWORKS[DEFAULT_NETWORK].name}
+              </motion.button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -307,6 +347,13 @@ export function WalletPanel({ autoFocusUnlock = false }: { autoFocusUnlock?: boo
       <NewAddressModal
         isOpen={isNewAddressOpen}
         onClose={() => setIsNewAddressOpen(false)}
+      />
+
+      {/* Mainnet went live and this wallet is still on a test network — invite
+          once, never move it for them. */}
+      <MainnetAnnouncementModal
+        isOpen={isMainnetAnnouncementOpen}
+        onClose={() => setIsMainnetAnnouncementOpen(false)}
       />
     </div>
   );

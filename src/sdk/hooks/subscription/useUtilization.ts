@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getUtilization } from '../../../services/subscriptionApi';
-import { getStoredSubscriptionKey } from '../../../config/storageKeys';
+import { getStoredSubscriptionKey } from '../../../config/subscriptionKeyCache';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import { SPHERE_KEYS } from '../../queryKeys';
 
