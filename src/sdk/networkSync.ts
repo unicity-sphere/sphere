@@ -9,6 +9,7 @@
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { STORAGE_KEYS } from '../config/storageKeys';
 import {
+  DEFAULT_NETWORK,
   NETWORK_BROADCAST_CHANNEL,
   isSwitchableNetwork,
   type NetworkChangedMessage,
@@ -48,7 +49,18 @@ export function installNetworkSync(
 
   const onStorage = (event: StorageEvent) => {
     if (event.key !== STORAGE_KEYS.ACTIVE_NETWORK) return;
-    if (event.newValue && isSwitchableNetwork(event.newValue) && event.newValue !== bootNetwork) {
+    // A REMOVED key is a network change too: resetActiveNetwork() deletes the
+    // entry, which fires an event with newValue === null. Treating null as
+    // "nothing happened" left every other tab on the previous network while the
+    // resetting one reloaded onto the default — the wallet split across networks
+    // until each tab was refreshed by hand. Resolve null the way boot does.
+    if (event.newValue === null) {
+      // The key was REMOVED — resetActiveNetwork(). DEFAULT_NETWORK is already
+      // resolved at module load, so it needs no switchability test here.
+      if (DEFAULT_NETWORK !== bootNetwork) reloadOnce();
+      return;
+    }
+    if (isSwitchableNetwork(event.newValue) && event.newValue !== bootNetwork) {
       reloadOnce();
     }
   };

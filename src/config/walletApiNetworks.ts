@@ -83,11 +83,15 @@ export function walletApiUrlFor(network: NetworkType): string | null {
   const key = RUNTIME_KEY[network];
   // Computed access on a window global: unfoldable by construction. The
   // container is authoritative, so it wins over anything baked at build time.
-  const runtime = key ? readRuntimeConfig()?.[key] : undefined;
+  // TRIMMED, not merely non-empty. A pasted ' ' passed a `!== ''` test, made the
+  // network selectable, and then `new URL(' ', origin)` resolved to the WALLET'S
+  // OWN origin — so the network would launch with its custody backend pointing at
+  // the app instead of failing closed. Whitespace is a missing value.
+  const runtime = key ? readRuntimeConfig()?.[key]?.trim() : undefined;
   if (runtime !== undefined && runtime !== '') return runtime;
 
   // Build-time per-network URL (dev / Pages / tests — never Docker).
-  const env = ENV_URL[network];
+  const env = ENV_URL[network]?.trim();
   if (env !== undefined && env !== '') return env;
 
   // Legacy single-URL deployments (VITE_WALLET_API_URL, and every deployment
@@ -106,7 +110,7 @@ export function walletApiUrlFor(network: NetworkType): string | null {
   // Do NOT reduce to a bare truthiness test: `!!legacy` folds to true against
   // the baked placeholder; the `!== ''` term is what survives into the Docker
   // bundle and keeps this runtime-decided after substitution.
-  return !!legacy && legacy !== '' ? legacy : null;
+  return !!legacy && legacy.trim() !== '' ? legacy.trim() : null;
 }
 
 /** Non-throwing capability predicate — safe to call at module scope. */

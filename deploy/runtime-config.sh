@@ -117,6 +117,17 @@ fi
 # without one — no fail-closed check is needed for it. The inverse IS a
 # misconfiguration worth failing on: rollout on, no URL, means an operator
 # believes they enabled mainnet while the row stays greyed out.
+# Whitespace is a MISSING value, not a configured one. `-z` accepts ' ', which
+# then reaches `new URL(' ', origin)` in the browser and resolves to the wallet's
+# own origin — a network launched with its custody backend pointing at the app.
+# Squeeze every wallet-api URL before any check reads it.
+for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET; do
+  eval "_v=\${$_k-}"
+  # shellcheck disable=SC2086
+  _v=$(printf '%s' "$_v" | tr -d '[:space:]')
+  eval "$_k=\$_v"
+done
+
 if [ "${MAINNET_ROLLOUT_ENABLED-}" = "true" ] && [ -z "${WALLET_API_URL_MAINNET-}" ] && [ "$require_wallet_api" = 1 ]; then
   log "ERROR: MAINNET_ROLLOUT_ENABLED=true but WALLET_API_URL_MAINNET is empty —"
   log "       refusing to start (mainnet would stay unselectable and the rollout"

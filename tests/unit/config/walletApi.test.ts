@@ -190,3 +190,27 @@ describe("getEngineOverride", () => {
     expect(() => getEngineOverride("dev")).toThrow(/must be set together/);
   });
 });
+describe('a whitespace-only URL is a MISSING url, not a configured one', () => {
+  beforeEach(() => {
+    // testnet2 is LEGACY_URL_NETWORK, so it also falls back to the single global
+    // URL — which a developer's .env sets. The suite's setup does not stub that
+    // one, and without it these cases pass for the wrong reason.
+    vi.stubEnv('VITE_WALLET_API_URL', '');
+  });
+
+  it('does not make a network selectable', () => {
+    // `-z` in the shell and `!== ''` in TS both accept ' '. It then reaches
+    // `new URL(' ', origin)`, which resolves to the WALLET'S OWN origin — so the
+    // network would launch with its custody backend pointing at the app rather
+    // than failing closed.
+    setRuntimeConfig({ WALLET_API_URL_TESTNET2: '   ' });
+    expect(isWalletApiEnabled(DEFAULT_NET)).toBe(false);
+    expect(getWalletApiBaseUrl(DEFAULT_NET)).toBeNull();
+  });
+
+  it('still accepts a real url with incidental padding', () => {
+    setRuntimeConfig({ WALLET_API_URL_TESTNET2: '  https://wallet-api.example  ' });
+    // Normalised through `new URL`, hence the trailing slash.
+    expect(getWalletApiBaseUrl(DEFAULT_NET)).toBe('https://wallet-api.example/');
+  });
+});
