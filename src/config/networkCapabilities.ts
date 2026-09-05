@@ -14,8 +14,13 @@
  * Networks that carry test money only. Every capability below is granted from
  * this one allowlist, so a new network is denied everything until it is listed
  * deliberately. Exact match by design: a typo'd network unlocks nothing.
+ *
+ * 'testnet' stays: it is a real alias of testnet2 in the SDK table, so a wallet
+ * can genuinely be asked about it. 'dev' is gone — sphere-sdk 0.16.0-dev.1
+ * deleted that network, and since the parameter is a plain `string` a stale
+ * entry would silently keep granting mint to a name nothing can resolve.
  */
-const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+const TEST_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet']);
 
 /** User-facing error for gated mint attempts (hook throws + Connect intent reject). */
 // Top Up only. NOT a statement that the network cannot mint: a dApp intent or
@@ -40,10 +45,25 @@ export function canSelfMint(network: string): boolean {
  * badge made it lie in exactly that case. testMoneyMatchesSelfMint() below pins
  * that they agree, so any divergence has to be written down rather than drifting.
  */
-const TEST_MONEY_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet', 'dev']);
+const TEST_MONEY_NETWORKS: ReadonlySet<string> = new Set(['testnet2', 'testnet']);
 
 export function isTestMoney(network: string): boolean {
   return TEST_MONEY_NETWORKS.has(network);
+}
+
+/**
+ * Fail-closed allowlist: true when a purchase on this network costs REAL money.
+ *
+ * The subscription gateway is per-network — `SUBSCRIPTION_API_URL` derives from
+ * `NETWORKS[SPHERE_NETWORK].aggregatorUrl` — but the flag that opens the store
+ * was deployment-wide, and `docs/DEVOPS-MAINNET.md` explicitly permits ONE
+ * deployment to serve both networks. So a user who switched to testnet could
+ * still open the upgrade flow and pay real money for a key belonging to a test
+ * network (#497 item 2). Every other money-shaped decision here is network-
+ * derived; this makes that one match.
+ */
+export function chargesRealMoney(network: string): boolean {
+  return !isTestMoney(network);
 }
 
 /** The two allowlists agree today; exported so a test can pin it. */

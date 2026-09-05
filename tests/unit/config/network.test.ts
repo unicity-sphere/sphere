@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
 
 /**
  * SUPPORTED_NETWORKS is a module-load const, so every case re-imports the
@@ -23,6 +24,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_WALLET_API_URL_TESTNET2', '');
   vi.stubEnv('VITE_WALLET_API_URL_MAINNET', '');
   vi.stubEnv('VITE_MAINNET_ROLLOUT_ENABLED', '');
+  vi.stubEnv('VITE_SUBSCRIPTION_ENABLED', '');
 });
 
 afterEach(() => {
@@ -31,18 +33,36 @@ afterEach(() => {
   localStorage.clear();
 });
 
+/**
+ * Everything a deployment needs to actually offer mainnet. Since sphere-sdk
+ * 0.16.0-dev.1 the SDK half is already true (NETWORKS.mainnet carries
+ * networkId 1), so mainnet is the second REAL network this suite can switch
+ * to — the role the deleted 'dev' hatch used to play.
+ */
+const MAINNET_LIVE = {
+  MAINNET_ROLLOUT_ENABLED: 'true',
+  WALLET_API_URL_MAINNET: 'https://wallet-api.mainnet.example',
+  WALLET_API_URL_TESTNET2: 'https://wallet-api.testnet2.example',
+  SUBSCRIPTION_ENABLED: 'true',
+};
+
 describe('SUPPORTED_NETWORKS — the availability gate', () => {
   it('offers exactly testnet2 and mainnet, in that order', async () => {
     const mod = await loadNetworkModule();
     expect(mod.SUPPORTED_NETWORKS.map((n) => n.id)).toEqual(['testnet2', 'mainnet']);
   });
 
-  it('reports mainnet as not-onboarded while the SDK has no networkId for it', async () => {
+  it('no longer blames the SDK for mainnet — it is onboarded, just not served here', async () => {
+    // This asserted 'not-onboarded' until sphere-sdk 0.16.0-dev.1, which gave
+    // NETWORKS.mainnet a networkId, a live gateway and its own registry. Gate
+    // (a) therefore opened BY ITSELF on the bump, with no code change here —
+    // which is precisely why the reason must be re-pinned: a stale expectation
+    // would have hidden that the wallet's refusal now rests entirely on the
+    // deployment gates.
     const mod = await loadNetworkModule();
     const mainnet = mod.SUPPORTED_NETWORKS.find((n) => n.id === 'mainnet');
-    // Verified against the pinned SDK: NETWORKS.mainnet carries no networkId.
     expect(mainnet?.available).toBe(false);
-    expect(mainnet?.unavailableReason).toBe('not-onboarded');
+    expect(mainnet?.unavailableReason).toBe('not-served-here');
   });
 
   it('marks testnet2 available once the deployment serves it', async () => {
@@ -117,12 +137,16 @@ describe('isSwitchableNetwork', () => {
     expect(mod.isSwitchableNetwork('testnet')).toBe(false);
   });
 
-  it('always allows the dev escape hatch, independent of the gate', async () => {
-    // Deliberate: dev is console-only and composes local custody, so the
-    // deployment-capability gate must not (and structurally cannot) hide it.
+  it("rejects 'dev' — the escape hatch is gone and the network with it", async () => {
+    // The hatch used to return true unconditionally, ahead of the gate. Since
+    // the parameter is a `string` behind a type predicate, removing 'dev' from
+    // NetworkType raised NO compile error here: a wallet holding the documented
+    // console value would have been handed a NetworkType that is not a key of
+    // NETWORKS, and NETWORKS[SPHERE_NETWORK].name would throw at first render.
+    // Arming REQUIRE_WALLET_API too, because that is what the hatch bypassed.
     vi.stubEnv('VITE_REQUIRE_WALLET_API', 'true');
     const mod = await loadNetworkModule();
-    expect(mod.isSwitchableNetwork('dev')).toBe(true);
+    expect(mod.isSwitchableNetwork('dev')).toBe(false);
   });
 });
 
@@ -134,16 +158,19 @@ describe('DEFAULT_NETWORK — a mainnet-first deployment must be possible', () =
 
   it('honours a deployment-configured start network', async () => {
     // While this was hardcoded, a mainnet-only deployment could not start.
-    vi.stubEnv('VITE_DEFAULT_NETWORK', 'dev'); // the one non-default network live today
+    // Mainnet is the non-default network this can be shown with now that the
+    // SDK onboarded it — and it is the case the option exists for.
+    setRuntimeConfig({ ...MAINNET_LIVE, DEFAULT_NETWORK: 'mainnet' });
     const mod = await loadNetworkModule();
-    expect(mod.DEFAULT_NETWORK).toBe('dev');
-    expect(mod.resolveActiveNetwork(null)).toBe('dev');
+    expect(mod.DEFAULT_NETWORK).toBe('mainnet');
+    expect(mod.resolveActiveNetwork(null)).toBe('mainnet');
   });
 
   it('ignores a start network this deployment cannot serve', async () => {
     // Naming an unavailable network must degrade to the fallback, not boot a
-    // wallet that cannot work.
-    vi.stubEnv('VITE_DEFAULT_NETWORK', 'mainnet'); // not onboarded in the SDK
+    // wallet that cannot work. Mainnet is onboarded in the SDK now, so what
+    // makes it unavailable here is the deployment: no backend URL, no rollout.
+    vi.stubEnv('VITE_DEFAULT_NETWORK', 'mainnet');
     const mod = await loadNetworkModule();
     expect(mod.DEFAULT_NETWORK).toBe('testnet2');
   });
@@ -157,8 +184,12 @@ describe('DEFAULT_NETWORK — a mainnet-first deployment must be possible', () =
 
 describe('resolveActiveNetwork — boot cannot brick', () => {
   it('uses a persisted switchable network', async () => {
+    // Worth stating with a network that is NOT the default, or the assertion
+    // would pass even if the stored value were ignored entirely.
+    setRuntimeConfig(MAINNET_LIVE);
     const mod = await loadNetworkModule();
-    expect(mod.resolveActiveNetwork('dev')).toBe('dev');
+    expect(mod.DEFAULT_NETWORK).toBe('testnet2');
+    expect(mod.resolveActiveNetwork('mainnet')).toBe('mainnet');
   });
 
   it('falls back to the build default when nothing is persisted', async () => {
@@ -177,13 +208,27 @@ describe('resolveActiveNetwork — boot cannot brick', () => {
     const mod = await loadNetworkModule();
     expect(mod.resolveActiveNetwork('{}')).toBe('testnet2');
   });
+
+  it("falls back for 'dev' — a network the SDK deleted", async () => {
+    const mod = await loadNetworkModule();
+    expect(mod.resolveActiveNetwork('dev')).toBe('testnet2');
+  });
+
+  it('falls back for a prototype key rather than treating it as a network', async () => {
+    // The stored value is an arbitrary string and the SDK table is a plain
+    // object, so a membership test written with `in` would answer true here.
+    const mod = await loadNetworkModule();
+    expect(mod.resolveActiveNetwork('constructor')).toBe('testnet2');
+    expect(mod.resolveActiveNetwork('toString')).toBe('testnet2');
+  });
 });
 
 describe('NETWORK_DOWNGRADED_FROM — a fallback must never be silent', () => {
   it('is null when the persisted choice was honoured', async () => {
-    localStorage.setItem('sphere_active_network', 'dev');
+    setRuntimeConfig(MAINNET_LIVE);
+    localStorage.setItem('sphere_active_network', 'mainnet');
     const mod = await loadNetworkModule();
-    expect(mod.SPHERE_NETWORK).toBe('dev');
+    expect(mod.SPHERE_NETWORK).toBe('mainnet');
     expect(mod.NETWORK_DOWNGRADED_FROM).toBeNull();
   });
 
@@ -209,13 +254,96 @@ describe('NETWORK_DOWNGRADED_FROM — a fallback must never be silent', () => {
   });
 });
 
+describe("a wallet left on 'dev' by the console escape hatch", () => {
+  /**
+   * THE bump-day migration. sphere-sdk 0.16.0-dev.1 removed 'dev' from
+   * NetworkType and from NETWORKS, but isSwitchableNetwork takes a `string`
+   * behind a type predicate — so deleting the network raised no compile error
+   * on the hatch, and anyone who had followed the documented console
+   * instruction (`localStorage.sphere_active_network = 'dev'`) would have
+   * booted with SPHERE_NETWORK = 'dev' and white-screened on the first
+   * NETWORKS[SPHERE_NETWORK].name — NetworkBadge, NetworkModal, the mainnet
+   * announcement. A wallet must never be bricked by a value the app itself
+   * told the user to set.
+   */
+  it('resolves to the build default instead of a network that no longer exists', async () => {
+    localStorage.setItem('sphere_active_network', 'dev');
+    const mod = await loadNetworkModule();
+
+    expect(mod.SPHERE_NETWORK).toBe('testnet2');
+    expect(mod.isSwitchableNetwork('dev')).toBe(false);
+  });
+
+  it('KEEPS a stored network this bundle does not know — it may be a NEWER one', async () => {
+    // gh-pages serves several builds at once, so an OLDER bundle can load after a
+    // newer one. A network the newer SDK added is unknown here but is a perfectly
+    // good standing choice; deleting it would destroy that intent silently. Only
+    // RETIRED ids are forgotten. This session still falls back — it cannot run a
+    // network it has no table entry for — but the choice survives for the bundle
+    // that understands it.
+    localStorage.setItem('sphere_active_network', 'testnet9');
+    const mod = await loadNetworkModule();
+
+    expect(localStorage.getItem('sphere_active_network')).toBe('testnet9');
+    expect(mod.SPHERE_NETWORK).toBe(mod.DEFAULT_NETWORK);
+  });
+
+  it('resolves to a network the SDK table can actually be indexed with', async () => {
+    // The assertion the white screen would have failed: every module that
+    // renders the network name does exactly this lookup, at module scope.
+    localStorage.setItem('sphere_active_network', 'dev');
+    const mod = await loadNetworkModule();
+
+    expect(NETWORKS[mod.SPHERE_NETWORK]).toBeDefined();
+    expect(NETWORKS[mod.SPHERE_NETWORK].name).toBe('Testnet');
+  });
+
+  it('forgets the stored value, so nothing is promised that cannot be kept', async () => {
+    // An unavailable-but-real choice is deliberately KEPT (see the test above:
+    // a persisted 'mainnet' survives so the wallet returns to it). 'dev' can
+    // never come back, so keeping it would pin a permanent downgrade notice
+    // offering to reopen a network that does not exist.
+    localStorage.setItem('sphere_active_network', 'dev');
+    const mod = await loadNetworkModule();
+
+    expect(localStorage.getItem('sphere_active_network')).toBeNull();
+    expect(mod.NETWORK_DOWNGRADED_FROM).toBeNull();
+  });
+
+  it('leaves a real network alone — only unknown ones are forgotten', async () => {
+    // The repair is scoped to membership in the SDK table, NOT availability.
+    localStorage.setItem('sphere_active_network', 'mainnet');
+    const mod = await loadNetworkModule();
+
+    expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+    expect(mod.NETWORK_DOWNGRADED_FROM).toBe('mainnet');
+  });
+
+  it('survives blocked storage without throwing at module load', async () => {
+    // Privacy mode: removeItem throws. The module is imported before React
+    // mounts, so an escaping error is the same white screen by another route.
+    localStorage.setItem('sphere_active_network', 'dev');
+    const removeItem = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new Error('storage blocked');
+      });
+    try {
+      const mod = await loadNetworkModule();
+      expect(mod.SPHERE_NETWORK).toBe('testnet2');
+    } finally {
+      removeItem.mockRestore();
+    }
+  });
+});
+
 describe('shouldAnnounceMainnet — invite once, never move anyone', () => {
   const LIVE = [
-    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'testnet2' as const, label: 'Testnet', available: true },
     { id: 'mainnet' as const, label: 'Mainnet', available: true },
   ];
   const NOT_LIVE = [
-    { id: 'testnet2' as const, label: 'Testnet2', available: true },
+    { id: 'testnet2' as const, label: 'Testnet', available: true },
     { id: 'mainnet' as const, label: 'Mainnet', available: false, unavailableReason: 'not-onboarded' as const },
   ];
 
@@ -258,7 +386,7 @@ describe('shouldAnnounceMainnet — invite once, never move anyone', () => {
 
 describe('resetActiveNetwork — the way out of a network that cannot start', () => {
   it('clears the choice and reloads onto the build default', async () => {
-    localStorage.setItem('sphere_active_network', 'dev');
+    localStorage.setItem('sphere_active_network', 'mainnet');
     const mod = await loadNetworkModule();
     const reload = vi.fn();
 
@@ -287,11 +415,15 @@ describe('resetActiveNetwork — the way out of a network that cannot start', ()
 
 describe('setActiveNetwork', () => {
   it('persists, broadcasts and reloads', async () => {
+    // A real switch needs a real second network: with mainnet live here the
+    // wallet still starts on testnet2, so this is a genuine change of network.
+    setRuntimeConfig(MAINNET_LIVE);
     const mod = await loadNetworkModule();
     const reload = vi.fn();
-    mod.setActiveNetwork('dev', { reload });
+    expect(mod.SPHERE_NETWORK).toBe('testnet2');
+    mod.setActiveNetwork('mainnet', { reload });
 
-    expect(localStorage.getItem('sphere_active_network')).toBe('dev');
+    expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
     expect(reload).toHaveBeenCalledOnce();
   });
 

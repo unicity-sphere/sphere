@@ -21,7 +21,7 @@ vi.mock('../../../src/config/network', () => ({
   },
   get SUPPORTED_NETWORKS() {
     return [
-      { id: 'testnet2', label: 'Testnet2', available: true },
+      { id: 'testnet2', label: 'Testnet', available: true },
       { id: 'mainnet', label: 'Mainnet', available: false, unavailableReason: netState.mainnetReason },
     ];
   },
@@ -44,7 +44,7 @@ function renderModal() {
 describe('NetworkModal', () => {
   it('renders the supported networks with the current one marked', () => {
     renderModal();
-    expect(screen.getByRole('button', { name: /Testnet2/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Testnet/ })).toBeDefined();
     expect(screen.getByText('Current')).toBeDefined();
   });
 
@@ -58,20 +58,18 @@ describe('NetworkModal', () => {
     expect(screen.queryByText(/separate per network/i)).toBeNull();
   });
 
-  it('appends the active dev network as an extra current row', () => {
-    netState.active = 'dev';
-    renderModal();
-    // Label comes from the real SDK NETWORKS table: dev = 'Development'
-    const devRow = screen.getByRole('button', { name: /Development/ }) as HTMLButtonElement;
-    expect(devRow.disabled).toBe(true); // current row is not re-selectable
-    expect(screen.getByText('Current')).toBeDefined();
-  });
+  // DELETED with the sphere-sdk 0.16.0-dev.1 bump: 'appends the active dev
+  // network as an extra current row'. It drove buildNetworkRows' append branch
+  // through netState.active = 'dev', and 'dev' is no longer a NetworkType — nor
+  // can any NetworkType outside SUPPORTED_NETWORKS become the active network
+  // (see the note in networkRows.test.ts). The screen has no state left in
+  // which it renders an unlisted current row.
 
   it('confirms before switching and calls setActiveNetwork', () => {
-    netState.active = 'dev'; // makes Testnet2 an available, non-current target
+    netState.active = 'mainnet'; // makes Testnet an available, non-current target
     renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Testnet/ }));
     expect(
       screen.getByText(
         'Balances, history and subscription keys are separate per network. The app will reload.',
@@ -83,10 +81,10 @@ describe('NetworkModal', () => {
   });
 
   it('cancel dismisses the confirmation without switching', () => {
-    netState.active = 'dev';
+    netState.active = 'mainnet';
     renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /Testnet2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Testnet/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByText(/separate per network/i)).toBeNull();
@@ -110,7 +108,7 @@ describe('NetworkModal', () => {
     // concludes their funds are gone.
     netState.downgradedFrom = 'mainnet';
     renderModal();
-    expect(screen.getByText(/mainnet is not available here, so the wallet is on Testnet2/)).toBeDefined();
+    expect(screen.getByText(/mainnet is not available here, so the wallet is on Testnet/)).toBeDefined();
     expect(screen.getByText(/assets on mainnet are\s+untouched/)).toBeDefined();
   });
 });

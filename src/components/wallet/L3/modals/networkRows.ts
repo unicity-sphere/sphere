@@ -10,13 +10,14 @@ export type RowState = 'current' | 'selectable' | 'unavailable';
  * "which networks to show" policy is testable on its own, separate from the
  * view.
  *
- * The screen offers exactly the public networks (testnet2, mainnet). The one
- * exception is honesty about the current state: an active network that is not
- * in that list — only reachable by setting `sphere_active_network` from the
- * browser console, the developer escape hatch used to verify switching while
- * testnet2 is the single live network — is appended as a current-only row, so
- * the screen never lies about where the wallet is and always offers a way back
- * to a public network.
+ * The screen offers exactly the public networks (testnet2, mainnet). The
+ * append below keeps one promise on top of that: the screen never lies about
+ * where the wallet is. It is a guarantee of this pure function, not a live path
+ * — the console escape hatch that used to reach it ('dev') is gone with the
+ * sphere-sdk 0.16.0-dev.1 bump, and the only remaining NetworkType outside the
+ * list is the 'testnet' alias, which resolveActiveNetwork can never return. It
+ * stays as the one line that keeps a future network from rendering a screen
+ * with no current row and no way back.
  */
 export function buildNetworkRows(active: NetworkType): SupportedNetwork[] {
   const rows: SupportedNetwork[] = [...SUPPORTED_NETWORKS];

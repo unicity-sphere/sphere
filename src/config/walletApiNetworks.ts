@@ -42,13 +42,11 @@ export const FALLBACK_NETWORK: NetworkType = 'testnet2';
 
 /**
  * Runtime-config key per network. A SOURCE-level map with literal keys — no env
- * is involved, so nothing here can fold. Networks absent from this map are
- * never wallet-api-served: 'testnet' is an alias of testnet2, and 'dev' is a
- * console-only escape hatch with no deployed backend — which since sphere-sdk
- * 0.15.0 means a wallet cannot actually run on it (Sphere.init refuses to
- * compose money without a `walletApi` config, and there is no local-custody
- * bundle any more). It is kept here only so the switching machinery has a
- * second network to exercise; removing it is owned by the SDK-bump PR.
+ * is involved, so nothing here can fold. The one network absent from this map
+ * is 'testnet', the SDK's alias of testnet2: a deployment configures the
+ * canonical id, and the alias is never a resolvable active network. ('dev' used
+ * to be the other absentee; sphere-sdk 0.16.0-dev.1 removed that network from
+ * NETWORKS altogether, along with the console hatch that could select it.)
  */
 const RUNTIME_KEY: Partial<Record<NetworkType, keyof SphereRuntimeConfig>> = {
   testnet2: 'WALLET_API_URL_TESTNET2',

@@ -1,8 +1,8 @@
 # Mainnet deployment — DevOps handoff
 
 Exactly which variables to set, where, and what each one does. Written against
-`main` + `feat/network-switcher`, revised 2026-09-02 against the pinned SDK
-(`@unicitylabs/sphere-sdk@0.15.0`).
+`main` + `feat/network-switcher`, revised 2026-09-03 against the pinned SDK
+(`@unicitylabs/sphere-sdk@0.16.0` — the bump that onboarded mainnet).
 
 ---
 
@@ -17,20 +17,31 @@ needed for them (they are read at container start, not baked at build):
 | `WALLET_API_URL_MAINNET` | your mainnet wallet-api base | Serves mainnet. **Empty/unset ⇒ this deployment does not offer mainnet at all** and the Settings → Network row stays greyed out. |
 | `MAINNET_ROLLOUT_ENABLED` | `true` | The deliberate go-live switch. Anything but exactly `true` keeps mainnet unselectable even when everything else is configured. |
 
-A wallet only offers a network when **all three** are true:
+A wallet only offers a network when **all four** are true:
 
 ```
-the SDK knows the network   AND   this deployment has its wallet-api URL   AND   (mainnet only) the rollout switch is on
+the SDK knows the network
+  AND  this deployment has its wallet-api URL
+  AND  (real-value networks) SUBSCRIPTION_ENABLED=true
+  AND  (mainnet only) the rollout switch is on
 ```
 
-Today the first condition is still false: the pinned SDK (**0.15.0**, see
-`package.json`) ships no mainnet `networkId` in its `NETWORKS` table, so mainnet
-renders greyed out as "Coming soon" whatever you set.
+The third is the one operators miss, because nothing points at it: mainnet
+refuses the shared build-time aggregator key — it ships readable to every
+visitor — so with `SUBSCRIPTION_ENABLED` off the row stays greyed even when the
+URL and the rollout switch are both set, and the UI gives no hint why.
 
-**Do not read that as "the vars are inert."** The SDK gate is the one gate this
-deployment does not control, and the one that disappears on its own: the next
-SDK bump that onboards mainnet satisfies condition (a) with no change in this
-repo. From that moment the only thing still holding mainnet is
+**The first condition is now TRUE.** Up to `0.15.0` the pinned SDK shipped no
+mainnet `networkId`, so mainnet rendered greyed out as "Coming soon" whatever
+you set. `0.16.0` onboards it — `networkId: 1`, an embedded mainnet trust
+base, the live `gateway.mainnet.unicity.network` and its own token registry — so
+that gate opened **by itself**, with no change in this repo. Exactly the "it
+disappears on its own" this section warned about; it has now happened.
+
+What that changes for you: mainnet's greyed row no longer reads "Coming soon"
+but **"Not available here"**, because the reason is now the deployment's. What
+still holds it is `WALLET_API_URL_MAINNET`, `SUBSCRIPTION_ENABLED=true` (a
+real-value network refuses the shared build-time aggregator key) and
 `MAINNET_ROLLOUT_ENABLED`. So:
 
 - setting `WALLET_API_URL_MAINNET` early is safe — on its own it only makes the
@@ -89,9 +100,9 @@ The app now **refuses to start** on a real-value network with subscriptions off,
 rather than leak the key.
 
 ### What you must NOT configure — it follows the network by itself
-`NETWORKS[network]` in SDK 0.15.0 carries exactly five things: `name`,
-`networkId` (only on networks it has onboarded), `aggregatorUrl`, `nostrRelays`,
-`groupRelays`, `tokenRegistryUrl`. Two more values follow the network without
+`NETWORKS[network]` in SDK 0.16.0 carries exactly six things: `name`,
+`networkId` (now present on every network in the table), `aggregatorUrl`,
+`nostrRelays`, `groupRelays`, `tokenRegistryUrl`. Two more values follow the network without
 being fields in it: the **SGW base URL**, which the app derives from
 `aggregatorUrl` because the SGW *is* the gateway (`src/config/subscription.ts`),
 and the **trust base**, which the SDK embeds per network. None of them takes an
@@ -193,15 +204,41 @@ Do not flip `MAINNET_ROLLOUT_ENABLED` before these land — both are money-safet
   moment a mainnet trust base ships anyone could mint real coinIds for free.
 
 Plus the SDK/protocol side, none of which this repo can supply — each one is
-observable in the pinned SDK, so check it there rather than in a plan doc:
+observable in the pinned SDK, so check it there rather than in a plan doc.
+**Four of the five landed in `0.16.0`:**
 
-- a mainnet **`networkId`** and a mainnet **trust base** — `NETWORKS.mainnet`
-  still has no `networkId`, which is what keeps the row greyed out today;
-- a **mainnet gateway** — `NETWORKS.mainnet.aggregatorUrl` is still the
-  placeholder `https://aggregator.unicity.network/rpc`;
-- a **mainnet token registry** — `NETWORKS.mainnet.tokenRegistryUrl` still
-  points at `unicity-ids.testnet.json`;
-- a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET`.
+- ~~a mainnet **`networkId`** and a mainnet **trust base**~~ — shipped:
+  `networkId: 1`, root trust base embedded in `assets/trustbase.ts` and pinned
+  by an integrity test against the published `bft-trustbase.mainnet.json`;
+- ~~a **mainnet gateway**~~ — shipped: `NETWORKS.mainnet.aggregatorUrl` is
+  `https://gateway.mainnet.unicity.network` (the old
+  `aggregator.unicity.network/rpc` placeholder was a v1 host that no longer
+  resolves);
+- **fungible definitions in the mainnet token registry** — **deliberately empty,
+  and NOT a rollout blocker.** `unicity-ids.mainnet.json` holds exactly one
+  entry, the non-fungible base type. Mainnet launches with no fungible assets at
+  all; ids arrive with bridging, once real crypto can be brought in from other
+  networks. A wallet on mainnet therefore shows an empty balance, which is the
+  expected state rather than a fault.
+
+  It becomes a prerequisite **at bridging time**, and the reason is worth
+  recording now so it is not rediscovered then: `PaymentRequestIntentModal`
+  reads `def?.decimals ?? 0` and formats the approval amount from it, so the
+  first fungible id that exists without a registry entry would have a user
+  approve a **raw base-unit number with no symbol** — `100000000` where they
+  mean `1.00 UCT` — on real money. Balances and the send confirmation degrade
+  the same way. Define the coins before shipping the bridge, not after;
+- a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET` — **DONE,
+  2026-09-04:** `https://wallet-api.mainnet.unicity.network`. Confirmed serving
+  networkId 1, and confirmed by construction rather than by inspection:
+  wallet-api#137 makes `NETWORK_ID` a required fail-closed assertion against the
+  parsed trust base's `networkId` at boot, so a mismatch crash-loops instead of
+  serving. A healthy task IS the proof. (`/v1/health` reports only status and
+  build sha; an identical sha across environments is expected — one
+  network-agnostic image, network supplied entirely by env.)
+
+Note also that mainnet shares testnet's Nostr relay until a dedicated one is
+stood up, so nametag bindings for both networks live in one namespace.
 
 (This used to link `docs/superpowers/plans/2026-07-15-mainnet-readiness-roadmap.md`.
 That pointer is dropped: `docs/superpowers/` is gitignored, so the file was never
@@ -213,8 +250,9 @@ committed and the link resolved to nothing for anyone who cloned the repo.)
 2. `GET /runtime-config.js` shows the per-network URLs and
    `MAINNET_ROLLOUT_ENABLED`.
 3. Settings → Network shows **Mainnet — Current** (a greyed row reading
-   "Not available here" means this deployment has no URL for it; "Coming soon"
-   means the SDK or the rollout switch, not you).
+   "Not available here" means this deployment cannot serve it — no
+   `WALLET_API_URL_MAINNET`, or `SUBSCRIPTION_ENABLED` is not `true`;
+   "Coming soon" now means only the rollout switch, since the SDK gate is open).
 4. Onboard a fresh wallet → a subscription key provisions (no "network
    mismatch") → Settings → Subscription shows a plan.
 5. Wallet actions show **no Top Up button** and a **disabled Swap** — their
