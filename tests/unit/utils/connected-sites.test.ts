@@ -8,6 +8,7 @@ import {
   migrateApprovedSessions,
 } from '../../../src/utils/connected-sites';
 import { STORAGE_KEYS } from '../../../src/config/storageKeys';
+import { SPHERE_NETWORK } from '../../../src/config/network';
 
 // Mock localStorage
 let localStorageMock: Record<string, string>;
@@ -272,6 +273,49 @@ describe('migrateApprovedSessions', () => {
 
     expect(getApprovedOrigins()).toEqual({});
     expect(getApprovedOrigin('https://a.com')).toBeNull();
+
+    // Hiding is not erasing. Until the migration runs the grant is still ON
+    // DISK, and an older bundle reads this key directly as approved origins.
+    expect(localStorageMock[STORAGE_KEYS.CONNECTED_SITES]).toBeDefined();
+
+    migrateApprovedSessions();
+    expect(localStorageMock[STORAGE_KEYS.CONNECTED_SITES]).toBeUndefined();
+  });
+
+  it('ERASES the flat record so a rolled-back bundle cannot re-activate it', () => {
+    // The failure Codex found on #498: readStore() refusing a non-v2 value only
+    // hid these grants from THIS bundle. gh-pages serves several builds at once
+    // and the sphere-site CFN ContainerImage is stale enough that a plain
+    // redeploy rolls the SPA back months, so the old reader is reachable.
+    localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = JSON.stringify({
+      'https://a.com': {
+        permissions: ['transfer:request'],
+        connectedAt: 1000,
+        lastSeenAt: 1000,
+        dapp: { name: 'App A', url: 'https://a.com' },
+      },
+    });
+
+    migrateApprovedSessions();
+
+    // What an older bundle would read: nothing at all.
+    expect(localStorageMock[STORAGE_KEYS.CONNECTED_SITES]).toBeUndefined();
+  });
+
+  it('erases an unparseable value rather than leaving it for an older reader', () => {
+    localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = '{not json';
+    migrateApprovedSessions();
+    expect(localStorageMock[STORAGE_KEYS.CONNECTED_SITES]).toBeUndefined();
+  });
+
+  it('leaves a valid v2 store untouched', () => {
+    saveApprovedOrigin(ORIGIN, DAPP, PERMISSIONS);
+    const before = localStorageMock[STORAGE_KEYS.CONNECTED_SITES];
+
+    migrateApprovedSessions();
+
+    expect(localStorageMock[STORAGE_KEYS.CONNECTED_SITES]).toBe(before);
+    expect(getApprovedOrigin(ORIGIN)).not.toBeNull();
   });
 
   it('removes old key after migration', () => {
@@ -320,5 +364,54 @@ describe('migrateApprovedSessions', () => {
     localStorageMock[OLD_KEY] = JSON.stringify([]);
     migrateApprovedSessions();
     expect(localStorageMock[OLD_KEY]).toBeUndefined();
+  });
+});
+
+// ==========================================
+// Malformed persisted buckets (Copilot, #498)
+// ==========================================
+
+/**
+ * `store.byNetwork[SPHERE_NETWORK] ?? {}` does not catch a bucket that is
+ * present but unusable: `?? {}` only replaces null/undefined. Writing through a
+ * primitive then throws under ESM strict mode — "Cannot create property on
+ * number" — taking out the connect approval flow, which the pre-v2 code could
+ * not do because it swallowed everything.
+ */
+describe('a malformed per-network bucket cannot break approvals', () => {
+  for (const bad of [5, 'nonsense', [1, 2], true] as const) {
+    it(`saveApprovedOrigin survives a ${JSON.stringify(bad)} bucket`, () => {
+      localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = JSON.stringify({
+        v: 2,
+        byNetwork: { [SPHERE_NETWORK]: bad },
+      });
+
+      expect(() => saveApprovedOrigin(ORIGIN, DAPP, PERMISSIONS)).not.toThrow();
+      expect(getApprovedOrigin(ORIGIN)?.dapp).toEqual(DAPP);
+    });
+  }
+
+  it('drops only the unusable bucket, never a sibling network\'s grants', () => {
+    localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = JSON.stringify({
+      v: 2,
+      byNetwork: {
+        [SPHERE_NETWORK]: { [ORIGIN]: { permissions: PERMISSIONS, connectedAt: 1, lastSeenAt: 1, dapp: DAPP } },
+        'some-other-network': 42,
+      },
+    });
+
+    expect(getApprovedOrigin(ORIGIN)?.dapp).toEqual(DAPP);
+  });
+
+  it('updateLastSeen early-returns rather than throwing', () => {
+    // Copilot reported this line as throwing too. It does not: the optional
+    // chain in `forNetwork?.[origin]` is undefined for every primitive, so the
+    // function returns before any write. Pinned so the claim stays settled.
+    localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = JSON.stringify({
+      v: 2,
+      byNetwork: { [SPHERE_NETWORK]: 5 },
+    });
+
+    expect(() => updateLastSeen(ORIGIN)).not.toThrow();
   });
 });

@@ -37,18 +37,33 @@ interface ApprovalStore {
   byNetwork: Record<string, Record<string, ApprovedOriginEntry>>;
 }
 
+/** Arrays and primitives are not usable as an origin->entry map. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * A per-network bucket that is not a plain object cannot hold grants, and
+ * writing through one throws: `forNetwork[origin] = ...` on a primitive is a
+ * TypeError under ESM's strict mode, which would take out the whole connect
+ * approval flow. Drop only the unusable buckets — a corrupt mainnet bucket must
+ * not cost the user their testnet2 grants.
+ */
+function sanitizeBuckets(byNetwork: Record<string, unknown>): ApprovalStore['byNetwork'] {
+  const out: ApprovalStore['byNetwork'] = {};
+  for (const [network, bucket] of Object.entries(byNetwork)) {
+    if (isPlainObject(bucket)) out[network] = bucket as Record<string, ApprovedOriginEntry>;
+  }
+  return out;
+}
+
 function readStore(): ApprovalStore {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CONNECTED_SITES);
     if (!raw) return { v: 2, byNetwork: {} };
     const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed === 'object' && parsed !== null &&
-      (parsed as ApprovalStore).v === 2 &&
-      typeof (parsed as ApprovalStore).byNetwork === 'object' &&
-      (parsed as ApprovalStore).byNetwork !== null
-    ) {
-      return parsed as ApprovalStore;
+    if (isPlainObject(parsed) && parsed.v === 2 && isPlainObject(parsed.byNetwork)) {
+      return { v: 2, byNetwork: sanitizeBuckets(parsed.byNetwork) };
     }
     return { v: 2, byNetwork: {} };
   } catch {
@@ -112,17 +127,39 @@ export function revokeApprovedOrigin(origin: string): void {
 const OLD_KEY = 'sphere-connect:approved';
 
 /**
- * Clears both pre-network shapes: the `sphere-connect:approved` array and the
+ * ERASES both pre-network shapes: the `sphere-connect:approved` array and the
  * flat `Record<origin, entry>` that replaced it.
  *
  * Neither records the network its grants were given on, and a permission store
  * must not guess. Inheriting them into the active network is how test-money
- * consent becomes real-money authority (#497 item 1); the flat shape is dropped
- * by `readStore()` on the first read, and this removes the older key so the
- * migration cannot run twice. Users re-approve once, with a prompt.
+ * consent becomes real-money authority (#497 item 1), so users re-approve once,
+ * with a prompt.
+ *
+ * `readStore()` REFUSING a non-v2 value only hides it from this bundle; the
+ * grants stay in localStorage, and an older bundle reads that same key directly
+ * as approved origins and re-activates them. That is not hypothetical: gh-pages
+ * serves several builds at once, and the sphere-site CFN `ContainerImage` is
+ * stale enough that a plain redeploy rolls the SPA back months. Hiding is not
+ * erasing — a permission migration has to remove the bytes.
+ *
+ * Removes rather than overwrites with an empty v2 store: an old bundle parsing
+ * `{ v: 2, byNetwork: {} }` as a flat record would list `v` and `byNetwork` as
+ * connected sites.
  */
 export function migrateApprovedSessions(): void {
   try {
     localStorage.removeItem(OLD_KEY);
+    const raw = localStorage.getItem(STORAGE_KEYS.CONNECTED_SITES);
+    if (raw === null) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      localStorage.removeItem(STORAGE_KEYS.CONNECTED_SITES);
+      return;
+    }
+    if (!isPlainObject(parsed) || parsed.v !== 2) {
+      localStorage.removeItem(STORAGE_KEYS.CONNECTED_SITES);
+    }
   } catch { /* ignore */ }
 }

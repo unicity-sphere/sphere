@@ -17,11 +17,19 @@ needed for them (they are read at container start, not baked at build):
 | `WALLET_API_URL_MAINNET` | your mainnet wallet-api base | Serves mainnet. **Empty/unset ⇒ this deployment does not offer mainnet at all** and the Settings → Network row stays greyed out. |
 | `MAINNET_ROLLOUT_ENABLED` | `true` | The deliberate go-live switch. Anything but exactly `true` keeps mainnet unselectable even when everything else is configured. |
 
-A wallet only offers a network when **all three** are true:
+A wallet only offers a network when **all four** are true:
 
 ```
-the SDK knows the network   AND   this deployment has its wallet-api URL   AND   (mainnet only) the rollout switch is on
+the SDK knows the network
+  AND  this deployment has its wallet-api URL
+  AND  (real-value networks) SUBSCRIPTION_ENABLED=true
+  AND  (mainnet only) the rollout switch is on
 ```
+
+The third is the one operators miss, because nothing points at it: mainnet
+refuses the shared build-time aggregator key — it ships readable to every
+visitor — so with `SUBSCRIPTION_ENABLED` off the row stays greyed even when the
+URL and the rollout switch are both set, and the UI gives no hint why.
 
 **The first condition is now TRUE.** Up to `0.15.0` the pinned SDK shipped no
 mainnet `networkId`, so mainnet rendered greyed out as "Coming soon" whatever
@@ -220,9 +228,14 @@ observable in the pinned SDK, so check it there rather than in a plan doc.
   approve a **raw base-unit number with no symbol** — `100000000` where they
   mean `1.00 UCT` — on real money. Balances and the send confirmation degrade
   the same way. Define the coins before shipping the bridge, not after;
-- a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET` — **still
-  outstanding.** Without it
-  `Sphere.init` cannot compose a mainnet money path at all.
+- a **mainnet wallet-api backend** to put in `WALLET_API_URL_MAINNET` — **DONE,
+  2026-09-04:** `https://wallet-api.mainnet.unicity.network`. Confirmed serving
+  networkId 1, and confirmed by construction rather than by inspection:
+  wallet-api#137 makes `NETWORK_ID` a required fail-closed assertion against the
+  parsed trust base's `networkId` at boot, so a mismatch crash-loops instead of
+  serving. A healthy task IS the proof. (`/v1/health` reports only status and
+  build sha; an identical sha across environments is expected — one
+  network-agnostic image, network supplied entirely by env.)
 
 Note also that mainnet shares testnet's Nostr relay until a dedicated one is
 stood up, so nametag bindings for both networks live in one namespace.
