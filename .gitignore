@@ -52,3 +52,7 @@ MAINNET-RISK-REGISTER.md
 # on nobody running `git add .` (which has already swept them into a commit
 # once).
 docs/superpowers/
+
+# Local env backups (see .env.bak.* created by tooling) — never commit these.
+.env.bak.*
+.env.local
