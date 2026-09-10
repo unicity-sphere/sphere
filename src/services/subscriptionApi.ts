@@ -89,8 +89,48 @@ interface Challenge {
   expiresAt: string;
 }
 
+/**
+ * How long to wait for the subscription gateway before calling it unreachable.
+ *
+ * A gateway that is BLOCKED does not refuse — the packets are dropped, so a
+ * bare fetch waits for as long as the browser feels like. That is how
+ * "Activate free plan" became a button that does nothing at all: no key, no
+ * error, a spinner with no end. Ten seconds is far longer than a healthy round
+ * trip and far shorter than a person's patience.
+ */
+export const SGW_TIMEOUT_MS = 10_000;
+
+/** What the user is told when the gateway cannot be reached at all. */
+const UNREACHABLE = "Couldn't reach the subscription gateway. Check your connection — a VPN or another network often helps if it is being blocked.";
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${SUBSCRIPTION_API_URL}${path}`, init);
+  const controller = new AbortController();
+  let expire: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    expire = setTimeout(() => {
+      // Abort the request as well as rejecting: a dropped connection would
+      // otherwise stay in flight, holding a socket for a caller that has left.
+      controller.abort();
+      reject(new Error(UNREACHABLE));
+    }, SGW_TIMEOUT_MS);
+  });
+
+  let res: Response;
+  try {
+    res = await Promise.race([
+      fetch(`${SUBSCRIPTION_API_URL}${path}`, { ...init, signal: controller.signal }),
+      timeout,
+    ]);
+  } catch (err) {
+    // A TypeError here is the browser's one word for DNS failure, refused
+    // connection and CORS block alike — none of which carry a status to show.
+    // Anything already carrying our own message passes through untouched.
+    if (err instanceof TypeError) throw new Error(UNREACHABLE);
+    throw err;
+  } finally {
+    clearTimeout(expire!);
+  }
+
   if (!res.ok) {
     // The gateway sends {"error": "<human-readable message>"} — surface it.
     const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
