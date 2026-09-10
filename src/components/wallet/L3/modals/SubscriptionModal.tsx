@@ -29,7 +29,11 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
   const data = util.data;
   const plan = data?.plan ?? null;
   const apiKey = getStoredSubscriptionKey();
-  const { sphere, network, applySubscriptionKey } = useSphereContext();
+  const { sphere, network, applySubscriptionKey, subscriptionKeyStatus } = useSphereContext();
+  // Two wallets have no key for very different reasons: one never asked, one
+  // asked and could not reach the gateway. The second is an outage — and it is
+  // also why sends are refused — so it must not be dressed as an invitation.
+  const setupFailed = subscriptionKeyStatus === 'failed';
   // Whether an upgrade is a thing that can happen here at all. Passing
   // `plans.data` UNCHANGED is deliberate: undefined means the catalogue has not
   // resolved, and hasPaidOffers fails open on it (see its doc).
@@ -75,18 +79,30 @@ export function SubscriptionModal({ isOpen, onClose, onUpgrade }: SubscriptionMo
         {activateError && <AlertMessage variant="error">{activateError}</AlertMessage>}
 
         {/* Pre-feature wallet (or failed onboarding provisioning): no key yet */}
-        {!apiKey && (
+                {!apiKey && (
           <div className="flex flex-col items-center gap-4 py-6">
             <EmptyState
               icon={Sparkles}
-              title="No plan yet"
-              description="Your wallet doesn't have a subscription key. Activate the free plan — it's tied to your wallet identity and takes one signature."
+              title={setupFailed ? "Couldn't set up your subscription key" : 'No plan yet'}
+              description={
+                setupFailed
+                  ? "Your wallet asked the gateway for its free key and got no answer, so sending is blocked until it succeeds. A VPN or another network often helps if the gateway is being blocked for you."
+                  : "Your wallet doesn't have a subscription key. Activate the free plan — it's tied to your wallet identity and takes one signature."
+              }
             />
-            <Button variant="primary" icon={Sparkles} loading={activating} disabled={!sphere} onClick={activateFreePlan}>
-              Activate free plan
+            {activateError && <AlertMessage variant="error">{activateError}</AlertMessage>}
+            <Button
+              variant="primary"
+              icon={Sparkles}
+              loading={activating}
+              disabled={!sphere}
+              onClick={activateFreePlan}
+            >
+              {setupFailed ? 'Try again' : 'Activate free plan'}
             </Button>
           </div>
         )}
+
 
         {apiKey && util.isLoading && (
           <div className="py-10 text-center text-neutral-400">
