@@ -100,10 +100,27 @@ interface Challenge {
  */
 export const SGW_TIMEOUT_MS = 10_000;
 
+/**
+ * The budget for creating a checkout, which is deliberately far longer.
+ *
+ * Every other call here reads or writes the gateway's own database. This one
+ * makes the gateway call Paymento to mint a payment request, so it is the only
+ * request whose latency is somebody else's. And abandoning it is not free: the
+ * order may exist on the server while the wallet holds no record of it, so the
+ * buyer starts over and ends up with TWO payable links for one purchase — the
+ * double-payment #503 exists to prevent. Wait a long time rather than risk that.
+ */
+export const CHECKOUT_TIMEOUT_MS = 60_000;
+
+
 /** What the user is told when the gateway cannot be reached at all. */
 const UNREACHABLE = "Couldn't reach the subscription gateway. Check your connection — a VPN or another network often helps if it is being blocked.";
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = SGW_TIMEOUT_MS,
+): Promise<T> {
   const controller = new AbortController();
   let expire: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
@@ -112,7 +129,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       // otherwise stay in flight, holding a socket for a caller that has left.
       controller.abort();
       reject(new Error(UNREACHABLE));
-    }, SGW_TIMEOUT_MS);
+    }, timeoutMs);
   });
 
   let res: Response;
@@ -140,12 +157,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function postJson<T>(path: string, body: unknown, extraHeaders?: Record<string, string>): Promise<T> {
-  return request<T>(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(extraHeaders ?? {}) },
-    body: JSON.stringify(body),
-  });
+function postJson<T>(
+  path: string,
+  body: unknown,
+  extraHeaders?: Record<string, string>,
+  timeoutMs?: number,
+): Promise<T> {
+  return request<T>(
+    path,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(extraHeaders ?? {}) },
+      body: JSON.stringify(body),
+    },
+    timeoutMs,
+  );
 }
 
 /**
@@ -216,7 +242,12 @@ export async function getStorePlans(): Promise<PlanInfo[]> {
 export function createStoreCheckout(planId: number, email: string, upgradeApiKey?: string): Promise<CheckoutResult> {
   if (SUBSCRIPTION_MOCK) return Promise.resolve(mock.mockCheckout);
   const apiKey = upgradeApiKey?.trim();
-  return postJson<CheckoutResult>('/api/paymento/checkout', apiKey ? { planId, email, apiKey } : { planId, email });
+  return postJson<CheckoutResult>(
+    '/api/paymento/checkout',
+    apiKey ? { planId, email, apiKey } : { planId, email },
+    undefined,
+    CHECKOUT_TIMEOUT_MS,
+  );
 }
 
 /** Polls the fulfillment status of a checkout order (see OrderStatusInfo for key-delivery semantics). */

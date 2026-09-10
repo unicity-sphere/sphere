@@ -9,7 +9,7 @@
  * nothing on screen explaining why.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getStorePlans, SGW_TIMEOUT_MS } from '@/services/subscriptionApi';
+import { getStorePlans, createStoreCheckout, SGW_TIMEOUT_MS, CHECKOUT_TIMEOUT_MS } from '@/services/subscriptionApi';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -57,7 +57,32 @@ describe('subscription gateway client', () => {
     await expect(getStorePlans()).rejects.toThrow(/reach the subscription gateway/i);
   });
 
+  it('waits much longer for a checkout, because abandoning one can cost money twice', () => {
+    // The gateway calls Paymento to mint a payment request, so this is the only
+    // call whose latency is somebody else's. Give up on it and the order may
+    // exist on the server with no record in the wallet — the buyer starts over
+    // and ends up with two payable links for one purchase (#503).
+    expect(CHECKOUT_TIMEOUT_MS).toBeGreaterThan(SGW_TIMEOUT_MS);
+  });
+
+  it('does not abandon a slow checkout at the ordinary deadline', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+
+    const pending = createStoreCheckout(2, 'buyer@example.com');
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+
+    await vi.advanceTimersByTimeAsync(SGW_TIMEOUT_MS + 1_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    // ...but it does eventually give up rather than hanging forever.
+    const assertion = expect(pending).rejects.toThrow(/reach the subscription gateway/i);
+    await vi.advanceTimersByTimeAsync(CHECKOUT_TIMEOUT_MS);
+    await assertion;
+  });
+
   it('still surfaces the gateway own message when it DOES answer', async () => {
+
     // A refusal is not an outage: the reason must survive.
     vi.stubGlobal(
       'fetch',
