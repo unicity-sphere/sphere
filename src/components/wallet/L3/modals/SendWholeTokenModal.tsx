@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import { useTransfer } from '../../../../sdk/hooks';
@@ -34,14 +34,40 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
   const [error, setError] = useState<string | null>(null);
   const [deliveryPending, setDeliveryPending] = useState(false);
   const [keepOpen, setKeepOpen] = useState(false);
+  // Bumped on every close. An in-flight send resolves against the generation it
+  // started in, so a late completion can never write its outcome onto whatever
+  // token the modal is showing by then — which would attribute one token's
+  // success to another.
+  const generation = useRef(0);
+  const shownFor = useRef<string | null>(null);
 
-  const close = () => {
+  const reset = () => {
     setRecipient('');
     setMemo('');
     setStep('form');
     setError(null);
     setDeliveryPending(false);
     setKeepOpen(false);
+  };
+
+  // The modal is reused across tokens, so state belonging to the PREVIOUS token
+  // must not survive into the next one — a success screen left standing would
+  // report one token's send as the other's. Bumping the generation here also
+  // retires any send still in flight from the token being replaced.
+  useEffect(() => {
+    const id = target?.tokenId ?? null;
+    if (shownFor.current === id) return;
+    shownFor.current = id;
+    generation.current += 1;
+    reset();
+  }, [target?.tokenId]);
+
+  const close = () => {
+    // A send in flight is NOT cancellable — the spend may already be on-chain.
+    // Closing mid-send would hide the only surface telling the user that.
+    if (step === 'sending') return;
+    generation.current += 1;
+    reset();
     onClose();
   };
 
@@ -49,6 +75,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
     if (!target || !recipient.trim()) return;
     setError(null);
     setStep('sending');
+    const gen = generation.current;
     try {
       const result = await transfer({
         kind: 'whole',
@@ -60,10 +87,12 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
       // Same three outcomes SendModal distinguishes: a keep-open result is NOT a
       // failure and must never invite a re-send — the intent stays open and the
       // SDK converges it under the same transferId.
+      if (gen !== generation.current) return;
       setKeepOpen(isKeepOpenPendingResult(result));
       setDeliveryPending(result.deliveryPending ?? false);
       setStep('success');
     } catch (e: unknown) {
+      if (gen !== generation.current) return;
       setError(e instanceof QuotaBlockedError ? 'Send quota reached.' : getErrorMessage(e));
       setStep('form');
     }
@@ -88,7 +117,12 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
           >
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Send token</h2>
-              <button onClick={close} aria-label="Close" className="rounded p-1 hover:bg-white/10">
+              <button
+                onClick={close}
+                disabled={step === 'sending'}
+                aria-label="Close"
+                className="rounded p-1 hover:bg-white/10 disabled:opacity-30"
+              >
                 <X className="h-5 w-5" />
               </button>
             </div>
