@@ -14,6 +14,7 @@ import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
 import { TokenDataModal, type TokenDataTarget } from '../modals/TokenDataModal';
+import { tokensTabView } from './tokensTabView';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
@@ -177,6 +178,7 @@ export function L3WalletView({
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
   const [nftOnly, setNftOnly] = useState(false);
   const [sendTarget, setSendTarget] = useState<WholeTokenTarget | null>(null);
+  const tokensTab = tokensTabView({ coinless: coinless.length, coins: tokens.length, nftOnly });
   const [inspectTarget, setInspectTarget] = useState<TokenDataTarget | null>(null);
 
   // Both rows send the SAME way — one named token, moved whole, never split.
@@ -439,7 +441,7 @@ export function L3WalletView({
               {/* TOKENS VIEW - no container animation, only item animations */}
               {activeTab === 'tokens' && (
                 <div className="space-y-2">
-                  {coinless.length > 0 && (
+                  {tokensTab.showToggle && (
                     <div className="flex justify-end pb-1">
                       <button
                         onClick={() => setNftOnly(v => !v)}
@@ -455,13 +457,11 @@ export function L3WalletView({
                     </div>
                   )}
 
-                  {/* Counts BOTH reads: a wallet holding only NFTs is not empty.
-                      tokens() and coinless() are disjoint, so nothing is counted twice. */}
-                  {coinless.length + (nftOnly ? 0 : tokens.length) === 0 ? (
-                    <EmptyState text="No individual tokens found." />
+                  {tokensTab.emptyText !== null ? (
+                    <EmptyState text={tokensTab.emptyText} />
                   ) : (
                     <>
-                      {coinless
+                      {tokensTab.showCoinless && coinless
                         .slice()
                         .sort((a, b) => b.createdAt - a.createdAt)
                         .map((token, index) => (
@@ -474,7 +474,7 @@ export function L3WalletView({
                             onInspect={handleInspectCoinless}
                           />
                         ))}
-                      {!nftOnly &&
+                      {tokensTab.showCoins &&
                         tokens
                           .slice()
                           .sort((a, b) => b.createdAt - a.createdAt)
