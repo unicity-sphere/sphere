@@ -9,6 +9,8 @@ interface CoinlessTokenRowProps {
   delay: number;
   isNew?: boolean;
   onSend?: (token: CoinlessToken) => void;
+  /** Open the raw genesis payload. Omit to render the row uninspectable. */
+  onInspect?: (token: CoinlessToken) => void;
 }
 
 function areEqual(prev: CoinlessTokenRowProps, next: CoinlessTokenRowProps): boolean {
@@ -33,6 +35,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   delay,
   isNew = true,
   onSend,
+  onInspect,
 }: CoinlessTokenRowProps) {
   const [copied, setCopied] = useState(false);
 
@@ -45,7 +48,18 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   };
 
   const className =
-    'p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group';
+    'p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group' +
+    (onInspect ? ' cursor-pointer' : '');
+  const rowProps = onInspect
+    ? {
+        onClick: () => { onInspect(token); },
+        role: 'button' as const,
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect(token); }
+        },
+      }
+    : {};
 
   const title = token.name || (token.tokenType ? `Type ${token.tokenType.slice(0, 8)}…` : 'Unknown type');
 
@@ -113,7 +127,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   );
 
   if (!isNew) {
-    return <div className={className}>{content}</div>;
+    return <div className={className} {...rowProps}>{content}</div>;
   }
 
   return (
@@ -122,6 +136,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay }}
       className={className}
+      {...rowProps}
     >
       {content}
     </motion.div>

@@ -12,6 +12,8 @@ interface TokenRowProps {
   isNew?: boolean;
   /** Send THIS token whole (no split). Omit to render the row without the action. */
   onSend?: (token: Token) => void;
+  /** Open the raw genesis payload. Omit to render the row uninspectable. */
+  onInspect?: (token: Token) => void;
 }
 
 // Custom comparison: allow re-render when amount changes (for number animation)
@@ -82,7 +84,7 @@ function AnimatedTokenAmount({ amount, coinId, symbol }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend }: TokenRowProps) {
+export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend, onInspect }: TokenRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async (e: React.MouseEvent) => {
@@ -93,7 +95,19 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
     }
   };
 
-  const className = "p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group";
+  const className = "p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group" + (onInspect ? " cursor-pointer" : "");
+  // The row is the inspect affordance; the copy-id and send controls inside it
+  // stop propagation so they keep their own meaning.
+  const rowProps = onInspect
+    ? {
+        onClick: () => { onInspect(token); },
+        role: 'button' as const,
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect(token); }
+        },
+      }
+    : {};
 
   const amountDisplay = (
     <AnimatedTokenAmount
@@ -166,7 +180,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
   // For existing items, render without motion to prevent any flashing
   if (!isNew) {
     return (
-      <div className={className}>
+      <div className={className} {...rowProps}>
         {tokenContent}
       </div>
     );
@@ -179,6 +193,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay }}
       className={className}
+      {...rowProps}
     >
       {tokenContent}
     </motion.div>

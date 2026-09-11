@@ -14,6 +14,8 @@ export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtime
 export { useTokens } from './payments/useTokens';
 export type { UseTokensReturn } from './payments/useTokens';
 export { useCoinlessTokens } from './payments/useCoinlessTokens';
+export { useTokenData } from './payments/useTokenData';
+export type { UseTokenDataReturn } from './payments/useTokenData';
 export type { UseCoinlessTokensReturn } from './payments/useCoinlessTokens';
 export { useBalance } from './payments/useBalance';
 export type { UseBalanceReturn } from './payments/useBalance';

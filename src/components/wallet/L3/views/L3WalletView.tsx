@@ -13,6 +13,7 @@ import { WalletActions } from '../components/WalletActions';
 import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
+import { TokenDataModal, type TokenDataTarget } from '../modals/TokenDataModal';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
@@ -176,6 +177,7 @@ export function L3WalletView({
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
   const [nftOnly, setNftOnly] = useState(false);
   const [sendTarget, setSendTarget] = useState<WholeTokenTarget | null>(null);
+  const [inspectTarget, setInspectTarget] = useState<TokenDataTarget | null>(null);
 
   // Both rows send the SAME way — one named token, moved whole, never split.
   // They differ only in which verb: the NFT row uses the coinless-scoped one,
@@ -191,6 +193,19 @@ export function L3WalletView({
 
   const handleSendCoinToken = useCallback((t: Token) => {
     setSendTarget({ tokenId: t.id, label: t.symbol || 'Token', coinless: false });
+  }, []);
+
+  // Both kinds inspect the same way — one call reads whatever the minter wrote.
+  const handleInspectCoinless = useCallback((t: CoinlessToken) => {
+    setInspectTarget({
+      tokenId: t.tokenId,
+      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
+    });
+  }, []);
+
+  const handleInspectCoinToken = useCallback((t: Token) => {
+    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });
   }, []);
 
   // Track previous token/asset IDs to detect truly new items
@@ -456,6 +471,7 @@ export function L3WalletView({
                             delay={index * 0.05}
                             isNew={false}
                             onSend={handleSendCoinless}
+                            onInspect={handleInspectCoinless}
                           />
                         ))}
                       {!nftOnly &&
@@ -469,6 +485,7 @@ export function L3WalletView({
                               delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
                               isNew={newTokenIds.has(token.id)}
                               onSend={handleSendCoinToken}
+                              onInspect={handleInspectCoinToken}
                             />
                           ))}
                     </>
@@ -484,6 +501,7 @@ export function L3WalletView({
       <TopUpModal isOpen={isTopUpModalOpen} onClose={() => setIsTopUpModalOpen(false)} />
       <SendModal isOpen={isSendModalOpen} onClose={() => setIsSendModalOpen(false)} />
       <SendWholeTokenModal target={sendTarget} onClose={() => setSendTarget(null)} />
+      <TokenDataModal target={inspectTarget} onClose={() => setInspectTarget(null)} />
       <SwapModal isOpen={isSwapModalOpen} onClose={() => setIsSwapModalOpen(false)} />
       <PaymentRequestsModal
         isOpen={isRequestsOpen}
