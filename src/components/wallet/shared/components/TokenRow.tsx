@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import type { Token } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
-import { Box, Copy, CheckCircle2, Loader2 } from 'lucide-react';
+import { Box, Copy, CheckCircle2, Loader2, Send } from 'lucide-react';
 import { useState, memo, useEffect } from 'react';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
@@ -10,6 +10,8 @@ interface TokenRowProps {
   delay: number;
   /** If true, animate entrance. If false, render without animation (token was already shown) */
   isNew?: boolean;
+  /** Send THIS token whole (no split). Omit to render the row without the action. */
+  onSend?: (token: Token) => void;
 }
 
 // Custom comparison: allow re-render when amount changes (for number animation)
@@ -80,7 +82,7 @@ function AnimatedTokenAmount({ amount, coinId, symbol }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: TokenRowProps) {
+export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend }: TokenRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async (e: React.MouseEvent) => {
@@ -124,6 +126,19 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
           </div>
         </div>
       </div>
+      <div className="flex items-center gap-2">
+      {/* Only a settled token can be named as a source; an in-flight one is already
+          committed elsewhere, so offering Send would just produce a refusal. */}
+      {onSend && token.status === 'confirmed' && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSend(token); }}
+          aria-label="Send this token"
+          title="Send this token"
+          className="p-1.5 rounded-lg text-neutral-400 hover:text-orange-500 dark:hover:text-orange-400 hover:bg-neutral-200 dark:hover:bg-white/10 transition-colors"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      )}
       <div className="flex flex-col items-end gap-1">
         {token.status === 'confirmed' ? (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
@@ -143,6 +158,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
         <span className="text-[10px] text-neutral-400 dark:text-[rgba(255,255,255,0.28)]" style={{ fontFamily: "'Geist Mono', 'SF Mono', 'Fira Code', monospace" }}>
           {new Date(token.createdAt).toLocaleDateString()}
         </span>
+      </div>
       </div>
     </div>
   );

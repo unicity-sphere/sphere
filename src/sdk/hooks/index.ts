@@ -13,12 +13,14 @@ export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtime
 // Payments (L3)
 export { useTokens } from './payments/useTokens';
 export type { UseTokensReturn } from './payments/useTokens';
+export { useCoinlessTokens } from './payments/useCoinlessTokens';
+export type { UseCoinlessTokensReturn } from './payments/useCoinlessTokens';
 export { useBalance } from './payments/useBalance';
 export type { UseBalanceReturn } from './payments/useBalance';
 export { useAssets } from './payments/useAssets';
 export type { UseAssetsReturn } from './payments/useAssets';
 export { useTransfer } from './payments/useTransfer';
-export type { UseTransferReturn, TransferParams } from './payments/useTransfer';
+export type { UseTransferReturn, TransferParams, CoinTransferParams, WholeTransferParams } from './payments/useTransfer';
 export { useTopUp } from './payments/useTopUp';
 export type { UseTopUpReturn, TopUpResult } from './payments/useTopUp';
 export { useTransactionHistory } from './payments/useTransactionHistory';
