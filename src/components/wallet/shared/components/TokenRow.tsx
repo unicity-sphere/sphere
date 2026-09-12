@@ -17,13 +17,19 @@ interface TokenRowProps {
 }
 
 // Custom comparison: allow re-render when amount changes (for number animation)
+// Every field the render branches on must be compared here, or a change to it
+// alone is swallowed: suspectedSpent flips on a resync while status stays
+// 'confirmed', and the Send action is gated on both.
 function areTokenPropsEqual(prev: TokenRowProps, next: TokenRowProps): boolean {
   return (
     prev.token.id === next.token.id &&
     prev.token.status === next.token.status &&
     prev.token.symbol === next.token.symbol &&
+    prev.token.suspectedSpent === next.token.suspectedSpent &&
     prev.isNew === next.isNew &&
-    prev.delay === next.delay
+    prev.delay === next.delay &&
+    prev.onSend === next.onSend &&
+    prev.onInspect === next.onInspect
   );
 }
 

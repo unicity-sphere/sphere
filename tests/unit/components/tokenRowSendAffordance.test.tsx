@@ -77,3 +77,60 @@ describe('the Send affordance tracks spendability', () => {
     expect(screen.getByText('Cool Cat')).toBeTruthy();
   });
 });
+
+describe('the Send affordance follows a flag that changes on an already-mounted row', () => {
+  // Both rows are memoized with custom comparators. A refetch or resync that
+  // changes ONLY suspectedSpent leaves every other compared field identical, so
+  // a comparator that omits the flag skips the re-render and the button keeps
+  // reflecting the old value. rerender() reuses the mounted instance, which is
+  // exactly the path the memo comparator guards.
+  it('drops Send from a coin row when it is demoted in place', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<TokenRow token={coin()} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeTruthy();
+
+    rerender(<TokenRow token={coin({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeNull();
+  });
+
+  it('restores Send to a coin row when a resync clears the demotion', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <TokenRow token={coin({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />,
+    );
+    expect(sendButton()).toBeNull();
+
+    rerender(<TokenRow token={coin()} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeTruthy();
+  });
+
+  it('drops Send from a coinless row when it is demoted in place', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeTruthy();
+
+    rerender(<CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeNull();
+  });
+
+  it('restores Send to a coinless row when a resync clears the demotion', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />,
+    );
+    expect(sendButton()).toBeNull();
+
+    rerender(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={onSend} />);
+    expect(sendButton()).toBeTruthy();
+  });
+
+  it('adopts a handler that is supplied after mount', () => {
+    // The same class of defect: a comparator that ignores onSend keeps rendering
+    // the row without the action even once the parent provides one.
+    const { rerender } = render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} />);
+    expect(sendButton()).toBeNull();
+
+    rerender(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />);
+    expect(sendButton()).toBeTruthy();
+  });
+});

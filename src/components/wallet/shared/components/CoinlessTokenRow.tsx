@@ -13,14 +13,19 @@ interface CoinlessTokenRowProps {
   onInspect?: (token: CoinlessToken) => void;
 }
 
+// Every field the render branches on must be compared here, or a change to it
+// alone is swallowed and the Send action keeps reflecting the old value.
 function areEqual(prev: CoinlessTokenRowProps, next: CoinlessTokenRowProps): boolean {
   return (
     prev.token.tokenId === next.token.tokenId &&
     prev.token.transferring === next.token.transferring &&
+    prev.token.suspectedSpent === next.token.suspectedSpent &&
     prev.token.name === next.token.name &&
     prev.token.iconUrl === next.token.iconUrl &&
     prev.isNew === next.isNew &&
-    prev.delay === next.delay
+    prev.delay === next.delay &&
+    prev.onSend === next.onSend &&
+    prev.onInspect === next.onInspect
   );
 }
 
