@@ -91,7 +91,9 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        {onSend && !token.transferring && (
+        {/* Same rule as the coin row: in-flight or #625-demoted is not spendable,
+            so the action is withheld rather than offered and refused. */}
+        {onSend && !token.transferring && token.suspectedSpent !== true && (
           <button
             onClick={(e) => {
               e.stopPropagation();

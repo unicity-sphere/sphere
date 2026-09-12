@@ -141,9 +141,12 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
         </div>
       </div>
       <div className="flex items-center gap-2">
-      {/* Only a settled token can be named as a source; an in-flight one is already
-          committed elsewhere, so offering Send would just produce a refusal. */}
-      {onSend && token.status === 'confirmed' && (
+      {/* Only a SPENDABLE token can be named as a source. An in-flight one is
+          committed elsewhere, and a #625-demoted one had its state proven spent
+          on-chain — the SDK refuses both, so offering Send would promise an
+          action that can only fail. The row still shows: a demotion is
+          recoverable by resync, and hiding the token would be worse. */}
+      {onSend && token.status === 'confirmed' && token.suspectedSpent !== true && (
         <button
           onClick={(e) => { e.stopPropagation(); onSend(token); }}
           aria-label="Send this token"
