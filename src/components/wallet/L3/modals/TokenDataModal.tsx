@@ -46,14 +46,23 @@ function CopyableField({ label, value }: { label: string; value: string }) {
 /**
  * Shows a token's raw GENESIS payload as hex, for both kinds.
  *
- * The same bytes mean different things by kind and that is the point: a
- * coinless token's payload is whatever its minter wrote, while a coin token's
- * is the value envelope — so pasting the hex into a CBOR parser shows the coin
- * amounts. Rendering it raw rather than decoding keeps this honest about what
- * is actually stored, and works for payloads this wallet has no schema for.
+ * The same bytes mean different things by kind, and the copy must not blur
+ * that. A COIN token's payload is the value envelope, CBOR tag 39050 by
+ * construction — so it always decodes in a CBOR parser. A COINLESS token's is
+ * whatever its minter wrote: arbitrary bytes, which may be an image, UTF-8, or
+ * anything else. (The one constraint the SDK imposes is that a payload STARTING
+ * in the CBOR array/tag byte ranges must be well-formed CBOR, so it cannot be
+ * confused with a corrupt value envelope — that rules out some first bytes, not
+ * the format.) Claiming "CBOR" for both would be wrong for the coinless case.
+ *
+ * Rendering raw rather than decoding keeps this honest, and works for payloads
+ * this wallet has no schema for. The label says what the bytes ARE; what to open
+ * them with is the reader's business.
  */
 export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
   const { hex, byteLength, isLoading, error } = useTokenData(target?.tokenId ?? null);
+  // A coin token has no token TYPE in this view; a coinless one always names its class.
+  const isCoinToken = target?.tokenType === undefined;
 
   return (
     <AnimatePresence>
@@ -95,11 +104,14 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
               <p className="py-3 text-sm text-neutral-400">This token carries no genesis data.</p>
             ) : (
               <>
-                <CopyableField label={`Genesis data — ${String(byteLength)} bytes, CBOR`} value={hex} />
-                <p className="text-xs text-neutral-500">
-                  Paste the hex into any CBOR decoder to read it.
-                  {target.tokenType === undefined && ' For a coin token this is the value envelope.'}
-                </p>
+                <CopyableField
+                  label={
+                    isCoinToken
+                      ? `Genesis data — ${String(byteLength)} bytes · value envelope (CBOR tag 39050)`
+                      : `Genesis data — ${String(byteLength)} bytes · minter-defined, not necessarily CBOR`
+                  }
+                  value={hex}
+                />
               </>
             )}
           </motion.div>
