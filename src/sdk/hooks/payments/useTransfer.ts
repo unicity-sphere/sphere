@@ -47,12 +47,30 @@ function disambiguateGatewayAuthError(openUpgrade: (reason?: UpgradeReason) => v
     .catch(warnKeyRejected);
 }
 
-export interface TransferParams {
+export interface CoinTransferParams {
+  /** Optional so every existing coin call site keeps compiling unchanged. */
+  kind?: 'coin';
   coinId: string;
   amount: string;
   recipient: string;
   memo?: string;
 }
+
+/**
+ * ONE named token, moved whole — no split, so a valued token's coins travel with
+ * it. `coinless: true` routes to the NFT-scoped verb, which REFUSES a valued
+ * source: if a row is wrong about holding an NFT, the send fails loudly instead
+ * of quietly moving coins the user did not mean to spend.
+ */
+export interface WholeTransferParams {
+  kind: 'whole';
+  tokenId: string;
+  recipient: string;
+  memo?: string;
+  coinless?: boolean;
+}
+
+export type TransferParams = CoinTransferParams | WholeTransferParams;
 
 export interface UseTransferReturn {
   transfer: (params: TransferParams) => Promise<TransferResult>;
@@ -105,6 +123,19 @@ export function useTransfer(): UseTransferReturn {
       }
 
       try {
+        // The ONE divergence. Everything around it — the key gate, the quota gate,
+        // the possibly-committed conversion below, the refetch fan-out — is money
+        // safety that applies identically to both spends, so it is NOT duplicated.
+        if (params.kind === 'whole') {
+          const req = {
+            recipient: params.recipient,
+            tokenId: params.tokenId,
+            ...(params.memo !== undefined ? { memo: params.memo } : {}),
+          };
+          return params.coinless === true
+            ? await payments.sendCoinless(req)
+            : await payments.sendWholeToken(req);
+        }
         return await payments.send({
           coinId: params.coinId,
           amount: params.amount,

@@ -58,6 +58,8 @@ export function useSphereEvents(): void {
   /** Running total per (sender, symbol) behind one coalesced incoming toast (#490). */
   const incomingTotalsRef = useRef<Map<string, { smallest: bigint; decimals: number }>>(new Map());
   const incomingGroupTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Coinless arrivals are COUNTED, not summed — there is no amount to add.
+  const incomingNftCountsRef = useRef<Map<string, number>>(new Map());
   /** Which group the single global progress slot is currently showing (#490). */
   const progressOwnerRef = useRef<string | null>(null);
   // One deferred-delivery toast per transfer — the SDK re-emits the
@@ -105,6 +107,43 @@ export function useSphereEvents(): void {
       seenTransferIdsRef.current.add(transfer.id);
 
       const sender = transfer.senderNametag ? `@${transfer.senderNametag}` : 'Someone';
+
+      // A coinless arrival (an NFT) is announced in `coinless`, never in `tokens`
+      // — it carries no coin. Falling through to the amount path below reads an
+      // EMPTY token list and renders "+0 ?": literally true, useless, and it
+      // would publish a balance-progress line for money that never moved.
+      const nfts = transfer.coinless ?? [];
+      if (nfts.length > 0 && transfer.tokens.length === 0) {
+        const groupKey = `incoming-nft:${transfer.senderPubkey || sender}`;
+        const carried = (incomingNftCountsRef.current.get(groupKey) ?? 0) + nfts.length;
+        incomingNftCountsRef.current.set(groupKey, carried);
+        const staleNft = incomingGroupTimersRef.current.get(groupKey);
+        if (staleNft !== undefined) clearTimeout(staleNft);
+        incomingGroupTimersRef.current.set(
+          groupKey,
+          setTimeout(() => {
+            incomingNftCountsRef.current.delete(groupKey);
+            incomingGroupTimersRef.current.delete(groupKey);
+          }, INCOMING_TOAST_MS + 500),
+        );
+        const first = nfts[0];
+        showTransferToast(
+          {
+            sender,
+            coinless: true,
+            // One names itself; several are counted, since their names differ.
+            label: carried === 1 ? (first?.name ?? 'an NFT') : `${String(carried)} NFTs`,
+            amount: '',
+            symbol: '',
+            ...(first?.iconUrl !== undefined ? { iconUrl: first.iconUrl } : {}),
+            ...(transfer.memo !== undefined ? { memo: transfer.memo } : {}),
+          },
+          INCOMING_TOAST_MS,
+          groupKey,
+        );
+        return;
+      }
+
       const firstToken = transfer.tokens[0];
       const symbol = firstToken?.symbol ?? '?';
       const decimals = firstToken?.decimals ?? 0;

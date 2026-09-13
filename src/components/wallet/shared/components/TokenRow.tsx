@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import type { Token } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
-import { Box, Copy, CheckCircle2, Loader2 } from 'lucide-react';
+import { Box, Copy, CheckCircle2, Loader2, Send } from 'lucide-react';
 import { useState, memo, useEffect } from 'react';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 
@@ -10,16 +10,26 @@ interface TokenRowProps {
   delay: number;
   /** If true, animate entrance. If false, render without animation (token was already shown) */
   isNew?: boolean;
+  /** Send THIS token whole (no split). Omit to render the row without the action. */
+  onSend?: (token: Token) => void;
+  /** Open the raw genesis payload. Omit to render the row uninspectable. */
+  onInspect?: (token: Token) => void;
 }
 
 // Custom comparison: allow re-render when amount changes (for number animation)
+// Every field the render branches on must be compared here, or a change to it
+// alone is swallowed: suspectedSpent flips on a resync while status stays
+// 'confirmed', and the Send action is gated on both.
 function areTokenPropsEqual(prev: TokenRowProps, next: TokenRowProps): boolean {
   return (
     prev.token.id === next.token.id &&
     prev.token.status === next.token.status &&
     prev.token.symbol === next.token.symbol &&
+    prev.token.suspectedSpent === next.token.suspectedSpent &&
     prev.isNew === next.isNew &&
-    prev.delay === next.delay
+    prev.delay === next.delay &&
+    prev.onSend === next.onSend &&
+    prev.onInspect === next.onInspect
   );
 }
 
@@ -80,7 +90,7 @@ function AnimatedTokenAmount({ amount, coinId, symbol }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: TokenRowProps) {
+export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend, onInspect }: TokenRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async (e: React.MouseEvent) => {
@@ -91,7 +101,19 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
     }
   };
 
-  const className = "p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group";
+  const className = "p-3 rounded-xl bg-neutral-50 dark:bg-[rgba(255,255,255,0.03)] hover:bg-neutral-100 dark:hover:bg-[rgba(255,255,255,0.05)] transition-all group" + (onInspect ? " cursor-pointer" : "");
+  // The row is the inspect affordance; the copy-id and send controls inside it
+  // stop propagation so they keep their own meaning.
+  const rowProps = onInspect
+    ? {
+        onClick: () => { onInspect(token); },
+        role: 'button' as const,
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect(token); }
+        },
+      }
+    : {};
 
   const amountDisplay = (
     <AnimatedTokenAmount
@@ -124,6 +146,22 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
           </div>
         </div>
       </div>
+      <div className="flex items-center gap-2">
+      {/* Only a SPENDABLE token can be named as a source. An in-flight one is
+          committed elsewhere, and a #625-demoted one had its state proven spent
+          on-chain — the SDK refuses both, so offering Send would promise an
+          action that can only fail. The row still shows: a demotion is
+          recoverable by resync, and hiding the token would be worse. */}
+      {onSend && token.status === 'confirmed' && token.suspectedSpent !== true && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSend(token); }}
+          aria-label="Send this token"
+          title="Send this token"
+          className="p-1.5 rounded-lg text-neutral-400 hover:text-orange-500 dark:hover:text-orange-400 hover:bg-neutral-200 dark:hover:bg-white/10 transition-colors"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      )}
       <div className="flex flex-col items-end gap-1">
         {token.status === 'confirmed' ? (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
@@ -144,13 +182,14 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
           {new Date(token.createdAt).toLocaleDateString()}
         </span>
       </div>
+      </div>
     </div>
   );
 
   // For existing items, render without motion to prevent any flashing
   if (!isNew) {
     return (
-      <div className={className}>
+      <div className={className} {...rowProps}>
         {tokenContent}
       </div>
     );
@@ -163,6 +202,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true }: T
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay }}
       className={className}
+      {...rowProps}
     >
       {tokenContent}
     </motion.div>

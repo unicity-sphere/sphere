@@ -3,14 +3,18 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens } from '../../../../sdk';
+import { useIdentity, useAssets, useTokens, useCoinlessTokens } from '../../../../sdk';
+import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
-import { TokenRow } from '../../shared/components';
+import { TokenRow, CoinlessTokenRow } from '../../shared/components';
 import { WalletActions } from '../components/WalletActions';
 import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
+import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
+import { TokenDataModal, type TokenDataTarget } from '../modals/TokenDataModal';
+import { tokensTabView } from './tokensTabView';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
@@ -158,12 +162,13 @@ export function L3WalletView({
   const { assets: sdkAssets, isLoading: isLoadingAssets } = useAssets();
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
+  const { coinless } = useCoinlessTokens();
   const { sphere, deleteWallet } = useSphereContext();
 
   const assets = sdkAssets;
 
   const tokens = sdkTokens;
-  const sendableTokens = useMemo(() => tokens.filter(t => t.coinId !== 'NAMETAG'), [tokens]);
+  const sendableTokens = tokens;
 
   const [activeTab, setActiveTab] = useState<Tab>('assets');
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
@@ -171,6 +176,39 @@ export function L3WalletView({
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false);
+  const [nftOnly, setNftOnly] = useState(false);
+  const [sendTarget, setSendTarget] = useState<WholeTokenTarget | null>(null);
+  const tokensTab = tokensTabView({ coinless: coinless.length, coins: tokens.length, nftOnly });
+  const [inspectTarget, setInspectTarget] = useState<TokenDataTarget | null>(null);
+
+  // Both rows send the SAME way — one named token, moved whole, never split.
+  // They differ only in which verb: the NFT row uses the coinless-scoped one,
+  // which refuses a valued source, so a mislabelled row fails loudly rather
+  // than quietly moving coins.
+  const handleSendCoinless = useCallback((t: CoinlessToken) => {
+    setSendTarget({
+      tokenId: t.tokenId,
+      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      coinless: true,
+    });
+  }, []);
+
+  const handleSendCoinToken = useCallback((t: Token) => {
+    setSendTarget({ tokenId: t.id, label: t.symbol || 'Token', coinless: false });
+  }, []);
+
+  // Both kinds inspect the same way — one call reads whatever the minter wrote.
+  const handleInspectCoinless = useCallback((t: CoinlessToken) => {
+    setInspectTarget({
+      tokenId: t.tokenId,
+      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
+    });
+  }, []);
+
+  const handleInspectCoinToken = useCallback((t: Token) => {
+    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });
+  }, []);
 
   // Track previous token/asset IDs to detect truly new items
   const prevTokenIdsRef = useRef<Set<string>>(new Set());
@@ -184,7 +222,7 @@ export function L3WalletView({
     }
 
     const newIds = new Set<string>();
-    tokens.filter(t => t.coinId !== 'NAMETAG').forEach(token => {
+    tokens.forEach(token => {
       if (!prevTokenIdsRef.current.has(token.id)) {
         newIds.add(token.id);
       }
@@ -209,7 +247,7 @@ export function L3WalletView({
 
   // Update previous snapshots after render (for next comparison)
   useEffect(() => {
-    const currentIds = new Set(tokens.filter(t => t.coinId !== 'NAMETAG').map(t => t.id));
+    const currentIds = new Set(tokens.map(t => t.id));
     prevTokenIdsRef.current = currentIds;
     isFirstLoadRef.current = false;
   }, [tokens]);
@@ -403,20 +441,54 @@ export function L3WalletView({
               {/* TOKENS VIEW - no container animation, only item animations */}
               {activeTab === 'tokens' && (
                 <div className="space-y-2">
-                  {tokens.filter(t => t.coinId !== 'NAMETAG').length === 0 ? (
-                    <EmptyState text="No individual tokens found." />
+                  {tokensTab.showToggle && (
+                    <div className="flex justify-end pb-1">
+                      <button
+                        onClick={() => setNftOnly(v => !v)}
+                        aria-pressed={nftOnly}
+                        className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition-colors ${
+                          nftOnly
+                            ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400'
+                            : 'text-neutral-500 hover:bg-neutral-100 dark:hover:bg-white/5'
+                        }`}
+                      >
+                        NFTs only
+                      </button>
+                    </div>
+                  )}
+
+                  {tokensTab.emptyText !== null ? (
+                    <EmptyState text={tokensTab.emptyText} />
                   ) : (
-                    tokens
-                      .filter(t => t.coinId !== 'NAMETAG')
-                      .sort((a, b) => b.createdAt - a.createdAt)
-                      .map((token, index) => (
-                        <TokenRow
-                          key={token.id}
-                          token={token}
-                          delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
-                          isNew={newTokenIds.has(token.id)}
-                        />
-                      ))
+                    <>
+                      {tokensTab.showCoinless && coinless
+                        .slice()
+                        .sort((a, b) => b.createdAt - a.createdAt)
+                        .map((token, index) => (
+                          <CoinlessTokenRow
+                            key={token.tokenId}
+                            token={token}
+                            delay={index * 0.05}
+                            isNew={false}
+                            onSend={handleSendCoinless}
+                            onInspect={handleInspectCoinless}
+                          />
+                        ))}
+                      {tokensTab.showCoins &&
+                        tokens
+                          .slice()
+                          .sort((a, b) => b.createdAt - a.createdAt)
+                          .map((token, index) => (
+                            <TokenRow
+                              key={token.id}
+                              token={token}
+                              delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
+                              isNew={newTokenIds.has(token.id)}
+                              onSend={handleSendCoinToken}
+                              onInspect={handleInspectCoinToken}
+                            />
+                          ))}
+                    </>
                   )}
                 </div>
               )}
@@ -428,6 +500,8 @@ export function L3WalletView({
       {/* Modals */}
       <TopUpModal isOpen={isTopUpModalOpen} onClose={() => setIsTopUpModalOpen(false)} />
       <SendModal isOpen={isSendModalOpen} onClose={() => setIsSendModalOpen(false)} />
+      <SendWholeTokenModal target={sendTarget} onClose={() => setSendTarget(null)} />
+      <TokenDataModal target={inspectTarget} onClose={() => setInspectTarget(null)} />
       <SwapModal isOpen={isSwapModalOpen} onClose={() => setIsSwapModalOpen(false)} />
       <PaymentRequestsModal
         isOpen={isRequestsOpen}

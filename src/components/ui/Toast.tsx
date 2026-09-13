@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Info, AlertTriangle, CheckCircle, XCircle, ArrowDownLeft } from 'lucide-react';
+import { X, Info, AlertTriangle, CheckCircle, XCircle, ArrowDownLeft, Image as ImageIcon } from 'lucide-react';
 import type { ToastType, ShowToastDetail, TransferToastData } from './toast-utils';
 
 export interface ToastData {
@@ -58,13 +58,23 @@ function TransferToast({ data, onClose }: { data: TransferToastData; onClose: ()
           <img src={data.iconUrl} className="w-10 h-10 rounded-full shrink-0" alt="" />
         ) : (
           <div className="w-10 h-10 rounded-full bg-neutral-700 flex items-center justify-center shrink-0">
-            <span className="text-sm font-semibold text-neutral-300">{data.symbol.slice(0, 2)}</span>
+            {data.coinless ? (
+              <ImageIcon className="w-5 h-5 text-neutral-300" />
+            ) : (
+              <span className="text-sm font-semibold text-neutral-300">{data.symbol.slice(0, 2)}</span>
+            )}
           </div>
         )}
 
         <div className="flex-1 min-w-0">
-          <div className="text-lg font-bold text-white">
-            +{data.amount} <span className="text-emerald-400">{data.symbol}</span>
+          <div className="text-lg font-bold text-white truncate">
+            {data.coinless ? (
+              data.label ?? 'NFT'
+            ) : (
+              <>
+                +{data.amount} <span className="text-emerald-400">{data.symbol}</span>
+              </>
+            )}
           </div>
           {data.sender && (
             <div className="text-xs text-neutral-400">

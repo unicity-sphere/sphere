@@ -12,7 +12,13 @@ import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from '../../../
 // (extends SphereError, code CERTIFICATION_UNCONFIRMED) for a possibly-certified
 // send (#631/#633). `subscriptionKeyStatus` defaults to 'ready' so the readiness
 // gate is transparent to the quota/send tests; the gate tests flip it.
-let fakeSphere: { payments: { send: ReturnType<typeof vi.fn> } } | null = null;
+let fakeSphere: {
+  payments: {
+    send: ReturnType<typeof vi.fn>;
+    sendWholeToken?: ReturnType<typeof vi.fn>;
+    sendCoinless?: ReturnType<typeof vi.fn>;
+  };
+} | null = null;
 let subscriptionKeyStatus: SubscriptionKeyStatus = 'ready';
 vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
   useSphereContext: () => ({ sphere: fakeSphere, subscriptionKeyStatus }),
@@ -498,5 +504,94 @@ describe('useTransfer — reactive 429/401 annotation (Task 4)', () => {
 
     expect(res?.deliveryPending).toBe(true);
     expect(openUpgradeMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('useTransfer — whole-token sends (#502 / sphere-sdk#777)', () => {
+  const WHOLE = { kind: 'whole' as const, tokenId: 'tok-1', recipient: '@bob' };
+
+  function world() {
+    const send = vi.fn();
+    const sendWholeToken = vi.fn().mockResolvedValue({ id: 't', status: 'delivered', tokens: [], tokenTransfers: [] });
+    const sendCoinless = vi.fn().mockResolvedValue({ id: 't', status: 'delivered', tokens: [], tokenTransfers: [] });
+    fakeSphere = { payments: { send, sendWholeToken, sendCoinless } };
+    return { send, sendWholeToken, sendCoinless };
+  }
+
+  it('routes a coin-token row to sendWholeToken, never to the amount-addressed send()', async () => {
+    const { send, sendWholeToken, sendCoinless } = world();
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => { await result.current.transfer(WHOLE); });
+
+    expect(sendWholeToken).toHaveBeenCalledWith({ recipient: '@bob', tokenId: 'tok-1' });
+    expect(sendCoinless).not.toHaveBeenCalled();
+    // send() would select sources for an AMOUNT and could split — a whole spend must not.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('routes an NFT row to sendCoinless — the verb that refuses a valued source', async () => {
+    const { sendWholeToken, sendCoinless } = world();
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => { await result.current.transfer({ ...WHOLE, coinless: true }); });
+
+    expect(sendCoinless).toHaveBeenCalledWith({ recipient: '@bob', tokenId: 'tok-1' });
+    expect(sendWholeToken).not.toHaveBeenCalled();
+  });
+
+  it('forwards a memo and omits the key entirely when there is none', async () => {
+    const { sendWholeToken } = world();
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => { await result.current.transfer({ ...WHOLE, memo: 'gm' }); });
+    expect(sendWholeToken).toHaveBeenCalledWith({ recipient: '@bob', tokenId: 'tok-1', memo: 'gm' });
+
+    await act(async () => { await result.current.transfer(WHOLE); });
+    expect(sendWholeToken).toHaveBeenLastCalledWith({ recipient: '@bob', tokenId: 'tok-1' });
+  });
+
+  it('converts a possibly-certified whole send into a pending SUCCESS — the same no-double-pay rule as send()', async () => {
+    // The whole point of parameterizing useTransfer instead of forking it: a
+    // keep-open outcome must NEVER surface as a re-sendable failure here either.
+    const { send } = world();
+    fakeSphere!.payments.sendWholeToken = vi.fn().mockRejectedValue(
+      new SphereError('certification unconfirmed', 'CERTIFICATION_UNCONFIRMED'),
+    );
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: { deliveryPending?: boolean } | undefined;
+    await act(async () => { res = await result.current.transfer(WHOLE); });
+
+    expect(res?.deliveryPending).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(fakeSphere!.payments.sendWholeToken).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('is blocked by the quota gate before any token leaves', async () => {
+    const { sendWholeToken } = world();
+    vi.mocked(checkSendQuota).mockResolvedValue({
+      verdict: 'block',
+      info: { reason: 'quota' } as never,
+    });
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await expect(
+      act(async () => { await result.current.transfer(WHOLE); }),
+    ).rejects.toBeInstanceOf(QuotaBlockedError);
+    expect(sendWholeToken).not.toHaveBeenCalled();
+  });
+
+  it('is refused while the subscription key is not ready', async () => {
+    const { sendWholeToken } = world();
+    subscriptionKeyStatus = 'checking';
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await expect(
+      act(async () => { await result.current.transfer(WHOLE); }),
+    ).rejects.toBeInstanceOf(SubscriptionNotReadyError);
+    expect(sendWholeToken).not.toHaveBeenCalled();
   });
 });
