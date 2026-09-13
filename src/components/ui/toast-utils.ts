@@ -11,6 +11,15 @@ export interface TransferToastData {
   symbol: string;
   iconUrl?: string | null;
   memo?: string;
+  /**
+   * A coinless arrival (an NFT) names a THING, not a quantity: it carries no
+   * coin, so there is no amount to add up and no symbol to name. Set this and
+   * the toast shows `label` instead of `+amount symbol` — which otherwise
+   * renders the literally-true-but-useless "+0 ?".
+   */
+  coinless?: boolean;
+  /** What arrived, when `coinless` — a class name, or a count for several. */
+  label?: string;
 }
 
 export interface ShowToastDetail {
@@ -64,7 +73,9 @@ export function showToast(
 }
 
 export function showTransferToast(transfer: TransferToastData, duration = 6000, groupId?: string) {
-  const message = `${transfer.sender} sent you ${transfer.amount} ${transfer.symbol}`;
+  const message = transfer.coinless
+    ? `${transfer.sender} sent you ${transfer.label ?? 'an NFT'}`
+    : `${transfer.sender} sent you ${transfer.amount} ${transfer.symbol}`;
   window.dispatchEvent(
     new CustomEvent<ShowToastDetail>('show-toast', {
       detail: { message, type: 'success', duration, transfer, ...(groupId !== undefined ? { groupId } : {}) },

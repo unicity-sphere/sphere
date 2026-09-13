@@ -31,6 +31,10 @@ export const SPHERE_KEYS = {
       all: ['sphere', 'payments', 'tokens'] as const,
       list: ['sphere', 'payments', 'tokens', 'list'] as const,
       byId: (id: string) => ['sphere', 'payments', 'tokens', id] as const,
+      // Nested under `all` on purpose: every refetchQueries({ queryKey: tokens.all })
+      // already in the app refreshes coinless holdings too, by prefix match.
+      coinless: ['sphere', 'payments', 'tokens', 'coinless'] as const,
+      data: (id: string) => ['sphere', 'payments', 'tokens', 'data', id] as const,
     },
 
     balance: {
