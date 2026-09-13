@@ -30,10 +30,10 @@ describe('TokenDataModal', () => {
     render(<TokenDataModal target={NFT} onClose={vi.fn()} />, { wrapper });
 
     await waitFor(() => expect(screen.getByText('63676d21')).toBeTruthy());
-    expect(screen.getByText(/4 bytes/)).toBeTruthy();
-    // A coinless payload is arbitrary minter-chosen bytes — claiming CBOR here
-    // would assert a format the SDK does not require.
-    expect(screen.getByText(/not necessarily CBOR/)).toBeTruthy();
+    // A coinless payload is arbitrary minter-chosen bytes, so its label names no
+    // format at all — CBOR is only stated where it is a fact.
+    expect(screen.getByText('Genesis data — 4 bytes')).toBeTruthy();
+    expect(screen.queryByText(/CBOR/)).toBeNull();
   });
 
   it('shows the token type for a coinless token and omits it for a coin token', async () => {
@@ -46,7 +46,6 @@ describe('TokenDataModal', () => {
     // A coin token's payload IS the value envelope, CBOR by construction — the
     // one case where naming the format is a fact rather than a guess.
     expect(screen.getByText(/value envelope \(CBOR tag 39050\)/)).toBeTruthy();
-    expect(screen.queryByText(/not necessarily CBOR/)).toBeNull();
   });
 
   it('says so plainly when a token carries no genesis data', async () => {

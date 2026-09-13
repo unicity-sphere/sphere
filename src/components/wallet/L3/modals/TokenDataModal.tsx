@@ -108,7 +108,7 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
                   label={
                     isCoinToken
                       ? `Genesis data — ${String(byteLength)} bytes · value envelope (CBOR tag 39050)`
-                      : `Genesis data — ${String(byteLength)} bytes · minter-defined, not necessarily CBOR`
+                      : `Genesis data — ${String(byteLength)} bytes`
                   }
                   value={hex}
                 />
