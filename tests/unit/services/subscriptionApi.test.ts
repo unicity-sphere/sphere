@@ -109,6 +109,59 @@ describe('subscriptionApi', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // never reached /auth/verify
   });
 
+  it('provisionOrRecoverKey works on a device whose clock is far off', async () => {
+    // The reported wallet: a machine running ~12 minutes behind, so every
+    // challenge the gateway issues looks to it like a stamp from the future.
+    // Nothing is wrong with the challenge, and the gateway checks the nonce
+    // against its OWN clock, so provisioning must go through (sphere-sdk#662).
+    const skewMs = 12 * 60_000;
+    const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, '.000Z');
+    const challenge =
+      'unicity:sgw:auth:v1\n' +
+      JSON.stringify({
+        network: 'testnet2',
+        pubkey: ROOT_PUBKEY,
+        nonce: NONCE,
+        issuedAt: iso(Date.now() + skewMs),
+        expiresAt: iso(Date.now() + skewMs + 5 * 60_000),
+      });
+    const fetchMock = mockFetchSequence([
+      { url: '/auth/challenge', json: { nonce: NONCE, challenge, expiresAt: iso(Date.now() + skewMs + 5 * 60_000) } },
+      { url: '/auth/verify', json: { apiKey: 'sk_clockskew', plan: 'free', created: true } },
+    ]);
+
+    const result = await provisionOrRecoverKey(fakeSphere() as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // it reached /auth/verify
+    const verifyCall = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(recoverPubkeyFromSignature(challenge, verifyCall.signature)).toBe(ROOT_PUBKEY);
+    expect(result.apiKey).toBe('sk_clockskew');
+  });
+
+  it('provisionOrRecoverKey works when the device clock runs AHEAD of the gateway', async () => {
+    // The other direction, which had no tolerance at all: a challenge whose
+    // five-minute window this device believes is already spent.
+    const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, '.000Z');
+    const challenge =
+      'unicity:sgw:auth:v1\n' +
+      JSON.stringify({
+        network: 'testnet2',
+        pubkey: ROOT_PUBKEY,
+        nonce: NONCE,
+        issuedAt: iso(Date.now() - 9 * 60_000),
+        expiresAt: iso(Date.now() - 4 * 60_000),
+      });
+    const fetchMock = mockFetchSequence([
+      { url: '/auth/challenge', json: { nonce: NONCE, challenge, expiresAt: iso(Date.now() - 4 * 60_000) } },
+      { url: '/auth/verify', json: { apiKey: 'sk_ahead', plan: 'free', created: true } },
+    ]);
+
+    const result = await provisionOrRecoverKey(fakeSphere() as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.apiKey).toBe('sk_ahead');
+  });
+
   it('provisionOrRecoverKey: throws when the root key is unavailable', async () => {
     const noRootKey = {
       deriveAddress: () => ({ privateKey: undefined }),

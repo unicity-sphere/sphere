@@ -48,14 +48,9 @@ describe('verifySgwChallenge', () => {
     expect(() => verifySgwChallenge(makeChallenge({ network: 'Testnet2' }), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: NOW })).not.toThrow();
   });
 
-  it('rejects an expired challenge', () => {
-    const past = Date.parse('2026-07-03T12:06:00.000Z');
-    expect(() => verifySgwChallenge(makeChallenge(), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: past })).toThrow(SgwChallengeError);
-  });
-
-  it('rejects issuedAt too far in the future (clock skew > 5 min)', () => {
-    const early = Date.parse('2026-07-03T11:54:00.000Z');
-    expect(() => verifySgwChallenge(makeChallenge(), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: early })).toThrow(SgwChallengeError);
+  it('rejects a validity window that ends before it starts', () => {
+    const inverted = makeChallenge({ issuedAt: '2026-07-03T12:05:00.000Z', expiresAt: '2026-07-03T12:00:00.000Z' });
+    expect(() => verifySgwChallenge(inverted, { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: NOW })).toThrow(SgwChallengeError);
   });
 
   it('rejects a validity window over 60 min', () => {
@@ -70,5 +65,47 @@ describe('verifySgwChallenge', () => {
   it('rejects missing/non-string fields', () => {
     const body = JSON.stringify({ network: 'testnet2', pubkey: PUBKEY, nonce: NONCE, issuedAt: '2026-07-03T12:00:00.000Z' }); // no expiresAt
     expect(() => verifySgwChallenge(SGW_CHALLENGE_PREFIX + body, { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: NOW })).toThrow(SgwChallengeError);
+  });
+});
+
+/**
+ * The device clock is not evidence about anything here.
+ *
+ * sphere-sdk hit this first (unicity-sphere/sphere-sdk#662): ~63 production
+ * Sentry events, gateway answering 200 in 200ms, and users whose clock had
+ * drifted could not sign in at all. The challenge is fetched, verified and
+ * signed in one synchronous run, so in SERVER time it is never stale; the
+ * gateway enforces the nonce TTL authoritatively on its own clock. What stops
+ * the wallet signing foreign or replayed text is the pubkey, nonce and network
+ * binding above, none of which involve time. So the SDK deleted its two
+ * device-clock comparisons and this file, a port of that function, follows.
+ *
+ * Support cost of keeping them here: one wallet, three weeks, four people,
+ * ending at "your computer's clock is wrong" (Discord, Aug-Sep 2026).
+ */
+describe('verifySgwChallenge ignores the device clock', () => {
+  it('accepts a challenge when the device clock runs 12 minutes behind', () => {
+    // The gateway stamps 12:00; this device believes it is 11:48.
+    const behind = Date.parse('2026-07-03T11:48:00.000Z');
+    expect(() => verifySgwChallenge(makeChallenge(), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: behind })).not.toThrow();
+  });
+
+  it('accepts a challenge the device clock believes has already expired', () => {
+    // The gateway stamps 12:00-12:05; this device believes it is 12:07.
+    const ahead = Date.parse('2026-07-03T12:07:00.000Z');
+    expect(() => verifySgwChallenge(makeChallenge(), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: ahead })).not.toThrow();
+  });
+
+  it('accepts it on a device whose DATE is wrong, not just its time', () => {
+    // A dead RTC battery lands the machine years off, which is commoner than
+    // a few minutes of drift and used to be just as fatal.
+    const yearsOff = Date.parse('2019-01-01T00:00:00.000Z');
+    expect(() => verifySgwChallenge(makeChallenge(), { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: yearsOff })).not.toThrow();
+  });
+
+  it('still refuses to sign for another wallet, whatever the clock says', () => {
+    const behind = Date.parse('2026-07-03T11:48:00.000Z');
+    const foreign = makeChallenge({ pubkey: '02' + 'a'.repeat(64) });
+    expect(() => verifySgwChallenge(foreign, { network: NET, pubkey: PUBKEY, nonce: NONCE, nowMs: behind })).toThrow(SgwChallengeError);
   });
 });
