@@ -19,8 +19,10 @@ export class SgwChallengeError extends Error {
 /**
  * @param expect.nowMs Accepted and deliberately IGNORED. It is what the device
  * believes the time is, and nothing here is allowed to depend on that (see the
- * timestamp block below). Kept so a caller can prove the independence, which is
- * what the tests use it for; the SDK keeps its own for the same reason.
+ * timestamp block below). Kept only so the tests can prove that independence by
+ * passing values that used to be fatal. Nothing in the SDK mirrors it: #662
+ * deprecated its `nowMs` and the field is gone from `ChallengeExpectation`
+ * altogether in the version this repo pins.
  */
 export function verifySgwChallenge(
   challenge: string,
