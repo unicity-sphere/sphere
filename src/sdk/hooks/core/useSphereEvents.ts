@@ -4,9 +4,10 @@ import { useSphereContext } from './useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { diag } from '../../diag';
 import { formatAmount } from '../../index';
-import { showToast, showTransferToast } from '../../../components/ui/toast-utils';
+import { showToast, showTransferToast, type TransferToastData } from '../../../components/ui/toast-utils';
 import { CHAT_KEYS, GROUP_CHAT_KEYS, type DmReceivedDetail } from '../../../components/chat/data/chatTypes';
 import { sendWelcomeDM } from '../../welcomeDM';
+import { getPayments } from '../../payments';
 import type { IncomingTransfer } from '@unicitylabs/sphere-sdk';
 
 // SDK DM shape (local mirror — SDK DTS not always available)
@@ -18,6 +19,13 @@ interface SDKDirectMessage {
 
 /** How long a coalesced incoming-payment toast stays up while more tokens land. */
 const INCOMING_TOAST_MS = 6000;
+
+/** A toast announcing exactly one NFT by its class name, until its own name is read (#785). */
+interface PendingNftLabel {
+  readonly tokenId: string;
+  readonly toast: TransferToastData;
+  readonly shownAt: number;
+}
 /** Coarse because a history refetch re-walks every page (useTransactionHistory). */
 const HISTORY_INVALIDATE_MS = 2500;
 
@@ -60,6 +68,8 @@ export function useSphereEvents(): void {
   const incomingGroupTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // Coinless arrivals are COUNTED, not summed — there is no amount to add.
   const incomingNftCountsRef = useRef<Map<string, number>>(new Map());
+  /** Per NFT group: the single-NFT toast still waiting for its own name (#785). */
+  const pendingNftLabelsRef = useRef<Map<string, PendingNftLabel>>(new Map());
   /** Which group the single global progress slot is currently showing (#490). */
   const progressOwnerRef = useRef<string | null>(null);
   // One deferred-delivery toast per transfer — the SDK re-emits the
@@ -98,6 +108,29 @@ export function useSphereEvents(): void {
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.transactions.history });
     });
 
+    // The registry names an NFT's CLASS; its own metadata names the token (#785).
+    // Best effort, never throws: the toast already says an NFT arrived. The drain
+    // announces a token BEFORE the inventory view nfts() reads has caught up, so
+    // an absent reading is retried on inventory:updated while the toast is up.
+    const relabelNftToast = async (groupKey: string, pending: PendingNftLabel) => {
+      try {
+        const payments = getPayments(sphere);
+        if (!payments) return;
+        const view = (await payments.nfts([pending.tokenId])).get(pending.tokenId);
+        // Superseded while reading: a second arrival made the toast a count, the
+        // group ended, or a concurrent attempt already named it.
+        if (!view || pendingNftLabelsRef.current.get(groupKey) !== pending) return;
+        pendingNftLabelsRef.current.delete(groupKey);
+        const remaining = INCOMING_TOAST_MS - (Date.now() - pending.shownAt);
+        if (view.content.kind !== 'metadata' || remaining <= 0) return;
+        // Same groupId, so it replaces the toast in place — for its remaining
+        // time only, so a rename never outlives the toast it renames.
+        showTransferToast({ ...pending.toast, label: view.content.name }, remaining, groupKey);
+      } catch {
+        // Keep the class name.
+      }
+    };
+
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
       diag('event:transfer:incoming');
       invalidatePayments();
@@ -124,23 +157,29 @@ export function useSphereEvents(): void {
           setTimeout(() => {
             incomingNftCountsRef.current.delete(groupKey);
             incomingGroupTimersRef.current.delete(groupKey);
+            pendingNftLabelsRef.current.delete(groupKey);
           }, INCOMING_TOAST_MS + 500),
         );
         const first = nfts[0];
-        showTransferToast(
-          {
-            sender,
-            coinless: true,
-            // One names itself; several are counted, since their names differ.
-            label: carried === 1 ? (first?.name ?? 'an NFT') : `${String(carried)} NFTs`,
-            amount: '',
-            symbol: '',
-            ...(first?.iconUrl !== undefined ? { iconUrl: first.iconUrl } : {}),
-            ...(transfer.memo !== undefined ? { memo: transfer.memo } : {}),
-          },
-          INCOMING_TOAST_MS,
-          groupKey,
-        );
+        const toast: TransferToastData = {
+          sender,
+          coinless: true,
+          // One names itself; several are counted, since their names differ.
+          label: carried === 1 ? (first?.name ?? 'an NFT') : `${String(carried)} NFTs`,
+          amount: '',
+          symbol: '',
+          ...(first?.iconUrl !== undefined ? { iconUrl: first.iconUrl } : {}),
+          ...(transfer.memo !== undefined ? { memo: transfer.memo } : {}),
+        };
+        showTransferToast(toast, INCOMING_TOAST_MS, groupKey);
+        if (carried === 1 && first) {
+          const pending: PendingNftLabel = { tokenId: first.tokenId, toast, shownAt: Date.now() };
+          pendingNftLabelsRef.current.set(groupKey, pending);
+          void relabelNftToast(groupKey, pending);
+        } else {
+          // A count names no single token.
+          pendingNftLabelsRef.current.delete(groupKey);
+        }
         return;
       }
 
@@ -230,6 +269,8 @@ export function useSphereEvents(): void {
       // transfers are never swallowed by ids seen under the old one.
       seenTransferIdsRef.current.clear();
       deferredToastIdsRef.current.clear();
+      // The new address's inventory never held the old one's arrivals.
+      pendingNftLabelsRef.current.clear();
       refreshIdentityCache();
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.identity.all });
       queryClient.invalidateQueries({ queryKey: SPHERE_KEYS.payments.all });
@@ -248,6 +289,8 @@ export function useSphereEvents(): void {
     const handleInventoryUpdated = () => {
       diag('event:inventory:updated');
       invalidatePayments();
+      // The view nfts() reads may now hold a token announced before it did.
+      for (const [groupKey, pending] of pendingNftLabelsRef.current) void relabelNftToast(groupKey, pending);
     };
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
@@ -359,12 +402,15 @@ export function useSphereEvents(): void {
     sphere.on('payment_request:incoming', handlePaymentRequestIncoming);
     sphere.on('transfer:attention', handleTransferAttention);
 
+    const pendingNftLabels = pendingNftLabelsRef.current;
     return () => {
       for (const timer of [invalidateTimerRef, historyTimerRef]) {
         if (timer.current === null) continue;
         clearTimeout(timer.current);
         timer.current = null;
       }
+      // A read still in flight belongs to this instance's facade: drop what it would rename.
+      pendingNftLabels.clear();
       sphere.off('transfer:incoming', handleIncomingTransfer);
       sphere.off('transfer:updated', handleTransferUpdated);
       sphere.off('history:updated', handleHistoryUpdated);

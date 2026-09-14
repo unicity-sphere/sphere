@@ -76,7 +76,7 @@ if (SENTRY_DSN) {
     ],
     // Errors thrown by injected extension scripts (other wallets) are not ours.
     // blob: is safe to deny wholesale — first-party code never executes from
-    // blob: URLs (createObjectURL is only used for backup file downloads);
+    // blob: URLs (createObjectURL only serves backup downloads and NFT media);
     // extensions injecting code via blob: do (SPHERE-1F).
     denyUrls: [
       /^chrome-extension:\/\//,

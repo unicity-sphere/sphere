@@ -24,6 +24,20 @@ export const SPHERE_KEYS = {
     progress: ['sphere', 'incoming', 'progress'] as const,
   },
 
+  /**
+   * NFT readings (#785). Deliberately NOT under `payments.*` either: that
+   * subtree is invalidated on every payment event, while a token's genesis
+   * payload — and a linked file pinned by its SHA-256 — never change.
+   */
+  nft: {
+    all: ['sphere', 'nft'] as const,
+    views: (chainPubkey: string, sortedTokenIds: readonly string[]) =>
+      ['sphere', 'nft', 'views', chainPubkey, sortedTokenIds] as const,
+    link: (uri: string, sha256: string) => ['sphere', 'nft', 'link', uri, sha256] as const,
+    /** A verified creator key's nametag. Unlike a reading this can change — a binding may be published later. */
+    creator: (chainPubkey: string) => ['sphere', 'nft', 'creator', chainPubkey] as const,
+  },
+
   payments: {
     all: ['sphere', 'payments'] as const,
 

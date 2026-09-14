@@ -1,8 +1,9 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Copy, CheckCircle2, Loader2 } from 'lucide-react';
 import { useState } from 'react';
-import { useTokenData } from '../../../../sdk/hooks';
+import { useNfts, useTokenData } from '../../../../sdk/hooks';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
+import { NftDetails } from '../../shared/nft/NftDetails';
 
 export interface TokenDataTarget {
   tokenId: string;
@@ -15,6 +16,8 @@ interface TokenDataModalProps {
   target: TokenDataTarget | null;
   onClose: () => void;
 }
+
+const NO_IDS: readonly string[] = [];
 
 function CopyableField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -58,11 +61,18 @@ function CopyableField({ label, value }: { label: string; value: string }) {
  * Rendering raw rather than decoding keeps this honest, and works for payloads
  * this wallet has no schema for. The label says what the bytes ARE; what to open
  * them with is the reader's business.
+ *
+ * A coinless payload the SDK recognises as an NFT (#785) also gets that reading,
+ * ABOVE the raw bytes. The reading is an interpretation; the raw view beneath it
+ * stays the record, label unchanged.
  */
 export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
   const { hex, byteLength, isLoading, error } = useTokenData(target?.tokenId ?? null);
   // A coin token has no token TYPE in this view; a coinless one always names its class.
   const isCoinToken = target?.tokenType === undefined;
+  // Only a coinless token can be an NFT: a coin token's payload is its value envelope.
+  const { views } = useNfts(target && !isCoinToken ? [target.tokenId] : NO_IDS);
+  const nft = target ? views.get(target.tokenId) : undefined;
 
   return (
     <AnimatePresence>
@@ -78,7 +88,7 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
-            className="w-full max-w-lg rounded-2xl bg-neutral-900 p-5 text-white shadow-xl"
+            className="max-h-full w-full max-w-lg overflow-y-auto rounded-2xl bg-neutral-900 p-5 text-white shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between gap-3">
@@ -87,6 +97,8 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
                 <X className="h-5 w-5" />
               </button>
             </div>
+
+            {nft && <NftDetails nft={nft} fallbackTitle={target.label} />}
 
             <CopyableField label="Token ID" value={target.tokenId} />
             {target.tokenType !== undefined && (

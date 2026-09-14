@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useCoinlessTokens } from '../../../../sdk';
+import { useIdentity, useAssets, useTokens, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
@@ -15,6 +15,7 @@ import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
 import { TokenDataModal, type TokenDataTarget } from '../modals/TokenDataModal';
 import { tokensTabView } from './tokensTabView';
+import { nftTitle } from '../../shared/nft/nftDisplay';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
@@ -163,6 +164,9 @@ export function L3WalletView({
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
   const { coinless } = useCoinlessTokens();
+  // NFT readings for the coinless rows (#785). A token's genesis payload never
+  // changes, so the map keeps its identity until the set of held ids does.
+  const { views: nftViews } = useNfts(coinless.map((t) => t.tokenId));
   const { sphere, deleteWallet } = useSphereContext();
 
   const assets = sdkAssets;
@@ -188,10 +192,10 @@ export function L3WalletView({
   const handleSendCoinless = useCallback((t: CoinlessToken) => {
     setSendTarget({
       tokenId: t.tokenId,
-      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      label: nftTitle(t, nftViews.get(t.tokenId)),
       coinless: true,
     });
-  }, []);
+  }, [nftViews]);
 
   const handleSendCoinToken = useCallback((t: Token) => {
     setSendTarget({ tokenId: t.id, label: t.symbol || 'Token', coinless: false });
@@ -201,10 +205,10 @@ export function L3WalletView({
   const handleInspectCoinless = useCallback((t: CoinlessToken) => {
     setInspectTarget({
       tokenId: t.tokenId,
-      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      label: nftTitle(t, nftViews.get(t.tokenId)),
       ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
     });
-  }, []);
+  }, [nftViews]);
 
   const handleInspectCoinToken = useCallback((t: Token) => {
     setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });
@@ -468,6 +472,7 @@ export function L3WalletView({
                           <CoinlessTokenRow
                             key={token.tokenId}
                             token={token}
+                            nft={nftViews.get(token.tokenId)}
                             delay={index * 0.05}
                             isNew={false}
                             onSend={handleSendCoinless}
