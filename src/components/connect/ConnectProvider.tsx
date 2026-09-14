@@ -5,10 +5,11 @@ import type {
   LockedRequestContext,
   PermissionScope,
 } from '@unicitylabs/sphere-sdk/connect';
-import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
+import { ERROR_CODES, INTENT_ACTIONS } from '@unicitylabs/sphere-sdk/connect';
 import {
   ConnectContext,
   type AutoIntentHandler,
+  type IntentAnswer,
   type PendingApproval,
   type PendingIntent,
   type ConnectContextValue,
@@ -26,6 +27,14 @@ import { INTENT_SETTLE_MS } from './settleWindow';
  * 4009 code. Nothing may depend on this string being byte-identical anywhere.
  */
 const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
+
+/**
+ * Intents that always reach the confirmation modal, whatever auto-approve
+ * handler a host holds — this provider's twin of the SDK host's own rule, which
+ * cannot see the map below. Minting an NFT signs dApp-chosen content as the
+ * user, so no earlier grant may stand in for the prompt.
+ */
+const ALWAYS_ASK_INTENTS: ReadonlySet<string> = new Set<string>([INTENT_ACTIONS.MINT_NFT]);
 
 interface ConnectProviderProps {
   children: ReactNode;
@@ -56,7 +65,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   }, []);
 
   const settleIntent = useCallback(
-    (id: number, result: { result?: unknown; error?: { code: number; message: string } }) => {
+    (id: number, result: IntentAnswer) => {
       const index = intentQueueRef.current.findIndex((entry) => entry.id === id);
       if (index === -1) return; // already settled — never resolve the same intent twice
       const [entry] = intentQueueRef.current.splice(index, 1);
@@ -218,9 +227,12 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       origin: string,
       action: string,
       params: Record<string, unknown>,
-    ): Promise<{ result?: unknown; error?: { code: number; message: string } }> => {
-      // Auto-approve handlers — only the ones THIS host granted.
-      const handler = autoIntentHandlersRef.current.get(host)?.get(action);
+    ): Promise<IntentAnswer> => {
+      // Auto-approve handlers — only the ones THIS host granted, and never for an
+      // intent that must be asked every time.
+      const handler = ALWAYS_ASK_INTENTS.has(action)
+        ? undefined
+        : autoIntentHandlersRef.current.get(host)?.get(action);
       if (handler) {
         try {
           const handled = await handler(action, params);
@@ -270,7 +282,8 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   );
 
   const rejectIntent = useCallback(
-    (id: number, code: number, message: string) => settleIntent(id, { error: { code, message } }),
+    (id: number, code: number, message: string, data?: unknown) =>
+      settleIntent(id, { error: data === undefined ? { code, message } : { code, message, data } }),
     [settleIntent],
   );
 

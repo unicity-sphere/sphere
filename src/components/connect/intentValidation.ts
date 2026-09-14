@@ -1,4 +1,5 @@
-import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
+import { ERROR_CODES, nftContentFromWire } from '@unicitylabs/sphere-sdk/connect';
+import type { NftContent } from '@unicitylabs/sphere-sdk';
 
 /** A refusal to hand an intent to the UI at all: malformed, or not implemented. */
 export interface IntentError {
@@ -6,9 +7,30 @@ export interface IntentError {
   message: string;
 }
 
+/** A well-formed `mint_nft` intent's params, decoded into what `payments.mintNft` takes. */
+export interface MintNftParams {
+  content: NftContent;
+  /** The dApp's `sign` with its default applied: only an explicit `false` mints unsigned. */
+  sign: boolean;
+}
+
+/**
+ * validateIntent's full answer: the refusal, or — for a well-formed `mint_nft` —
+ * its decoded params. That content arrives as base64 of up to ~1 MB, so the
+ * decode done to check it is handed on, and the caller never decodes it a second
+ * time to preview or to mint.
+ */
+export type IntentCheck =
+  | { error: IntentError; mintNft: null }
+  | { error: null; mintNft: MintNftParams | null };
+
 const COIN_ID_RE = /^([0-9a-f]{2})+$/;
 
-const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'receive']);
+const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'mint_nft', 'receive']);
+
+function refuse(code: number, message: string): IntentCheck {
+  return { error: { code, message }, mintNft: null };
+}
 
 /**
  * Validate dApp-supplied intent params up front. Returns a structured error to
@@ -17,11 +39,12 @@ const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_messag
  * its handler, so it is only checked for support here.
  */
 export function validateIntent(action: string, params: Record<string, unknown>): IntentError | null {
+  return checkIntent(action, params).error;
+}
+
+export function checkIntent(action: string, params: Record<string, unknown>): IntentCheck {
   if (!SUPPORTED_INTENTS.has(action)) {
-    return {
-      code: ERROR_CODES.METHOD_NOT_FOUND,
-      message: `Intent "${action}" is not supported by this wallet`,
-    };
+    return refuse(ERROR_CODES.METHOD_NOT_FOUND, `Intent "${action}" is not supported by this wallet`);
   }
   // NOT gated on the network. Minting through a dApp is the USER's own authority
   // — their gateway subscription, their key, their asset ids — so it is a
@@ -31,6 +54,34 @@ export function validateIntent(action: string, params: Record<string, unknown>):
   // mainnet. Sphere's own Top Up and Swap stay testnet-only for their own
   // reasons; that is a product decision about those features, not a statement
   // about what the network can do.
+  //
+  // `mint_nft` is the same authority under its own `nft:mint` scope, which no
+  // other grant implies. Its content is the dApp's and is signed as the user by
+  // default, so the handler shows every one and never offers auto-approval.
+  if (action === 'mint_nft') return checkMintNft(params);
+  const error = paramsError(action, params);
+  return error ? { error, mintNft: null } : { error: null, mintNft: null };
+}
+
+/**
+ * Shape and base64 only. The VALUE rules — non-empty text, media types, URI
+ * schemes, the payload cap — stay with `payments.mintNft`, whose refusal becomes
+ * the intent's error.
+ */
+function checkMintNft(params: Record<string, unknown>): IntentCheck {
+  const sign = params.sign === undefined ? true : params.sign;
+  if (typeof sign !== 'boolean') {
+    return refuse(ERROR_CODES.INVALID_PARAMS, '"sign" must be a boolean when present');
+  }
+  try {
+    // Throws a message naming the offending field, e.g. `Invalid NFT content.image.bytes: …`.
+    return { error: null, mintNft: { content: nftContentFromWire(params.content), sign } };
+  } catch (err) {
+    return refuse(ERROR_CODES.INVALID_PARAMS, err instanceof Error ? err.message : 'Invalid NFT content');
+  }
+}
+
+function paramsError(action: string, params: Record<string, unknown>): IntentError | null {
   if (action === 'send' || action === 'payment_request') {
     if (typeof params.to !== 'string' || params.to.trim() === '') {
       return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };

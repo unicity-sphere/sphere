@@ -1,4 +1,4 @@
-import type { CoinlessToken, NftMediaRef, NftView } from '@unicitylabs/sphere-sdk';
+import type { CoinlessToken, NftContent, NftMediaRef, NftView } from '@unicitylabs/sphere-sdk';
 import { truncateId } from '../../../../utils/identifiers';
 
 /**
@@ -13,11 +13,14 @@ export function nftTitle(token: CoinlessToken, nft?: NftView): string {
   return token.tokenType ? `Type ${token.tokenType.slice(0, 8)}…` : 'Unknown type';
 }
 
+/** The media an NFT's content shows first: metadata's `image`, or a bare media/link NFT itself. */
+export function nftContentMediaRef(content: NftContent): NftMediaRef | null {
+  return content.kind === 'metadata' ? content.image : content;
+}
+
 /** The media a list row previews: metadata's `image`, or a bare media/link NFT itself. */
 export function nftThumbnailRef(nft?: NftView): NftMediaRef | null {
-  if (!nft) return null;
-  const { content } = nft;
-  return content.kind === 'metadata' ? content.image : content;
+  return nft ? nftContentMediaRef(nft.content) : null;
 }
 
 /** A creator key (66-hex chain pubkey) shortened for display. */

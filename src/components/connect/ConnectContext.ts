@@ -27,6 +27,12 @@ export interface PendingApproval {
   resolve: (result: { approved: boolean; grantedPermissions: PermissionScope[] }) => void;
 }
 
+/** The wallet's answer to an intent. The host relays `error.data` to the dApp as the error's `data`. */
+export interface IntentAnswer {
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
+
 export interface PendingIntent {
   id: number;
   host: ConnectHost;
@@ -34,13 +40,13 @@ export interface PendingIntent {
   origin: string;
   action: string;
   params: Record<string, unknown>;
-  resolve: (result: { result?: unknown; error?: { code: number; message: string } }) => void;
+  resolve: (result: IntentAnswer) => void;
 }
 
 export type AutoIntentHandler = (
   action: string,
   params: Record<string, unknown>,
-) => Promise<{ result?: unknown; error?: { code: number; message: string } } | null>;
+) => Promise<IntentAnswer | null>;
 
 export interface ConnectContextValue {
   /** Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection. */
@@ -57,7 +63,7 @@ export interface ConnectContextValue {
     origin: string,
     action: string,
     params: Record<string, unknown>,
-  ) => Promise<{ result?: unknown; error?: { code: number; message: string } }>;
+  ) => Promise<IntentAnswer>;
 
   /**
    * NOTIFY-ONLY: a host has just answered WALLET_LOCKED (4009). The host has
@@ -109,14 +115,18 @@ export interface ConnectContextValue {
    * still in flight, so a completed transfer's result would land on a DIFFERENT dApp's intent.
    */
   resolveIntent: (id: number, result: unknown) => void;
-  rejectIntent: (id: number, code: number, message: string) => void;
+  /** `data`, when given, reaches the dApp as the error's `data` (e.g. a journaled mint's `{ tokenId }`). */
+  rejectIntent: (id: number, code: number, message: string, data?: unknown) => void;
 
   /** Register a live host with its transport-verified origin. Paired with releaseHost(). */
   attachHost: (host: ConnectHost, origin: string) => void;
   /** Remove a host (tab closed, url switched, popup unloaded) and settle its pending work. */
   releaseHost: (host: ConnectHost) => void;
 
-  /** Register an auto-approve handler for an intent action, scoped to ONE host. */
+  /**
+   * Register an auto-approve handler for an intent action, scoped to ONE host.
+   * Never consulted for an always-ask intent (`mint_nft`): that one reaches the modal every time.
+   */
   registerAutoIntent: (host: ConnectHost, action: string, handler: AutoIntentHandler) => void;
 }
 

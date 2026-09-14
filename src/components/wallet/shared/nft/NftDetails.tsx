@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isValidNametag, normalizeNametag } from '@unicitylabs/sphere-sdk';
-import type { NftAttribute, NftSignatureStatus, NftView } from '@unicitylabs/sphere-sdk';
+import type { NftAttribute, NftContent, NftSignatureStatus, NftView } from '@unicitylabs/sphere-sdk';
 import { CheckCircle2, Copy, ExternalLink, ShieldAlert, ShieldCheck, ShieldQuestionMark } from 'lucide-react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
@@ -9,11 +9,17 @@ import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { isChainPubkey } from '../../../../utils/identifiers';
 import { isHttpsUrl } from '../../../../utils/isHttpsUrl';
 import { NftMediaView } from './NftMediaView';
-import { nftThumbnailRef, shortPubkey } from './nftDisplay';
+import { nftContentMediaRef, shortPubkey } from './nftDisplay';
 
 interface NftDetailsProps {
   nft: NftView;
   /** Names the media when the NFT carries no name of its own (a bare media or link NFT). */
+  fallbackTitle: string;
+}
+
+interface NftContentDetailsProps {
+  content: NftContent;
+  /** Names the media when the content carries no name of its own (a bare media or link NFT). */
   fallbackTitle: string;
 }
 
@@ -184,17 +190,20 @@ function ExternalUrl({ url }: { url: string }) {
 }
 
 /**
- * A coinless token's NFT reading (#785) for the token detail view. Every string
- * in it is chosen by whoever minted the token, so all of it renders as plain
- * text; media renders only through NftMediaView's checks.
+ * What an NFT's content shows (#785): its media, then its metadata. Every string
+ * in it is chosen by whoever wrote the content, so all of it renders as plain
+ * text; media renders only through NftMediaView's checks. It says nothing about
+ * who created the token or whether a signature verifies, so it also serves a
+ * mint preview, for a token that does not exist yet. Renders the parts
+ * unwrapped: the caller's container spaces them.
  */
-export function NftDetails({ nft, fallbackTitle }: NftDetailsProps) {
-  const metadata = nft.content.kind === 'metadata' ? nft.content : null;
+export function NftContentDetails({ content, fallbackTitle }: NftContentDetailsProps) {
+  const metadata = content.kind === 'metadata' ? content : null;
   const title = metadata?.name ?? fallbackTitle;
-  const media = nftThumbnailRef(nft);
+  const media = nftContentMediaRef(content);
 
   return (
-    <section aria-label="NFT" className="mb-4 space-y-3">
+    <>
       {media && <NftMediaView media={media} alt={title} variant="full" />}
       {metadata?.animation_url && <NftMediaView media={metadata.animation_url} alt={title} variant="full" />}
       {metadata && (
@@ -208,6 +217,18 @@ export function NftDetails({ nft, fallbackTitle }: NftDetailsProps) {
       )}
       {metadata && metadata.attributes.length > 0 && <Attributes attributes={metadata.attributes} />}
       {metadata?.external_url && <ExternalUrl url={metadata.external_url} />}
+    </>
+  );
+}
+
+/**
+ * A coinless token's NFT reading (#785) for the token detail view: its content,
+ * then who created it and whether that signature verifies.
+ */
+export function NftDetails({ nft, fallbackTitle }: NftDetailsProps) {
+  return (
+    <section aria-label="NFT" className="mb-4 space-y-3">
+      <NftContentDetails content={nft.content} fallbackTitle={fallbackTitle} />
       {nft.creator !== null && nft.signature === 'valid' && <VerifiedCreator creator={nft.creator} />}
       {nft.creator !== null && nft.signature === 'invalid' && <ClaimedCreator creator={nft.creator} />}
       <SignatureLine status={nft.signature} />
