@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { NftView } from '@unicitylabs/sphere-sdk';
-import { useNfts } from '../../../src/sdk/hooks/payments/useNfts';
+import { NFT_READ_RETRY_MS, useNfts } from '../../../src/sdk/hooks/payments/useNfts';
 import { SPHERE_KEYS } from '../../../src/sdk/queryKeys';
 
 const PUB_A = '02' + 'aa'.repeat(32);
@@ -156,5 +156,79 @@ describe('useNfts', () => {
     paymentsRunning = true;
     const second = renderHook(() => useNfts([ID_1]), { wrapper });
     await waitFor(() => expect(second.result.current.views.size).toBe(1));
+  });
+
+  it('keeps the readings already on screen when a changed set of ids fails to read', async () => {
+    const { client, wrapper } = setup();
+    const { result, rerender } = renderHook(({ ids }) => useNfts(ids), {
+      wrapper,
+      initialProps: { ids: [ID_1] },
+    });
+    await waitFor(() => expect(result.current.views.size).toBe(1));
+
+    // One failed blob read (a wallet-api 503, a timeout) fails the whole batch.
+    nftsMock.mockRejectedValue(new Error('HTTP 503'));
+    rerender({ ids: [ID_1, ID_2] });
+
+    await waitFor(() =>
+      expect(client.getQueryState(SPHERE_KEYS.nft.views(PUB_A, [ID_1, ID_2]))?.status).toBe('error'),
+    );
+    expect(result.current.views.get(ID_1)?.tokenId).toBe(ID_1);
+    expect(result.current.views.has(ID_2)).toBe(false);
+  });
+
+  it("never falls back to another address's readings when a read fails", async () => {
+    const { client, wrapper } = setup();
+    const { result, rerender } = renderHook(() => useNfts([ID_1]), { wrapper });
+    await waitFor(() => expect(result.current.views.size).toBe(1));
+
+    nftsMock.mockRejectedValue(new Error('HTTP 503'));
+    fakeSphere = makeSphere(PUB_B);
+    rerender();
+
+    await waitFor(() => expect(client.getQueryState(SPHERE_KEYS.nft.views(PUB_B, [ID_1]))?.status).toBe('error'));
+    expect(result.current.views.size).toBe(0);
+  });
+
+  describe('a failed read on a view that stays mounted', () => {
+    // RTL's waitFor polls on timers, so these step the fake clock by hand.
+    async function tick(ms: number) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('is read again, until it succeeds', async () => {
+      nftsMock.mockRejectedValueOnce(new Error('HTTP 503'));
+      const { client, wrapper } = setup();
+      const { result } = renderHook(() => useNfts([ID_1]), { wrapper });
+      await tick(10);
+      expect(client.getQueryState(SPHERE_KEYS.nft.views(PUB_A, [ID_1]))?.status).toBe('error');
+      expect(result.current.views.size).toBe(0);
+
+      await tick(NFT_READ_RETRY_MS);
+      await tick(10);
+
+      expect(nftsMock).toHaveBeenCalledTimes(2);
+      expect(result.current.views.size).toBe(1);
+    });
+
+    it('is the only kind read again — a successful batch is never re-read', async () => {
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useNfts([ID_1]), { wrapper });
+      await tick(10);
+      expect(result.current.views.size).toBe(1);
+
+      await tick(NFT_READ_RETRY_MS * 3);
+
+      expect(nftsMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

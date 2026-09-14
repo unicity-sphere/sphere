@@ -87,3 +87,61 @@ describe('incoming toast coalescing (#490)', () => {
     expect(screen.getAllByTestId('toast')).toHaveLength(2);
   });
 });
+
+/**
+ * A replace-only update refines a toast already shown — an incoming NFT toast
+ * renamed once the NFT's own name is read (#785), which can land seconds later.
+ * It updates that toast while it is up, and does nothing once it has ended.
+ */
+describe('replace-only toast updates', () => {
+  const GROUP = 'incoming-nft:api-4';
+
+  function closeTheToast() {
+    act(() => {
+      screen.getByRole('button').click();
+    });
+  }
+
+  it('renames a toast that is still up, in place', () => {
+    render(<ToastContainer />);
+
+    fire({ message: 'Cats', duration: 0, groupId: GROUP });
+    fire({ message: 'Cool Cat #7', duration: 0, groupId: GROUP, replaceOnly: true });
+
+    expect(screen.getAllByTestId('toast')).toHaveLength(1);
+    expect(screen.getByText('Cool Cat #7')).toBeTruthy();
+  });
+
+  it('does not bring back a toast the user closed', () => {
+    render(<ToastContainer />);
+
+    fire({ message: 'Cats', duration: 0, groupId: GROUP });
+    closeTheToast();
+    expect(screen.queryByTestId('toast')).toBeNull();
+
+    fire({ message: 'Cool Cat #7', duration: 6000, groupId: GROUP, replaceOnly: true });
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('does not bring back a toast whose time ran out', () => {
+    vi.useFakeTimers();
+    render(<ToastContainer />);
+
+    fire({ message: 'Cats', duration: 1000, groupId: GROUP });
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.queryByTestId('toast')).toBeNull();
+
+    fire({ message: 'Cool Cat #7', duration: 1000, groupId: GROUP, replaceOnly: true });
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('still shows a new arrival in a group whose toast was closed', () => {
+    render(<ToastContainer />);
+
+    fire({ message: 'Cats', duration: 0, groupId: GROUP });
+    closeTheToast();
+    fire({ message: '@api-4 sent you 2 NFTs', duration: 0, groupId: GROUP });
+
+    expect(screen.getByText('@api-4 sent you 2 NFTs')).toBeTruthy();
+  });
+});

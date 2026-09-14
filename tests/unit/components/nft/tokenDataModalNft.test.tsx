@@ -12,7 +12,8 @@ import type { NftContent, NftMetadata, NftSignatureStatus, NftView } from '@unic
 
 const tokenDataMock = vi.fn<(tokenId: string) => Promise<Uint8Array | null>>();
 const nftsMock = vi.fn<(tokenIds: readonly string[]) => Promise<ReadonlyMap<string, NftView>>>();
-const resolveMock = vi.fn<(identifier: string) => Promise<{ chainPubkey: string; nametag?: string } | null>>();
+const resolveMock =
+  vi.fn<(identifier: string) => Promise<{ chainPubkey: string; transportPubkey: string; nametag?: string } | null>>();
 const fakeSphere = { identity: { chainPubkey: '03' + '11'.repeat(32) }, resolve: resolveMock };
 
 vi.mock('../../../../src/sdk/payments', () => ({
@@ -212,8 +213,24 @@ describe('TokenDataModal — an NFT reading (#785)', () => {
 });
 
 describe('TokenDataModal — the creator (#785)', () => {
-  it('names a verified creator, by nametag once its binding resolves', async () => {
-    resolveMock.mockResolvedValue({ chainPubkey: CREATOR, nametag: 'alice' });
+  const OTHER = '03' + 'cd'.repeat(32);
+
+  /**
+   * A binding as resolve() answers it: the chain key it names, its nametag, and
+   * the key that signed it — by default the named key's own x-only form, which
+   * is how a Sphere wallet signs its binding.
+   */
+  function binding(chainPubkey: string, nametag?: string, signer: string = chainPubkey.slice(2)) {
+    return { chainPubkey, transportPubkey: signer, ...(nametag !== undefined ? { nametag } : {}) };
+  }
+
+  /** resolve() answers from this table: a key's lookup, and `@name` for the name's own binding. */
+  function resolvesTo(answers: Record<string, ReturnType<typeof binding>>) {
+    resolveMock.mockImplementation(async (identifier) => answers[identifier] ?? null);
+  }
+
+  it('names a verified creator, by nametag once its binding resolves both ways', async () => {
+    resolvesTo({ [CREATOR]: binding(CREATOR, 'alice'), '@alice': binding(CREATOR, 'alice') });
     renderModal(view(metadata(), 'valid'));
 
     expect(await screen.findByText('@alice')).toBeTruthy();
@@ -221,6 +238,7 @@ describe('TokenDataModal — the creator (#785)', () => {
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
     expect(screen.getByText('Signed by its creator')).toBeTruthy();
     expect(resolveMock).toHaveBeenCalledWith(CREATOR);
+    expect(resolveMock).toHaveBeenCalledWith('@alice');
   });
 
   it('shows the verified key without a name when no binding resolves', async () => {
@@ -234,7 +252,7 @@ describe('TokenDataModal — the creator (#785)', () => {
   });
 
   it('takes no name from a resolver answer about a different key', async () => {
-    resolveMock.mockResolvedValue({ chainPubkey: '03' + 'cd'.repeat(32), nametag: 'someone-else' });
+    resolvesTo({ [CREATOR]: binding(OTHER, 'someone-else'), '@someone-else': binding(OTHER, 'someone-else') });
     renderModal(view(metadata(), 'valid'));
 
     expect(await screen.findByText('Creator')).toBeTruthy();
@@ -244,8 +262,71 @@ describe('TokenDataModal — the creator (#785)', () => {
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
   });
 
+  it("takes no name that the key's binding states but the name's own binding gives to another key", async () => {
+    // The lookup by key is answered by the creator's own binding, which names a
+    // nametag registered to someone else: a binding's name is only its publisher's word.
+    resolvesTo({ [CREATOR]: binding(CREATOR, 'unicity'), '@unicity': binding(OTHER, 'unicity') });
+    renderModal(view(metadata(), 'valid'));
+
+    expect(await screen.findByText('Creator')).toBeTruthy();
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith('@unicity'));
+    await settle();
+    expect(screen.queryByText('@unicity')).toBeNull();
+    expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
+    expect(screen.getByText('Signed by its creator')).toBeTruthy();
+  });
+
+  it('takes no name that resolves to no binding of its own', async () => {
+    resolvesTo({ [CREATOR]: binding(CREATOR, 'ghost') });
+    renderModal(view(metadata(), 'valid'));
+
+    expect(await screen.findByText('Creator')).toBeTruthy();
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith('@ghost'));
+    await settle();
+    expect(screen.queryByText('@ghost')).toBeNull();
+  });
+
+  it('takes no name outside the format a nametag is registered in, even when both lookups confirm it', async () => {
+    // An invisible character makes a different name that renders just like "unicity".
+    const lookalike = 'unicity​';
+    resolvesTo({ [CREATOR]: binding(CREATOR, lookalike), [`@${lookalike}`]: binding(CREATOR, lookalike) });
+    renderModal(view(metadata(), 'valid'));
+
+    expect(await screen.findByText('Creator')).toBeTruthy();
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith(CREATOR));
+    await settle();
+    expect(screen.queryByText(/^@unicity/)).toBeNull();
+    expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
+  });
+
+  it('shows a name in its canonical form, and looks up that form', async () => {
+    resolvesTo({ [CREATOR]: binding(CREATOR, ' Alice '), '@alice': binding(CREATOR, 'alice') });
+    renderModal(view(metadata(), 'valid'));
+
+    expect(await screen.findByText('@alice')).toBeTruthy();
+    expect(resolveMock).toHaveBeenCalledWith('@alice');
+  });
+
+  it.each(['by key', 'by name'] as const)(
+    'takes no name when the binding found %s names the creator but was signed by another key',
+    async (which) => {
+      const foreignSigner = 'cd'.repeat(32);
+      resolvesTo({
+        [CREATOR]: binding(CREATOR, 'alice', which === 'by key' ? foreignSigner : undefined),
+        '@alice': binding(CREATOR, 'alice', which === 'by name' ? foreignSigner : undefined),
+      });
+      renderModal(view(metadata(), 'valid'));
+
+      expect(await screen.findByText('Creator')).toBeTruthy();
+      await waitFor(() => expect(resolveMock).toHaveBeenCalledWith(CREATOR));
+      await settle();
+      expect(screen.queryByText('@alice')).toBeNull();
+      expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
+    },
+  );
+
   it("presents an invalid signature's key only as a claim: never resolved, never named, never the creator", async () => {
-    resolveMock.mockResolvedValue({ chainPubkey: CREATOR, nametag: 'alice' });
+    resolvesTo({ [CREATOR]: binding(CREATOR, 'alice'), '@alice': binding(CREATOR, 'alice') });
     renderModal(view(metadata(), 'invalid'));
 
     expect(await screen.findByText('Claimed creator (not verified)')).toBeTruthy();

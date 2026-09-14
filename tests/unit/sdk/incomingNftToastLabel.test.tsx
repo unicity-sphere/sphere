@@ -124,8 +124,11 @@ describe('incoming NFT toast — named by its own metadata (#785)', () => {
     expect(renamed?.transfer?.label).toBe('Cool Cat #7');
     expect(renamed?.message).toBe('@api-4 sent you Cool Cat #7');
     expect(renamed?.transfer?.coinless).toBe(true);
-    // The same notification, replaced — not a second toast stacked on the first.
+    // The same notification, replaced — not a second toast stacked on the first,
+    // and never a fresh one if the first has already been closed.
     expect(renamed?.groupId).toBe(shown?.groupId);
+    expect(renamed?.replaceOnly).toBe(true);
+    expect(shown?.replaceOnly).toBeUndefined();
     // And only for the time the original had left.
     expect(renamed?.duration).toBeGreaterThan(0);
     expect(renamed?.duration).toBeLessThanOrEqual(shown?.duration ?? 0);

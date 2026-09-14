@@ -33,6 +33,8 @@ export const SPHERE_KEYS = {
     all: ['sphere', 'nft'] as const,
     views: (chainPubkey: string, sortedTokenIds: readonly string[]) =>
       ['sphere', 'nft', 'views', chainPubkey, sortedTokenIds] as const,
+    /** Every batch of readings, for every address. */
+    allViews: ['sphere', 'nft', 'views'] as const,
     link: (uri: string, sha256: string) => ['sphere', 'nft', 'link', uri, sha256] as const,
     /** A verified creator key's nametag. Unlike a reading this can change — a binding may be published later. */
     creator: (chainPubkey: string) => ['sphere', 'nft', 'creator', chainPubkey] as const,

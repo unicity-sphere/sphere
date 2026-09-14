@@ -100,8 +100,20 @@ export function ToastContainer() {
   const [toasts, setToasts] = useState<ToastData[]>([]);
   /** Per-toast dismiss timers, so a coalesced update can restart its own. */
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /**
+   * Ids of the toasts in state, kept outside it so a replace-only update can
+   * tell synchronously whether its toast is still up.
+   */
+  const liveIdsRef = useRef(new Set<string>());
 
   const removeToast = useCallback((id: string) => {
+    liveIdsRef.current.delete(id);
+    // A toast closed by hand no longer needs the timer that would have closed it.
+    const timer = timersRef.current.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -112,6 +124,11 @@ export function ToastContainer() {
     // the wallet disappears behind a wall of near-identical toasts; with it the
     // user gets one toast whose amount climbs as the tokens land.
     const id = detail.groupId ?? `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // A replace-only update refines a toast that is still up. Once that toast
+    // has ended — closed by the user or timed out — there is nothing to replace,
+    // and appending would bring back a toast the user already dismissed.
+    if (detail.replaceOnly && !liveIdsRef.current.has(id)) return;
+    liveIdsRef.current.add(id);
     const duration = detail.duration ?? 4000;
     const toast: ToastData = {
       id,

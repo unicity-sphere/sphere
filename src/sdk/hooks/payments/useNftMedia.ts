@@ -18,7 +18,15 @@ export interface UseNftMediaReturn {
   state: NftMediaState;
 }
 
-type LinkedFile = { verified: true; bytes: Uint8Array } | { verified: false };
+/**
+ * What fetching a link came to. `unavailable` is every answer that leaves no
+ * file to check: an HTTP error, a file over the size cap, a body that broke off.
+ */
+type LinkedFile =
+  | { verified: true; bytes: Uint8Array }
+  | { verified: false; reason: 'mismatch' | 'unavailable' };
+
+const UNAVAILABLE: LinkedFile = { verified: false, reason: 'unavailable' };
 
 function tooLarge(): Error {
   return new Error(`Linked file exceeds ${String(MAX_LINKED_MEDIA_BYTES)} bytes`);
@@ -56,12 +64,25 @@ async function readCapped(res: Response): Promise<Uint8Array> {
 
 async function fetchLinkedFile(link: NftLink, url: string, signal: AbortSignal): Promise<LinkedFile> {
   // No cookies and no referrer: the host of an attacker-chosen link learns
-  // nothing about which wallet is looking.
+  // nothing about which wallet is looking. This throws only when the host never
+  // answered — nothing was downloaded, so a later view may ask again.
   const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache', signal });
-  if (!res.ok) throw new Error(`Linked file request failed: HTTP ${String(res.status)}`);
-  if (Number(res.headers.get('content-length')) > MAX_LINKED_MEDIA_BYTES) throw tooLarge();
-  const bytes = await readCapped(res);
-  return verifyNftLinkContent(link, bytes) ? { verified: true, bytes } : { verified: false };
+  // Once the host has answered, its answer is the outcome: returned, not thrown,
+  // so it is cached like a match. A thrown refusal would be retried, and fetched
+  // again by every remount and every other view of the link — each time costing
+  // up to the size cap, from a host the NFT's sender chose.
+  try {
+    if (!res.ok || Number(res.headers.get('content-length')) > MAX_LINKED_MEDIA_BYTES) {
+      res.body?.cancel().catch(() => {});
+      return UNAVAILABLE;
+    }
+    const bytes = await readCapped(res);
+    return verifyNftLinkContent(link, bytes) ? { verified: true, bytes } : { verified: false, reason: 'mismatch' };
+  } catch (err) {
+    // Cancelled because nothing shows the link any more: that says nothing about the file.
+    if (signal.aborted) throw err;
+    return UNAVAILABLE;
+  }
 }
 
 /**
@@ -106,12 +127,14 @@ export function useNftMedia(ref: NftMediaRef | null): UseNftMediaReturn {
   }, [bytes, mediaType]);
   const url = objectUrl && objectUrl.bytes === bytes && objectUrl.type === mediaType ? objectUrl.url : null;
 
+  const refusal = link && linked.data?.verified === false ? linked.data.reason : null;
+
   let state: NftMediaState;
   if (!ref) state = 'none';
   else if (!renderable || (ref.kind === 'link' && linkUrl === null)) state = 'unsupported';
   else if (url) state = 'ready';
-  else if (link && linked.isError) state = 'error';
-  else if (link && linked.data?.verified === false) state = 'mismatch';
+  else if (link && (linked.isError || refusal === 'unavailable')) state = 'error';
+  else if (refusal === 'mismatch') state = 'mismatch';
   else state = 'loading';
 
   return { url, mediaType, state };

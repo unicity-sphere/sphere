@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { isValidNametag, normalizeNametag } from '@unicitylabs/sphere-sdk';
 import type { NftAttribute, NftSignatureStatus, NftView } from '@unicitylabs/sphere-sdk';
 import { CheckCircle2, Copy, ExternalLink, ShieldAlert, ShieldCheck, ShieldQuestionMark } from 'lucide-react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
@@ -18,6 +19,23 @@ interface NftDetailsProps {
 
 const LABEL = 'text-xs text-neutral-400';
 
+/** The fields of a resolved identity binding that say whose it is. */
+interface BindingKeys {
+  readonly chainPubkey: string;
+  readonly transportPubkey: string;
+}
+
+/**
+ * Whether a resolved binding is `creator`'s own: it names that key, and it was
+ * signed by that key. A Sphere wallet signs its binding with the x-only form of
+ * its chain key; the key named inside a binding is only its publisher's word.
+ */
+function isBindingOf(peer: BindingKeys | null, creator: string): boolean {
+  if (!peer) return false;
+  const key = creator.toLowerCase();
+  return peer.chainPubkey.toLowerCase() === key && peer.transportPubkey.toLowerCase() === key.slice(2);
+}
+
 /** The creator key's nametag from its identity binding. Best effort: the key shows either way. */
 function useCreatorNametag(creator: string): string | null {
   const { sphere } = useSphereContext();
@@ -25,10 +43,19 @@ function useCreatorNametag(creator: string): string | null {
     queryKey: SPHERE_KEYS.nft.creator(creator),
     queryFn: async () => {
       if (!sphere) return null;
-      const peer = await sphere.resolve(creator);
-      // An answer about any other key would put someone else's name on this token.
-      if (!peer || peer.chainPubkey.toLowerCase() !== creator.toLowerCase()) return null;
-      return peer.nametag ?? null;
+      // A lookup by KEY returns whatever name its binding states, and a binding
+      // can state a name its publisher does not own. A name has a single owner
+      // only on the lookup by NAME, so the name counts only when its own binding
+      // points back at this key — and both bindings were signed by the key itself.
+      const byKey = await sphere.resolve(creator);
+      if (!byKey?.nametag || !isBindingOf(byKey, creator)) return null;
+      // Canonical, and only in the format a nametag is registered in: a name
+      // that merely renders like another — an invisible character, say — is a
+      // different name, and whoever published it may well own it.
+      const nametag = normalizeNametag(byKey.nametag);
+      if (!isValidNametag(nametag)) return null;
+      const byName = await sphere.resolve(`@${nametag}`);
+      return isBindingOf(byName, creator) ? nametag : null;
     },
     enabled: !!sphere && isChainPubkey(creator),
     // Unlike the reading, a binding can appear later.

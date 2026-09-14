@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -203,5 +203,99 @@ describe('useNftMedia — linked media', () => {
 
     expect(result.current.state).toBe('unsupported');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useNftMedia — a link whose host answered is fetched once', () => {
+  // The app's own retry policy (src/lib/queryClient.ts), with no delay so a
+  // retry is counted rather than waited for.
+  function appClient() {
+    return new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+  }
+
+  function mountWith(client: QueryClient, ref: NftMediaRef) {
+    return renderHook(() => useNftMedia(ref), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+  }
+
+  // Long enough for a mount to have started a fetch, had one been due.
+  async function settle() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+
+  const pastTheCap = () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(MAX_LINKED_MEDIA_BYTES));
+          controller.enqueue(new Uint8Array(1));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+
+  const brokenOff = () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(PNG);
+          controller.error(new TypeError('network error'));
+        },
+      }),
+      { status: 200 },
+    );
+
+  it.each([
+    [
+      'declares a size over the cap',
+      () => new Response(PNG, { status: 200, headers: { 'content-length': String(MAX_LINKED_MEDIA_BYTES + 1) } }),
+      'error',
+    ],
+    ['streams past the cap', pastTheCap, 'error'],
+    ['answers with an HTTP error', () => new Response('unavailable', { status: 503 }), 'error'],
+    ['breaks off mid-body', brokenOff, 'error'],
+    ['serves bytes that do not match the fingerprint', () => new Response(GIF, { status: 200 }), 'mismatch'],
+  ] as const)(
+    'fetches a link whose host %s once — not again on retry, remount or a second view',
+    async (_how, respond, state) => {
+      fetchMock.mockImplementation(async () => respond());
+      const client = appClient();
+
+      const first = mountWith(client, link());
+      await waitFor(() => expect(first.result.current.state).toBe(state));
+      first.unmount();
+
+      // The Tokens tab opened again, and the same NFT's detail view beside it.
+      const row = mountWith(client, link());
+      const detail = mountWith(client, link());
+      await settle();
+
+      expect(row.result.current.state).toBe(state);
+      expect(detail.result.current.state).toBe(state);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(createObjectURL).not.toHaveBeenCalled();
+    },
+  );
+
+  it('asks again on a later view when the host never answered — nothing was downloaded', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    const client = appClient();
+
+    const first = mountWith(client, link());
+    await waitFor(() => expect(first.result.current.state).toBe('error'));
+    const asked = fetchMock.mock.calls.length;
+    first.unmount();
+
+    fetchMock.mockResolvedValue(new Response(PNG, { status: 200 }));
+    const again = mountWith(client, link());
+
+    await waitFor(() => expect(again.result.current.state).toBe('ready'));
+    expect(fetchMock.mock.calls.length).toBe(asked + 1);
   });
 });

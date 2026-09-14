@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { NftView } from '@unicitylabs/sphere-sdk';
 import { getPayments } from '../../payments';
@@ -12,8 +13,11 @@ export interface UseNftsReturn {
 
 const EMPTY: ReadonlyMap<string, NftView> = new Map();
 
+/** How long a failed read waits before it is tried again, for as long as it stays on screen. */
+export const NFT_READ_RETRY_MS = 30_000;
+
 interface NftReadings {
-  /** The address these readings were read for — placeholder data never crosses addresses. */
+  /** The address these readings were read for — earlier readings never cross addresses. */
   chainPubkey: string;
   views: ReadonlyMap<string, NftView>;
 }
@@ -48,7 +52,20 @@ export function useNfts(tokenIds: readonly string[]): UseNftsReturn {
     // on screen while the new set loads — a reading never changes for a token id — so
     // rows do not flash back to registry names. Never across addresses.
     placeholderData: (previous) => (previous?.chainPubkey === chainPubkey ? previous : undefined),
+    // With staleTime Infinity nothing reads a failed batch again while its view stays
+    // mounted, and the wallet view stays mounted for the whole session. So a failed
+    // batch is tried again on a slow timer until it succeeds; useSphereEvents also
+    // retries it as soon as the inventory changes or the connection recovers.
+    refetchInterval: (q) => (q.state.status === 'error' ? NFT_READ_RETRY_MS : false),
   });
 
-  return { views: query.data?.views ?? EMPTY, isLoading: query.isLoading };
+  // The readings this address last actually got. placeholderData covers a batch
+  // that is still loading, not one that failed: a failed batch falls back to these,
+  // so one failed read cannot strip rows of the names, previews and signature pills
+  // they already showed. Never across addresses.
+  const [lastRead, setLastRead] = useState<NftReadings | null>(null);
+  if (query.data !== undefined && !query.isPlaceholderData && query.data !== lastRead) setLastRead(query.data);
+  const fallback = query.isError && lastRead?.chainPubkey === chainPubkey ? lastRead.views : undefined;
+
+  return { views: query.data?.views ?? fallback ?? EMPTY, isLoading: query.isLoading };
 }

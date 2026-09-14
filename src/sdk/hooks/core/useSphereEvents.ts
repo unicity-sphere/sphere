@@ -123,9 +123,12 @@ export function useSphereEvents(): void {
         pendingNftLabelsRef.current.delete(groupKey);
         const remaining = INCOMING_TOAST_MS - (Date.now() - pending.shownAt);
         if (view.content.kind !== 'metadata' || remaining <= 0) return;
-        // Same groupId, so it replaces the toast in place — for its remaining
-        // time only, so a rename never outlives the toast it renames.
-        showTransferToast({ ...pending.toast, label: view.content.name }, remaining, groupKey);
+        // Same groupId and replace-only: it renames the toast in place while that
+        // toast is still up, for its remaining time only. A toast the user closed
+        // stays closed, and a rename never outlives the toast it renames.
+        showTransferToast({ ...pending.toast, label: view.content.name }, remaining, groupKey, {
+          replaceOnly: true,
+        });
       } catch {
         // Keep the class name.
       }
@@ -284,13 +287,30 @@ export function useSphereEvents(): void {
       sendWelcomeDM(sphere);
     };
 
+    // NFT readings sit under nft.*, outside what invalidatePayments touches, with
+    // staleTime Infinity — so a failed batch is otherwise only retried on
+    // useNfts' slow timer. Read it again as soon as there is reason to expect it
+    // to succeed. Failed batches only: a reading never changes for a token id.
+    const retryFailedNftReads = () => {
+      queryClient.invalidateQueries({
+        queryKey: SPHERE_KEYS.nft.allViews,
+        predicate: (query) => query.state.status === 'error',
+      });
+    };
+
     // inventory:updated replaces sync:completed / sync:remote-update — the
     // wallet-api inventory mirror changed, re-read tokens()/assets().
     const handleInventoryUpdated = () => {
       diag('event:inventory:updated');
       invalidatePayments();
+      retryFailedNftReads();
       // The view nfts() reads may now hold a token announced before it did.
       for (const [groupKey, pending] of pendingNftLabelsRef.current) void relabelNftToast(groupKey, pending);
+    };
+
+    // The wallet-api session is back: a read that failed while it was not may now succeed.
+    const handleConnectionStatus = (data: { status: 'connected' | 'degraded' | 'offline' }) => {
+      if (data.status === 'connected') retryFailedNftReads();
     };
 
     // Bridge incoming SDK DMs to lightweight custom event + query invalidation
@@ -396,6 +416,7 @@ export function useSphereEvents(): void {
     sphere.on('nametag:recovered', handleNametagChange);
     sphere.on('identity:changed', handleIdentityChange);
     sphere.on('inventory:updated', handleInventoryUpdated);
+    sphere.on('connection:status', handleConnectionStatus);
     sphere.on('message:dm', handleDmReceived);
     sphere.on('message:read', handleMessageRead);
     sphere.on('composing:started', handleComposingStarted);
@@ -418,6 +439,7 @@ export function useSphereEvents(): void {
       sphere.off('nametag:recovered', handleNametagChange);
       sphere.off('identity:changed', handleIdentityChange);
       sphere.off('inventory:updated', handleInventoryUpdated);
+      sphere.off('connection:status', handleConnectionStatus);
       sphere.off('message:dm', handleDmReceived);
       sphere.off('message:read', handleMessageRead);
       sphere.off('composing:started', handleComposingStarted);

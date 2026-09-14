@@ -34,6 +34,12 @@ export interface ShowToastDetail {
    * one event per token.
    */
   groupId?: string;
+  /**
+   * Only update the toast with this `groupId` while it is still up; show
+   * nothing once it has ended. For a follow-up that refines a toast already
+   * shown: a toast the user closed, or whose time ran out, stays gone.
+   */
+  replaceOnly?: boolean;
 }
 
 export interface ShowToastOptions {
@@ -72,13 +78,25 @@ export function showToast(
   );
 }
 
-export function showTransferToast(transfer: TransferToastData, duration = 6000, groupId?: string) {
+export function showTransferToast(
+  transfer: TransferToastData,
+  duration = 6000,
+  groupId?: string,
+  options?: { replaceOnly?: boolean },
+) {
   const message = transfer.coinless
     ? `${transfer.sender} sent you ${transfer.label ?? 'an NFT'}`
     : `${transfer.sender} sent you ${transfer.amount} ${transfer.symbol}`;
   window.dispatchEvent(
     new CustomEvent<ShowToastDetail>('show-toast', {
-      detail: { message, type: 'success', duration, transfer, ...(groupId !== undefined ? { groupId } : {}) },
+      detail: {
+        message,
+        type: 'success',
+        duration,
+        transfer,
+        ...(groupId !== undefined ? { groupId } : {}),
+        ...(options?.replaceOnly ? { replaceOnly: true } : {}),
+      },
     })
   );
 }
