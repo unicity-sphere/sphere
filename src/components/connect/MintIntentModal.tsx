@@ -98,10 +98,12 @@ export function MintIntentModal({ intentId, coinId, amount, subscriptionKeyReady
       if (result.success) {
         resolveIntent(intentId, { tokenId: result.tokenId, coinId, amount });
       } else if (result.tokenId !== undefined) {
-        // Journaled before it failed: the wallet resumes it, so it may still complete.
+        // Journaled before it failed: the wallet resumes it, so it may still complete. The
+        // outcome is unknown, and only that code forbids the dApp to ask again — a retry
+        // could mint twice. The token id lets it reconcile.
         rejectIntent(
           intentId,
-          ERROR_CODES.INTERNAL_ERROR,
+          ERROR_CODES.INTENT_OUTCOME_UNKNOWN,
           journaledMintMessage(result.tokenId, result.error),
           { tokenId: result.tokenId },
         );

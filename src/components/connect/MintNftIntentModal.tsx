@@ -159,10 +159,12 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
       if (result.success && result.tokenId !== undefined) {
         resolveIntent(intentId, { tokenId: result.tokenId });
       } else if (result.tokenId !== undefined) {
-        // Journaled before it failed: the wallet resumes it, so it may still complete.
+        // Journaled before it failed: the wallet resumes it, so it may still complete. The
+        // outcome is unknown, and only that code forbids the dApp to ask again — a retry
+        // would mint a second NFT. The token id lets it reconcile.
         rejectIntent(
           intentId,
-          ERROR_CODES.INTERNAL_ERROR,
+          ERROR_CODES.INTENT_OUTCOME_UNKNOWN,
           journaledNftMintMessage(result.tokenId, result.error),
           { tokenId: result.tokenId },
         );

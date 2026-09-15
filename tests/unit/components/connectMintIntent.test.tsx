@@ -109,7 +109,7 @@ describe('mint intent — the outcome', () => {
     expect(rejectIntent).not.toHaveBeenCalled();
   });
 
-  it('a journaled failure says the mint may still complete, and names the token id in the message and the data', async () => {
+  it('a journaled failure is an unknown outcome that may still complete, naming the token id in the message and the data', async () => {
     mocks.mint.mockResolvedValue({ success: false, tokenId: TOKEN_ID, error: 'gateway timeout' });
     render(<ConnectIntentHandler />);
 
@@ -118,7 +118,8 @@ describe('mint intent — the outcome', () => {
     await waitFor(() => expect(rejectIntent).toHaveBeenCalledTimes(1));
     const [id, code, message, data] = rejectIntent.mock.calls[0]!;
     expect(id).toBe(INTENT_ID);
-    expect(code).toBe(ERROR_CODES.INTERNAL_ERROR);
+    // The one code that forbids the dApp to ask again: the wallet resumes this mint.
+    expect(code).toBe(ERROR_CODES.INTENT_OUTCOME_UNKNOWN);
     expect(message).toMatch(/may still complete/);
     expect(message).toContain(TOKEN_ID);
     expect(message).toContain('gateway timeout');
