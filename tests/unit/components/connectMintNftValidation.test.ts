@@ -23,12 +23,13 @@ function metadata(overrides: Partial<NftMetadata> = {}): NftMetadata {
     external_url: null,
     attributes: [{ trait_type: 'Eyes', value: 'green' }],
     collection: 'Cats',
+    collection_id: null,
     ...overrides,
   };
 }
 
-function wireMetadata(): WireNftMetadata {
-  return nftContentToWire(metadata()) as WireNftMetadata;
+function wireMetadata(overrides: Partial<NftMetadata> = {}): WireNftMetadata {
+  return nftContentToWire(metadata(overrides)) as WireNftMetadata;
 }
 
 describe('mint_nft intent validation', () => {
@@ -46,6 +47,23 @@ describe('mint_nft intent validation', () => {
 
     expect(check.error).toBeNull();
     expect(check.mintNft?.sign).toBe(false);
+  });
+
+  it('hands on a claimed collection_id as it was sent', () => {
+    const check = checkIntent('mint_nft', { content: wireMetadata({ collection_id: 'c0ffee' }) });
+
+    expect(check.error).toBeNull();
+    expect(check.mintNft?.content).toEqual(metadata({ collection_id: 'c0ffee' }));
+  });
+
+  it('refuses metadata without collection_id, with INVALID_PARAMS naming the field — an absent field is null, never omitted', () => {
+    const content: Record<string, unknown> = { ...wireMetadata() };
+    delete content.collection_id;
+    const check = checkIntent('mint_nft', { content });
+
+    expect(check.error?.code).toBe(ERROR_CODES.INVALID_PARAMS);
+    expect(check.error?.message).toContain('content.collection_id');
+    expect(check.mintNft).toBeNull();
   });
 
   it('refuses a missing content with INVALID_PARAMS naming the field', () => {

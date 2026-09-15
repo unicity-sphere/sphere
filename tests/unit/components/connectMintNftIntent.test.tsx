@@ -5,19 +5,21 @@
  * and a mint that failed after it was journaled tells the dApp it may still
  * complete, with the token id to reconcile against.
  *
- * Runs the real handler, the real NFT preview and the real media hook; the wallet,
- * the subscription guard and the Connect context are fakes.
+ * Runs the real handler, the real NFT preview and the real media and document
+ * hooks; the wallet, the subscription guard and the Connect context are fakes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
 import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
 import { ERROR_CODES, nftContentFromWire, nftContentToWire } from '@unicitylabs/sphere-sdk/connect';
+import { NFT_DOCUMENT_MEDIA_TYPE, encodeNftContent } from '@unicitylabs/sphere-sdk';
 import type { NftLink, NftMetadata } from '@unicitylabs/sphere-sdk';
 import type { MintNftRequest, MintResult } from '@unicitylabs/sphere-sdk/payments-v2';
 import type { PendingIntent } from '../../../src/components/connect/ConnectContext';
+import { truncateId } from '../../../src/utils/identifiers';
 
 const mocks = vi.hoisted(() => ({
   mintNft: vi.fn<(request: MintNftRequest) => Promise<MintResult>>(),
@@ -72,6 +74,9 @@ const INTENT_ID = 11;
 const ORIGIN = 'https://memes.example';
 const SIGNED_LINE = 'You will be its creator — signed with your wallet key';
 const UNSIGNED_LINE = 'Unsigned — anyone could mint an identical token';
+const VALID_SIGNATURE_LINE = 'Signed by this key — it attributes the item to its signer, not to a collection';
+const COLLECTION_ID = 'c0ffee' + '00'.repeat(10) + 'beef';
+const DOCUMENT_URI = 'https://memes.example/cat.cbor';
 
 function metadata(overrides: Partial<NftMetadata> = {}): NftMetadata {
   return {
@@ -83,8 +88,13 @@ function metadata(overrides: Partial<NftMetadata> = {}): NftMetadata {
     external_url: null,
     attributes: [{ trait_type: 'Eyes', value: 'green' }],
     collection: 'Cats',
+    collection_id: null,
     ...overrides,
   };
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 function hostedImage(): NftLink {
@@ -92,8 +102,20 @@ function hostedImage(): NftLink {
     kind: 'link',
     media_type: 'image/png',
     uri: 'https://example.com/cat.png',
-    sha256: createHash('sha256').update(PNG).digest('hex'),
+    sha256: sha256Hex(PNG),
   };
+}
+
+/** A hosted metadata document: its own name, collection, claimed collection id and inline image. */
+const DOCUMENT = encodeNftContent(metadata({ name: 'Doc Cat #1', collection: 'Doc Cats', collection_id: COLLECTION_ID }));
+
+/** A document link pinned to `pinned`'s fingerprint. */
+function documentLink(pinned: Uint8Array = DOCUMENT): NftLink {
+  return { kind: 'link', media_type: NFT_DOCUMENT_MEDIA_TYPE, uri: DOCUMENT_URI, sha256: sha256Hex(pinned) };
+}
+
+function served(bytes: Uint8Array): Response {
+  return new Response(new Uint8Array(bytes), { status: 200 });
 }
 
 function mintNftIntent(params: Record<string, unknown>): PendingIntent {
@@ -166,8 +188,8 @@ describe('mint_nft intent — what the user is shown', () => {
 
     expect(screen.getByText(SIGNED_LINE)).toBeTruthy();
     expect(screen.queryByText(UNSIGNED_LINE)).toBeNull();
-    expect(screen.queryByText('Signed by its creator')).toBeNull();
-    expect(screen.queryByText(/Creator/)).toBeNull();
+    expect(screen.queryByText(VALID_SIGNATURE_LINE)).toBeNull();
+    expect(screen.queryByText(/Creator|Signer/)).toBeNull();
   });
 
   it('says an unsigned mint is unsigned', () => {
@@ -234,6 +256,113 @@ describe('mint_nft intent — what the user is shown', () => {
       expect.stringContaining('content.bytes'),
     );
     expect(screen.queryByText('Mint NFT')).toBeNull();
+  });
+
+  it('refuses metadata without collection_id before any modal, with INVALID_PARAMS naming the field', () => {
+    const content: Record<string, unknown> = { ...nftContentToWire(metadata()) };
+    delete content.collection_id;
+    pendingIntent = mintNftIntent({ content });
+    renderHandler();
+
+    expect(rejectIntent).toHaveBeenCalledWith(
+      INTENT_ID,
+      ERROR_CODES.INVALID_PARAMS,
+      expect.stringContaining('content.collection_id'),
+    );
+    expect(screen.queryByText('Mint NFT')).toBeNull();
+    expect(mocks.mintNft).not.toHaveBeenCalled();
+  });
+});
+
+describe('mint_nft intent — a claimed collection and a hosted metadata document (#785)', () => {
+  it("shows a claimed collection_id shortened, captioned as the item's claim", () => {
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ collection_id: COLLECTION_ID })) });
+    renderHandler();
+
+    const preview = screen.getByTestId('nft-mint-preview');
+    expect(within(preview).getByText('Collection ID')).toBeTruthy();
+    expect(within(preview).getByText(truncateId(COLLECTION_ID)).getAttribute('title')).toBe(COLLECTION_ID);
+    expect(within(preview).getByText('Claimed by the item — not verified')).toBeTruthy();
+  });
+
+  it('shows no collection id, and no caption, for an item that claims none', () => {
+    renderHandler();
+
+    expect(screen.getByText('Cool Cat #7')).toBeTruthy();
+    expect(screen.queryByText('Collection ID')).toBeNull();
+    expect(screen.queryByText('Claimed by the item — not verified')).toBeNull();
+  });
+
+  it('previews the document a link resolves to — name and image — and still mints the link itself', async () => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    mocks.mintNft.mockResolvedValue({ success: true, tokenId: TOKEN_ID });
+    const link = documentLink();
+    pendingIntent = mintNftIntent({ content: nftContentToWire(link) });
+    renderHandler();
+
+    const preview = screen.getByTestId('nft-mint-preview');
+    expect(await within(preview).findByRole('heading', { name: 'Doc Cat #1' })).toBeTruthy();
+    await waitFor(() => expect(within(preview).getByAltText('Doc Cat #1').getAttribute('src')).toBe('blob:nft-1'));
+    expect(within(preview).getByText('Doc Cats')).toBeTruthy();
+    expect(within(preview).getByText('Claimed by the item — not verified')).toBeTruthy();
+    expect(
+      within(preview).getByText(`Metadata hosted at ${DOCUMENT_URI}, checked against its fingerprint`),
+    ).toBeTruthy();
+    // Fetched under the linked-media policy, exactly as the token detail view fetches it.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      DOCUMENT_URI,
+      expect.objectContaining({ credentials: 'omit', referrerPolicy: 'no-referrer' }),
+    );
+    // The signing line is the intent's `sign`, never anything the document says.
+    expect(screen.getByText(SIGNED_LINE)).toBeTruthy();
+    expect(screen.queryByText(VALID_SIGNATURE_LINE)).toBeNull();
+
+    await clickMint();
+    await waitFor(() => expect(resolveIntent).toHaveBeenCalledWith(INTENT_ID, { tokenId: TOKEN_ID }));
+    // What is minted — and signed — is the dApp's content: the link pinning the document.
+    expect(mocks.mintNft.mock.calls[0]![0].content).toEqual(link);
+  });
+
+  it('says a hosted document minted unsigned is unsigned, whatever the document holds', async () => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()), sign: false });
+    renderHandler();
+
+    expect(await screen.findByRole('heading', { name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.getByText(UNSIGNED_LINE)).toBeTruthy();
+    expect(screen.queryByText(SIGNED_LINE)).toBeNull();
+  });
+
+  it('keeps the preview a fixed-height scroll box while the document loads, and after', async () => {
+    let answer!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+    renderHandler();
+
+    const preview = screen.getByTestId('nft-mint-preview');
+    const fixedBox = ['h-80', 'overflow-y-auto'];
+    expect(within(preview).getByRole('status', { name: 'Loading metadata' })).toBeTruthy();
+    expect(fixedBox.every((name) => preview.classList.contains(name))).toBe(true);
+
+    await act(async () => answer(served(DOCUMENT)));
+    expect(await within(preview).findByRole('heading', { name: 'Doc Cat #1' })).toBeTruthy();
+
+    expect(screen.getByTestId('nft-mint-preview')).toBe(preview);
+    expect(fixedBox.every((name) => preview.classList.contains(name))).toBe(true);
+  });
+
+  it('shows nothing of a document that does not match its fingerprint and says so — the signing line is still the intent’s', async () => {
+    fetchMock.mockImplementation(async () => served(GIF));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()), sign: false });
+    renderHandler();
+
+    expect(await screen.findByText('Metadata does not match its fingerprint — not shown')).toBeTruthy();
+    expect(screen.queryByText('Doc Cat #1')).toBeNull();
+    expect(screen.queryByText(/Metadata hosted at/)).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByText(UNSIGNED_LINE)).toBeTruthy();
+    expect(screen.queryByText(SIGNED_LINE)).toBeNull();
   });
 });
 

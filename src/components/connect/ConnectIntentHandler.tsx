@@ -13,7 +13,7 @@ import {
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
-import { NftContentDetails } from '../wallet/shared/nft/NftDetails';
+import { NftResolvedContentDetails } from '../wallet/shared/nft/NftDetails';
 import { SendIntentModal } from './SendIntentModal';
 import { PaymentRequestIntentModal } from './PaymentRequestIntentModal';
 import { checkIntent } from './intentValidation';
@@ -600,15 +600,18 @@ export function ConnectIntentHandler() {
           </div>
 
           {/* The NFT views are drawn for a dark panel (TokenDataModal's), so the
-              preview keeps one in both themes. Its height is FIXED: media loads on the
-              dApp's timing, often after the settle shield drops, and a preview that grew
-              would move Mint under a cursor aimed at Cancel. Taller content scrolls. */}
+              preview keeps one in both themes. Its height is FIXED: media — and a hosted
+              metadata document — loads on the dApp's timing, often after the settle shield
+              drops, and a preview that grew would move Mint under a cursor aimed at Cancel.
+              Taller content scrolls. A document link is fetched and checked exactly as the
+              token detail view does; what is minted, and signed, is still the dApp's
+              content — the link that pins the document. */}
           <section
             aria-label="NFT preview"
             data-testid="nft-mint-preview"
             className="mb-4 h-80 space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-neutral-900 p-4 text-white"
           >
-            <NftContentDetails content={request.content} fallbackTitle="NFT" />
+            <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
           </section>
 
           <MintSignLine sign={request.sign} />
