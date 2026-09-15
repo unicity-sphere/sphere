@@ -7,7 +7,7 @@ import { QuotaBlockedError } from '../../../../sdk/quotaGate';
 
 export interface WholeTokenTarget {
   tokenId: string;
-  /** Row label — an NFT's class name, or a coin token's symbol. */
+  /** Row label — an NFT's own name (else its class name), or a coin token's symbol. Minter-chosen for an NFT: render as text. */
   label: string;
   /** True for a coinless row: routes to the verb that refuses a valued source. */
   coinless: boolean;
@@ -141,7 +141,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
                       ? 'Sent — delivery still pending'
                       : 'Sent'}
                 </p>
-                <p className="text-sm text-neutral-400">
+                <p className="text-sm break-words text-neutral-400">
                   {keepOpen
                     ? 'It will finish on its own. Do not send it again.'
                     : `${target.label} is on its way.`}

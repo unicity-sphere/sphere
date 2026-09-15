@@ -20,6 +20,11 @@ interface PaymentRequestIntentModalProps {
   onReject: (message: string) => void;
   /** Called when the user cancels (rejects the intent). */
   onCancel: () => void;
+  /**
+   * Whether the intent is still waited for. False once it settled — answered, or dropped
+   * because its host stopped waiting — even before this modal unmounts.
+   */
+  isPending: () => boolean;
 }
 
 /**
@@ -38,6 +43,7 @@ export function PaymentRequestIntentModal({
   onResolve,
   onReject,
   onCancel,
+  isPending,
 }: PaymentRequestIntentModalProps) {
   const { sphere } = useSphereContext();
   const [busy, setBusy] = useState(false);
@@ -51,6 +57,9 @@ export function PaymentRequestIntentModal({
   const displayAmount = formatAmount(amount, { decimals, symbol, maxFractionDigits: 8 });
 
   const handleSend = async () => {
+    // Settled already — the host stopped waiting and answered the dApp itself — though
+    // this modal has not unmounted yet: a request sent now is one the dApp may send again.
+    if (!isPending()) return;
     const payments = getPayments(sphere);
     if (!payments) {
       onReject('Wallet not available');

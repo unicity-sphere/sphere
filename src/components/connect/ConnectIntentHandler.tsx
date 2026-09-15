@@ -1,12 +1,19 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { getPayments } from '../../sdk/payments';
-import { MessageSquare, PenLine, Coins, Inbox, AlertTriangle } from 'lucide-react';
+import {
+  MessageSquare,
+  PenLine,
+  Inbox,
+  AlertTriangle,
+} from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
+import { MintIntentModal } from './MintIntentModal';
+import { MintNftIntentModal } from './MintNftIntentModal';
 import { SendIntentModal } from './SendIntentModal';
 import { PaymentRequestIntentModal } from './PaymentRequestIntentModal';
-import { validateIntent } from './intentValidation';
+import { checkIntent } from './intentValidation';
 import { useConnectContext} from './ConnectContext';
 import { useSendDM } from '../../sdk/hooks/comms/useSendDM';
 import { getErrorMessage } from '../../sdk/errors';
@@ -22,7 +29,7 @@ import { truncateId } from '../../utils/identifiers';
 
 
 export function ConnectIntentHandler() {
-  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
+  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield, isIntentPending } =
     useConnectContext();
   const { sphere } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
@@ -30,8 +37,6 @@ export function ConnectIntentHandler() {
   const [dmError, setDmError] = useState<string | null>(null);
   const [autoApproveDM, setAutoApproveDM] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
-  const [mintError, setMintError] = useState<string | null>(null);
-  const [isMinting, setIsMinting] = useState(false);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [isReceiving, setIsReceiving] = useState(false);
   // Money-safety gate for `send` — see duplicateSendGuard.ts for the invariant.
@@ -41,13 +46,18 @@ export function ConnectIntentHandler() {
   // Validate/normalize params up front: reject malformed or unsupported intents
   // cleanly (INVALID_PARAMS / METHOD_NOT_FOUND) instead of opening a modal that
   // silently hangs (unresolved coinId) or crashes (missing sign_message body).
-  // Runs once per pending intent.
+  // Checked ONCE per pending intent: a `mint_nft` intent carries its content as
+  // base64 of up to ~1 MB, and checking it decodes it. That decoded content is
+  // what the preview renders and what gets minted, so no re-render decodes again.
+  const checked = useMemo(
+    () => (pendingIntent ? checkIntent(pendingIntent.action, pendingIntent.params) : null),
+    [pendingIntent],
+  );
   useEffect(() => {
-    if (!pendingIntent) return;
-    const error = validateIntent(pendingIntent.action, pendingIntent.params);
-    if (error) rejectIntent(pendingIntent.id, error.code, error.message);
+    if (!pendingIntent || !checked?.error) return;
+    rejectIntent(pendingIntent.id, checked.error.code, checked.error.message);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingIntent]);
+  }, [pendingIntent, checked]);
 
   // THE INVARIANT (ConnectContext.armIntentShield): the §8.4 settle window
   // measures from the moment actionable UI is PRESENTED. Every modal below
@@ -63,7 +73,7 @@ export function ConnectIntentHandler() {
     pendingIntent !== null &&
     pendingIntent.action === 'send' &&
     duplicateSend.status !== 'checking' &&
-    validateIntent(pendingIntent.action, pendingIntent.params) === null
+    checked?.error === null
       ? `${pendingIntent.id}:${duplicateSend.status}`
       : null;
 
@@ -88,7 +98,7 @@ export function ConnectIntentHandler() {
   const { action, params } = pendingIntent;
 
   // Malformed / unsupported intents are rejected by the effect above — render nothing.
-  if (validateIntent(action, params)) return null;
+  if (!checked || checked.error) return null;
 
   const handleClose = () => {
     rejectIntent(intentId, ERROR_CODES.USER_REJECTED, 'User cancelled');
@@ -200,6 +210,7 @@ export function ConnectIntentHandler() {
         }
         onReject={(message) => rejectIntent(intentId, ERROR_CODES.TRANSFER_FAILED, message)}
         onCancel={handleClose}
+        isPending={() => isIntentPending(intentId)}
       />
     );
   }
@@ -215,6 +226,7 @@ export function ConnectIntentHandler() {
         onResolve={(requestId) => resolveIntent(intentId, { success: true, requestId })}
         onReject={(message) => rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, message)}
         onCancel={handleClose}
+        isPending={() => isIntentPending(intentId)}
       />
     );
   }
@@ -225,6 +237,9 @@ export function ConnectIntentHandler() {
     const message = params.message as string;
 
     const handleSendDM = async () => {
+      // Settled already — the host stopped waiting and answered the dApp itself — though
+      // this modal has not unmounted yet: a DM sent now is one the dApp may send again.
+      if (!isIntentPending(intentId)) return;
       setDmError(null);
       try {
         const dm = await sendDM({ recipient: to, content: message });
@@ -323,6 +338,9 @@ export function ConnectIntentHandler() {
     const displayDomain = domainMatch ? domainMatch[1].trim() : null;
 
     const handleSign = () => {
+      // Settled already — the host stopped waiting and answered the dApp itself — though
+      // this modal has not unmounted yet: no signature is made for it.
+      if (!isIntentPending(intentId)) return;
       setSignError(null);
       if (!sphere) {
         setSignError('Wallet not available');
@@ -374,110 +392,37 @@ export function ConnectIntentHandler() {
 
   // --- Mint Intent: self-mint a fungible token to the user's own wallet ---
   if (action === 'mint') {
-    const coinId = params.coinId as string;
-    const amount = params.amount as string;
-
-    const handleMint = async () => {
-      setMintError(null);
-      const payments = getPayments(sphere);
-      if (!payments) {
-        setMintError('Wallet not available');
-        return;
-      }
-      // Validate params before touching the engine (fail fast with INVALID_PARAMS).
-      if (typeof coinId !== 'string' || !/^([0-9a-f]{2})+$/.test(coinId)) {
-        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'coinId must be lowercase even-length hex');
-        return;
-      }
-      let amountBig: bigint;
-      try {
-        amountBig = BigInt(amount);
-      } catch {
-        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'amount must be an integer string');
-        return;
-      }
-      if (amountBig <= 0n) {
-        rejectIntent(intentId, ERROR_CODES.INVALID_PARAMS, 'amount must be greater than zero');
-        return;
-      }
-      // Mint is a certification_request — refuse until the subscription key is on
-      // the oracle (else it 401s in the provisioning window). Reject gracefully.
-      if (!subscriptionKeyReady) {
-        rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, 'Subscription is still being set up — try again in a moment');
-        return;
-      }
-
-      setIsMinting(true);
-      try {
-        const result = await payments.mint(coinId, amountBig);
-        if (result.success) {
-          resolveIntent(intentId, { tokenId: result.tokenId, coinId, amount });
-        } else {
-          rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, result.error ?? 'Mint failed');
-        }
-      } catch (err) {
-        setMintError(getErrorMessage(err));
-      } finally {
-        setIsMinting(false);
-      }
-    };
-
-    // Resolve registry metadata for a friendlier confirmation (icon + symbol +
-    // human-readable amount), falling back to the raw values when the coin is
-    // unknown. Display-only — the actual mint uses the raw coinId/amount.
-    const registry = TokenRegistry.getInstance();
-    const def = typeof coinId === 'string' ? registry.getDefinition(coinId) : undefined;
-    const iconUrl = def ? registry.getIconUrl(coinId) : null;
-    const displayAmount =
-      def?.symbol && def.decimals != null && /^\d+$/.test(String(amount))
-        ? formatAmount(amount, { decimals: def.decimals, symbol: def.symbol, maxFractionDigits: 8 })
-        : null;
-
+    // Its own component, keyed by the intent: its one-mint guard holds for exactly one intent.
     return (
-      <BaseModal isOpen={true} onClose={handleClose}>
-        <ModalHeader title="Mint Tokens" icon={Coins} onClose={handleClose} />
+      <MintIntentModal
+        key={intentId}
+        intentId={intentId}
+        coinId={params.coinId as string}
+        amount={params.amount as string}
+        subscriptionKeyReady={subscriptionKeyReady}
+        onCancel={handleClose}
+      />
+    );
+  }
 
-        <div className="px-6 py-5 flex-1 flex flex-col justify-center">
-          <div className="bg-neutral-100 dark:bg-neutral-900 rounded-2xl p-5 mb-5 border border-neutral-200 dark:border-white/10">
-            <div className="text-sm text-neutral-500 mb-4">
-              This dApp is asking to mint tokens{' '}
-              <span className="text-neutral-900 dark:text-white font-medium">to your own wallet</span>.
-            </div>
-
-            <div className="flex items-center gap-3 mb-3">
-              {iconUrl && (
-                <img src={iconUrl} alt="" className="w-9 h-9 rounded-full shrink-0" />
-              )}
-              <span className="text-2xl font-semibold text-neutral-900 dark:text-white break-all">
-                {displayAmount ?? amount}
-              </span>
-            </div>
-
-            <div className="text-[11px] text-neutral-400 break-all">
-              <span className="text-neutral-500 dark:text-neutral-400">Coin ID:</span>{' '}
-              <span className="font-mono">{coinId}</span>
-              {!def && (
-                <div className="mt-1 text-amber-600 dark:text-amber-500">
-                  Unrecognized coin — verify the ID before approving
-                </div>
-              )}
-            </div>
-          </div>
-
-          {mintError && (
-            <div className="text-red-500 text-sm mb-3 text-center">{mintError}</div>
-          )}
-
-          <div className="flex gap-3">
-            <Button variant="secondary" fullWidth onClick={handleClose} disabled={isMinting}>
-              Cancel
-            </Button>
-            <Button variant="primary" fullWidth disabled={isMinting} onClick={handleMint}>
-              {isMinting ? 'Minting…' : 'Mint'}
-            </Button>
-          </div>
-        </div>
-      </BaseModal>
+  // --- Mint NFT Intent: mint ONE dApp-described NFT to the user's own wallet ---
+  // Asked every time, never auto-approved: nothing here calls registerAutoIntent,
+  // and ConnectProvider never consults its auto-approve map for this action. The
+  // content is the dApp's and, by default, is signed with the user's key as its
+  // creator — so the user sees exactly what will be minted before it is.
+  if (action === 'mint_nft' && checked.mintNft) {
+    // Its own component, keyed by the intent: the preview's queries live only where
+    // an NFT is previewed, and the one-mint guard and the settle-shield arming inside
+    // it hold for exactly one intent each.
+    return (
+      <MintNftIntentModal
+        key={intentId}
+        intentId={intentId}
+        origin={pendingIntent.origin}
+        request={checked.mintNft}
+        subscriptionKeyReady={subscriptionKeyReady}
+        onCancel={handleClose}
+      />
     );
   }
 

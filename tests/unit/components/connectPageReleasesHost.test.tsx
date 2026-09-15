@@ -19,6 +19,7 @@ const hostMock = vi.hoisted(() => ({
 const ctxMock = vi.hoisted(() => ({
   attachHost: vi.fn(),
   releaseHost: vi.fn(),
+  requestIntent: vi.fn(),
 }));
 
 vi.mock('@unicitylabs/sphere-sdk/connect', () => ({
@@ -56,7 +57,7 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
 vi.mock('../../../src/components/connect/ConnectContext', () => ({
   useConnectContext: () => ({
     requestApproval: vi.fn(),
-    requestIntent: vi.fn(),
+    requestIntent: ctxMock.requestIntent,
     noteLockedRequest: vi.fn(),
     attachHost: ctxMock.attachHost,
     releaseHost: ctxMock.releaseHost,
@@ -80,6 +81,7 @@ beforeEach(() => {
   hostMock.configs.length = 0;
   ctxMock.attachHost.mockClear();
   ctxMock.releaseHost.mockClear();
+  ctxMock.requestIntent.mockClear();
   // ConnectPage refuses to run without an opener (ConnectPage.tsx:86-90).
   Object.defineProperty(window, 'opener', { value: {}, configurable: true, writable: true });
 });
@@ -115,5 +117,28 @@ describe('ConnectPage host registration', () => {
 
     expect(host.revokeSession).toHaveBeenCalledTimes(1);
     expect(ctxMock.releaseHost).toHaveBeenCalledWith(host);
+  });
+});
+
+describe('ConnectPage intents', () => {
+  it("hands the host's abort signal to the intent queue, so an intent the host stops waiting for is dropped", () => {
+    renderPage();
+    const onIntent = hostMock.configs[0]!.onIntent as (
+      action: string,
+      params: Record<string, unknown>,
+      session: unknown,
+      ctx: { signal: AbortSignal },
+    ) => unknown;
+    const controller = new AbortController();
+
+    void onIntent('mint_nft', { content: {} }, {}, { signal: controller.signal });
+
+    expect(ctxMock.requestIntent).toHaveBeenCalledWith(
+      hostMock.instances[0],
+      'https://dapp.example',
+      'mint_nft',
+      { content: {} },
+      controller.signal,
+    );
   });
 });

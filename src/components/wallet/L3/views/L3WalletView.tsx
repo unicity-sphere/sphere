@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useCoinlessTokens } from '../../../../sdk';
+import { useIdentity, useAssets, useTokens, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
@@ -163,6 +163,12 @@ export function L3WalletView({
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
   const { coinless } = useCoinlessTokens();
+  const [activeTab, setActiveTab] = useState<Tab>('assets');
+  // NFT readings for the coinless rows (#785), read only while the Tokens tab shows them:
+  // each is a genesis payload to fetch and decode, and a large collection must not cost
+  // that before any NFT row is on screen. A token's genesis payload never changes, so the
+  // map keeps its identity until the set of held ids does.
+  const { views: nftViews } = useNfts(activeTab === 'tokens' ? coinless.map((t) => t.tokenId) : []);
   const { sphere, deleteWallet } = useSphereContext();
 
   const assets = sdkAssets;
@@ -170,7 +176,6 @@ export function L3WalletView({
   const tokens = sdkTokens;
   const sendableTokens = tokens;
 
-  const [activeTab, setActiveTab] = useState<Tab>('assets');
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);
@@ -184,11 +189,13 @@ export function L3WalletView({
   // Both rows send the SAME way — one named token, moved whole, never split.
   // They differ only in which verb: the NFT row uses the coinless-scoped one,
   // which refuses a valued source, so a mislabelled row fails loudly rather
-  // than quietly moving coins.
-  const handleSendCoinless = useCallback((t: CoinlessToken) => {
+  // than quietly moving coins. The label is the row's own title — a hosted
+  // metadata document's name once resolved — so the dialog names the token
+  // exactly as the row the user clicked did.
+  const handleSendCoinless = useCallback((t: CoinlessToken, title: string) => {
     setSendTarget({
       tokenId: t.tokenId,
-      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      label: title,
       coinless: true,
     });
   }, []);
@@ -198,16 +205,17 @@ export function L3WalletView({
   }, []);
 
   // Both kinds inspect the same way — one call reads whatever the minter wrote.
-  const handleInspectCoinless = useCallback((t: CoinlessToken) => {
+  const handleInspectCoinless = useCallback((t: CoinlessToken, title: string) => {
     setInspectTarget({
       tokenId: t.tokenId,
-      label: t.name || (t.tokenType ? `Type ${t.tokenType.slice(0, 8)}…` : 'Unknown type'),
+      label: title,
+      kind: 'coinless',
       ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
     });
   }, []);
 
   const handleInspectCoinToken = useCallback((t: Token) => {
-    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });
+    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token', kind: 'coin' });
   }, []);
 
   // Track previous token/asset IDs to detect truly new items
@@ -468,6 +476,7 @@ export function L3WalletView({
                           <CoinlessTokenRow
                             key={token.tokenId}
                             token={token}
+                            nft={nftViews.get(token.tokenId)}
                             delay={index * 0.05}
                             isNew={false}
                             onSend={handleSendCoinless}

@@ -188,3 +188,86 @@ describe('settling an intent is keyed by ID, never by queue position', () => {
     expect(bob).toBeUndefined();
   });
 });
+
+describe('mint_nft is asked every time, and a refusal can carry data to the dApp', () => {
+  it('never answers mint_nft from an auto-approve grant — the intent reaches the modal', async () => {
+    // Minting an NFT signs dApp-chosen content as the user; no grant may stand in for the prompt.
+    const auto = vi.fn(async () => ({ result: { tokenId: 'forged' } }));
+    renderProvider();
+    act(() => {
+      ctx!.attachHost(hostA, 'https://a.example');
+      ctx!.registerAutoIntent(hostA, 'mint_nft', auto);
+    });
+
+    let answer: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { answer = r; });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('mint_nft'));
+    expect(auto).not.toHaveBeenCalled();
+    expect(answer).toBeUndefined();
+  });
+
+  it("relays a rejection's data with its error, and adds no data field when there is none", async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+
+    let journaled: unknown;
+    let refused: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { journaled = r; });
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { refused = r; });
+    });
+
+    act(() =>
+      ctx!.rejectIntent(ctx!.pendingIntent!.id, ERROR_CODES.INTERNAL_ERROR, 'may still complete', { tokenId: 'ab' }),
+    );
+    await waitFor(() =>
+      expect(journaled).toEqual({
+        error: { code: ERROR_CODES.INTERNAL_ERROR, message: 'may still complete', data: { tokenId: 'ab' } },
+      }),
+    );
+
+    act(() => ctx!.rejectIntent(ctx!.pendingIntent!.id, ERROR_CODES.INTERNAL_ERROR, 'refused'));
+    await waitFor(() => expect(refused).toBeDefined());
+    expect(Object.keys((refused as { error: object }).error)).toEqual(['code', 'message']);
+  });
+
+  it('drops an intent its host stops waiting for: the modal moves on, and the intent is no longer pending', async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+    const controller = new AbortController();
+    let answer: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}, controller.signal).then((r) => { answer = r; });
+      void ctx!.requestIntent(hostA, 'https://a.example', 'dm', {});
+    });
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('mint_nft'));
+    const id = ctx!.pendingIntent!.id;
+    expect(ctx!.isIntentPending(id)).toBe(true);
+
+    act(() => controller.abort());
+
+    // Synchronously: a click landing before the re-render must already see it gone.
+    expect(ctx!.isIntentPending(id)).toBe(false);
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('dm'));
+    await waitFor(() =>
+      expect(answer).toEqual({ error: expect.objectContaining({ code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN }) }),
+    );
+  });
+
+  it('never queues an intent whose host has already stopped waiting', async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+    const controller = new AbortController();
+    controller.abort();
+
+    const answer = await act(async () =>
+      ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}, controller.signal),
+    );
+
+    expect(answer).toEqual({ error: expect.objectContaining({ code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN }) });
+    expect(screen.getByTestId('head').textContent).toBe('none');
+  });
+});

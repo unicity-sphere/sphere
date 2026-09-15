@@ -24,6 +24,11 @@ interface SendIntentModalProps {
   onReject: (message: string) => void;
   /** Called when the user cancels (rejects the intent). */
   onCancel: () => void;
+  /**
+   * Whether the intent is still waited for. False once it settled — answered, or dropped
+   * because its host stopped waiting — even before this modal unmounts.
+   */
+  isPending: () => boolean;
 }
 
 /**
@@ -34,7 +39,7 @@ interface SendIntentModalProps {
  * to render a human-readable figure for review. A failed transfer rejects the
  * intent (the dApp is told) rather than leaving it hanging.
  */
-export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject, onCancel }: SendIntentModalProps) {
+export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject, onCancel, isPending }: SendIntentModalProps) {
   const { assets } = useAssets();
   const { transfer } = useTransfer();
   const { openUpgrade } = useUpgrade();
@@ -57,6 +62,9 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
   const displayAmount = formatAmount(amount, { decimals, symbol, maxFractionDigits: 8 });
 
   const handleSend = async () => {
+    // Settled already — the host stopped waiting and answered the dApp itself — though
+    // this modal has not unmounted yet: a transfer now is a payment the dApp may send again.
+    if (!isPending()) return;
     setBusy(true);
     try {
       // Shared with the duplicate-send guard, so the identifier this modal

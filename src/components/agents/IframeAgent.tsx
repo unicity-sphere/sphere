@@ -220,8 +220,10 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       // after a human clicks it (graceful lock §8.3). Pass the origin WE verified,
       // not ctx.origin, even though the host echoes the same value back.
       onLockedRequest: (ctx) => noteLockedRequestRef.current(origin, ctx),
-      onIntent: (action, params) =>
-        requestIntentRef.current(hostRef.current!, origin, action, params),
+      // The host's signal aborts once it stops waiting for the intent; the queue then
+      // drops the intent and its modal, as the SDK requires.
+      onIntent: (action, params, _session, ctx) =>
+        requestIntentRef.current(hostRef.current!, origin, action, params, ctx?.signal),
     });
     hostRef.current = host;
     attachHost(host, origin);

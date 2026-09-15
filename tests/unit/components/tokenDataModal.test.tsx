@@ -13,8 +13,8 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
 
 import { TokenDataModal, type TokenDataTarget } from '../../../src/components/wallet/L3/modals/TokenDataModal';
 
-const NFT: TokenDataTarget = { tokenId: 'aa'.repeat(32), label: 'Cool Cat', tokenType: 'bb'.repeat(32) };
-const COIN: TokenDataTarget = { tokenId: 'cc'.repeat(32), label: 'UCT' };
+const NFT: TokenDataTarget = { tokenId: 'aa'.repeat(32), label: 'Cool Cat', kind: 'coinless', tokenType: 'bb'.repeat(32) };
+const COIN: TokenDataTarget = { tokenId: 'cc'.repeat(32), label: 'UCT', kind: 'coin' };
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
