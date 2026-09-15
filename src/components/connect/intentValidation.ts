@@ -70,9 +70,36 @@ function isWireRecord(value: unknown): value is WireRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** At least a text field's UTF-8 size: every UTF-16 code unit takes at least one byte. */
+/**
+ * A text field's size once UTF-8 encoded, counted without copying it. Counting UTF-16
+ * code units instead would let multibyte text past the limit: 400,000 CJK characters
+ * are 1.2 MB of UTF-8. A lone surrogate encodes as U+FFFD, three bytes. Stops counting
+ * once over the limit — past it the exact figure no longer matters.
+ */
 function textBytes(value: unknown): number {
-  return typeof value === 'string' ? value.length : 0;
+  if (typeof value !== 'string') return 0;
+  // Every code unit takes at least one byte.
+  if (value.length > NFT_MAX_PAYLOAD_BYTES) return value.length;
+  let bytes = 0;
+  for (let i = 0; i < value.length && bytes <= NFT_MAX_PAYLOAD_BYTES; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4; // a surrogate pair: one code point beyond the BMP
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 /** What a hex field decodes to. */
@@ -96,8 +123,9 @@ function mediaRefBytes(ref: unknown): number {
 }
 
 /**
- * A LOWER bound on the size of wire NFT content once encoded, read from string
- * lengths only — nothing is decoded or copied. The encoded payload is larger still
+ * A LOWER bound on the size of wire NFT content once encoded, read from the fields as
+ * they are — text counted in UTF-8 bytes, base64 and hex by what they decode to,
+ * nothing decoded or copied. The encoded payload is larger still
  * (CBOR framing, and the NftSigned wrapper when signed), so content over
  * NFT_MAX_PAYLOAD_BYTES by this count is over it for certain: `payments.mintNft`
  * would refuse it. Only the fields of the declared kind count, so a malformed shape

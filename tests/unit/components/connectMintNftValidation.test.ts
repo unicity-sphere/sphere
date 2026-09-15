@@ -158,6 +158,40 @@ describe('mint_nft intent validation — the payload limit, before decoding', ()
     expect(nftContentFromWire).not.toHaveBeenCalled();
   });
 
+  it('counts text in UTF-8 bytes: multibyte text over the limit is refused, though it has fewer characters', () => {
+    // Three UTF-8 bytes each, one UTF-16 code unit each.
+    const description = '界'.repeat(Math.floor(NFT_MAX_PAYLOAD_BYTES / 3) + 1);
+    expect(description.length).toBeLessThan(NFT_MAX_PAYLOAD_BYTES);
+    const check = checkIntent('mint_nft', { content: { ...wireMetadata(), description } });
+
+    expect(check.error?.code).toBe(ERROR_CODES.INVALID_PARAMS);
+    expect(nftContentFromWire).not.toHaveBeenCalled();
+  });
+
+  it('counts a character beyond the BMP — a surrogate pair — as its four UTF-8 bytes', () => {
+    // Accepted at 4 bytes each (it would not be at 6, counting each half alone)...
+    const under = '😺'.repeat(Math.floor(NFT_MAX_PAYLOAD_BYTES / 5));
+    expect(checkIntent('mint_nft', { content: { ...wireMetadata(), description: under } }).error).toBeNull();
+
+    // ...and refused once 4 bytes each is over the limit, though it has fewer code units.
+    vi.mocked(nftContentFromWire).mockClear();
+    const over = '😺'.repeat(Math.floor(NFT_MAX_PAYLOAD_BYTES / 4) + 1);
+    expect(over.length).toBeLessThan(NFT_MAX_PAYLOAD_BYTES);
+    expect(checkIntent('mint_nft', { content: { ...wireMetadata(), description: over } }).error?.code).toBe(
+      ERROR_CODES.INVALID_PARAMS,
+    );
+    expect(nftContentFromWire).not.toHaveBeenCalled();
+  });
+
+  it('counts two-byte text as two bytes each, not a worst case: text under the limit is still decoded', () => {
+    // Refused if every code unit counted as three bytes.
+    const description = 'é'.repeat(Math.floor(NFT_MAX_PAYLOAD_BYTES / 3) + 1);
+    const check = checkIntent('mint_nft', { content: { ...wireMetadata(), description } });
+
+    expect(check.error).toBeNull();
+    expect(nftContentFromWire).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves a malformed shape to the decoder, whose refusal names the field', () => {
     const check = checkIntent('mint_nft', { content: { kind: 'media', media_type: MEDIA_TYPE, bytes: 12345 } });
 
