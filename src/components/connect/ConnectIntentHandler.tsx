@@ -29,7 +29,7 @@ import { truncateId } from '../../utils/identifiers';
 
 
 export function ConnectIntentHandler() {
-  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
+  const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield, isIntentPending } =
     useConnectContext();
   const { sphere } = useSphereContext();
   const { ready: subscriptionKeyReady } = useSubscriptionKeyGuard();
@@ -210,6 +210,7 @@ export function ConnectIntentHandler() {
         }
         onReject={(message) => rejectIntent(intentId, ERROR_CODES.TRANSFER_FAILED, message)}
         onCancel={handleClose}
+        isPending={() => isIntentPending(intentId)}
       />
     );
   }
@@ -225,6 +226,7 @@ export function ConnectIntentHandler() {
         onResolve={(requestId) => resolveIntent(intentId, { success: true, requestId })}
         onReject={(message) => rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, message)}
         onCancel={handleClose}
+        isPending={() => isIntentPending(intentId)}
       />
     );
   }
@@ -235,6 +237,9 @@ export function ConnectIntentHandler() {
     const message = params.message as string;
 
     const handleSendDM = async () => {
+      // Settled already — the host stopped waiting and answered the dApp itself — though
+      // this modal has not unmounted yet: a DM sent now is one the dApp may send again.
+      if (!isIntentPending(intentId)) return;
       setDmError(null);
       try {
         const dm = await sendDM({ recipient: to, content: message });
@@ -333,6 +338,9 @@ export function ConnectIntentHandler() {
     const displayDomain = domainMatch ? domainMatch[1].trim() : null;
 
     const handleSign = () => {
+      // Settled already — the host stopped waiting and answered the dApp itself — though
+      // this modal has not unmounted yet: no signature is made for it.
+      if (!isIntentPending(intentId)) return;
       setSignError(null);
       if (!sphere) {
         setSignError('Wallet not available');

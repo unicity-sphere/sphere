@@ -100,6 +100,7 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
     rejectIntent,
     registerAutoIntent: vi.fn(),
     armIntentShield,
+    isIntentPending: () => true,
   }),
 }));
 
