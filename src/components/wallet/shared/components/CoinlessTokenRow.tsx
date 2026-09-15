@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import type { CoinlessToken, NftView } from '@unicitylabs/sphere-sdk';
 import { Image as ImageIcon, Copy, CheckCircle2, Loader2, Send, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useState, memo } from 'react';
+import { useResolvedNftContent } from '../../../../sdk/hooks/payments/useNftDocument';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { NftMediaView } from '../nft/NftMediaView';
 import { nftThumbnailRef, nftTitle } from '../nft/nftDisplay';
@@ -12,9 +13,13 @@ interface CoinlessTokenRowProps {
   nft?: NftView;
   delay: number;
   isNew?: boolean;
-  onSend?: (token: CoinlessToken) => void;
-  /** Open the raw genesis payload. Omit to render the row uninspectable. */
-  onInspect?: (token: CoinlessToken) => void;
+  /**
+   * `title` is the name the row shows at that moment — a hosted metadata document's
+   * once it has resolved — so what opens names the token exactly as the row did.
+   */
+  onSend?: (token: CoinlessToken, title: string) => void;
+  /** Open the raw genesis payload. Omit to render the row uninspectable. `title` as for onSend. */
+  onInspect?: (token: CoinlessToken, title: string) => void;
 }
 
 // Every field the render branches on must be compared here, or a change to it
@@ -47,7 +52,9 @@ const PILL = 'text-[10px] font-bold px-2 py-0.5 rounded-md';
  * to its type and stays fully usable.
  *
  * An NFT reading's name, collection and media are attacker-chosen: they render
- * as plain text, and media only through NftMediaView's checks.
+ * as plain text, and media only through NftMediaView's checks. A reading that
+ * links a hosted metadata document takes them from the document once it has
+ * resolved; until then, and if it never does, the row shows what it would without.
  */
 export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   token,
@@ -58,6 +65,13 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   onInspect,
 }: CoinlessTokenRowProps) {
   const [copied, setCopied] = useState(false);
+  // What the reading shows: its own content, or its metadata document's item.
+  // Only content — the signature pills below always read the token itself.
+  const { content } = useResolvedNftContent(nft?.content);
+
+  const title = nftTitle(token, content);
+  const thumbnail = nftThumbnailRef(content);
+  const collection = content?.kind === 'metadata' ? content.collection : null;
 
   const handleCopyId = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -72,20 +86,16 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
     (onInspect ? ' cursor-pointer' : '');
   const rowProps = onInspect
     ? {
-        onClick: () => { onInspect(token); },
+        onClick: () => { onInspect(token, title); },
         role: 'button' as const,
         tabIndex: 0,
         onKeyDown: (e: React.KeyboardEvent) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect(token); }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect(token, title); }
         },
       }
     : {};
 
-  const title = nftTitle(token, nft);
-  const thumbnail = nftThumbnailRef(nft);
-  const collection = nft?.content.kind === 'metadata' ? nft.content.collection : null;
-
-  const content = (
+  const rowContent = (
     <div className="flex items-center justify-between gap-2">
       {/* min-w-0 down to the text: a long NFT name truncates instead of pushing the actions off the row. */}
       <div className="flex items-center gap-3 min-w-0">
@@ -127,7 +137,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onSend(token);
+              onSend(token, title);
             }}
             aria-label="Send this token"
             title="Send this token"
@@ -138,12 +148,17 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
         )}
         <div className="flex flex-col items-end gap-1">
           <div className="flex items-center gap-1">
-            {/* The creator's signature binds this token's id, so a copy of someone
-                else's NFT cannot carry a valid one. Unsigned claims nothing. */}
+            {/* The signature binds this token's id, so a copy of someone else's NFT
+                cannot carry a valid one. A valid one attributes the item to the key
+                that signed it and no more: it is no proof of collection membership.
+                Unsigned claims nothing. */}
             {nft?.signature === 'valid' && (
-              <span className={`${PILL} bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 flex items-center gap-1`}>
+              <span
+                title="Signed by the key shown in its details. This does not prove it belongs to a collection."
+                className={`${PILL} bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 flex items-center gap-1`}
+              >
                 <ShieldCheck className="w-2.5 h-2.5" />
-                Verified
+                Signed
               </span>
             )}
             {nft?.signature === 'invalid' && (
@@ -175,7 +190,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   );
 
   if (!isNew) {
-    return <div className={className} {...rowProps}>{content}</div>;
+    return <div className={className} {...rowProps}>{rowContent}</div>;
   }
 
   return (
@@ -186,7 +201,7 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
       className={className}
       {...rowProps}
     >
-      {content}
+      {rowContent}
     </motion.div>
   );
 }, areEqual);

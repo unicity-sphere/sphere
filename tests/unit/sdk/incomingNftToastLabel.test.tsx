@@ -59,6 +59,7 @@ const named = (name: string): NftContent => ({
   external_url: null,
   attributes: [],
   collection: null,
+  collection_id: null,
 });
 
 const reading = (content: NftContent, tokenId = TOKEN_ID): NftView => ({

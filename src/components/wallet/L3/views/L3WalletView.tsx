@@ -15,7 +15,6 @@ import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
 import { TokenDataModal, type TokenDataTarget } from '../modals/TokenDataModal';
 import { tokensTabView } from './tokensTabView';
-import { nftTitle } from '../../shared/nft/nftDisplay';
 import { SwapModal } from '../modals/SwapModal';
 import { PaymentRequestsModal } from '../modals/PaymentRequestModal';
 import { TopUpModal } from '../modals/TopUpModal';
@@ -188,27 +187,29 @@ export function L3WalletView({
   // Both rows send the SAME way — one named token, moved whole, never split.
   // They differ only in which verb: the NFT row uses the coinless-scoped one,
   // which refuses a valued source, so a mislabelled row fails loudly rather
-  // than quietly moving coins.
-  const handleSendCoinless = useCallback((t: CoinlessToken) => {
+  // than quietly moving coins. The label is the row's own title — a hosted
+  // metadata document's name once resolved — so the dialog names the token
+  // exactly as the row the user clicked did.
+  const handleSendCoinless = useCallback((t: CoinlessToken, title: string) => {
     setSendTarget({
       tokenId: t.tokenId,
-      label: nftTitle(t, nftViews.get(t.tokenId)),
+      label: title,
       coinless: true,
     });
-  }, [nftViews]);
+  }, []);
 
   const handleSendCoinToken = useCallback((t: Token) => {
     setSendTarget({ tokenId: t.id, label: t.symbol || 'Token', coinless: false });
   }, []);
 
   // Both kinds inspect the same way — one call reads whatever the minter wrote.
-  const handleInspectCoinless = useCallback((t: CoinlessToken) => {
+  const handleInspectCoinless = useCallback((t: CoinlessToken, title: string) => {
     setInspectTarget({
       tokenId: t.tokenId,
-      label: nftTitle(t, nftViews.get(t.tokenId)),
+      label: title,
       ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
     });
-  }, [nftViews]);
+  }, []);
 
   const handleInspectCoinToken = useCallback((t: Token) => {
     setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });

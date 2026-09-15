@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
-import type { NftContent, NftMetadata, NftSignatureStatus, NftView } from '@unicitylabs/sphere-sdk';
+import { NFT_DOCUMENT_MEDIA_TYPE, encodeNftContent } from '@unicitylabs/sphere-sdk';
+import type { NftContent, NftLink, NftMetadata, NftSignatureStatus, NftView } from '@unicitylabs/sphere-sdk';
 
 /**
  * The token detail view given an NFT reading (#785). Every string in a reading
  * is chosen by whoever minted the token, and its creator key is only a claim
- * unless the signature over this token verifies.
+ * unless the signature over this token verifies — and even then the signature
+ * attributes the item to its signer, nothing more.
  */
 
 const tokenDataMock = vi.fn<(tokenId: string) => Promise<Uint8Array | null>>();
 const nftsMock = vi.fn<(tokenIds: readonly string[]) => Promise<ReadonlyMap<string, NftView>>>();
 const resolveMock =
   vi.fn<(identifier: string) => Promise<{ chainPubkey: string; transportPubkey: string; nametag?: string } | null>>();
+const copyMock = vi.fn<(text: string) => Promise<boolean>>();
 const fakeSphere = { identity: { chainPubkey: '03' + '11'.repeat(32) }, resolve: resolveMock };
 
 vi.mock('../../../../src/sdk/payments', () => ({
@@ -21,6 +25,9 @@ vi.mock('../../../../src/sdk/payments', () => ({
 }));
 vi.mock('../../../../src/sdk/hooks/core/useSphere', () => ({
   useSphereContext: () => ({ sphere: fakeSphere }),
+}));
+vi.mock('../../../../src/utils/copyToClipboard', () => ({
+  copyToClipboard: (text: string) => copyMock(text),
 }));
 
 import { TokenDataModal, type TokenDataTarget } from '../../../../src/components/wallet/L3/modals/TokenDataModal';
@@ -31,6 +38,9 @@ const TARGET: TokenDataTarget = { tokenId: TOKEN_ID, label: 'Cats', tokenType: '
 const COIN: TokenDataTarget = { tokenId: 'cc'.repeat(32), label: 'UCT' };
 const CREATOR = '02' + 'ab'.repeat(32);
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const VALID_LINE = 'Signed by this key — it attributes the item to its signer, not to a collection';
+const COLLECTION_ID = 'c0ffee' + '00'.repeat(10) + 'beef';
+const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
 
 function metadata(over: Partial<NftMetadata> = {}): NftMetadata {
   return {
@@ -42,6 +52,7 @@ function metadata(over: Partial<NftMetadata> = {}): NftMetadata {
     external_url: null,
     attributes: [],
     collection: null,
+    collection_id: null,
     ...over,
   };
 }
@@ -62,6 +73,31 @@ function renderModal(nft: NftView | null, target: TokenDataTarget = TARGET) {
   return render(<TokenDataModal target={target} onClose={vi.fn()} />, { wrapper: makeWrapper() });
 }
 
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** A hosted metadata document, and bytes that match their own fingerprint but are no document. */
+const DOCUMENT = encodeNftContent(
+  metadata({
+    name: 'Doc Cat #1',
+    description: 'Hosted, not inline.',
+    image: { kind: 'media', media_type: 'image/png', bytes: PNG },
+    collection: 'Doc Cats',
+    collection_id: COLLECTION_ID,
+  }),
+);
+const NOT_A_DOCUMENT = new Uint8Array([0x63, 0x67, 0x6d, 0x21]);
+
+/** A document link pinned to `pinned`'s fingerprint. */
+function documentLink(pinned: Uint8Array = DOCUMENT): NftLink {
+  return { kind: 'link', media_type: NFT_DOCUMENT_MEDIA_TYPE, uri: `ipfs://${CID}/cat.cbor`, sha256: sha256Hex(pinned) };
+}
+
+function served(bytes: Uint8Array): Response {
+  return new Response(new Uint8Array(bytes), { status: 200 });
+}
+
 let urlSeq = 0;
 const createObjectURL = vi.fn<(obj: Blob | MediaSource) => string>(() => `blob:nft-${String(++urlSeq)}`);
 const revokeObjectURL = vi.fn<(url: string) => void>();
@@ -73,9 +109,11 @@ beforeEach(() => {
   tokenDataMock.mockReset();
   nftsMock.mockReset();
   resolveMock.mockReset();
+  copyMock.mockReset();
   // 0x63 'gm!' — the raw block shows whatever the blob holds.
   tokenDataMock.mockResolvedValue(new Uint8Array([0x63, 0x67, 0x6d, 0x21]));
   resolveMock.mockResolvedValue(null);
+  copyMock.mockResolvedValue(true);
   urlSeq = 0;
   createObjectURL.mockClear();
   revokeObjectURL.mockClear();
@@ -192,7 +230,7 @@ describe('TokenDataModal — an NFT reading (#785)', () => {
 
     await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^blob:nft-/));
     expect(container.querySelector('img')?.getAttribute('alt')).toBe('Cats');
-    expect(screen.getByText('Signed by its creator')).toBeTruthy();
+    expect(screen.getByText(VALID_LINE)).toBeTruthy();
   });
 
   it('plays animation_url alongside the image', async () => {
@@ -212,7 +250,121 @@ describe('TokenDataModal — an NFT reading (#785)', () => {
   });
 });
 
-describe('TokenDataModal — the creator (#785)', () => {
+describe('TokenDataModal — the collection id (#785)', () => {
+  it('shows a claimed collection id shortened, with copy, captioned as a claim', async () => {
+    renderModal(view(metadata({ collection: 'Cool Cats', collection_id: COLLECTION_ID }), 'valid'));
+
+    const label = await screen.findByText('Collection ID');
+    expect(screen.getByText(truncateId(COLLECTION_ID)).getAttribute('title')).toBe(COLLECTION_ID);
+    expect(screen.queryByText(COLLECTION_ID)).toBeNull();
+    expect(screen.getByText('Claimed by the item — not verified')).toBeTruthy();
+
+    fireEvent.click(label.parentElement?.querySelector('button') as HTMLButtonElement);
+    await waitFor(() => expect(copyMock).toHaveBeenCalledWith(COLLECTION_ID));
+  });
+
+  it.each(['valid', 'unsigned'] as const)(
+    'shows no collection id, and no caption, for an item that claims none (%s)',
+    async (signature) => {
+      renderModal(view(metadata({ collection: 'Cool Cats' }), signature));
+
+      await screen.findByRole('heading', { name: 'Cool Cat #7' });
+      expect(screen.queryByText('Collection ID')).toBeNull();
+      expect(screen.queryByText('Claimed by the item — not verified')).toBeNull();
+    },
+  );
+});
+
+describe('TokenDataModal — a hosted metadata document (#785)', () => {
+  const HOSTED_LINE = `Metadata hosted at ipfs://${CID}/cat.cbor, checked against its fingerprint`;
+
+  it('shows the document its link resolves to — name, image and details — and where it is hosted', async () => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    const { container } = renderModal(view(documentLink()));
+
+    expect(await screen.findByRole('heading', { level: 3, name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.getByText('Doc Cats')).toBeTruthy();
+    expect(screen.getByText('Hosted, not inline.')).toBeTruthy();
+    expect(screen.getByText('Claimed by the item — not verified')).toBeTruthy();
+    expect(screen.getByText(HOSTED_LINE)).toBeTruthy();
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^blob:nft-/));
+    expect(container.querySelector('img')?.getAttribute('alt')).toBe('Doc Cat #1');
+    // Named by the document as its row is, not by the registry's class name.
+    expect(screen.getByRole('heading', { level: 2, name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Cats' })).toBeNull();
+    // The heading and the NFT section resolve the same link: fetched once, under the media policy.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`https://ipfs.io/ipfs/${CID}/cat.cbor`);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer' });
+  });
+
+  it('shows the loading placeholder, and nothing of the document, while it is fetched', async () => {
+    fetchMock.mockReturnValue(new Promise<Response>(() => {}));
+    renderModal(view(documentLink()));
+
+    expect(await screen.findByRole('status', { name: 'Loading metadata' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
+    expect(screen.queryByText(HOSTED_LINE)).toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'Cats' })).toBeTruthy();
+    expect(screen.getByText('Unsigned — anyone could mint an identical token')).toBeTruthy();
+  });
+
+  it.each([
+    [
+      'does not match its fingerprint',
+      () => served(NOT_A_DOCUMENT),
+      documentLink(),
+      'Metadata does not match its fingerprint — not shown',
+    ],
+    [
+      'is not a valid NFT document',
+      () => served(NOT_A_DOCUMENT),
+      documentLink(NOT_A_DOCUMENT),
+      'Linked metadata is not a valid NFT document',
+    ],
+  ] as const)('shows nothing from a file that %s, and says so', async (_how, respond, link, caption) => {
+    fetchMock.mockImplementation(async () => respond());
+    const { container } = renderModal(view(link));
+
+    expect(await screen.findByText(caption)).toBeTruthy();
+    expect(screen.queryByRole('status', { name: 'Loading metadata' })).toBeNull();
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
+    expect(screen.queryByText(HOSTED_LINE)).toBeNull();
+    expect(screen.queryByText(/files are not displayed/)).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { level: 2, name: 'Cats' })).toBeTruthy();
+  });
+
+  it("falls back to the token's own content when the document cannot be fetched", async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderModal(view(documentLink()));
+
+    expect(await screen.findByText(`Not shown — ${NFT_DOCUMENT_MEDIA_TYPE} files are not displayed`)).toBeTruthy();
+    expect(screen.queryByText(/does not match its fingerprint|not a valid NFT document/)).toBeNull();
+    expect(screen.queryByRole('status', { name: 'Loading metadata' })).toBeNull();
+    expect(screen.queryByText(HOSTED_LINE)).toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'Cats' })).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['valid', VALID_LINE],
+    ['invalid', 'Creator signature does not verify — this may be a copy'],
+    ['unsigned', 'Unsigned — anyone could mint an identical token'],
+  ] as const)('takes the signature status from the token (%s), never from the document', async (signature, line) => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    renderModal(view(documentLink(), signature));
+
+    expect(await screen.findByRole('heading', { level: 3, name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.getByText(line)).toBeTruthy();
+    expect(screen.getAllByText(/^(Signed by this key|Creator signature does not verify|Unsigned —)/)).toHaveLength(1);
+    expect(screen.queryByText('Signer') !== null).toBe(signature === 'valid');
+    expect(screen.queryByText('Claimed creator (not verified)') !== null).toBe(signature === 'invalid');
+  });
+});
+
+describe('TokenDataModal — the signer (#785)', () => {
   const OTHER = '03' + 'cd'.repeat(32);
 
   /**
@@ -229,22 +381,22 @@ describe('TokenDataModal — the creator (#785)', () => {
     resolveMock.mockImplementation(async (identifier) => answers[identifier] ?? null);
   }
 
-  it('names a verified creator, by nametag once its binding resolves both ways', async () => {
+  it('names the signer of a valid signature, by nametag once its binding resolves both ways', async () => {
     resolvesTo({ [CREATOR]: binding(CREATOR, 'alice'), '@alice': binding(CREATOR, 'alice') });
     renderModal(view(metadata(), 'valid'));
 
     expect(await screen.findByText('@alice')).toBeTruthy();
-    expect(screen.getByText('Creator')).toBeTruthy();
+    expect(screen.getByText('Signer')).toBeTruthy();
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
-    expect(screen.getByText('Signed by its creator')).toBeTruthy();
+    expect(screen.getByText(VALID_LINE)).toBeTruthy();
     expect(resolveMock).toHaveBeenCalledWith(CREATOR);
     expect(resolveMock).toHaveBeenCalledWith('@alice');
   });
 
-  it('shows the verified key without a name when no binding resolves', async () => {
+  it("shows the signer's key without a name when no binding resolves", async () => {
     renderModal(view(metadata(), 'valid'));
 
-    expect(await screen.findByText('Creator')).toBeTruthy();
+    expect(await screen.findByText('Signer')).toBeTruthy();
     await waitFor(() => expect(resolveMock).toHaveBeenCalled());
     await settle();
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
@@ -255,7 +407,7 @@ describe('TokenDataModal — the creator (#785)', () => {
     resolvesTo({ [CREATOR]: binding(OTHER, 'someone-else'), '@someone-else': binding(OTHER, 'someone-else') });
     renderModal(view(metadata(), 'valid'));
 
-    expect(await screen.findByText('Creator')).toBeTruthy();
+    expect(await screen.findByText('Signer')).toBeTruthy();
     await waitFor(() => expect(resolveMock).toHaveBeenCalled());
     await settle();
     expect(screen.queryByText('@someone-else')).toBeNull();
@@ -268,19 +420,19 @@ describe('TokenDataModal — the creator (#785)', () => {
     resolvesTo({ [CREATOR]: binding(CREATOR, 'unicity'), '@unicity': binding(OTHER, 'unicity') });
     renderModal(view(metadata(), 'valid'));
 
-    expect(await screen.findByText('Creator')).toBeTruthy();
+    expect(await screen.findByText('Signer')).toBeTruthy();
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith('@unicity'));
     await settle();
     expect(screen.queryByText('@unicity')).toBeNull();
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
-    expect(screen.getByText('Signed by its creator')).toBeTruthy();
+    expect(screen.getByText(VALID_LINE)).toBeTruthy();
   });
 
   it('takes no name that resolves to no binding of its own', async () => {
     resolvesTo({ [CREATOR]: binding(CREATOR, 'ghost') });
     renderModal(view(metadata(), 'valid'));
 
-    expect(await screen.findByText('Creator')).toBeTruthy();
+    expect(await screen.findByText('Signer')).toBeTruthy();
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith('@ghost'));
     await settle();
     expect(screen.queryByText('@ghost')).toBeNull();
@@ -292,7 +444,7 @@ describe('TokenDataModal — the creator (#785)', () => {
     resolvesTo({ [CREATOR]: binding(CREATOR, lookalike), [`@${lookalike}`]: binding(CREATOR, lookalike) });
     renderModal(view(metadata(), 'valid'));
 
-    expect(await screen.findByText('Creator')).toBeTruthy();
+    expect(await screen.findByText('Signer')).toBeTruthy();
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith(CREATOR));
     await settle();
     expect(screen.queryByText(/^@unicity/)).toBeNull();
@@ -317,7 +469,7 @@ describe('TokenDataModal — the creator (#785)', () => {
       });
       renderModal(view(metadata(), 'valid'));
 
-      expect(await screen.findByText('Creator')).toBeTruthy();
+      expect(await screen.findByText('Signer')).toBeTruthy();
       await waitFor(() => expect(resolveMock).toHaveBeenCalledWith(CREATOR));
       await settle();
       expect(screen.queryByText('@alice')).toBeNull();
@@ -325,7 +477,7 @@ describe('TokenDataModal — the creator (#785)', () => {
     },
   );
 
-  it("presents an invalid signature's key only as a claim: never resolved, never named, never the creator", async () => {
+  it("presents an invalid signature's key only as a claim: never resolved, never named, never the signer", async () => {
     resolvesTo({ [CREATOR]: binding(CREATOR, 'alice'), '@alice': binding(CREATOR, 'alice') });
     renderModal(view(metadata(), 'invalid'));
 
@@ -333,18 +485,18 @@ describe('TokenDataModal — the creator (#785)', () => {
     await settle();
     expect(screen.getByText('Creator signature does not verify — this may be a copy')).toBeTruthy();
     expect(screen.getByText(truncateId(CREATOR))).toBeTruthy();
-    expect(screen.queryByText('Creator')).toBeNull();
-    expect(screen.queryByText('Signed by its creator')).toBeNull();
+    expect(screen.queryByText('Signer')).toBeNull();
+    expect(screen.queryByText(VALID_LINE)).toBeNull();
     expect(screen.queryByText('@alice')).toBeNull();
     expect(resolveMock).not.toHaveBeenCalled();
   });
 
-  it('shows no creator at all for an unsigned NFT', async () => {
+  it('shows no creator or signer at all for an unsigned NFT', async () => {
     renderModal(view(metadata(), 'unsigned'));
 
     expect(await screen.findByText('Unsigned — anyone could mint an identical token')).toBeTruthy();
     await settle();
-    expect(screen.queryByText(/creator/i)).toBeNull();
+    expect(screen.queryByText(/creator|signer/i)).toBeNull();
     expect(resolveMock).not.toHaveBeenCalled();
   });
 });
@@ -357,7 +509,7 @@ describe('TokenDataModal — no reading', () => {
     await waitFor(() => expect(nftsMock).toHaveBeenCalledWith([TOKEN_ID]));
     await settle();
     expect(screen.queryByRole('region', { name: 'NFT' })).toBeNull();
-    expect(screen.queryByText(/Signed by its creator|Unsigned|does not verify/)).toBeNull();
+    expect(screen.queryByText(/Signed by this key|Unsigned|does not verify/)).toBeNull();
   });
 
   it('never reads a coin token as an NFT', async () => {
