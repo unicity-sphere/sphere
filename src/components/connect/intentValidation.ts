@@ -1,4 +1,5 @@
 import { ERROR_CODES, nftContentFromWire } from '@unicitylabs/sphere-sdk/connect';
+import { NFT_MAX_PAYLOAD_BYTES } from '@unicitylabs/sphere-sdk';
 import type { NftContent } from '@unicitylabs/sphere-sdk';
 
 /** A refusal to hand an intent to the UI at all: malformed, or not implemented. */
@@ -63,15 +64,86 @@ export function checkIntent(action: string, params: Record<string, unknown>): In
   return error ? { error, mintNft: null } : { error: null, mintNft: null };
 }
 
+type WireRecord = Record<string, unknown>;
+
+function isWireRecord(value: unknown): value is WireRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** At least a text field's UTF-8 size: every UTF-16 code unit takes at least one byte. */
+function textBytes(value: unknown): number {
+  return typeof value === 'string' ? value.length : 0;
+}
+
+/** What a hex field decodes to. */
+function hexBytes(value: unknown): number {
+  return typeof value === 'string' ? Math.floor(value.length / 2) : 0;
+}
+
+/** What base64 decodes to, from its length and its trailing padding alone. */
+function base64Bytes(value: unknown): number {
+  if (typeof value !== 'string') return 0;
+  const n = value.length;
+  const padding = n > 0 && value.charCodeAt(n - 1) === 0x3d ? (n > 1 && value.charCodeAt(n - 2) === 0x3d ? 2 : 1) : 0;
+  return Math.max(0, Math.floor((n * 3) / 4) - padding);
+}
+
+function mediaRefBytes(ref: unknown): number {
+  if (!isWireRecord(ref)) return 0;
+  if (ref.kind === 'media') return textBytes(ref.media_type) + base64Bytes(ref.bytes);
+  if (ref.kind === 'link') return textBytes(ref.media_type) + textBytes(ref.uri) + hexBytes(ref.sha256);
+  return 0;
+}
+
 /**
- * Shape and base64 only. The VALUE rules — non-empty text, media types, URI
- * schemes, the payload cap — stay with `payments.mintNft`, whose refusal becomes
- * the intent's error.
+ * A LOWER bound on the size of wire NFT content once encoded, read from string
+ * lengths only — nothing is decoded or copied. The encoded payload is larger still
+ * (CBOR framing, and the NftSigned wrapper when signed), so content over
+ * NFT_MAX_PAYLOAD_BYTES by this count is over it for certain: `payments.mintNft`
+ * would refuse it. Only the fields of the declared kind count, so a malformed shape
+ * is left to nftContentFromWire, whose refusal names the offending field.
+ */
+function payloadLowerBound(content: unknown): number {
+  if (!isWireRecord(content)) return 0;
+  if (content.kind === 'media' || content.kind === 'link') return mediaRefBytes(content);
+  if (content.kind !== 'metadata') return 0;
+  let total =
+    textBytes(content.name) +
+    textBytes(content.description) +
+    textBytes(content.external_url) +
+    textBytes(content.collection) +
+    hexBytes(content.collection_id) +
+    mediaRefBytes(content.image) +
+    mediaRefBytes(content.animation_url);
+  if (Array.isArray(content.attributes)) {
+    for (const attribute of content.attributes) {
+      if (total > NFT_MAX_PAYLOAD_BYTES) break;
+      if (!isWireRecord(attribute)) continue;
+      // An attribute is at least a one-byte CBOR array header, besides its text.
+      total += 1 + textBytes(attribute.trait_type) + textBytes(attribute.value);
+    }
+  }
+  return total;
+}
+
+/**
+ * Size first, then shape and base64. nftContentFromWire decodes base64 of any
+ * length, and the preview then builds a Blob of it — all before the user has been
+ * asked, for content `payments.mintNft` refuses only after approval — so content
+ * over the payload limit is refused before anything is decoded. The other VALUE
+ * rules — non-empty text, media types, URI schemes — stay with `payments.mintNft`,
+ * whose refusal becomes the intent's error.
  */
 function checkMintNft(params: Record<string, unknown>): IntentCheck {
   const sign = params.sign === undefined ? true : params.sign;
   if (typeof sign !== 'boolean') {
     return refuse(ERROR_CODES.INVALID_PARAMS, '"sign" must be a boolean when present');
+  }
+  if (payloadLowerBound(params.content) > NFT_MAX_PAYLOAD_BYTES) {
+    return refuse(
+      ERROR_CODES.INVALID_PARAMS,
+      `NFT content exceeds the ${String(NFT_MAX_PAYLOAD_BYTES)}-byte payload limit (NFT_MAX_PAYLOAD_BYTES)`,
+    );
   }
   try {
     // Throws a message naming the offending field, e.g. `Invalid NFT content.image.bytes: …`.

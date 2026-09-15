@@ -53,6 +53,7 @@ vi.mock('../../../src/components/upgrade', () => ({
 const resolveIntent = vi.fn();
 const rejectIntent = vi.fn();
 const registerAutoIntent = vi.fn();
+const armIntentShield = vi.fn();
 let pendingIntent: PendingIntent | null = null;
 
 vi.mock('../../../src/components/connect/ConnectContext', () => ({
@@ -61,11 +62,12 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
     resolveIntent,
     rejectIntent,
     registerAutoIntent,
-    armIntentShield: vi.fn(),
+    armIntentShield,
   }),
 }));
 
 import { ConnectIntentHandler } from '../../../src/components/connect/ConnectIntentHandler';
+import { NFT_PREVIEW_WAIT_MS } from '../../../src/sdk/hooks/payments/useNftPreviewState';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const GIF = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
@@ -75,6 +77,9 @@ const ORIGIN = 'https://memes.example';
 const SIGNED_LINE = 'You will be its creator — signed with your wallet key';
 const UNSIGNED_LINE = 'Unsigned — anyone could mint an identical token';
 const VALID_SIGNATURE_LINE = 'Signed by this key — it attributes the item to its signer, not to a collection';
+const UNSHOWN_SIGNED = 'Linked content could not be shown — minting will sign its link without it having been shown to you';
+const UNSHOWN_UNSIGNED =
+  'Linked content could not be shown — the NFT will carry its link without it having been shown to you';
 const COLLECTION_ID = 'c0ffee' + '00'.repeat(10) + 'beef';
 const DOCUMENT_URI = 'https://memes.example/cat.cbor';
 
@@ -135,6 +140,7 @@ beforeEach(() => {
   resolveIntent.mockClear();
   rejectIntent.mockClear();
   registerAutoIntent.mockClear();
+  armIntentShield.mockClear();
   vi.mocked(nftContentFromWire).mockClear();
   urlSeq = 0;
   createObjectURL.mockClear();
@@ -160,9 +166,20 @@ function renderHandler() {
   return render(<ConnectIntentHandler />, { wrapper: Wrapper });
 }
 
+function mintButton(): HTMLButtonElement {
+  return screen.getByRole('button', { name: 'Mint' }) as HTMLButtonElement;
+}
+
 async function clickMint() {
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Mint' }));
+    fireEvent.click(mintButton());
+  });
+}
+
+// Long enough for a query or an effect to have run, had one been due.
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 }
 
@@ -241,6 +258,7 @@ describe('mint_nft intent — what the user is shown', () => {
     expect(await screen.findByText('Image does not match its fingerprint — not shown')).toBeTruthy();
     expect(screen.queryByAltText('Cool Cat #7')).toBeNull();
     expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByText(UNSHOWN_SIGNED)).toBeTruthy();
 
     await clickMint();
     await waitFor(() => expect(resolveIntent).toHaveBeenCalledWith(INTENT_ID, { tokenId: TOKEN_ID }));
@@ -308,7 +326,9 @@ describe('mint_nft intent — a claimed collection and a hosted metadata documen
     expect(
       within(preview).getByText(`Metadata hosted at ${DOCUMENT_URI}, checked against its fingerprint`),
     ).toBeTruthy();
-    // Fetched under the linked-media policy, exactly as the token detail view fetches it.
+    expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
+    // Fetched under the linked-media policy, exactly as the token detail view fetches it — once,
+    // though the preview and the Mint gate both watch it.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       DOCUMENT_URI,
@@ -363,6 +383,139 @@ describe('mint_nft intent — a claimed collection and a hosted metadata documen
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(screen.getByText(UNSIGNED_LINE)).toBeTruthy();
     expect(screen.queryByText(SIGNED_LINE)).toBeNull();
+    expect(screen.getByText(UNSHOWN_UNSIGNED)).toBeTruthy();
+  });
+});
+
+describe('mint_nft intent — Mint waits for what the user is asked to approve', () => {
+  it('keeps Mint disabled while the hosted document loads, and enables it once the document is shown', async () => {
+    let answer!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+    renderHandler();
+
+    expect(mintButton().disabled).toBe(true);
+    await settle();
+    expect(mintButton().disabled).toBe(true);
+
+    await act(async () => answer(served(DOCUMENT)));
+    expect(await screen.findByRole('heading', { name: 'Doc Cat #1' })).toBeTruthy();
+    await waitFor(() => expect(mintButton().disabled).toBe(false));
+  });
+
+  it('keeps Mint disabled while a linked image loads, and enables it once the image is shown', async () => {
+    let answer!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ image: hostedImage() })) });
+    renderHandler();
+
+    expect(mintButton().disabled).toBe(true);
+
+    await act(async () => answer(served(PNG)));
+    await waitFor(() => expect(screen.getByAltText('Cool Cat #7').getAttribute('src')).toBe('blob:nft-1'));
+    expect(mintButton().disabled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Mint disabled while the resolved document's own linked image loads", async () => {
+    const withLinkedImage = encodeNftContent(metadata({ name: 'Doc Cat #2', image: hostedImage() }));
+    let answerImage!: (response: Response) => void;
+    const image = new Promise<Response>((resolve) => (answerImage = resolve));
+    fetchMock.mockImplementation(async (url) => (url === DOCUMENT_URI ? served(withLinkedImage) : image));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink(withLinkedImage)) });
+    renderHandler();
+
+    expect(await screen.findByRole('heading', { name: 'Doc Cat #2' })).toBeTruthy();
+    expect(mintButton().disabled).toBe(true);
+
+    await act(async () => answerImage(served(PNG)));
+    await waitFor(() => expect(screen.getByAltText('Doc Cat #2').getAttribute('src')).toMatch(/^blob:nft-/));
+    expect(mintButton().disabled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the document link's URI and fingerprint from the first paint, while the document loads", () => {
+    fetchMock.mockReturnValue(new Promise<Response>(() => {}));
+    const link = documentLink();
+    pendingIntent = mintNftIntent({ content: nftContentToWire(link) });
+    renderHandler();
+
+    expect(
+      screen.getByText(`Metadata document: ${DOCUMENT_URI} · SHA-256 ${truncateId(link.sha256)}`),
+    ).toBeTruthy();
+    expect(mintButton().disabled).toBe(true);
+  });
+
+  it.each([
+    ['cannot be fetched', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['does not match its fingerprint', () => served(GIF)],
+  ] as const)(
+    'warns, when the hosted document %s, that minting signs a link whose content was not shown — Mint stays enabled',
+    async (_how, respond) => {
+      fetchMock.mockImplementation(async () => respond());
+      pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+      renderHandler();
+
+      expect(await screen.findByText(UNSHOWN_SIGNED)).toBeTruthy();
+      expect(within(screen.getByTestId('nft-mint-preview')).getByRole('alert')).toBeTruthy();
+      expect(mintButton().disabled).toBe(false);
+    },
+  );
+
+  it('arms the settle shield once when Mint becomes actionable after its preview loaded — not while loading, not again', async () => {
+    let answer!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+    const { rerender } = renderHandler();
+
+    await settle();
+    expect(armIntentShield).not.toHaveBeenCalled();
+
+    await act(async () => answer(served(DOCUMENT)));
+    await waitFor(() => expect(mintButton().disabled).toBe(false));
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+
+    rerender(<ConnectIntentHandler />);
+    rerender(<ConnectIntentHandler />);
+    await settle();
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+  });
+
+  it('arms nothing more for a preview with nothing to load — the arrival arm already covers it', async () => {
+    renderHandler();
+    await settle();
+
+    expect(mintButton().disabled).toBe(false);
+    expect(armIntentShield).not.toHaveBeenCalled();
+  });
+
+  it('holds Mint back for a stalled link only for its bounded wait — then enables it with the warning, arming the shield once', async () => {
+    // A host can accept the request and never finish it. That must not make the
+    // intent impossible to approve: once the wait is over, what has not loaded
+    // counts as not shown.
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockReturnValue(new Promise<Response>(() => {}));
+      pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+      renderHandler();
+
+      await act(async () => {
+        vi.advanceTimersByTime(NFT_PREVIEW_WAIT_MS - 1);
+      });
+      expect(mintButton().disabled).toBe(true);
+      expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
+      expect(armIntentShield).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(mintButton().disabled).toBe(false);
+      expect(screen.getByText(UNSHOWN_SIGNED)).toBeTruthy();
+      expect(screen.getByRole('status', { name: 'Loading metadata' })).toBeTruthy();
+      expect(armIntentShield).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -434,17 +587,36 @@ describe('mint_nft intent — minting', () => {
     ]);
   });
 
-  it('shows a thrown error in the modal and settles nothing', async () => {
-    mocks.mintNft.mockRejectedValue(new Error('Payments are not running'));
-    renderHandler();
+  it.each([
+    ['rejects', () => Promise.reject(new Error('Payments are not running'))],
+    ['throws synchronously', () => { throw new Error('Payments are not running'); }],
+  ] as const)(
+    'settles a mint that %s as an unknown outcome at once, and never offers Mint again — a retry could mint a second NFT',
+    async (_how, failure) => {
+      mocks.mintNft.mockImplementation(failure);
+      renderHandler();
 
-    await clickMint();
+      await clickMint();
 
-    expect(await screen.findByText(/Payments are not running/)).toBeTruthy();
-    expect(resolveIntent).not.toHaveBeenCalled();
-    expect(rejectIntent).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Mint' })).toHaveProperty('disabled', false);
-  });
+      await waitFor(() => expect(rejectIntent).toHaveBeenCalledTimes(1));
+      const [id, code, message] = rejectIntent.mock.calls[0]!;
+      expect(id).toBe(INTENT_ID);
+      expect(code).toBe(ERROR_CODES.INTENT_OUTCOME_UNKNOWN);
+      expect(message).toMatch(/may have started/);
+      expect(message).toMatch(/may still complete/);
+      expect(message).toMatch(/Tokens tab/);
+      expect(message).toContain('Payments are not running');
+      expect(resolveIntent).not.toHaveBeenCalled();
+
+      // The dialog does not stay open with Mint enabled, and nothing here settles the intent again.
+      expect(mintButton().disabled).toBe(true);
+      expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+      await clickMint();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(mocks.mintNft).toHaveBeenCalledTimes(1);
+      expect(rejectIntent).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('refuses while the subscription key is still being set up: INTERNAL_ERROR, and no mint', async () => {
     mocks.subscriptionReady = false;

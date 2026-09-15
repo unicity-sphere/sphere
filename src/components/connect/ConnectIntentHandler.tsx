@@ -6,14 +6,11 @@ import {
   Coins,
   Inbox,
   AlertTriangle,
-  ImagePlus,
-  ShieldCheck,
-  ShieldQuestionMark,
 } from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
-import { NftResolvedContentDetails } from '../wallet/shared/nft/NftDetails';
+import { MintNftIntentModal } from './MintNftIntentModal';
 import { SendIntentModal } from './SendIntentModal';
 import { PaymentRequestIntentModal } from './PaymentRequestIntentModal';
 import { checkIntent } from './intentValidation';
@@ -31,44 +28,6 @@ import { truncateId } from '../../utils/identifiers';
 /** Canonical coinId: even-length lowercase hex (same shape the mint intent requires). */
 
 
-/** A `mint_nft` run, tied to its intent so its progress and error never show on the next one. */
-interface NftMintRun {
-  intentId: number;
-  running: boolean;
-  error: string | null;
-}
-
-/**
- * The refusal for an NFT mint that failed AFTER it was journaled. The wallet
- * resumes a journaled mint, so it may still complete — the dApp is told that, and
- * given the token id to reconcile against rather than asking again.
- */
-function journaledNftMintMessage(tokenId: string, error: string | undefined): string {
-  const reason = error ? ` (${error})` : '';
-  return `The NFT mint has not finished${reason}, but it may still complete: this wallet resumes it. Token ID: ${tokenId}`;
-}
-
-/**
- * What signing will mean for an NFT that does not exist yet. Deliberately NOT a
- * signature status: there is no signature to verify before the mint.
- */
-function MintSignLine({ sign }: { sign: boolean }) {
-  if (sign) {
-    return (
-      <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-        <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-        You will be its creator — signed with your wallet key
-      </p>
-    );
-  }
-  return (
-    <p className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-      <ShieldQuestionMark className="h-3.5 w-3.5 shrink-0" />
-      Unsigned — anyone could mint an identical token
-    </p>
-  );
-}
-
 export function ConnectIntentHandler() {
   const { pendingIntent, resolveIntent, rejectIntent, registerAutoIntent, armIntentShield } =
     useConnectContext();
@@ -80,7 +39,6 @@ export function ConnectIntentHandler() {
   const [signError, setSignError] = useState<string | null>(null);
   const [mintError, setMintError] = useState<string | null>(null);
   const [isMinting, setIsMinting] = useState(false);
-  const [nftMint, setNftMint] = useState<NftMintRun | null>(null);
   const [receiveError, setReceiveError] = useState<string | null>(null);
   const [isReceiving, setIsReceiving] = useState(false);
   // Money-safety gate for `send` — see duplicateSendGuard.ts for the invariant.
@@ -541,94 +499,18 @@ export function ConnectIntentHandler() {
   // content is the dApp's and, by default, is signed with the user's key as its
   // creator — so the user sees exactly what will be minted before it is.
   if (action === 'mint_nft' && checked.mintNft) {
-    const request = checked.mintNft;
-    const run = nftMint?.intentId === intentId ? nftMint : null;
-    const isMintingNft = run?.running ?? false;
-    // Once the mint runs, "the user declined" is no longer a true answer — the NFT
-    // may be minted either way — so the modal cannot be dismissed meanwhile.
-    const closeNftMint = isMintingNft ? () => {} : handleClose;
-
-    const handleMintNft = async () => {
-      const payments = getPayments(sphere);
-      if (!payments) {
-        setNftMint({ intentId, running: false, error: 'Wallet not available' });
-        return;
-      }
-      // Mint is a certification_request — refuse until the subscription key is on
-      // the oracle (else it 401s in the provisioning window). Reject gracefully.
-      if (!subscriptionKeyReady) {
-        rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, 'Subscription is still being set up — try again in a moment');
-        return;
-      }
-
-      setNftMint({ intentId, running: true, error: null });
-      let error: string | null = null;
-      try {
-        const result = await payments.mintNft({ content: request.content, sign: request.sign });
-        if (result.success && result.tokenId !== undefined) {
-          resolveIntent(intentId, { tokenId: result.tokenId });
-        } else if (result.tokenId !== undefined) {
-          // Journaled before it failed: the wallet resumes it, so it may still complete.
-          rejectIntent(
-            intentId,
-            ERROR_CODES.INTERNAL_ERROR,
-            journaledNftMintMessage(result.tokenId, result.error),
-            { tokenId: result.tokenId },
-          );
-        } else {
-          // Refused before anything was journaled or minted (a value rule, the size cap).
-          rejectIntent(intentId, ERROR_CODES.INTERNAL_ERROR, result.error ?? 'NFT mint failed');
-        }
-      } catch (err) {
-        error = getErrorMessage(err);
-      }
-      setNftMint((current) => (current?.intentId === intentId ? { intentId, running: false, error } : current));
-    };
-
+    // Its own component, keyed by the intent: the preview's queries live only where
+    // an NFT is previewed, and the one-mint guard and the settle-shield arming inside
+    // it hold for exactly one intent each.
     return (
-      <BaseModal isOpen={true} onClose={closeNftMint}>
-        <ModalHeader title="Mint NFT" icon={ImagePlus} onClose={closeNftMint} closeDisabled={isMintingNft} />
-
-        <div className="relative z-10 px-6 py-5 overflow-y-auto flex-1">
-          <div className="text-sm text-neutral-500 mb-1">
-            This dApp is asking to mint an NFT{' '}
-            <span className="text-neutral-900 dark:text-white font-medium">to your own wallet</span>.
-          </div>
-          <div className="text-xs text-neutral-400 mb-4 break-all">
-            Requested by{' '}
-            <span className="font-mono text-neutral-700 dark:text-neutral-300">{pendingIntent.origin}</span>
-          </div>
-
-          {/* The NFT views are drawn for a dark panel (TokenDataModal's), so the
-              preview keeps one in both themes. Its height is FIXED: media — and a hosted
-              metadata document — loads on the dApp's timing, often after the settle shield
-              drops, and a preview that grew would move Mint under a cursor aimed at Cancel.
-              Taller content scrolls. A document link is fetched and checked exactly as the
-              token detail view does; what is minted, and signed, is still the dApp's
-              content — the link that pins the document. */}
-          <section
-            aria-label="NFT preview"
-            data-testid="nft-mint-preview"
-            className="mb-4 h-80 space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-neutral-900 p-4 text-white"
-          >
-            <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
-          </section>
-
-          <MintSignLine sign={request.sign} />
-        </div>
-
-        <div className="relative z-10 px-6 py-4 border-t border-neutral-200/50 dark:border-white/8 shrink-0">
-          {run?.error && <div className="text-red-500 text-sm mb-3 text-center">{run.error}</div>}
-          <div className="flex gap-3">
-            <Button variant="secondary" fullWidth onClick={handleClose} disabled={isMintingNft}>
-              Cancel
-            </Button>
-            <Button variant="primary" fullWidth disabled={isMintingNft} onClick={handleMintNft}>
-              {isMintingNft ? 'Minting…' : 'Mint'}
-            </Button>
-          </div>
-        </div>
-      </BaseModal>
+      <MintNftIntentModal
+        key={intentId}
+        intentId={intentId}
+        origin={pendingIntent.origin}
+        request={checked.mintNft}
+        subscriptionKeyReady={subscriptionKeyReady}
+        onCancel={handleClose}
+      />
     );
   }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import type { NftMediaRef } from '@unicitylabs/sphere-sdk';
+import { queryOptions, useQuery } from '@tanstack/react-query';
+import type { NftLink, NftMediaRef } from '@unicitylabs/sphere-sdk';
 import { SPHERE_KEYS } from '../../queryKeys';
 import {
   MAX_LINKED_MEDIA_BYTES,
@@ -19,6 +19,25 @@ export interface UseNftMediaReturn {
 }
 
 /**
+ * The query for a linked media file: shared by everything that watches the same
+ * link, so a link is fetched once however many views wait on it. `link` is null,
+ * and nothing is fetched, unless its type is allowlisted; `url` is its
+ * resolveLinkUrl, null when it cannot be fetched.
+ */
+export function linkedMediaQuery(link: NftLink | null, url: string | null) {
+  return queryOptions({
+    queryKey: SPHERE_KEYS.nft.link(link?.uri ?? '', link?.sha256 ?? ''),
+    queryFn: ({ signal }) => {
+      if (!link || !url) throw new Error('No fetchable link');
+      return fetchLinkedFile(link, url, MAX_LINKED_MEDIA_BYTES, signal);
+    },
+    enabled: url !== null,
+    staleTime: Infinity, // content-addressed: the same uri + sha256 always verifies the same way
+    structuralSharing: false,
+  });
+}
+
+/**
  * Renderable bytes for an NFT media reference (#785).
  *
  * Inline media renders when its type is allowlisted. A link is fetched only
@@ -31,16 +50,7 @@ export function useNftMedia(ref: NftMediaRef | null): UseNftMediaReturn {
   const link = ref?.kind === 'link' && renderable ? ref : null;
   const linkUrl = link ? resolveLinkUrl(link.uri) : null;
 
-  const linked = useQuery({
-    queryKey: SPHERE_KEYS.nft.link(link?.uri ?? '', link?.sha256 ?? ''),
-    queryFn: ({ signal }) => {
-      if (!link || !linkUrl) throw new Error('No fetchable link');
-      return fetchLinkedFile(link, linkUrl, MAX_LINKED_MEDIA_BYTES, signal);
-    },
-    enabled: linkUrl !== null,
-    staleTime: Infinity, // content-addressed: the same uri + sha256 always verifies the same way
-    structuralSharing: false,
-  });
+  const linked = useQuery(linkedMediaQuery(link, linkUrl));
 
   let bytes: Uint8Array | null = null;
   if (renderable && ref?.kind === 'media') bytes = ref.bytes;
