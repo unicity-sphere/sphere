@@ -334,10 +334,12 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
   CONNECT="$CONNECT https://unicity-ipfs1.dyndns.org"
   CONNECT="$CONNECT https://o4511695062237184.ingest.de.sentry.io"
   # NFT links (#785): ipfs:// and ar:// files are fetched through these fixed gateways
-  # (src/components/wallet/shared/nft/media.ts) and hash-checked before display. An
-  # https:// NFT link is fetched from a host its minter chose, only when the user asks;
-  # no list can name those hosts, so an enforced policy blocks them.
-  CONNECT="$CONNECT https://ipfs.io https://arweave.net"
+  # (src/components/wallet/shared/nft/media.ts) and hash-checked before display.
+  # arweave.net answers with a redirect to a per-transaction subdomain, and CSP checks
+  # every redirect target too. An https:// NFT link is fetched from a host its minter
+  # chose, only when the user asks; no list can name those hosts, so an enforced policy
+  # blocks them.
+  CONNECT="$CONNECT https://ipfs.io https://arweave.net https://*.arweave.net"
 
   # Report-Only until staging reports are clean. Flip the header NAME to enforce —
   # nothing else about the policy changes.

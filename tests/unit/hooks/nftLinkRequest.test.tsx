@@ -234,3 +234,47 @@ describe('useNftDocument — a document on a host its minter chose', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('redirects', () => {
+  /** What fetch answers a redirect with when told not to follow it: no status, nothing to read. */
+  function opaqueRedirect(): Response {
+    return { ok: false, status: 0, type: 'opaqueredirect', headers: new Headers(), body: null } as unknown as Response;
+  }
+
+  it.each([
+    ['once the user asks', undefined],
+    ['under an automatic policy', 'automatic'],
+  ] as const)(
+    'never follows a redirect from a host its minter chose (%s) — the redirect counts as unavailable',
+    async (_when, policy) => {
+      fetchMock.mockImplementation(async () => opaqueRedirect());
+      const { result } = renderHook(() => useNftMedia(imageLink()), { wrapper: wrapperFor(newClient(), policy) });
+      await settle();
+      if (!policy) act(() => result.current.request?.load());
+
+      await waitFor(() => expect(result.current.state).toBe('error'));
+      await settle();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+    },
+  );
+
+  it('never follows a redirect for a document on a host its minter chose', async () => {
+    fetchMock.mockImplementation(async () => opaqueRedirect());
+    const { result } = renderHook(() => useNftDocument(documentLink(), 'automatic'), {
+      wrapper: wrapperFor(newClient()),
+    });
+
+    await waitFor(() => expect(result.current.state).toBe('error'));
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+  });
+
+  it.each([`ipfs://${CID}/cat.png`, `ar://${AR_ID}`])("follows the gateway's own redirects for %s", async (uri) => {
+    fetchMock.mockImplementation(async () => served(PNG));
+    const { result } = renderHook(() => useNftMedia(imageLink(uri)), { wrapper: wrapperFor(newClient()) });
+
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'follow' });
+  });
+});

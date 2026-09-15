@@ -1,9 +1,11 @@
 import { verifyNftLinkContent } from '@unicitylabs/sphere-sdk';
 import type { NftLink } from '@unicitylabs/sphere-sdk';
+import { linkHostIsMinterChosen } from '../../../components/wallet/shared/nft/media';
 
 /**
  * What fetching a link came to. `unavailable` is every answer that leaves no
- * file to check: an HTTP error, a file over the size cap, a body that broke off.
+ * file to check: an HTTP error, a redirect from a host its minter chose, a file
+ * over the size cap, a body that broke off.
  */
 export type LinkedFile =
   | { verified: true; bytes: Uint8Array }
@@ -57,9 +59,18 @@ export async function fetchLinkedFile(
   signal: AbortSignal,
 ): Promise<LinkedFile> {
   // No cookies and no referrer: the host of an attacker-chosen link learns
-  // nothing about which wallet is looking. This throws only when the host never
-  // answered — nothing was downloaded, so a later view may ask again.
-  const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache', signal });
+  // nothing about which wallet is looking.
+  //
+  // A host its minter chose is the only host contacted. Its redirect is not followed:
+  // the user is asked about that host alone, and a mint preview must show what a
+  // recipient will get. The opaque answer a redirect leaves is not ok, so it counts as
+  // unavailable. A gateway's own redirects are followed: arweave.net answers with one,
+  // to a per-transaction subdomain.
+  //
+  // This throws only when the host never answered — nothing was downloaded, so a
+  // later view may ask again.
+  const redirect: RequestRedirect = linkHostIsMinterChosen(link.uri) ? 'manual' : 'follow';
+  const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache', redirect, signal });
   // Once the host has answered, its answer is the outcome: returned, not thrown,
   // so it is cached like a match. A thrown refusal would be retried, and fetched
   // again by every remount and every other view of the link — each time costing
