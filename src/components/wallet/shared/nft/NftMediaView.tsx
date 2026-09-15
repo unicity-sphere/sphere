@@ -12,6 +12,8 @@ interface NftMediaViewProps {
   alt: string;
   /** `thumb` fills a list row's icon box and shows images only; `full` also plays video and audio. */
   variant: 'thumb' | 'full';
+  /** Hold off: fetch and render nothing yet, showing the placeholder — as for a row not yet on screen. */
+  defer?: boolean;
 }
 
 const NOUN: Record<NftMediaKind, string> = { image: 'Image', video: 'Video', audio: 'Audio' };
@@ -27,10 +29,10 @@ const NOUN: Record<NftMediaKind, string> = { image: 'Image', video: 'Video', aud
  * displayed once an image has loaded or a video or audio has its first data, failed
  * on an element error.
  */
-export function NftMediaView({ media, alt, variant }: NftMediaViewProps) {
+export function NftMediaView({ media, alt, variant, defer = false }: NftMediaViewProps) {
   const kind = media ? mediaKindOf(media.media_type) : null;
   // A row never plays video or audio, so it never downloads a file for one either.
-  const shown = variant === 'thumb' && kind !== 'image' ? null : media;
+  const shown = defer || (variant === 'thumb' && kind !== 'image') ? null : media;
   const { url, state, request } = useNftMedia(shown);
   const report = useContext(NftMediaDisplayContext);
   // Keyed by URL: a new file gets its own attempt instead of inheriting a failure.

@@ -6,6 +6,7 @@ import { useResolvedNftContent } from '../../../../sdk/hooks/payments/useNftDocu
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { NftMediaView } from '../nft/NftMediaView';
 import { nftThumbnailRef, nftTitle } from '../nft/nftDisplay';
+import { useSeenOnce } from '../nft/useSeenOnce';
 
 interface CoinlessTokenRowProps {
   token: CoinlessToken;
@@ -65,9 +66,12 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
   onInspect,
 }: CoinlessTokenRowProps) {
   const [copied, setCopied] = useState(false);
+  // A row fetches nothing linked until it has come into view: opening a long list
+  // must not download every token's thumbnail and metadata document at once.
+  const [seenRef, seen] = useSeenOnce<HTMLDivElement>();
   // What the reading shows: its own content, or its metadata document's item.
   // Only content — the signature pills below always read the token itself.
-  const { content } = useResolvedNftContent(nft?.content);
+  const { content } = useResolvedNftContent(nft?.content, { defer: !seen });
 
   const title = nftTitle(token, content);
   const thumbnail = nftThumbnailRef(content);
@@ -99,9 +103,12 @@ export const CoinlessTokenRow = memo(function CoinlessTokenRow({
     <div className="flex items-center justify-between gap-2">
       {/* min-w-0 down to the text: a long NFT name truncates instead of pushing the actions off the row. */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="relative w-10 h-10 shrink-0 rounded-lg flex items-center justify-center overflow-hidden bg-neutral-200/50 dark:bg-white/5">
+        <div
+          ref={seenRef}
+          className="relative w-10 h-10 shrink-0 rounded-lg flex items-center justify-center overflow-hidden bg-neutral-200/50 dark:bg-white/5"
+        >
           {thumbnail ? (
-            <NftMediaView media={thumbnail} alt={title} variant="thumb" />
+            <NftMediaView media={thumbnail} alt={title} variant="thumb" defer={!seen} />
           ) : token.iconUrl ? (
             <img src={token.iconUrl} alt={title} className="w-full h-full object-cover" />
           ) : (

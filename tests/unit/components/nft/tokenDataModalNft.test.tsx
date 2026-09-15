@@ -34,8 +34,8 @@ import { TokenDataModal, type TokenDataTarget } from '../../../../src/components
 import { truncateId } from '../../../../src/utils/identifiers';
 
 const TOKEN_ID = 'aa'.repeat(32);
-const TARGET: TokenDataTarget = { tokenId: TOKEN_ID, label: 'Cats', tokenType: 'bb'.repeat(32) };
-const COIN: TokenDataTarget = { tokenId: 'cc'.repeat(32), label: 'UCT' };
+const TARGET: TokenDataTarget = { tokenId: TOKEN_ID, label: 'Cats', kind: 'coinless', tokenType: 'bb'.repeat(32) };
+const COIN: TokenDataTarget = { tokenId: 'cc'.repeat(32), label: 'UCT', kind: 'coin' };
 const CREATOR = '02' + 'ab'.repeat(32);
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const VALID_LINE = 'Signed by this key — it attributes the item to its signer, not to a collection';
@@ -552,8 +552,19 @@ describe('TokenDataModal — no reading', () => {
     expect(screen.queryByRole('region', { name: 'NFT' })).toBeNull();
   });
 
+  it('reads a coinless token as an NFT even when its token type is unknown', async () => {
+    const untyped: TokenDataTarget = { tokenId: TOKEN_ID, label: 'Cats', kind: 'coinless' };
+    renderModal(view(metadata(), 'valid'), untyped);
+
+    expect(await screen.findByRole('heading', { name: 'Cool Cat #7' })).toBeTruthy();
+    expect(nftsMock).toHaveBeenCalledWith([TOKEN_ID]);
+    expect(await screen.findByText('Genesis data — 4 bytes')).toBeTruthy();
+    expect(screen.queryByText(/value envelope/)).toBeNull();
+    expect(screen.queryByText('Token type (class)')).toBeNull();
+  });
+
   it("does not carry one token's reading over to another", async () => {
-    const other: TokenDataTarget = { tokenId: 'dd'.repeat(32), label: 'Dogs', tokenType: 'bb'.repeat(32) };
+    const other: TokenDataTarget = { tokenId: 'dd'.repeat(32), label: 'Dogs', kind: 'coinless', tokenType: 'bb'.repeat(32) };
     const { rerender } = renderModal(view(metadata(), 'valid'));
     await screen.findByRole('heading', { name: 'Cool Cat #7' });
 

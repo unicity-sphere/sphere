@@ -100,11 +100,15 @@ export interface ResolvedNftContent {
  * The NFT content display code shows: a token's own content, or — when that is a
  * document link that resolved — the document's item. It takes content, never a
  * reading, so nothing shown from a document can carry a signature status: that
- * always comes from the token.
+ * always comes from the token. `defer` holds off resolving — as for a row not yet on
+ * screen — and gives the content as it is meanwhile.
  */
-export function useResolvedNftContent(content: NftContent | null | undefined): ResolvedNftContent {
+export function useResolvedNftContent(
+  content: NftContent | null | undefined,
+  options: { readonly defer?: boolean } = {},
+): ResolvedNftContent {
   const own = content ?? null;
-  const link = nftDocumentLinkOf(own);
+  const link = options.defer ? null : nftDocumentLinkOf(own);
   const { document, state, request } = useNftDocument(link);
   if (document && link) return { content: document, hostedAt: link, documentState: state };
   return request

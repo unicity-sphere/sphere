@@ -8,7 +8,13 @@ import { NftDetails } from '../../shared/nft/NftDetails';
 export interface TokenDataTarget {
   tokenId: string;
   label: string;
-  /** Token CLASS for a coinless token; absent for a coin token. */
+  /**
+   * What the token is. Only a coinless token can carry an NFT reading: a coin token's
+   * payload is its value envelope. Stated, never inferred — a coinless token's type
+   * can be unknown.
+   */
+  kind: 'coin' | 'coinless';
+  /** The token's CLASS, when the view knows it. */
   tokenType?: string;
 }
 
@@ -68,9 +74,9 @@ function CopyableField({ label, value }: { label: string; value: string }) {
  */
 export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
   const { hex, byteLength, isLoading, error } = useTokenData(target?.tokenId ?? null);
-  // A coin token has no token TYPE in this view; a coinless one always names its class.
-  const isCoinToken = target?.tokenType === undefined;
-  // Only a coinless token can be an NFT: a coin token's payload is its value envelope.
+  const isCoinToken = target?.kind === 'coin';
+  // Only a coinless token can be an NFT, whether or not its type is known: a coin
+  // token's payload is its value envelope.
   const { views } = useNfts(target && !isCoinToken ? [target.tokenId] : NO_IDS);
   const nft = target ? views.get(target.tokenId) : undefined;
   // A reading that links a hosted metadata document is named by that document once

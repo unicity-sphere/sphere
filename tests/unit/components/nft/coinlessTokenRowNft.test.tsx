@@ -378,3 +378,75 @@ describe('CoinlessTokenRow — a reading that changes on an already-mounted row'
     expect(screen.queryByText('Signed')).toBeNull();
   });
 });
+
+/** Stands in for the browser's IntersectionObserver: nothing is on screen until showAll(). */
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  readonly callback: IntersectionObserverCallback;
+  readonly targets = new Set<Element>();
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(target: Element) {
+    this.targets.add(target);
+  }
+
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+
+  disconnect() {
+    this.targets.clear();
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  /** Every observed element scrolls into view. */
+  static showAll() {
+    for (const observer of FakeIntersectionObserver.instances) {
+      const entries = [...observer.targets].map((target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry);
+      if (entries.length > 0) observer.callback(entries, observer as unknown as IntersectionObserver);
+    }
+  }
+}
+
+describe('CoinlessTokenRow — fetching only once the row is on screen (#785)', () => {
+  beforeEach(() => {
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+  });
+
+  it('fetches a gateway image only once the row has come into view', async () => {
+    fetchMock.mockImplementation(async () => served(PNG));
+    const image: NftLink = { kind: 'link', media_type: 'image/png', uri: `ipfs://${CID}/cat.png`, sha256: sha256Hex(PNG) };
+    const { container } = renderRow(view(metadata({ image })), { iconUrl: REGISTRY_ICON });
+    await settle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container.querySelector('img')).toBeNull();
+
+    act(() => FakeIntersectionObserver.showAll());
+
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:nft-1'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves a metadata document only once the row has come into view', async () => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    renderRow(view(documentLink()), { iconUrl: REGISTRY_ICON });
+    await settle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText('Cats')).toBeTruthy();
+
+    act(() => FakeIntersectionObserver.showAll());
+
+    expect(await screen.findByText('Doc Cat #1')).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

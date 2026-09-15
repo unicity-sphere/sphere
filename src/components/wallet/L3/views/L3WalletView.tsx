@@ -207,12 +207,13 @@ export function L3WalletView({
     setInspectTarget({
       tokenId: t.tokenId,
       label: title,
+      kind: 'coinless',
       ...(t.tokenType !== undefined ? { tokenType: t.tokenType } : {}),
     });
   }, []);
 
   const handleInspectCoinToken = useCallback((t: Token) => {
-    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token' });
+    setInspectTarget({ tokenId: t.id, label: t.symbol || 'Token', kind: 'coin' });
   }, []);
 
   // Track previous token/asset IDs to detect truly new items
