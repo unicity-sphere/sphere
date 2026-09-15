@@ -7,6 +7,8 @@
  *
  * Runs the real handler, the real NFT preview and the real media and document
  * hooks; the wallet, the subscription guard and the Connect context are fakes.
+ * jsdom decodes no media, so a test stands in for the browser by firing an
+ * element's `load`, `loadeddata` or `error` itself.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -77,9 +79,8 @@ const ORIGIN = 'https://memes.example';
 const SIGNED_LINE = 'You will be its creator — signed with your wallet key';
 const UNSIGNED_LINE = 'Unsigned — anyone could mint an identical token';
 const VALID_SIGNATURE_LINE = 'Signed by this key — it attributes the item to its signer, not to a collection';
-const UNSHOWN_SIGNED = 'Linked content could not be shown — minting will sign its link without it having been shown to you';
-const UNSHOWN_UNSIGNED =
-  'Linked content could not be shown — the NFT will carry its link without it having been shown to you';
+const UNSHOWN_SIGNED = 'Some of this NFT could not be shown — minting will sign it without it having been shown to you';
+const UNSHOWN_UNSIGNED = 'Some of this NFT could not be shown — it will be minted without having been shown to you';
 const COLLECTION_ID = 'c0ffee' + '00'.repeat(10) + 'beef';
 const DOCUMENT_URI = 'https://memes.example/cat.cbor';
 
@@ -181,6 +182,21 @@ async function settle() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
+}
+
+/** The preview's media elements, once rendered. */
+async function previewMedia(selector = 'img, video, audio'): Promise<HTMLElement[]> {
+  const preview = screen.getByTestId('nft-mint-preview');
+  await waitFor(() => expect(preview.querySelector(selector)).toBeTruthy());
+  return [...preview.querySelectorAll<HTMLElement>(selector)];
+}
+
+/** Stand in for the browser: every media element in the preview reports its content displayed. */
+async function displayPreviewMedia() {
+  for (const element of await previewMedia()) {
+    if (element.tagName === 'IMG') fireEvent.load(element);
+    else fireEvent.loadedData(element);
+  }
 }
 
 describe('mint_nft intent — what the user is shown', () => {
@@ -326,7 +342,6 @@ describe('mint_nft intent — a claimed collection and a hosted metadata documen
     expect(
       within(preview).getByText(`Metadata hosted at ${DOCUMENT_URI}, checked against its fingerprint`),
     ).toBeTruthy();
-    expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
     // Fetched under the linked-media policy, exactly as the token detail view fetches it — once,
     // though the preview and the Mint gate both watch it.
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -338,6 +353,8 @@ describe('mint_nft intent — a claimed collection and a hosted metadata documen
     expect(screen.getByText(SIGNED_LINE)).toBeTruthy();
     expect(screen.queryByText(VALID_SIGNATURE_LINE)).toBeNull();
 
+    await displayPreviewMedia();
+    expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
     await clickMint();
     await waitFor(() => expect(resolveIntent).toHaveBeenCalledWith(INTENT_ID, { tokenId: TOKEN_ID }));
     // What is minted — and signed — is the dApp's content: the link pinning the document.
@@ -388,7 +405,7 @@ describe('mint_nft intent — a claimed collection and a hosted metadata documen
 });
 
 describe('mint_nft intent — Mint waits for what the user is asked to approve', () => {
-  it('keeps Mint disabled while the hosted document loads, and enables it once the document is shown', async () => {
+  it('keeps Mint disabled while the hosted document loads, and until its image is displayed', async () => {
     let answer!: (response: Response) => void;
     fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
     pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
@@ -400,10 +417,15 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
 
     await act(async () => answer(served(DOCUMENT)));
     expect(await screen.findByRole('heading', { name: 'Doc Cat #1' })).toBeTruthy();
-    await waitFor(() => expect(mintButton().disabled).toBe(false));
+    // The document is shown, its image not yet.
+    await previewMedia('img');
+    expect(mintButton().disabled).toBe(true);
+
+    await displayPreviewMedia();
+    expect(mintButton().disabled).toBe(false);
   });
 
-  it('keeps Mint disabled while a linked image loads, and enables it once the image is shown', async () => {
+  it('keeps Mint disabled while a linked image loads, and until its element has displayed it', async () => {
     let answer!: (response: Response) => void;
     fetchMock.mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
     pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ image: hostedImage() })) });
@@ -413,6 +435,9 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
 
     await act(async () => answer(served(PNG)));
     await waitFor(() => expect(screen.getByAltText('Cool Cat #7').getAttribute('src')).toBe('blob:nft-1'));
+    expect(mintButton().disabled).toBe(true);
+
+    await displayPreviewMedia();
     expect(mintButton().disabled).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -430,6 +455,7 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
 
     await act(async () => answerImage(served(PNG)));
     await waitFor(() => expect(screen.getByAltText('Doc Cat #2').getAttribute('src')).toMatch(/^blob:nft-/));
+    await displayPreviewMedia();
     expect(mintButton().disabled).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -450,7 +476,7 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
     ['cannot be fetched', () => Promise.reject(new TypeError('Failed to fetch'))],
     ['does not match its fingerprint', () => served(GIF)],
   ] as const)(
-    'warns, when the hosted document %s, that minting signs a link whose content was not shown — Mint stays enabled',
+    'warns, when the hosted document %s, that minting signs what was not shown — Mint stays enabled',
     async (_how, respond) => {
       fetchMock.mockImplementation(async () => respond());
       pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
@@ -472,7 +498,10 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
     expect(armIntentShield).not.toHaveBeenCalled();
 
     await act(async () => answer(served(DOCUMENT)));
-    await waitFor(() => expect(mintButton().disabled).toBe(false));
+    await previewMedia('img');
+    expect(armIntentShield).not.toHaveBeenCalled();
+    await displayPreviewMedia();
+    expect(mintButton().disabled).toBe(false);
     expect(armIntentShield).toHaveBeenCalledTimes(1);
 
     rerender(<ConnectIntentHandler />);
@@ -481,7 +510,8 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
     expect(armIntentShield).toHaveBeenCalledTimes(1);
   });
 
-  it('arms nothing more for a preview with nothing to load — the arrival arm already covers it', async () => {
+  it('arms nothing more for a preview with nothing to wait for — the arrival arm already covers it', async () => {
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ image: null })) });
     renderHandler();
     await settle();
 
@@ -519,11 +549,115 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
   });
 });
 
+describe('mint_nft intent — Mint waits for the browser to display the media', () => {
+  it('keeps Mint disabled after a verified linked image arrives, until its element loads — then arms the shield once', async () => {
+    fetchMock.mockImplementation(async () => served(PNG));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ image: hostedImage() })) });
+    renderHandler();
+
+    const [image] = await previewMedia('img');
+    await settle();
+    expect(mintButton().disabled).toBe(true);
+    expect(armIntentShield).not.toHaveBeenCalled();
+
+    fireEvent.load(image!);
+    expect(mintButton().disabled).toBe(false);
+    expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a verified linked image', () => metadata({ image: hostedImage() })],
+    ['an inline image', () => metadata()],
+  ] as const)('enables Mint with the warning when the element for %s fails to display it', async (_what, content) => {
+    fetchMock.mockImplementation(async () => served(PNG));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(content()) });
+    renderHandler();
+
+    const [image] = await previewMedia('img');
+    expect(mintButton().disabled).toBe(true);
+
+    fireEvent.error(image!);
+    expect(mintButton().disabled).toBe(false);
+    expect(screen.getByText(UNSHOWN_SIGNED)).toBeTruthy();
+    // What the user sees is the placeholder, not the image.
+    expect(screen.queryByAltText('Cool Cat #7')).toBeNull();
+    expect(armIntentShield).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Mint disabled for inline image bytes until their element loads them', async () => {
+    renderHandler();
+
+    const [image] = await previewMedia('img');
+    await settle();
+    expect(mintButton().disabled).toBe(true);
+
+    fireEvent.load(image!);
+    expect(mintButton().disabled).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('waits for a video to report its first data — and for every media item, not just the first', async () => {
+    const video = { kind: 'media', media_type: 'video/mp4', bytes: PNG } as const;
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ animation_url: video })) });
+    renderHandler();
+
+    const [image] = await previewMedia('img');
+    const [clip] = await previewMedia('video');
+    fireEvent.load(image!);
+    expect(mintButton().disabled).toBe(true);
+
+    fireEvent.loadedData(clip!);
+    expect(mintButton().disabled).toBe(false);
+    expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
+  });
+
+  it('enables Mint with the warning when a video element fails', async () => {
+    const video = { kind: 'media', media_type: 'video/mp4', bytes: PNG } as const;
+    pendingIntent = mintNftIntent({ content: nftContentToWire(metadata({ image: null, animation_url: video })) });
+    renderHandler();
+
+    const [clip] = await previewMedia('video');
+    expect(mintButton().disabled).toBe(true);
+
+    fireEvent.error(clip!);
+    expect(mintButton().disabled).toBe(false);
+    expect(screen.getByText(UNSHOWN_SIGNED)).toBeTruthy();
+  });
+
+  it('counts media that never loads nor fails as not shown once the wait is over — Mint enables with the warning, the shield arms once', async () => {
+    vi.useFakeTimers();
+    try {
+      renderHandler();
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(screen.getByAltText('Cool Cat #7')).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(NFT_PREVIEW_WAIT_MS - 1);
+      });
+      expect(mintButton().disabled).toBe(true);
+      expect(screen.queryByText(UNSHOWN_SIGNED)).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(mintButton().disabled).toBe(false);
+      expect(screen.getByText(UNSHOWN_SIGNED)).toBeTruthy();
+      expect(armIntentShield).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('mint_nft intent — minting', () => {
   it('mints the DECODED content, signed by default, and resolves { tokenId }', async () => {
     mocks.mintNft.mockResolvedValue({ success: true, tokenId: TOKEN_ID });
     renderHandler();
 
+    await displayPreviewMedia();
     await clickMint();
 
     await waitFor(() => expect(resolveIntent).toHaveBeenCalledWith(INTENT_ID, { tokenId: TOKEN_ID }));
@@ -540,6 +674,7 @@ describe('mint_nft intent — minting', () => {
     pendingIntent = mintNftIntent({ content: nftContentToWire(metadata()), sign: false });
     renderHandler();
 
+    await displayPreviewMedia();
     await clickMint();
 
     await waitFor(() => expect(resolveIntent).toHaveBeenCalledWith(INTENT_ID, { tokenId: TOKEN_ID }));
@@ -560,6 +695,7 @@ describe('mint_nft intent — minting', () => {
     mocks.mintNft.mockResolvedValue({ success: false, tokenId: TOKEN_ID, error: 'gateway timeout' });
     renderHandler();
 
+    await displayPreviewMedia();
     await clickMint();
 
     await waitFor(() => expect(rejectIntent).toHaveBeenCalledTimes(1));
@@ -577,6 +713,7 @@ describe('mint_nft intent — minting', () => {
     mocks.mintNft.mockResolvedValue({ success: false, error: 'Invalid NFT name: must not be empty' });
     renderHandler();
 
+    await displayPreviewMedia();
     await clickMint();
 
     await waitFor(() => expect(rejectIntent).toHaveBeenCalledTimes(1));
@@ -596,6 +733,7 @@ describe('mint_nft intent — minting', () => {
       mocks.mintNft.mockImplementation(failure);
       renderHandler();
 
+      await displayPreviewMedia();
       await clickMint();
 
       await waitFor(() => expect(rejectIntent).toHaveBeenCalledTimes(1));
@@ -622,6 +760,7 @@ describe('mint_nft intent — minting', () => {
     mocks.subscriptionReady = false;
     renderHandler();
 
+    await displayPreviewMedia();
     await clickMint();
 
     expect(mocks.mintNft).not.toHaveBeenCalled();
@@ -635,6 +774,7 @@ describe('mint_nft intent — minting', () => {
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.queryByText(/without confirmation/i)).toBeNull();
 
+    await displayPreviewMedia();
     await clickMint();
 
     await waitFor(() => expect(resolveIntent).toHaveBeenCalled());
@@ -648,6 +788,7 @@ describe('mint_nft intent — minting', () => {
     rerender(<ConnectIntentHandler />);
     rerender(<ConnectIntentHandler />);
 
+    await displayPreviewMedia();
     await clickMint();
     expect(screen.getByRole('button', { name: 'Minting…' })).toBeTruthy();
     const cancel = screen.getByRole('button', { name: 'Cancel' });

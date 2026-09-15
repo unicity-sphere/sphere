@@ -1,20 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { NftMediaRef } from '@unicitylabs/sphere-sdk';
 import { AlertTriangle, ImagePlus, ShieldCheck, ShieldQuestionMark } from 'lucide-react';
 import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { NftResolvedContentDetails } from '../wallet/shared/nft/NftDetails';
+import { NftMediaDisplayContext, type NftMediaDisplayStatus } from '../wallet/shared/nft/mediaDisplay';
 import { useConnectContext } from './ConnectContext';
 import type { MintNftParams } from './intentValidation';
 import { getPayments } from '../../sdk/payments';
 import { getErrorMessage } from '../../sdk/errors';
 import { useSphereContext } from '../../sdk';
-import { NFT_PREVIEW_WAIT_MS, useNftPreviewState } from '../../sdk/hooks/payments/useNftPreviewState';
+import {
+  NFT_PREVIEW_WAIT_MS,
+  useNftPreviewState,
+  type NftMediaDisplays,
+} from '../../sdk/hooks/payments/useNftPreviewState';
 import { truncateId } from '../../utils/identifiers';
 
-/** Shown once a linked part of the preview ended up not shown, for a signed mint and an unsigned one. */
-const UNSHOWN_SIGNED = 'Linked content could not be shown — minting will sign its link without it having been shown to you';
-const UNSHOWN_UNSIGNED =
-  'Linked content could not be shown — the NFT will carry its link without it having been shown to you';
+/** Shown once part of the preview ended up not shown, for a signed mint and an unsigned one. */
+const UNSHOWN_SIGNED = 'Some of this NFT could not be shown — minting will sign it without it having been shown to you';
+const UNSHOWN_UNSIGNED = 'Some of this NFT could not be shown — it will be minted without having been shown to you';
 
 /**
  * The refusal for an NFT mint that failed AFTER it was journaled. The wallet
@@ -84,13 +89,22 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
   const [run, setRun] = useState<NftMintRun>(IDLE);
   // Set before the mint's first await: one mint per intent, whatever lands before a re-render.
   const mintStarted = useRef(false);
-  const preview = useNftPreviewState(request.content);
 
-  // Mint waits for linked content — the user cannot approve what they have not seen —
-  // but only for so long: a host can accept the request and never finish it, and that
-  // must not make the intent impossible to approve. Past the wait, what has not loaded
-  // counts as not shown: Mint is offered with the warning, and the preview still fills
-  // in if the content arrives after all.
+  // What each media element in the preview reported — the browser's own verdict on
+  // bytes that passed every check. A functional update, so two elements reporting in
+  // the same tick both land.
+  const [displays, setDisplays] = useState<NftMediaDisplays>(() => new Map());
+  const reportDisplay = useCallback((media: NftMediaRef, status: NftMediaDisplayStatus) => {
+    setDisplays((current) => (current.get(media) === status ? current : new Map(current).set(media, status)));
+  }, []);
+  const preview = useNftPreviewState(request.content, displays);
+
+  // Mint waits until the preview is on screen — the user cannot approve what they have
+  // not seen: linked content fetched, and every media item displayed by its element.
+  // But only for so long: a host can accept the request and never finish it, and an
+  // element can neither load nor fail, and that must not make the intent impossible to
+  // approve. Past the wait, what is not displayed counts as not shown: Mint is offered
+  // with the warning, and the preview still fills in if the content arrives after all.
   const [waitedOut, setWaitedOut] = useState(false);
   useEffect(() => {
     if (!preview.loading || waitedOut) return;
@@ -100,8 +114,8 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
   const waiting = preview.loading && !waitedOut;
 
   // THE INVARIANT (ConnectContext.armIntentShield): the settle window measures from
-  // the moment ACTIONABLE UI is presented. While Mint waits for a linked preview it is
-  // disabled, so the moment it becomes actionable — the content shown, or the wait
+  // the moment ACTIONABLE UI is presented. While Mint waits for the preview it is
+  // disabled, so the moment it becomes actionable — everything shown, or the wait
   // over — is a fresh presentation, armed ONCE: it is a primary button enabling under
   // a cursor that may already rest on it. A LAYOUT effect, so the shield is up in the
   // same paint. A preview with nothing to wait for is actionable on arrival, and the
@@ -167,7 +181,7 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
     }
   };
 
-  // Not shown: refused, unavailable, or — once the wait is over — still not loaded.
+  // Not shown: refused, unavailable, failed to display, or — once the wait is over — still not on screen.
   const unshown = !waiting && (preview.unavailable || preview.loading);
 
   return (
@@ -203,7 +217,9 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
               {request.sign ? UNSHOWN_SIGNED : UNSHOWN_UNSIGNED}
             </p>
           )}
-          <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
+          <NftMediaDisplayContext.Provider value={reportDisplay}>
+            <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
+          </NftMediaDisplayContext.Provider>
         </section>
 
         {/* Known from the content itself, so it is there from the first paint: what the

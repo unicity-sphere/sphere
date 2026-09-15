@@ -5,6 +5,10 @@ import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
 import type { NftLink, NftMedia } from '@unicitylabs/sphere-sdk';
 import { NftMediaView } from '../../../../src/components/wallet/shared/nft/NftMediaView';
+import {
+  NftMediaDisplayContext,
+  type NftMediaDisplayReporter,
+} from '../../../../src/components/wallet/shared/nft/mediaDisplay';
 
 /**
  * NftMediaView renders only what useNftMedia cleared, and says why when it
@@ -185,5 +189,38 @@ describe('NftMediaView — thumb', () => {
     fireEvent.error(container.querySelector('img') as HTMLImageElement);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('svg')).toBeTruthy();
+  });
+});
+
+describe('NftMediaView — reporting what the browser displayed', () => {
+  it.each([
+    ['an image', 'image/png', 'img', 'load'],
+    ['a video', 'video/mp4', 'video', 'loadedData'],
+    ['audio', 'audio/mpeg', 'audio', 'loadedData'],
+  ] as const)('reports %s displayed once its element has it, and failed on an element error', async (_what, type, tag, event) => {
+    const report = vi.fn<NftMediaDisplayReporter>();
+    const media = inline(type);
+    const { container } = renderView(
+      <NftMediaDisplayContext.Provider value={report}>
+        <NftMediaView media={media} alt="x" variant="full" />
+      </NftMediaDisplayContext.Provider>,
+    );
+    await waitFor(() => expect(container.querySelector(tag)).toBeTruthy());
+    expect(report).not.toHaveBeenCalled();
+
+    fireEvent[event](container.querySelector(tag) as HTMLElement);
+    expect(report).toHaveBeenLastCalledWith(media, 'displayed');
+
+    fireEvent.error(container.querySelector(tag) as HTMLElement);
+    expect(report).toHaveBeenLastCalledWith(media, 'failed');
+    expect(report).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports nothing, and renders the same, without a reporter', async () => {
+    const { container } = renderView(<NftMediaView media={inline('video/mp4')} alt="x" variant="full" />);
+    await waitFor(() => expect(container.querySelector('video')).toBeTruthy());
+
+    expect(() => fireEvent.loadedData(container.querySelector('video') as HTMLVideoElement)).not.toThrow();
+    expect(container.querySelector('video')?.getAttribute('preload')).toBe('auto');
   });
 });
