@@ -364,6 +364,37 @@ describe('TokenDataModal — a hosted metadata document (#785)', () => {
   });
 });
 
+describe('TokenDataModal — content on a host its minter chose (#785)', () => {
+  const HOSTED_URI = 'https://cats.example/cat.cbor';
+
+  it('asks before loading a hosted document, keeps the class name meanwhile, and shows the document once loaded', async () => {
+    fetchMock.mockImplementation(async () => served(DOCUMENT));
+    renderModal(view({ ...documentLink(), uri: HOSTED_URI }));
+
+    expect(await screen.findByText('Metadata hosted at cats.example. Loading it shows that site your IP address.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'Cats' })).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+
+    expect(await screen.findByRole('heading', { level: 3, name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Doc Cat #1' })).toBeTruthy();
+    expect(screen.getByText(`Metadata hosted at ${HOSTED_URI}, checked against its fingerprint`)).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(HOSTED_URI);
+  });
+
+  it('asks before loading a hosted image, and fetches nothing until asked', async () => {
+    const image: NftLink = { kind: 'link', media_type: 'image/png', uri: 'https://cats.example/cat.png', sha256: sha256Hex(PNG) };
+    renderModal(view(metadata({ image })));
+
+    expect(await screen.findByText('Image hosted at cats.example. Loading it shows that site your IP address.')).toBeTruthy();
+    await settle();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('TokenDataModal — the signer (#785)', () => {
   const OTHER = '03' + 'cd'.repeat(32);
 

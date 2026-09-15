@@ -3,9 +3,12 @@ import { isNftDocumentLink, parseNftDocument } from '@unicitylabs/sphere-sdk';
 import type { NftContent, NftLink, NftMedia, NftMetadata } from '@unicitylabs/sphere-sdk';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { MAX_NFT_DOCUMENT_BYTES, resolveLinkUrl } from '../../../components/wallet/shared/nft/media';
+import type { NftLinkFetchPolicy } from '../../../components/wallet/shared/nft/linkFetch';
 import { fetchLinkedFile } from './linkedFile';
+import { linkRequestOf, useLinkFetchGate, waitsForUser, type LinkRequest } from './linkFetchGate';
 
-export type NftDocumentState = 'none' | 'loading' | 'ready' | 'unsupported' | 'mismatch' | 'invalid' | 'error';
+/** `ask` is a document link that waits for the user before it is fetched (NftLinkFetchContext). */
+export type NftDocumentState = 'none' | 'loading' | 'ask' | 'ready' | 'unsupported' | 'mismatch' | 'invalid' | 'error';
 
 /** What a metadata document holds: one metadata or media item — never a link, so documents do not chain. */
 export type NftDocument = NftMetadata | NftMedia;
@@ -14,6 +17,11 @@ export interface UseNftDocumentReturn {
   /** The document's item; null in every state but 'ready'. */
   document: NftDocument | null;
   state: NftDocumentState;
+  /**
+   * How the user asks for a document link that waits for them: present in 'ask', and
+   * in 'error' once asking failed. Absent for any other link.
+   */
+  request?: LinkRequest;
 }
 
 /**
@@ -44,11 +52,14 @@ export function nftDocumentLinkOf(content: NftContent | null | undefined): NftLi
  * The metadata document a document link points at (#785): fetched under the
  * same policy as linked media, but held to MAX_NFT_DOCUMENT_BYTES, and parsed
  * only once its bytes match the link's sha256. Anything that is not a document
- * link is 'none', and never fetched.
+ * link is 'none', and never fetched. A link to a host its minter chose waits for
+ * the user unless `policy` — by default the nearest NftLinkFetchContext — is
+ * `automatic`; a caller that renders that context passes its policy here.
  */
-export function useNftDocument(link: NftLink | null): UseNftDocumentReturn {
+export function useNftDocument(link: NftLink | null, policy?: NftLinkFetchPolicy): UseNftDocumentReturn {
   const documentLink = nftDocumentLinkOf(link);
   const url = documentLink ? resolveLinkUrl(documentLink.uri) : null;
+  const gate = useLinkFetchGate(documentLink, url, policy);
 
   const resolved = useQuery({
     queryKey: SPHERE_KEYS.nft.document(documentLink?.uri ?? '', documentLink?.sha256 ?? ''),
@@ -56,7 +67,7 @@ export function useNftDocument(link: NftLink | null): UseNftDocumentReturn {
       if (!documentLink || !url) throw new Error('No fetchable document link');
       return fetchDocument(documentLink, url, signal);
     },
-    enabled: url !== null,
+    enabled: url !== null && gate.automatic,
     staleTime: Infinity, // content-addressed: the same uri + sha256 always resolves the same way
     structuralSharing: false, // a media document carries Uint8Array bytes
   });
@@ -66,8 +77,12 @@ export function useNftDocument(link: NftLink | null): UseNftDocumentReturn {
   const outcome = resolved.data;
   if (outcome?.kind === 'document') return { document: outcome.document, state: 'ready' };
   if (outcome?.kind === 'mismatch' || outcome?.kind === 'invalid') return { document: null, state: outcome.kind };
-  if (outcome?.kind === 'unavailable' || resolved.isError) return { document: null, state: 'error' };
-  return { document: null, state: 'loading' };
+  let state: NftDocumentState;
+  if (outcome?.kind === 'unavailable' || resolved.isError) state = 'error';
+  else if (waitsForUser(gate, resolved)) state = 'ask';
+  else return { document: null, state: 'loading' };
+  const request = linkRequestOf(gate, resolved);
+  return request ? { document: null, state, request } : { document: null, state };
 }
 
 export interface ResolvedNftContent {
@@ -77,6 +92,8 @@ export interface ResolvedNftContent {
   readonly hostedAt: NftLink | null;
   /** Where resolving the document stands; 'none' when the content is not a document link. */
   readonly documentState: NftDocumentState;
+  /** How the user asks for a document link that waits for them (useNftDocument's `request`). */
+  readonly documentRequest?: LinkRequest;
 }
 
 /**
@@ -88,8 +105,9 @@ export interface ResolvedNftContent {
 export function useResolvedNftContent(content: NftContent | null | undefined): ResolvedNftContent {
   const own = content ?? null;
   const link = nftDocumentLinkOf(own);
-  const { document, state } = useNftDocument(link);
-  return document && link
-    ? { content: document, hostedAt: link, documentState: state }
+  const { document, state, request } = useNftDocument(link);
+  if (document && link) return { content: document, hostedAt: link, documentState: state };
+  return request
+    ? { content: own, hostedAt: null, documentState: state, documentRequest: request }
     : { content: own, hostedAt: null, documentState: state };
 }

@@ -5,6 +5,7 @@ import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { NftResolvedContentDetails } from '../wallet/shared/nft/NftDetails';
 import { NftMediaDisplayContext, type NftMediaDisplayStatus } from '../wallet/shared/nft/mediaDisplay';
+import { NftLinkFetchContext } from '../wallet/shared/nft/linkFetch';
 import { useConnectContext } from './ConnectContext';
 import type { MintNftParams } from './intentValidation';
 import { getPayments } from '../../sdk/payments';
@@ -217,9 +218,13 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
               {request.sign ? UNSHOWN_SIGNED : UNSHOWN_UNSIGNED}
             </p>
           )}
-          <NftMediaDisplayContext.Provider value={reportDisplay}>
-            <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
-          </NftMediaDisplayContext.Provider>
+          {/* The dApp asking for the mint chose these links and already has the user's
+              IP address, so they load without asking (NftLinkFetchContext). */}
+          <NftLinkFetchContext.Provider value="automatic">
+            <NftMediaDisplayContext.Provider value={reportDisplay}>
+              <NftResolvedContentDetails content={request.content} fallbackTitle="NFT" />
+            </NftMediaDisplayContext.Provider>
+          </NftLinkFetchContext.Provider>
         </section>
 
         {/* Known from the content itself, so it is there from the first paint: what the

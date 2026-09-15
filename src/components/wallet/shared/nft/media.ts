@@ -58,3 +58,12 @@ export function resolveLinkUrl(uri: string): string | null {
   if (uri.startsWith('ar://')) return viaGateway(uri.slice('ar://'.length), ARWEAVE_ID, ARWEAVE_GATEWAY);
   return null;
 }
+
+/**
+ * Whether fetching a link reaches a host its minter chose. An `https://` link does,
+ * and the request shows that host the viewer's IP address; `ipfs://` and `ar://`
+ * links are fetched from the fixed gateways above instead.
+ */
+export function linkHostIsMinterChosen(uri: string): boolean {
+  return uri.startsWith('https://');
+}

@@ -77,9 +77,11 @@ const DOCUMENT = encodeNftContent(
 );
 const NOT_A_DOCUMENT = new Uint8Array([0x63, 0x67, 0x6d, 0x21]);
 
-/** A document link pinned to `pinned`'s fingerprint. */
-function documentLink(pinned: Uint8Array = DOCUMENT): NftLink {
-  return { kind: 'link', media_type: NFT_DOCUMENT_MEDIA_TYPE, uri: 'https://nft.example/cat.cbor', sha256: sha256Hex(pinned) };
+const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+
+/** A document link pinned to `pinned`'s fingerprint, through the IPFS gateway: a row fetches it without asking. */
+function documentLink(pinned: Uint8Array = DOCUMENT, uri = `ipfs://${CID}/cat.cbor`): NftLink {
+  return { kind: 'link', media_type: NFT_DOCUMENT_MEDIA_TYPE, uri, sha256: sha256Hex(pinned) };
 }
 
 function served(bytes: Uint8Array): Response {
@@ -230,7 +232,7 @@ describe('CoinlessTokenRow — a hosted metadata document (#785)', () => {
     expect(container.querySelectorAll('img')).toHaveLength(1);
     expect(container.querySelector('img')?.getAttribute('alt')).toBe('Doc Cat #1');
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://nft.example/cat.cbor');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`https://ipfs.io/ipfs/${CID}/cat.cbor`);
   });
 
   it('keeps the registry name, and shows no icon in place of the preview, while the document loads', async () => {
@@ -303,6 +305,33 @@ describe('CoinlessTokenRow — a hosted metadata document (#785)', () => {
     act(() => { screen.getByText('Doc Cat #1').click(); });
     expect(onInspect).toHaveBeenCalledTimes(1);
     expect(onInspect).toHaveBeenLastCalledWith(held, 'Doc Cat #1');
+  });
+});
+
+describe('CoinlessTokenRow — content on a host its minter chose (#785)', () => {
+  // A row never fetches from such a host and never asks: loading it is the user's
+  // choice, made in the token's details.
+  it('fetches no hosted document, and keeps the registry name', async () => {
+    const { container } = renderRow(view(documentLink(DOCUMENT, 'https://nft.example/cat.cbor')), {
+      iconUrl: REGISTRY_ICON,
+    });
+    await settle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText('Cats')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load' })).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('fetches no hosted image, and shows neither it nor the registry icon', async () => {
+    const image: NftLink = { kind: 'link', media_type: 'image/png', uri: 'https://nft.example/cat.png', sha256: sha256Hex(PNG) };
+    const { container } = renderRow(view(metadata({ image })), { iconUrl: REGISTRY_ICON });
+    await settle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container.querySelector('img')).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Load' })).toBeNull();
   });
 });
 

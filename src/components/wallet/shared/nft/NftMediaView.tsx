@@ -2,6 +2,7 @@ import { useContext, useState } from 'react';
 import type { NftMediaRef } from '@unicitylabs/sphere-sdk';
 import { Image as ImageIcon, Loader2 } from 'lucide-react';
 import { useNftMedia } from '../../../../sdk/hooks/payments/useNftMedia';
+import { LinkRequestPrompt } from './LinkRequestPrompt';
 import { mediaKindOf, type NftMediaKind } from './media';
 import { NftMediaDisplayContext } from './mediaDisplay';
 
@@ -19,7 +20,8 @@ const NOUN: Record<NftMediaKind, string> = { image: 'Image', video: 'Video', aud
  * An NFT's image, video or audio (#785), rendered only from bytes `useNftMedia`
  * cleared: an allowlisted type, and for a hosted file a matching SHA-256.
  * Anything else — and a file the browser then fails to decode — falls back to
- * the generic icon.
+ * the generic icon. A link that waits for the user (NftLinkFetchContext) is asked
+ * for in the full view; a row shows the icon until it has been loaded.
  *
  * Inside a NftMediaDisplayContext it also reports the element's verdict on the item:
  * displayed once an image has loaded or a video or audio has its first data, failed
@@ -29,7 +31,7 @@ export function NftMediaView({ media, alt, variant }: NftMediaViewProps) {
   const kind = media ? mediaKindOf(media.media_type) : null;
   // A row never plays video or audio, so it never downloads a file for one either.
   const shown = variant === 'thumb' && kind !== 'image' ? null : media;
-  const { url, state } = useNftMedia(shown);
+  const { url, state, request } = useNftMedia(shown);
   const report = useContext(NftMediaDisplayContext);
   // Keyed by URL: a new file gets its own attempt instead of inheriting a failure.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -106,7 +108,9 @@ export function NftMediaView({ media, alt, variant }: NftMediaViewProps) {
   }
 
   let caption: React.ReactNode = null;
-  if (state === 'mismatch' && kind) {
+  if (request && kind) {
+    caption = <LinkRequestPrompt request={request} noun={NOUN[kind]} failed={state === 'error'} />;
+  } else if (state === 'mismatch' && kind) {
     caption = <p className="mt-1 text-xs text-amber-400">{NOUN[kind]} does not match its fingerprint — not shown</p>;
   } else if (state === 'unsupported') {
     caption = (

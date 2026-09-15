@@ -472,6 +472,34 @@ describe('mint_nft intent — Mint waits for what the user is asked to approve',
     expect(mintButton().disabled).toBe(true);
   });
 
+  it('never shows the not-shown warning, even in its first paint, for a document on the host the dApp chose', async () => {
+    // The dialog loads the dApp's links without asking. Were any part of it to wait for
+    // the user instead, its first paint would count the document as not shown — before
+    // any effect ran — and the warning would flash. render() flushes effects, so only a
+    // record of every node the dialog inserted or removed can see that paint.
+    fetchMock.mockReturnValue(new Promise<Response>(() => {}));
+    pendingIntent = mintNftIntent({ content: nftContentToWire(documentLink()) });
+    const texts: string[] = [];
+    const collect = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of [...record.addedNodes, ...record.removedNodes]) texts.push(node.textContent ?? '');
+      }
+    };
+    const observer = new MutationObserver(collect);
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      renderHandler();
+      await settle();
+    } finally {
+      collect(observer.takeRecords());
+      observer.disconnect();
+    }
+
+    expect(texts.some((text) => text.includes(UNSHOWN_SIGNED))).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(DOCUMENT_URI, expect.anything());
+    expect(mintButton().disabled).toBe(true);
+  });
+
   it.each([
     ['cannot be fetched', () => Promise.reject(new TypeError('Failed to fetch'))],
     ['does not match its fingerprint', () => served(GIF)],

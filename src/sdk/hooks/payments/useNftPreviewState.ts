@@ -21,8 +21,11 @@ export type NftMediaDisplays = ReadonlyMap<NftMediaRef, NftMediaDisplayStatus>;
 /** Where one media slot of a preview stands. */
 type MediaPart = 'none' | 'loading' | 'shown' | 'unavailable';
 
-/** The document states in which nothing from the document is shown. */
-const DOCUMENT_UNSHOWN: ReadonlySet<NftDocumentState> = new Set(['unsupported', 'mismatch', 'invalid', 'error']);
+/**
+ * The document states in which nothing from the document is shown. A preview fetches
+ * without asking, so `ask` never arises in one; were it to, nothing would be shown.
+ */
+const DOCUMENT_UNSHOWN: ReadonlySet<NftDocumentState> = new Set(['ask', 'unsupported', 'mismatch', 'invalid', 'error']);
 
 export interface NftPreviewState {
   /**
@@ -69,10 +72,14 @@ function useMediaPart(ref: NftMediaRef | null, displays: NftMediaDisplays): Medi
  * of whatever the preview shows — the resolved document's item, or the content itself —
  * through the queries the preview renders from, so nothing is fetched a second time,
  * and through `displays`, what each media element reported.
+ *
+ * Everything is fetched without asking, as the preview itself does (NftLinkFetchContext
+ * `automatic`): the content comes from the dApp asking for the mint. The document's
+ * policy is passed explicitly because this runs in the dialog that renders that context.
  */
 export function useNftPreviewState(content: NftContent | null, displays: NftMediaDisplays): NftPreviewState {
   const documentLink = nftDocumentLinkOf(content);
-  const { document, state: documentState } = useNftDocument(documentLink);
+  const { document, state: documentState } = useNftDocument(documentLink, 'automatic');
   // A document link shows no media of its own: until its document resolves there is nothing more to watch.
   const shown = documentLink ? document : content;
   const image = useMediaPart(shown ? nftContentMediaRef(shown) : null, displays);

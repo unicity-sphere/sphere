@@ -31,7 +31,8 @@ function link(overrides: Partial<NftLink> = {}): NftLink {
   return {
     kind: 'link',
     media_type: 'image/png',
-    uri: 'https://example.com/cat.png',
+    // Through the IPFS gateway, so it is fetched as soon as it is shown.
+    uri: 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/cat.png',
     sha256: sha256Hex(PNG),
     ...overrides,
   };
@@ -222,5 +223,55 @@ describe('NftMediaView — reporting what the browser displayed', () => {
 
     expect(() => fireEvent.loadedData(container.querySelector('video') as HTMLVideoElement)).not.toThrow();
     expect(container.querySelector('video')?.getAttribute('preload')).toBe('auto');
+  });
+});
+
+describe('NftMediaView — a file on a host its minter chose', () => {
+  const HOSTED = link({ uri: 'https://cats.example/cat.png' });
+  const PROMPT = 'Image hosted at cats.example. Loading it shows that site your IP address.';
+
+  it('asks before loading it in the full view, and fetches nothing until asked', async () => {
+    const { container } = renderView(<NftMediaView media={HOSTED} alt="x" variant="full" />);
+    await settle();
+
+    expect(screen.getByText(PROMPT)).toBeTruthy();
+    expect(container.querySelector('img')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('shows the file once the user loads it, and asks no more', async () => {
+    fetchMock.mockResolvedValue(new Response(PNG, { status: 200 }));
+    const { container } = renderView(<NftMediaView media={HOSTED} alt="Cat" variant="full" />);
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:nft-1'));
+    expect(fetchMock).toHaveBeenCalledWith('https://cats.example/cat.png', expect.objectContaining({ credentials: 'omit' }));
+    expect(screen.queryByText(PROMPT)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load' })).toBeNull();
+  });
+
+  it('offers to try again when it could not be loaded', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    renderView(<NftMediaView media={HOSTED} alt="x" variant="full" />);
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+
+    expect(await screen.findByText('Image could not be loaded from cats.example')).toBeTruthy();
+    fetchMock.mockResolvedValue(new Response(PNG, { status: 200 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the icon in a row, fetching nothing and asking nothing', async () => {
+    const { container } = renderView(<NftMediaView media={HOSTED} alt="x" variant="thumb" />);
+    await settle();
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg')).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

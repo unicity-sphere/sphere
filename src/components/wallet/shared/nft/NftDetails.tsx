@@ -14,10 +14,12 @@ import {
 } from 'lucide-react';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useResolvedNftContent, type NftDocumentState } from '../../../../sdk/hooks/payments/useNftDocument';
+import type { LinkRequest } from '../../../../sdk/hooks/payments/linkFetchGate';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { isChainPubkey, truncateId } from '../../../../utils/identifiers';
 import { isHttpsUrl } from '../../../../utils/isHttpsUrl';
+import { LinkRequestPrompt } from './LinkRequestPrompt';
 import { NftMediaView } from './NftMediaView';
 import { nftContentMediaRef, shortPubkey } from './nftDisplay';
 
@@ -223,8 +225,17 @@ function CollectionId({ id }: { id: string }) {
   );
 }
 
-/** A metadata document that cannot be shown, yet or at all. Nothing from the file itself appears. */
-function DocumentNotShown({ state }: { state: Extract<NftDocumentState, 'loading' | 'mismatch' | 'invalid'> }) {
+/**
+ * A metadata document that cannot be shown, yet or at all. Nothing from the file itself
+ * appears. A document on a host its minter chose waits for the user to load it.
+ */
+function DocumentNotShown({
+  state,
+  request,
+}: {
+  state: Extract<NftDocumentState, 'loading' | 'ask' | 'mismatch' | 'invalid'>;
+  request?: LinkRequest;
+}) {
   return (
     <div>
       <div className="overflow-hidden rounded-lg bg-black/40">
@@ -238,6 +249,7 @@ function DocumentNotShown({ state }: { state: Extract<NftDocumentState, 'loading
           </div>
         )}
       </div>
+      {state === 'ask' && request && <LinkRequestPrompt request={request} noun="Metadata" failed={false} />}
       {state === 'mismatch' && (
         <p className="mt-1 text-xs text-amber-400">Metadata does not match its fingerprint — not shown</p>
       )}
@@ -285,14 +297,21 @@ export function NftContentDetails({ content, fallbackTitle }: NftContentDetailsP
  * is hosted. While it loads, or when it fails either check, a placeholder says so
  * and nothing from the file is shown. A document that could not be fetched at all
  * leaves the content as it is. The token detail view and the mint preview both show
- * content through it, so a hosted document is checked the same way in each.
+ * content through it, so a hosted document is checked the same way in each. A
+ * document on a host its minter chose is fetched only once the user asks, unless the
+ * nearest NftLinkFetchContext says otherwise — as the mint preview's does.
  */
 export function NftResolvedContentDetails({ content, fallbackTitle }: NftContentDetailsProps) {
   const resolved = useResolvedNftContent(content);
-  const { documentState, hostedAt } = resolved;
+  const { documentState, hostedAt, documentRequest } = resolved;
 
-  if (documentState === 'loading' || documentState === 'mismatch' || documentState === 'invalid') {
-    return <DocumentNotShown state={documentState} />;
+  if (
+    documentState === 'loading' ||
+    documentState === 'ask' ||
+    documentState === 'mismatch' ||
+    documentState === 'invalid'
+  ) {
+    return <DocumentNotShown state={documentState} request={documentRequest} />;
   }
   return (
     <>
@@ -301,6 +320,9 @@ export function NftResolvedContentDetails({ content, fallbackTitle }: NftContent
         <p className="text-xs break-all text-neutral-400">
           {`Metadata hosted at ${hostedAt.uri}, checked against its fingerprint`}
         </p>
+      )}
+      {documentState === 'error' && documentRequest && (
+        <LinkRequestPrompt request={documentRequest} noun="Metadata" failed />
       )}
     </>
   );

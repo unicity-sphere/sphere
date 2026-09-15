@@ -8,14 +8,22 @@ import {
   resolveLinkUrl,
 } from '../../../components/wallet/shared/nft/media';
 import { fetchLinkedFile } from './linkedFile';
+import { linkRequestOf, useLinkFetchGate, waitsForUser, type LinkRequest } from './linkFetchGate';
+import { acquireObjectUrl, releaseObjectUrl } from './sharedObjectUrl';
 
-export type NftMediaState = 'none' | 'loading' | 'ready' | 'unsupported' | 'mismatch' | 'error';
+/** `ask` is a link that waits for the user before it is fetched (NftLinkFetchContext). */
+export type NftMediaState = 'none' | 'loading' | 'ask' | 'ready' | 'unsupported' | 'mismatch' | 'error';
 
 export interface UseNftMediaReturn {
   /** A `blob:` URL of bytes that are safe to render; null in every state but 'ready'. */
   url: string | null;
   mediaType: string | null;
   state: NftMediaState;
+  /**
+   * How the user asks for a link that waits for them: present in 'ask', and in 'error'
+   * once asking failed. Absent for any other link, and for inline media.
+   */
+  request?: LinkRequest;
 }
 
 /**
@@ -43,6 +51,8 @@ export function linkedMediaQuery(link: NftLink | null, url: string | null) {
  * Inline media renders when its type is allowlisted. A link is fetched only
  * when its type is allowlisted, and shown only when the bytes hash to the
  * link's sha256 — whatever a gateway serves in their place is never rendered.
+ * A link to a host its minter chose is fetched only once the user asks, unless
+ * the nearest NftLinkFetchContext says otherwise.
  */
 export function useNftMedia(ref: NftMediaRef | null): UseNftMediaReturn {
   const mediaType = ref?.media_type ?? null;
@@ -50,21 +60,23 @@ export function useNftMedia(ref: NftMediaRef | null): UseNftMediaReturn {
   const link = ref?.kind === 'link' && renderable ? ref : null;
   const linkUrl = link ? resolveLinkUrl(link.uri) : null;
 
-  const linked = useQuery(linkedMediaQuery(link, linkUrl));
+  const gate = useLinkFetchGate(link, linkUrl);
+  const linked = useQuery({ ...linkedMediaQuery(link, linkUrl), enabled: linkUrl !== null && gate.automatic });
 
   let bytes: Uint8Array | null = null;
   if (renderable && ref?.kind === 'media') bytes = ref.bytes;
   else if (link && linked.data?.verified) bytes = linked.data.bytes;
 
-  // The URL is paired with the bytes it was made from, so a changed ref never
-  // returns the previous — already revoked — URL for the render in between.
+  // One URL per bytes and type, however many views show them (sharedObjectUrl). It is
+  // paired with the bytes it was made from, so a changed ref never returns the
+  // previous — possibly revoked — URL for the render in between.
   const [objectUrl, setObjectUrl] = useState<{ bytes: Uint8Array; type: string; url: string } | null>(null);
   useEffect(() => {
     if (!bytes || !mediaType) return;
-    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mediaType }));
+    const url = acquireObjectUrl(bytes, mediaType);
     setObjectUrl({ bytes, type: mediaType, url });
     return () => {
-      URL.revokeObjectURL(url);
+      releaseObjectUrl(bytes, mediaType);
       setObjectUrl((current) => (current?.url === url ? null : current));
     };
   }, [bytes, mediaType]);
@@ -78,7 +90,9 @@ export function useNftMedia(ref: NftMediaRef | null): UseNftMediaReturn {
   else if (url) state = 'ready';
   else if (link && (linked.isError || refusal === 'unavailable')) state = 'error';
   else if (refusal === 'mismatch') state = 'mismatch';
+  else if (link && waitsForUser(gate, linked)) state = 'ask';
   else state = 'loading';
 
-  return { url, mediaType, state };
+  const request = state === 'ask' || state === 'error' ? linkRequestOf(gate, linked) : undefined;
+  return request ? { url, mediaType, state, request } : { url, mediaType, state };
 }
