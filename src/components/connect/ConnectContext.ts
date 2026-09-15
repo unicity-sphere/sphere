@@ -41,6 +41,12 @@ export interface PendingIntent {
   action: string;
   params: Record<string, unknown>;
   resolve: (result: IntentAnswer) => void;
+  /**
+   * The host's signal for this intent. It aborts once the host stops waiting — its
+   * deadline, a lock, a revoked session — having answered the dApp itself; the intent
+   * then leaves the queue, and nothing may act on it.
+   */
+  signal?: AbortSignal;
 }
 
 export type AutoIntentHandler = (
@@ -57,12 +63,17 @@ export interface ConnectContextValue {
     origin: string,
   ) => Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>;
 
-  /** Called by a ConnectHost when a dApp sends an intent. Queued FIFO per wallet. */
+  /**
+   * Called by a ConnectHost when a dApp sends an intent. Queued FIFO per wallet. Pass the
+   * host's `IntentContext.signal`: the SDK requires the wallet to dismiss an intent's
+   * modal once it aborts.
+   */
   requestIntent: (
     host: ConnectHost,
     origin: string,
     action: string,
     params: Record<string, unknown>,
+    signal?: AbortSignal,
   ) => Promise<IntentAnswer>;
 
   /**
@@ -117,6 +128,12 @@ export interface ConnectContextValue {
   resolveIntent: (id: number, result: unknown) => void;
   /** `data`, when given, reaches the dApp as the error's `data` (e.g. a journaled mint's `{ tokenId }`). */
   rejectIntent: (id: number, code: number, message: string, data?: unknown) => void;
+  /**
+   * Whether an intent is still queued, and so still waited for. False once it settled —
+   * answered, or dropped because its host stopped waiting — even before the modal showing
+   * it re-renders: check it before starting anything that cannot be undone.
+   */
+  isIntentPending: (id: number) => boolean;
 
   /** Register a live host with its transport-verified origin. Paired with releaseHost(). */
   attachHost: (host: ConnectHost, origin: string) => void;

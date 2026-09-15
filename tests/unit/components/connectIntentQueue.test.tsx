@@ -233,4 +233,41 @@ describe('mint_nft is asked every time, and a refusal can carry data to the dApp
     await waitFor(() => expect(refused).toBeDefined());
     expect(Object.keys((refused as { error: object }).error)).toEqual(['code', 'message']);
   });
+
+  it('drops an intent its host stops waiting for: the modal moves on, and the intent is no longer pending', async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+    const controller = new AbortController();
+    let answer: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}, controller.signal).then((r) => { answer = r; });
+      void ctx!.requestIntent(hostA, 'https://a.example', 'dm', {});
+    });
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('mint_nft'));
+    const id = ctx!.pendingIntent!.id;
+    expect(ctx!.isIntentPending(id)).toBe(true);
+
+    act(() => controller.abort());
+
+    // Synchronously: a click landing before the re-render must already see it gone.
+    expect(ctx!.isIntentPending(id)).toBe(false);
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('dm'));
+    await waitFor(() =>
+      expect(answer).toEqual({ error: expect.objectContaining({ code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN }) }),
+    );
+  });
+
+  it('never queues an intent whose host has already stopped waiting', async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+    const controller = new AbortController();
+    controller.abort();
+
+    const answer = await act(async () =>
+      ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}, controller.signal),
+    );
+
+    expect(answer).toEqual({ error: expect.objectContaining({ code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN }) });
+    expect(screen.getByTestId('head').textContent).toBe('none');
+  });
 });

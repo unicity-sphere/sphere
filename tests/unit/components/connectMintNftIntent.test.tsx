@@ -58,6 +58,9 @@ const registerAutoIntent = vi.fn();
 const armIntentShield = vi.fn();
 let pendingIntent: PendingIntent | null = null;
 
+/** Intent ids the host has stopped waiting for, as ConnectProvider.isIntentPending sees them. */
+const stoppedIntents = new Set<number>();
+
 vi.mock('../../../src/components/connect/ConnectContext', () => ({
   useConnectContext: () => ({
     pendingIntent,
@@ -65,6 +68,7 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
     rejectIntent,
     registerAutoIntent,
     armIntentShield,
+    isIntentPending: (id: number) => !stoppedIntents.has(id),
   }),
 }));
 
@@ -736,6 +740,22 @@ describe('mint_nft intent — minting', () => {
     expect(message).toContain('gateway timeout');
     expect(data).toEqual({ tokenId: TOKEN_ID });
     expect(resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('mints nothing once the host has stopped waiting for the intent, even with Mint still on screen', async () => {
+    renderHandler();
+    await displayPreviewMedia();
+    stoppedIntents.add(INTENT_ID);
+    try {
+      await clickMint();
+      await settle();
+
+      expect(mocks.mintNft).not.toHaveBeenCalled();
+      expect(resolveIntent).not.toHaveBeenCalled();
+      expect(rejectIntent).not.toHaveBeenCalled();
+    } finally {
+      stoppedIntents.delete(INTENT_ID);
+    }
   });
 
   it('a refusal — nothing journaled — is the intent error, with no token id', async () => {

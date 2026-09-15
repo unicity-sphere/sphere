@@ -227,6 +227,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       origin: string,
       action: string,
       params: Record<string, unknown>,
+      signal?: AbortSignal,
     ): Promise<IntentAnswer> => {
       // Auto-approve handlers — only the ones THIS host granted, and never for an
       // intent that must be asked every time.
@@ -252,13 +253,24 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       // Otherwise queue for the modal. FIFO, never a single overwritten slot: a
       // second requestIntent used to replace the state and lose the previous
       // `resolve` forever, leaving `await onIntent(...)` unsettled.
+      //
+      // Unless the host has stopped waiting: past its deadline, or once a lock or a revoked
+      // session settled the intent, the host has answered the dApp itself. A modal left
+      // open would act on an intent nothing waits for — a late Mint mints what the dApp
+      // may send again. So an aborted intent never queues, and one that aborts while
+      // queued leaves the queue, taking its modal with it. The host ignores this answer.
+      const stopped: IntentAnswer = {
+        error: { code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN, message: 'The Connect host stopped waiting for this intent' },
+      };
+      if (signal?.aborted) return stopped;
       return new Promise((resolve) => {
         const id = ++nextIdRef.current;
-        intentQueueRef.current.push({ id, host, origin, action, params, resolve });
+        intentQueueRef.current.push({ id, host, origin, action, params, resolve, ...(signal ? { signal } : {}) });
+        signal?.addEventListener('abort', () => settleIntent(id, stopped), { once: true });
         syncHeads();
       });
     },
-    [syncHeads],
+    [settleIntent, syncHeads],
   );
 
   const approveConnection = useCallback(
@@ -287,6 +299,13 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [settleIntent],
   );
 
+  // Read from the queue itself, not from state: a settle lands here synchronously, before
+  // any re-render, so a click on a modal that is about to close already sees it.
+  const isIntentPending = useCallback(
+    (id: number) => intentQueueRef.current.some((entry) => entry.id === id),
+    [],
+  );
+
   const value: ConnectContextValue = {
     requestApproval,
     requestIntent,
@@ -299,6 +318,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     denyConnection,
     resolveIntent,
     rejectIntent,
+    isIntentPending,
     attachHost,
     releaseHost,
     registerAutoIntent,

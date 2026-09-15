@@ -85,7 +85,7 @@ interface MintNftIntentModalProps {
  * one intent each.
  */
 export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyReady, onCancel }: MintNftIntentModalProps) {
-  const { resolveIntent, rejectIntent, armIntentShield } = useConnectContext();
+  const { resolveIntent, rejectIntent, armIntentShield, isIntentPending } = useConnectContext();
   const { sphere } = useSphereContext();
   const [run, setRun] = useState<NftMintRun>(IDLE);
   // Set before the mint's first await: one mint per intent, whatever lands before a re-render.
@@ -140,6 +140,9 @@ export function MintNftIntentModal({ intentId, origin, request, subscriptionKeyR
 
   const handleMintNft = async () => {
     if (mintStarted.current) return;
+    // Already settled — the host stopped waiting and answered the dApp itself — though
+    // this dialog has not unmounted yet: a mint now is one the dApp could send again.
+    if (!isIntentPending(intentId)) return;
     const payments = getPayments(sphere);
     if (!payments) {
       setRun({ ...IDLE, error: 'Wallet not available' });

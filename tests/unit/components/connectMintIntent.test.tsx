@@ -50,6 +50,9 @@ const resolveIntent = vi.fn();
 const rejectIntent = vi.fn();
 let pendingIntent: PendingIntent | null = null;
 
+/** Intent ids the host has stopped waiting for, as ConnectProvider.isIntentPending sees them. */
+const stoppedIntents = new Set<number>();
+
 vi.mock('../../../src/components/connect/ConnectContext', () => ({
   useConnectContext: () => ({
     pendingIntent,
@@ -57,6 +60,7 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
     rejectIntent,
     registerAutoIntent: vi.fn(),
     armIntentShield: vi.fn(),
+    isIntentPending: (id: number) => !stoppedIntents.has(id),
   }),
 }));
 
@@ -125,6 +129,20 @@ describe('mint intent — the outcome', () => {
     expect(message).toContain('gateway timeout');
     expect(data).toEqual({ tokenId: TOKEN_ID });
     expect(resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it('mints nothing once the host has stopped waiting for the intent, even with Mint still on screen', async () => {
+    render(<ConnectIntentHandler />);
+    stoppedIntents.add(INTENT_ID);
+    try {
+      await clickMint();
+
+      expect(mocks.mint).not.toHaveBeenCalled();
+      expect(resolveIntent).not.toHaveBeenCalled();
+      expect(rejectIntent).not.toHaveBeenCalled();
+    } finally {
+      stoppedIntents.delete(INTENT_ID);
+    }
   });
 
   it('a failure with nothing journaled is INTERNAL_ERROR with its reason, and no data', async () => {

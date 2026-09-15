@@ -49,7 +49,7 @@ interface MintIntentModalProps {
  * Render it keyed by the intent: the one-mint guard below holds for one intent.
  */
 export function MintIntentModal({ intentId, coinId, amount, subscriptionKeyReady, onCancel }: MintIntentModalProps) {
-  const { resolveIntent, rejectIntent } = useConnectContext();
+  const { resolveIntent, rejectIntent, isIntentPending } = useConnectContext();
   const { sphere } = useSphereContext();
   const [run, setRun] = useState<MintRun>(IDLE);
   // Set before the mint's first await: one mint per intent, whatever lands before a re-render.
@@ -62,6 +62,9 @@ export function MintIntentModal({ intentId, coinId, amount, subscriptionKeyReady
 
   const handleMint = async () => {
     if (mintStarted.current) return;
+    // Already settled — the host stopped waiting and answered the dApp itself — though
+    // this dialog has not unmounted yet: a mint now is one the dApp could send again.
+    if (!isIntentPending(intentId)) return;
     setRun(IDLE);
     const payments = getPayments(sphere);
     if (!payments) {

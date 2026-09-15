@@ -163,9 +163,12 @@ export function L3WalletView({
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
   const { coinless } = useCoinlessTokens();
-  // NFT readings for the coinless rows (#785). A token's genesis payload never
-  // changes, so the map keeps its identity until the set of held ids does.
-  const { views: nftViews } = useNfts(coinless.map((t) => t.tokenId));
+  const [activeTab, setActiveTab] = useState<Tab>('assets');
+  // NFT readings for the coinless rows (#785), read only while the Tokens tab shows them:
+  // each is a genesis payload to fetch and decode, and a large collection must not cost
+  // that before any NFT row is on screen. A token's genesis payload never changes, so the
+  // map keeps its identity until the set of held ids does.
+  const { views: nftViews } = useNfts(activeTab === 'tokens' ? coinless.map((t) => t.tokenId) : []);
   const { sphere, deleteWallet } = useSphereContext();
 
   const assets = sdkAssets;
@@ -173,7 +176,6 @@ export function L3WalletView({
   const tokens = sdkTokens;
   const sendableTokens = tokens;
 
-  const [activeTab, setActiveTab] = useState<Tab>('assets');
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);

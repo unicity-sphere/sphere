@@ -9,7 +9,7 @@ import { render, screen } from '@testing-library/react';
 import type { AgentConfig } from '../../../src/config/activities';
 import { AGENT_IFRAME_SANDBOX } from '../../../src/config/agentOrigins';
 
-const { ConnectHostMock } = vi.hoisted(() => ({
+const { ConnectHostMock, requestIntentMock } = vi.hoisted(() => ({
   ConnectHostMock: vi.fn(function () {
     return {
       destroy: vi.fn(),
@@ -21,6 +21,7 @@ const { ConnectHostMock } = vi.hoisted(() => ({
       getState: vi.fn(() => ({ walletState: 'live', session: null })),
     };
   }),
+  requestIntentMock: vi.fn(),
 }));
 
 vi.mock('@unicitylabs/sphere-sdk/connect', () => ({
@@ -39,7 +40,7 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
 vi.mock('../../../src/components/connect/ConnectContext', () => ({
   useConnectContext: () => ({
     requestApproval: vi.fn(),
-    requestIntent: vi.fn(),
+    requestIntent: requestIntentMock,
     noteLockedRequest: vi.fn(),
     attachHost: vi.fn(),
     releaseHost: vi.fn(),
@@ -63,6 +64,7 @@ function makeAgent(url: string): AgentConfig {
 
 beforeEach(() => {
   ConnectHostMock.mockClear();
+  requestIntentMock.mockClear();
 });
 
 describe('IframeAgent trust boundary', () => {
@@ -82,5 +84,28 @@ describe('IframeAgent trust boundary', () => {
     expect(iframe.getAttribute('sandbox')).not.toContain('allow-popups-to-escape-sandbox');
     expect(iframe.getAttribute('allow') ?? '').not.toContain('clipboard-write');
     expect(ConnectHostMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('IframeAgent intents', () => {
+  it("hands the host's abort signal to the intent queue, so an intent the host stops waiting for is dropped", () => {
+    render(<IframeAgent agent={makeAgent('https://third-party.example/app')} />);
+    // The mock takes no parameters; the config the component built is still recorded.
+    const [config] = ConnectHostMock.mock.calls[0] as unknown as [
+      {
+        onIntent: (action: string, params: Record<string, unknown>, session: unknown, ctx: { signal: AbortSignal }) => unknown;
+      },
+    ];
+    const controller = new AbortController();
+
+    void config.onIntent('mint_nft', { content: {} }, {}, { signal: controller.signal });
+
+    expect(requestIntentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'https://third-party.example',
+      'mint_nft',
+      { content: {} },
+      controller.signal,
+    );
   });
 });
