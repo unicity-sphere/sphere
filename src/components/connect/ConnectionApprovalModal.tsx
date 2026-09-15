@@ -27,6 +27,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   [PERMISSION_SCOPES.PAYMENT_REQUEST]: 'Payment requests',
   [PERMISSION_SCOPES.SIGN_REQUEST]: 'Sign messages',
   [PERMISSION_SCOPES.MINT_REQUEST]: 'Request minting',
+  [PERMISSION_SCOPES.NFT_TRANSFER]: 'Send NFTs',
+  [PERMISSION_SCOPES.NFT_MINT]: 'Mint NFTs to your wallet',
 };
 
 export function ConnectionApprovalModal() {

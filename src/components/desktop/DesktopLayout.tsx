@@ -19,6 +19,7 @@ import { isHttpsUrl } from '../../utils/isHttpsUrl';
 
 const CUSTOM_URL_PRESETS = [
   { label: 'Sphere Connect Example', url: 'https://unicity-sphere.github.io/sphere-sdk-connect-example/' },
+  { label: 'Sphere Memes', url: 'https://mastap.github.io/unicity-sphere-nft/' },
 ];
 
 export function DesktopLayout() {

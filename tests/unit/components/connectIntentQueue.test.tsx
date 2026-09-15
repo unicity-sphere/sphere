@@ -188,3 +188,49 @@ describe('settling an intent is keyed by ID, never by queue position', () => {
     expect(bob).toBeUndefined();
   });
 });
+
+describe('mint_nft is asked every time, and a refusal can carry data to the dApp', () => {
+  it('never answers mint_nft from an auto-approve grant — the intent reaches the modal', async () => {
+    // Minting an NFT signs dApp-chosen content as the user; no grant may stand in for the prompt.
+    const auto = vi.fn(async () => ({ result: { tokenId: 'forged' } }));
+    renderProvider();
+    act(() => {
+      ctx!.attachHost(hostA, 'https://a.example');
+      ctx!.registerAutoIntent(hostA, 'mint_nft', auto);
+    });
+
+    let answer: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { answer = r; });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('head').textContent).toBe('mint_nft'));
+    expect(auto).not.toHaveBeenCalled();
+    expect(answer).toBeUndefined();
+  });
+
+  it("relays a rejection's data with its error, and adds no data field when there is none", async () => {
+    renderProvider();
+    act(() => ctx!.attachHost(hostA, 'https://a.example'));
+
+    let journaled: unknown;
+    let refused: unknown;
+    act(() => {
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { journaled = r; });
+      void ctx!.requestIntent(hostA, 'https://a.example', 'mint_nft', {}).then((r) => { refused = r; });
+    });
+
+    act(() =>
+      ctx!.rejectIntent(ctx!.pendingIntent!.id, ERROR_CODES.INTERNAL_ERROR, 'may still complete', { tokenId: 'ab' }),
+    );
+    await waitFor(() =>
+      expect(journaled).toEqual({
+        error: { code: ERROR_CODES.INTERNAL_ERROR, message: 'may still complete', data: { tokenId: 'ab' } },
+      }),
+    );
+
+    act(() => ctx!.rejectIntent(ctx!.pendingIntent!.id, ERROR_CODES.INTERNAL_ERROR, 'refused'));
+    await waitFor(() => expect(refused).toBeDefined());
+    expect(Object.keys((refused as { error: object }).error)).toEqual(['code', 'message']);
+  });
+});

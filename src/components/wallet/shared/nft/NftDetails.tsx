@@ -250,7 +250,8 @@ function DocumentNotShown({ state }: { state: Extract<NftDocumentState, 'loading
  * What an NFT's content shows (#785): its media, then its metadata. Every string
  * in it is chosen by whoever wrote the content, so all of it renders as plain
  * text; media renders only through NftMediaView's checks. It says nothing about
- * who signed the token, or whether that signature verifies. Renders the parts
+ * who signed the token or whether that signature verifies, so it also serves a
+ * mint preview, for a token that does not exist yet. Renders the parts
  * unwrapped: the caller's container spaces them.
  */
 export function NftContentDetails({ content, fallbackTitle }: NftContentDetailsProps) {
@@ -283,7 +284,8 @@ export function NftContentDetails({ content, fallbackTitle }: NftContentDetailsP
  * item once its bytes have matched the link's fingerprint and parsed, with where it
  * is hosted. While it loads, or when it fails either check, a placeholder says so
  * and nothing from the file is shown. A document that could not be fetched at all
- * leaves the content as it is.
+ * leaves the content as it is. The token detail view and the mint preview both show
+ * content through it, so a hosted document is checked the same way in each.
  */
 export function NftResolvedContentDetails({ content, fallbackTitle }: NftContentDetailsProps) {
   const resolved = useResolvedNftContent(content);

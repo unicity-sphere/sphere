@@ -73,4 +73,19 @@ describe('ConnectionApprovalModal — verified origin as trust anchor', () => {
 
     expect(screen.getByTestId('connect-origin-mismatch')).toBeDefined();
   });
+
+  it('names the NFT scopes — minting NFTs and sending them are separate grants', () => {
+    state.pending = {
+      dapp: { name: 'Sphere Memes', url: 'https://memes.example' },
+      permissions: ['nft:mint', 'nft:transfer'] as PermissionScope[],
+      origin: 'https://memes.example',
+      resolve: () => {},
+    };
+
+    render(<ConnectionApprovalModal />);
+
+    expect(screen.getByText('Mint NFTs to your wallet')).toBeDefined();
+    expect(screen.getByText('Send NFTs')).toBeDefined();
+    expect(screen.queryByText('nft:mint')).toBeNull();
+  });
 });
