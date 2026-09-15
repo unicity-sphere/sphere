@@ -47,6 +47,13 @@ export function useNfts(tokenIds: readonly string[]): UseNftsReturn {
     },
     enabled: !!sphere && ids.length > 0,
     staleTime: Infinity,
+    // A batch nothing watches leaves the cache at once. Every send or receive keys a new
+    // batch holding every reading, so keeping superseded ones for the default five
+    // minutes piles up snapshot after snapshot of decoded payloads. What stays on screen
+    // does not depend on them: placeholderData takes the observer's previous data, and a
+    // failed batch falls back to lastRead below. Reading a set again costs little, since
+    // payments.nfts() answers from its own per-token cache.
+    gcTime: 0,
     structuralSharing: false, // views carry Uint8Array media
     // Every send or receive changes the id set, and so the key. Keep the last readings
     // on screen while the new set loads — a reading never changes for a token id — so

@@ -190,6 +190,23 @@ describe('useNfts', () => {
     expect(result.current.views.size).toBe(0);
   });
 
+  it('keeps no superseded batch in the cache once the set of ids changes', async () => {
+    // Every arrival or removal keys a new batch holding every reading; superseded
+    // batches kept around would pile up one snapshot of decoded payloads after another.
+    const { client, wrapper } = setup();
+    const { result, rerender } = renderHook(({ ids }) => useNfts(ids), {
+      wrapper,
+      initialProps: { ids: [ID_1] },
+    });
+    await waitFor(() => expect(result.current.views.size).toBe(1));
+
+    rerender({ ids: [ID_1, ID_2] });
+    await waitFor(() => expect(result.current.views.size).toBe(2));
+
+    await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: SPHERE_KEYS.nft.allViews })).toHaveLength(1));
+    expect(client.getQueryState(SPHERE_KEYS.nft.views(PUB_A, [ID_1, ID_2]))?.status).toBe('success');
+  });
+
   describe('a failed read on a view that stays mounted', () => {
     // RTL's waitFor polls on timers, so these step the fake clock by hand.
     async function tick(ms: number) {

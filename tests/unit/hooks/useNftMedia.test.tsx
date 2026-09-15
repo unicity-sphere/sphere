@@ -134,7 +134,8 @@ describe('useNftMedia — linked media', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(`https://ipfs.io/ipfs/${CID}/cat.png`);
-    expect(init).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache' });
+    // Revalidated with the host: another NFT may pin the same URL to other bytes.
+    expect(init).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-cache' });
     const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
     expect(await blobBytes(blob)).toEqual([...PNG]);
   });

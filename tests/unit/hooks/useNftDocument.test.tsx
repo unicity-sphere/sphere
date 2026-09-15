@@ -99,7 +99,8 @@ describe('useNftDocument — resolving', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(`https://ipfs.io/ipfs/${CID}/cat.cbor`);
-    expect(init).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache' });
+    // Revalidated with the host: another NFT may pin the same URL to other bytes.
+    expect(init).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-cache' });
   });
 
   it('resolves a document that holds a media item', async () => {

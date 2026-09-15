@@ -67,10 +67,15 @@ export async function fetchLinkedFile(
   // unavailable. A gateway's own redirects are followed: arweave.net answers with one,
   // to a per-transaction subdomain.
   //
+  // `no-cache` revalidates with the host instead of trusting the HTTP cache: another NFT
+  // can pin the same URL to other bytes (the file changed since), and a stale copy would
+  // read as a mismatch that is then kept for the session. An unchanged file answers 304,
+  // without its body.
+  //
   // This throws only when the host never answered — nothing was downloaded, so a
   // later view may ask again.
   const redirect: RequestRedirect = linkHostIsMinterChosen(link.uri) ? 'manual' : 'follow';
-  const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'force-cache', redirect, signal });
+  const res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-cache', redirect, signal });
   // Once the host has answered, its answer is the outcome: returned, not thrown,
   // so it is cached like a match. A thrown refusal would be retried, and fetched
   // again by every remount and every other view of the link — each time costing
