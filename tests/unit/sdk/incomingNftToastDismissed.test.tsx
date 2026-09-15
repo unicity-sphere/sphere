@@ -61,6 +61,7 @@ const reading: NftView = {
     external_url: null,
     attributes: [],
     collection: null,
+    collection_id: null,
   },
   creator: null,
   signature: 'unsigned',

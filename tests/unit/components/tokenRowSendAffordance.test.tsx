@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import type { Token, CoinlessToken } from '@unicitylabs/sphere-sdk';
 
 import { TokenRow } from '../../../src/components/wallet/shared/components/TokenRow';
@@ -39,6 +41,17 @@ const nft = (over: Partial<CoinlessToken> = {}): CoinlessToken =>
 
 const sendButton = () => screen.queryByRole('button', { name: 'Send this token' });
 
+// A coinless row resolves hosted NFT metadata through the query cache, so it
+// renders under a QueryClientProvider — as it always does in the app.
+function withQueryClient() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  };
+}
+
 describe('the Send affordance tracks spendability', () => {
   it('offers Send for a settled coin token', () => {
     render(<TokenRow token={coin()} delay={0} isNew={false} onSend={vi.fn()} />);
@@ -57,13 +70,14 @@ describe('the Send affordance tracks spendability', () => {
   });
 
   it('offers Send for a settled coinless token', () => {
-    render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />);
+    render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />, withQueryClient());
     expect(sendButton()).toBeTruthy();
   });
 
   it('withholds it from a #625-demoted coinless token', () => {
     render(
       <CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={vi.fn()} />,
+      withQueryClient(),
     );
     expect(sendButton()).toBeNull();
   });
@@ -73,6 +87,7 @@ describe('the Send affordance tracks spendability', () => {
     // suspect and resync can clear it, so the token is not gone.
     render(
       <CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={vi.fn()} />,
+      withQueryClient(),
     );
     expect(screen.getByText('Cool Cat')).toBeTruthy();
   });
@@ -106,7 +121,10 @@ describe('the Send affordance follows a flag that changes on an already-mounted 
 
   it('drops Send from a coinless row when it is demoted in place', () => {
     const onSend = vi.fn();
-    const { rerender } = render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={onSend} />);
+    const { rerender } = render(
+      <CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={onSend} />,
+      withQueryClient(),
+    );
     expect(sendButton()).toBeTruthy();
 
     rerender(<CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />);
@@ -117,6 +135,7 @@ describe('the Send affordance follows a flag that changes on an already-mounted 
     const onSend = vi.fn();
     const { rerender } = render(
       <CoinlessTokenRow token={nft({ suspectedSpent: true })} delay={0} isNew={false} onSend={onSend} />,
+      withQueryClient(),
     );
     expect(sendButton()).toBeNull();
 
@@ -127,7 +146,7 @@ describe('the Send affordance follows a flag that changes on an already-mounted 
   it('adopts a handler that is supplied after mount', () => {
     // The same class of defect: a comparator that ignores onSend keeps rendering
     // the row without the action even once the parent provides one.
-    const { rerender } = render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} />);
+    const { rerender } = render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} />, withQueryClient());
     expect(sendButton()).toBeNull();
 
     rerender(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />);

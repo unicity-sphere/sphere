@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Copy, CheckCircle2, Loader2 } from 'lucide-react';
 import { useState } from 'react';
-import { useNfts, useTokenData } from '../../../../sdk/hooks';
+import { useNfts, useResolvedNftContent, useTokenData } from '../../../../sdk/hooks';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
 import { NftDetails } from '../../shared/nft/NftDetails';
 
@@ -73,6 +73,11 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
   // Only a coinless token can be an NFT: a coin token's payload is its value envelope.
   const { views } = useNfts(target && !isCoinToken ? [target.tokenId] : NO_IDS);
   const nft = target ? views.get(target.tokenId) : undefined;
+  // A reading that links a hosted metadata document is named by that document once
+  // it resolves — as its row is. The NFT section below resolves the same link through
+  // the same query, so the document is fetched once.
+  const { content: shown, hostedAt } = useResolvedNftContent(nft?.content);
+  const documentName = hostedAt && shown?.kind === 'metadata' && shown.name ? shown.name : null;
 
   return (
     <AnimatePresence>
@@ -92,7 +97,7 @@ export function TokenDataModal({ target, onClose }: TokenDataModalProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="truncate text-lg font-semibold">{target.label}</h2>
+              <h2 className="truncate text-lg font-semibold">{documentName ?? target.label}</h2>
               <button onClick={onClose} aria-label="Close" className="rounded p-1 hover:bg-white/10">
                 <X className="h-5 w-5" />
               </button>

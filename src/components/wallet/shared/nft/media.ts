@@ -14,6 +14,13 @@ export const AUDIO_TYPES: readonly string[] = ['audio/mpeg', 'audio/ogg', 'audio
 /** A linked file larger than this is refused before it is hashed or shown. */
 export const MAX_LINKED_MEDIA_BYTES = 10 * 1024 * 1024;
 
+/**
+ * A linked metadata document larger than this is refused before it is hashed or
+ * parsed. A document is one metadata or media item, and an NFT's whole genesis
+ * payload is held to the same 1 MiB when this wallet mints one.
+ */
+export const MAX_NFT_DOCUMENT_BYTES = 1024 * 1024;
+
 export type NftMediaKind = 'image' | 'video' | 'audio';
 
 /** The element a media type renders as; null = not rendered at all. Exact match: the format only admits lowercase types. */

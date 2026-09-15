@@ -3,6 +3,7 @@ import {
   AUDIO_TYPES,
   IMAGE_TYPES,
   MAX_LINKED_MEDIA_BYTES,
+  MAX_NFT_DOCUMENT_BYTES,
   VIDEO_TYPES,
   mediaKindOf,
   resolveLinkUrl,
@@ -30,8 +31,16 @@ describe('NFT media allowlists', () => {
     }
   });
 
+  it('never renders a metadata document as media', () => {
+    expect(mediaKindOf('application/vnd.unicity.nft+cbor')).toBeNull();
+  });
+
   it('caps a linked file at 10 MiB', () => {
     expect(MAX_LINKED_MEDIA_BYTES).toBe(10 * 1024 * 1024);
+  });
+
+  it('caps a linked metadata document at 1 MiB', () => {
+    expect(MAX_NFT_DOCUMENT_BYTES).toBe(1024 * 1024);
   });
 });
 

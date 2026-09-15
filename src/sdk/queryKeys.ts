@@ -36,6 +36,12 @@ export const SPHERE_KEYS = {
     /** Every batch of readings, for every address. */
     allViews: ['sphere', 'nft', 'views'] as const,
     link: (uri: string, sha256: string) => ['sphere', 'nft', 'link', uri, sha256] as const,
+    /**
+     * A metadata document a link points at, fetched, checked and parsed. Apart from
+     * `link` although both are keyed by uri + sha256: a document is held to a smaller
+     * size cap, so a refusal cached for one must never answer for the other.
+     */
+    document: (uri: string, sha256: string) => ['sphere', 'nft', 'document', uri, sha256] as const,
     /** A verified creator key's nametag. Unlike a reading this can change — a binding may be published later. */
     creator: (chainPubkey: string) => ['sphere', 'nft', 'creator', chainPubkey] as const,
   },
