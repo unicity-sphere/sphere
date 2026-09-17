@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { DEV_PORTAL_URL } from '../config/devPortal';
+import { SDK_VERSION } from '../config/sdkVersion';
 import { copyToClipboard } from '../utils/copyToClipboard';
 
 type Section =
@@ -380,7 +381,20 @@ export function DocsPage() {
           <section id="getting-started" data-section="getting-started" className="mb-16">
             <h1 className="text-3xl sm:text-4xl font-bold mb-4">
               Sphere SDK
-              <span className="ml-3 text-sm font-normal text-neutral-500">v0.4.7</span>
+              {/* The version this page documents is the version this app is pinned to.
+                  SDK_VERSION is asserted against the package.json pin in
+                  tests/unit/config/sdkVersion.test.ts, so it cannot drift silently the
+                  way the old hard-coded v0.4.7 label did. A "latest on npm" link would
+                  drift the other way: it points at whatever npm ships today, which is
+                  not necessarily what these samples were checked against. */}
+              <a
+                href={`https://www.npmjs.com/package/@unicitylabs/sphere-sdk/v/${SDK_VERSION}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-3 text-sm font-normal text-neutral-500 hover:text-orange-500 transition align-middle"
+              >
+                v{SDK_VERSION}
+              </a>
             </h1>
             <p className="text-lg text-neutral-600 dark:text-neutral-400 mb-8 max-w-2xl">
               Build marketplaces where humans and AI agents trade anything. Payments, messaging, identity, and market intents in one SDK.
@@ -404,13 +418,26 @@ export function DocsPage() {
                 filename="app.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
-// 1. Create providers for your target network
-const providers = createBrowserProviders({ network: 'testnet' });
+const NETWORK = 'testnet2'; // 'mainnet' | 'testnet2'
 
-// 2. Initialize (auto-loads existing wallet or creates new one)
+// 1. Base providers for your target network
+const base = createBrowserProviders({ network: NETWORK });
+
+// 2. Attach the wallet-api composition. Assets move only through this
+//    vertical: Sphere.init throws INVALID_CONFIG without a walletApi
+//    config, and walletApi.network must equal the Sphere network.
+const providers = createWalletApiProviders(base, {
+  baseUrl: import.meta.env.VITE_WALLET_API_URL, // deployment-specific
+  network: NETWORK,
+});
+
+// 3. Initialize (auto-loads existing wallet or creates new one).
+//    Pass network here too — it selects the token registry.
 const { sphere, created, generatedMnemonic } = await Sphere.init({
   ...providers,
+  network: NETWORK,
   autoGenerate: true, // auto-generate mnemonic if no wallet exists
 });
 
@@ -418,18 +445,18 @@ if (generatedMnemonic) {
   console.log('Save this mnemonic:', generatedMnemonic);
 }
 
-// 3. Check your identity
+// 4. Check your identity
 console.log('Nametag:', sphere.getNametag());
 console.log('Identity:', sphere.identity);
 
-// 4. Send tokens
+// 5. Send tokens
 await sphere.payments.send({
   coinId: '0x...',
   amount: '100000000',
   recipient: '@alice',
 });
 
-// 5. Listen for incoming transfers
+// 6. Listen for incoming transfers
 sphere.on('transfer:incoming', (transfer) => {
   console.log('Received tokens:', transfer.tokens);
 });`}
@@ -439,15 +466,21 @@ sphere.on('transfer:incoming', (transfer) => {
             <div id="browser-setup" data-section="browser-setup" className="scroll-mt-24 mb-12">
               <h2 className="text-2xl font-bold mb-4">Browser Setup</h2>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                The SDK uses a provider-based architecture. <code className="text-amber-600 dark:text-amber-400">createBrowserProviders()</code> creates
-                all required providers for browser environments (IndexedDB storage, Nostr transport, aggregator oracle).
+                The SDK uses a provider-based architecture, composed in two steps.
+                <code className="text-amber-600 dark:text-amber-400"> createBrowserProviders()</code> builds the
+                platform providers (IndexedDB storage, Nostr transport, aggregator oracle), and
+                <code className="text-amber-600 dark:text-amber-400"> createWalletApiProviders()</code> attaches the
+                wallet-api transport config the payments vertical is built from.
               </p>
               <CodeBlock
                 filename="setup.ts"
                 code={`import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
-const providers = createBrowserProviders({
-  network: 'testnet',           // 'mainnet' | 'testnet' | 'testnet2'
+const NETWORK = 'testnet2'; // 'mainnet' | 'testnet2'
+
+const base = createBrowserProviders({
+  network: NETWORK,
   price: {
     platform: 'coingecko',      // fiat price provider
     cacheTtlMs: 5 * 60_000,    // cache prices for 5 minutes
@@ -456,11 +489,59 @@ const providers = createBrowserProviders({
   market: true,                 // enable intent bulletin board
 });
 
-// providers contains: storage, transport, oracle,
-// groupChat, market`}
+// base contains: storage, transport, oracle, groupChat, market
+
+const providers = createWalletApiProviders(base, {
+  baseUrl: import.meta.env.VITE_WALLET_API_URL,
+  network: NETWORK,             // must equal the Sphere network
+});
+
+// providers adds: walletApi`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                The providers object is spread into <code className="text-amber-600 dark:text-amber-400">Sphere.init()</code> to configure the SDK instance.
+                The providers object is spread into <code className="text-amber-600 dark:text-amber-400">Sphere.init()</code>,
+                together with the same <code className="text-amber-600 dark:text-amber-400">network</code> value.
+              </p>
+              <div className="my-4 p-4 rounded-xl border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10">
+                <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                  <strong>The wallet-api composition is mandatory.</strong> Assets move only through that vertical;
+                  there is no local-custody fallback. <code className="text-amber-600 dark:text-amber-400">Sphere.init()</code> throws
+                  <code className="text-amber-600 dark:text-amber-400"> INVALID_CONFIG</code> when
+                  <code className="text-amber-600 dark:text-amber-400"> walletApi</code> is missing, when
+                  <code className="text-amber-600 dark:text-amber-400"> network</code> is missing, or when
+                  <code className="text-amber-600 dark:text-amber-400"> walletApi.network</code> does not match it. The
+                  base URL is deployment-specific — take it from your own configuration rather than hard-coding one.
+                </p>
+              </div>
+              <h3 className="text-lg font-semibold mt-8 mb-3">What belongs in your .env</h3>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Only non-secret, deployment-specific values. Vite inlines every
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code>-prefixed variable into the client bundle,
+                so anything you put there is served verbatim to every visitor.
+              </p>
+              <CodeBlock
+                filename=".env"
+                code={`# Deployment-specific, and public by design — these ship in the bundle.
+VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
+
+# NEVER a seed phrase, a private key or an API secret. A VITE_ variable is not
+# configuration the browser keeps to itself: it is compiled into app.js and
+# downloaded by anyone who opens the page. A mnemonic put here is published.
+# Wallets come from the user at runtime (an import prompt) or from
+# autoGenerate; server-only secrets stay in a server-side process.`}
+              />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                The legacy <code className="text-amber-600 dark:text-amber-400">'testnet'</code> key still resolves to the same
+                configuration as <code className="text-amber-600 dark:text-amber-400">'testnet2'</code>, but new code should not
+                use it. It is deliberately absent from <code className="text-amber-600 dark:text-amber-400">SPHERE_NETWORKS</code>,
+                which is what a dApp sends in a Connect handshake — and, more sharply, the init guard compares
+                <code className="text-amber-600 dark:text-amber-400"> walletApi.network</code> with
+                <code className="text-amber-600 dark:text-amber-400"> options.network</code> as raw strings. Passing
+                <code className="text-amber-600 dark:text-amber-400"> 'testnet'</code> to one and
+                <code className="text-amber-600 dark:text-amber-400"> 'testnet2'</code> to the other throws
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_CONFIG</code> even though both name the same network.
+                Use one literal — the <code className="text-amber-600 dark:text-amber-400">NETWORK</code> constant in the samples
+                above exists for exactly that reason.
               </p>
             </div>
           </section>
@@ -619,6 +700,8 @@ unsub(); // stop listening`}
                   { name: 'storage', type: 'StorageProvider', description: 'Storage provider (IndexedDB in browser)', required: true },
                   { name: 'transport', type: 'TransportProvider', description: 'Transport provider (Nostr in browser)', required: true },
                   { name: 'oracle', type: 'OracleProvider', description: 'Aggregator oracle provider', required: true },
+                  { name: 'walletApi', type: 'WalletApiTransportConfig', description: 'Wallet-api transport config from createWalletApiProviders(). Missing it throws INVALID_CONFIG', required: true },
+                  { name: 'network', type: "'mainnet' | 'testnet2'", description: 'Network this wallet runs on. Must equal walletApi.network; missing it throws INVALID_CONFIG', required: true },
                   { name: 'mnemonic', type: 'string', description: 'BIP39 mnemonic to create wallet from (if no wallet exists)' },
                   { name: 'autoGenerate', type: 'boolean', description: 'Auto-generate mnemonic if wallet does not exist' },
                   { name: 'nametag', type: 'string', description: 'Register nametag on creation' },
@@ -642,12 +725,19 @@ unsub(); // stop listening`}
                 filename="init.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
-const providers = createBrowserProviders({ network: 'testnet' });
+const NETWORK = 'testnet2';
+
+const providers = createWalletApiProviders(
+  createBrowserProviders({ network: NETWORK }),
+  { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
+);
 
 // Auto-create with generated mnemonic
 const { sphere, generatedMnemonic } = await Sphere.init({
   ...providers,
+  network: NETWORK,
   autoGenerate: true,
   nametag: 'myagent',
 });
@@ -655,6 +745,7 @@ const { sphere, generatedMnemonic } = await Sphere.init({
 // Or import with known mnemonic
 const { sphere: imported } = await Sphere.init({
   ...providers,
+  network: NETWORK,
   mnemonic: 'abandon badge cable drama ...',
 });`}
               />
@@ -670,11 +761,16 @@ const { sphere: imported } = await Sphere.init({
               <CodeBlock code={`static async exists(storage: StorageProvider): Promise<boolean>`} />
               <CodeBlock
                 filename="example.ts"
-                code={`const providers = createBrowserProviders({ network: 'testnet' });
+                code={`const NETWORK = 'testnet2';
+const providers = createWalletApiProviders(
+  createBrowserProviders({ network: NETWORK }),
+  { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
+);
+
 const hasWallet = await Sphere.exists(providers.storage);
 
 if (hasWallet) {
-  const { sphere } = await Sphere.init({ ...providers });
+  const { sphere } = await Sphere.init({ ...providers, network: NETWORK });
 } else {
   // Show onboarding flow
 }`}
@@ -1271,16 +1367,16 @@ const recent = await sphere.market.getRecentListings();`}
                 The protocol follows a <strong>Host / Client</strong> architecture:
               </p>
               <ul className="list-disc ml-6 text-neutral-600 dark:text-neutral-300 space-y-2 mb-4">
-                <li><strong>Host</strong> — the Sphere wallet (web app or browser extension). Manages keys, signs transactions, controls permissions.</li>
+                <li><strong>Host</strong> — the Sphere wallet web app. Manages keys, signs transactions, controls permissions.</li>
                 <li><strong>Client</strong> — your dApp. Sends queries and intents to the wallet via a transport layer.</li>
               </ul>
               <p className="text-neutral-600 dark:text-neutral-300 mb-4">
-                Three transport types are available depending on the environment:
+                The SDK ships three transports. Only one of them reaches the hosted Sphere wallet:
               </p>
               <ul className="list-disc ml-6 text-neutral-600 dark:text-neutral-300 space-y-2">
-                <li><strong>PostMessageTransport</strong> — for browser apps loaded in iframes or opened as popups</li>
-                <li><strong>ExtensionTransport</strong> — for apps connecting via the Sphere browser extension <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-medium">In Development</span></li>
-                <li><strong>WebSocketTransport</strong> — for Node.js / CLI applications</li>
+                <li><strong>PostMessageTransport</strong> — <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 font-medium">Supported</span> the browser path, and the only transport the hosted wallet implements. In the supported arrangement your dApp runs <em>inside</em> Sphere, in an iframe, and talks to the wallet page that frames it; the popup fallback below rides the same transport against the wallet&rsquo;s <code>/connect</code> page.</li>
+                <li><strong>WebSocketTransport</strong> — for a wallet host you run yourself. Its server mode expects the <em>wallet</em> to listen on a WebSocket port, which a browser page cannot do, so the hosted wallet at sphere.unicity.network never sits behind it. Use it for Node.js / CLI setups where you supply both ends.</li>
+                <li><strong>ExtensionTransport</strong> — <span className="text-xs px-1.5 py-0.5 rounded-full bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 font-medium">Deprecated</span> the SDK still exports it, but there is no supported wallet behind it. The Sphere browser extension is discontinued — do not build against this transport.</li>
               </ul>
             </div>
 
@@ -1324,8 +1420,8 @@ const recent = await sphere.market.getRecentListings();`}
             <div id="connect-autoconnect" data-section="connect-autoconnect" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">autoConnect()</h3>
               <p className="text-neutral-600 dark:text-neutral-300 mb-4">
-                The recommended way to connect from a browser app. It automatically detects the best
-                available transport and establishes the connection:
+                The recommended way to connect from a browser app. It detects the environment and
+                picks a transport, in this order:
               </p>
 
               <div className="overflow-x-auto my-4">
@@ -1340,36 +1436,99 @@ const recent = await sphere.market.getRecentListings();`}
                   <tbody>
                     <tr className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-4 font-mono text-amber-600 dark:text-amber-400">P1</td>
-                      <td className="py-2 pr-4">Iframe</td>
-                      <td className="py-2 text-neutral-600 dark:text-neutral-400">App is loaded inside Sphere as an agent</td>
+                      <td className="py-2 pr-4">Iframe <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 font-medium">Supported</span></td>
+                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Your app is loaded inside Sphere as an agent. This is the path to build for.</td>
                     </tr>
                     <tr className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-4 font-mono text-amber-600 dark:text-amber-400">P2</td>
-                      <td className="py-2 pr-4">Extension <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-medium">In Development</span></td>
-                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Sphere browser extension is installed</td>
+                      <td className="py-2 pr-4">Extension <span className="text-xs px-1.5 py-0.5 rounded-full bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 font-medium">Deprecated</span></td>
+                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Never selected in practice: the Sphere browser extension is discontinued, so nothing installs the <code>window.sphere</code> bridge this probes for.</td>
                     </tr>
                     <tr className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-4 font-mono text-amber-600 dark:text-amber-400">P3</td>
-                      <td className="py-2 pr-4">Popup</td>
-                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Fallback — opens Sphere in a popup window</td>
+                      <td className="py-2 pr-4">Popup <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-medium">Fallback</span></td>
+                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Last resort when the page is not framed: needs <code>walletUrl</code>, a popup the browser does not block, and your own session persistence to survive a reload. Not the arrangement to design for, but it is the usable one against a wallet you run yourself (a local Sphere dev server on <code>localhost:5173</code>).</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
+              <div className="my-6 p-4 rounded-xl border border-orange-300 dark:border-orange-500/40 bg-orange-50 dark:bg-orange-500/10">
+                <p className="text-sm font-semibold mb-2">Running your dApp against the wallet</p>
+                <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-3">
+                  The supported arrangement is your dApp running <em>inside</em> Sphere. To try a build you host yourself,
+                  open it as a custom agent:
+                </p>
+                <CodeBlock
+                  filename="open in Sphere"
+                  code={`https://sphere.unicity.network/agents/custom?url=<your https url>`}
+                />
+                <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-3">
+                  <strong>The URL must be https.</strong> Sphere only frames a custom tab whose URL parses with an
+                  <code className="text-amber-600 dark:text-amber-400"> https:</code> protocol; anything else falls through
+                  to the &ldquo;Load Custom URL&rdquo; prompt and never loads. The check is protocol-only, and it is not
+                  the only gate — see below.
+                </p>
+                <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-3">
+                  <strong>A localhost URL will not get that far.</strong> The CDN in front of
+                  <code className="text-amber-600 dark:text-amber-400"> sphere.unicity.network</code> rejects any request
+                  whose query string contains <code className="text-amber-600 dark:text-amber-400">localhost</code> or
+                  <code className="text-amber-600 dark:text-amber-400"> 127.0.0.1</code> with a
+                  <strong> 403</strong> and its own error page, before the request reaches the wallet at all. Measured with
+                  <code className="text-amber-600 dark:text-amber-400"> curl</code> on 2026-09-17: the same routes return
+                  <strong> 200</strong> without those substrings
+                  (<code className="text-amber-600 dark:text-amber-400">/connect</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> /connect?origin=…</code> and
+                  <code className="text-amber-600 dark:text-amber-400"> /agents/custom?url=…</code> all answered 200), and
+                  403 with them, on every route tried and regardless of request headers. It is a rule about local URLs in
+                  the query, not something specific to Connect or to the popup path.
+                </p>
+                <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                  So to try a local build against the <em>hosted</em> wallet, put it on a publicly reachable https origin —
+                  an https tunnel in front of your dev server is enough — and pass that URL. Plain http would not be framed
+                  anyway. (Typing an https URL into the wallet&rsquo;s own &ldquo;Load Custom URL&rdquo; prompt never sends
+                  that query string to the CDN, so it should clear the 403 and only face the https gate; that path has not
+                  been verified end to end.) Against a wallet you run yourself — this repo&rsquo;s dev server on
+                  <code className="text-amber-600 dark:text-amber-400"> localhost:5173</code> — no CDN is in the way at all,
+                  so the popup path over plain <code className="text-amber-600 dark:text-amber-400">http://localhost</code> is
+                  fine. The https rule above is the wallet&rsquo;s own, so it still applies to anything Sphere frames as a
+                  custom tab, local or not.
+                </p>
+              </div>
+
               <CodeBlock
                 filename="connect-example.ts"
                 code={`import { autoConnect } from '@unicitylabs/sphere-sdk/connect/browser';
-import { WALLET_EVENTS } from '@unicitylabs/sphere-sdk/connect';
+import { SPHERE_NETWORKS, WALLET_EVENTS } from '@unicitylabs/sphere-sdk/connect';
+import type { WalletUnlockedPayload } from '@unicitylabs/sphere-sdk/connect';
 
-// Connect to wallet — auto-detects best transport (iframe → extension → popup)
+// Connect to the wallet. In the supported arrangement this page is already
+// framed by Sphere, so autoConnect picks the iframe transport by itself.
 const { client, connection, disconnect } = await autoConnect({
   dapp: {
     name: 'My App',
     url: location.origin,
     icon: location.origin + '/icon.svg',  // shown in wallet approval dialog
   },
-  permissions: ['identity:read', 'sign:request', 'balance:read'],
+
+  // REQUIRED. The wallet's compatibility gate treats a missing or mismatched
+  // network as INCOMPATIBLE_NETWORK (4008) and refuses the handshake before any
+  // UI appears. Use the SPHERE_NETWORKS table so the id cannot drift.
+  network: SPHERE_NETWORKS.testnet2,   // or SPHERE_NETWORKS.mainnet
+
+  // Ask for exactly what this file uses. Every query, intent and event
+  // subscription below maps to one of these scopes:
+  //   identity:read    -> sphere_getIdentity
+  //   balance:read     -> sphere_getBalance
+  //   transfer:request -> the 'send' intent  (without it: PERMISSION_DENIED 4002)
+  //   events:subscribe -> client.on('transfer:incoming', ...) — the subscribe RPC
+  //                       fails silently, so without it the handler never fires
+  permissions: ['identity:read', 'balance:read', 'transfer:request', 'events:subscribe'],
+
+  // Only used by the popup fallback (P3): autoConnect opens
+  // <walletUrl>/connect?origin=<your origin>. Harmless to pass, but it is NOT
+  // what makes the iframe path work — that needs Sphere to frame your page.
+  walletUrl: 'https://sphere.unicity.network',
 });
 
 // Query wallet
@@ -1404,7 +1563,12 @@ client.on(WALLET_EVENTS.LOCKED, () => {
 // is NOT guaranteed to be the wallet you connected with — the lock screen's
 // "Forgot password → restore from recovery phrase" installs a different seed.
 // Compare before you retry anything.
-client.on(WALLET_EVENTS.UNLOCKED, ({ identity }) => {
+//
+// ConnectEventHandler is (data: unknown) => void, so destructuring the payload
+// directly does not compile under strict TypeScript. Narrow it with the exported
+// payload type instead:
+client.on(WALLET_EVENTS.UNLOCKED, (payload) => {
+  const { identity } = (payload ?? {}) as WalletUnlockedPayload;
   if (identity?.chainPubkey !== connectedPubkey) {
     // A different wallet came back — treat it as a new connection.
     disconnect();
@@ -1433,7 +1597,10 @@ client.on(WALLET_EVENTS.IDENTITY_CHANGED, (newIdentity) => {
   // Update displayed identity
 });
 
-// Listen for real-time events
+// Listen for real-time events. Unlike the wallet:* events above, this one is NOT
+// auto-pushed: it goes through sphere_subscribe, which needs 'events:subscribe'.
+// Without that scope the subscribe is refused and swallowed — no throw, no error,
+// the handler simply never fires.
 client.on('transfer:incoming', (transfer) => {
   console.log('Received:', transfer);
 });
@@ -1441,9 +1608,10 @@ client.on('transfer:incoming', (transfer) => {
 // Disconnect when done
 disconnect();
 
-// TIP: For popup mode, save connection.sessionId to sessionStorage
-// and pass resumeSessionId to autoConnect() to survive page refreshes.
-// See full guide: github.com/unicity-sphere/sphere-sdk/blob/main/docs/CONNECT.md`}
+// TIP: in the popup fallback, save connection.sessionId to sessionStorage and
+// pass resumeSessionId to autoConnect() so a page refresh does not re-handshake.
+// See the full guide:
+// github.com/unicity-sphere/sphere-sdk/blob/main/docs/CONNECT.md`}
               />
             </div>
 
@@ -1524,17 +1692,36 @@ disconnect();
                 filename="marketplace.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
-const providers = createBrowserProviders({
-  network: 'testnet',
-  market: true,
+const NETWORK = 'testnet2';
+
+const providers = createWalletApiProviders(
+  createBrowserProviders({ network: NETWORK, market: true }),
+  { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
+);
+
+// NEVER put a seed phrase in a build-time variable. Anything prefixed VITE_ is
+// inlined into the bundle and served to every visitor — that is publishing the
+// wallet, not configuring it. init() loads the wallet already in this browser's
+// storage; autoGenerate only fires when there is none, and hands the phrase to
+// the user to write down.
+const { sphere, created, generatedMnemonic } = await Sphere.init({
+  ...providers,
+  network: NETWORK,
+  autoGenerate: true,
 });
 
-const { sphere } = await Sphere.init({
-  ...providers,
-  mnemonic: process.env.WALLET_MNEMONIC,
-});`}
+if (created && generatedMnemonic) {
+  showBackupPrompt(generatedMnemonic); // your UI — the user saves it, you never store it
+}`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                To let a user bring an existing wallet, take the phrase from an input they fill in and pass it as
+                <code className="text-amber-600 dark:text-amber-400"> mnemonic</code> — see
+                <a href="#guide-wallet-backup" className="text-orange-500 hover:underline"> Wallet Backup &amp; Recovery</a>.
+                A seed that comes from your configuration rather than from the user is a seed you have distributed.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 2: Post Listings</h4>
               <CodeBlock
@@ -1617,21 +1804,33 @@ const txt = sphere.exportToTxt();`}
 
               <h4 className="font-medium text-lg mt-6 mb-3">Recovery</h4>
               <CodeBlock
-                code={`// Recover from mnemonic
+                code={`// \`providers\` below is the composed bundle from Browser Setup —
+// createBrowserProviders(...) wrapped in createWalletApiProviders(...).
+// Every entry point needs the same \`network\` as walletApi.network.
+const NETWORK = 'testnet2';
+
+// Recover from a mnemonic the USER supplies at runtime — a textarea they paste
+// into, a hardware prompt, whatever your UI is. Never a build-time constant and
+// never import.meta.env: a VITE_ variable is inlined into the bundle and served
+// to every visitor, so a seed put there is a published seed.
+const phrase = mnemonicInput.value.trim();
 const { sphere } = await Sphere.init({
   ...providers,
-  mnemonic: 'abandon badge cable drama ...',
+  network: NETWORK,
+  mnemonic: phrase,
 });
 
 // Import from JSON file
-const result = await Sphere.importFromJSON({
+const fromJson = await Sphere.importFromJSON({
   ...providers,
+  network: NETWORK,
   jsonContent: '{"version":...}',
 });
 
 // Import from a legacy wallet file (.txt / JSON backups; .dat was removed)
-const result = await Sphere.importFromLegacyFile({
+const fromLegacy = await Sphere.importFromLegacyFile({
   ...providers,
+  network: NETWORK,
   fileContent: fileData,
   fileName: 'wallet.txt',
   password: 'if-encrypted',
@@ -1657,13 +1856,27 @@ const result = await Sphere.importFromLegacyFile({
                 filename="simple-payment.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+
+const NETWORK = 'testnet2';
 
 async function main() {
-  const providers = createBrowserProviders({ network: 'testnet' });
-  const { sphere } = await Sphere.init({
+  const providers = createWalletApiProviders(
+    createBrowserProviders({ network: NETWORK }),
+    { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
+  );
+  // Loads the wallet already in this browser's storage. autoGenerate only fires
+  // when there is none — a throwaway wallet whose phrase is handed straight to
+  // the user. A seed never comes from import.meta.env: VITE_ variables are
+  // inlined into the bundle and served to every visitor.
+  const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
-    mnemonic: process.env.MNEMONIC,
+    network: NETWORK,
+    autoGenerate: true,
   });
+  if (created && generatedMnemonic) {
+    console.log('New wallet — save this phrase:', generatedMnemonic);
+  }
 
   // Check balance
   const assets = await sphere.payments.assets();
@@ -1698,16 +1911,25 @@ main();`}
                 filename="p2p-marketplace.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
+
+const NETWORK = 'testnet2';
 
 async function main() {
-  const providers = createBrowserProviders({
-    network: 'testnet',
-    market: true,
-  });
-  const { sphere } = await Sphere.init({
+  const providers = createWalletApiProviders(
+    createBrowserProviders({ network: NETWORK, market: true }),
+    { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
+  );
+  // Existing wallet in this browser, or a throwaway one whose phrase goes to the
+  // user. Never a seed from import.meta.env — VITE_ variables ship in the bundle.
+  const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
-    mnemonic: process.env.MNEMONIC,
+    network: NETWORK,
+    autoGenerate: true,
   });
+  if (created && generatedMnemonic) {
+    console.log('New wallet — save this phrase:', generatedMnemonic);
+  }
 
   // Post items for sale
   await sphere.market.postIntent({
