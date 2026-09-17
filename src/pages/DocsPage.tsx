@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { DEV_PORTAL_URL } from '../config/devPortal';
+import { SDK_VERSION } from '../config/sdkVersion';
 import { copyToClipboard } from '../utils/copyToClipboard';
 
 type Section =
@@ -380,15 +381,19 @@ export function DocsPage() {
           <section id="getting-started" data-section="getting-started" className="mb-16">
             <h1 className="text-3xl sm:text-4xl font-bold mb-4">
               Sphere SDK
-              {/* No hard-coded version here: a literal in this file cannot track the
-                  package and drifted for many releases. Link to the registry instead. */}
+              {/* The version this page documents is the version this app is pinned to.
+                  SDK_VERSION is asserted against the package.json pin in
+                  tests/unit/config/sdkVersion.test.ts, so it cannot drift silently the
+                  way the old hard-coded v0.4.7 label did. A "latest on npm" link would
+                  drift the other way: it points at whatever npm ships today, which is
+                  not necessarily what these samples were checked against. */}
               <a
-                href="https://www.npmjs.com/package/@unicitylabs/sphere-sdk"
+                href={`https://www.npmjs.com/package/@unicitylabs/sphere-sdk/v/${SDK_VERSION}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-3 text-sm font-normal text-neutral-500 hover:text-orange-500 transition align-middle"
               >
-                current version on npm
+                v{SDK_VERSION}
               </a>
             </h1>
             <p className="text-lg text-neutral-600 dark:text-neutral-400 mb-8 max-w-2xl">
@@ -508,11 +513,35 @@ const providers = createWalletApiProviders(base, {
                   base URL is deployment-specific — take it from your own configuration rather than hard-coding one.
                 </p>
               </div>
+              <h3 className="text-lg font-semibold mt-8 mb-3">What belongs in your .env</h3>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Only non-secret, deployment-specific values. Vite inlines every
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code>-prefixed variable into the client bundle,
+                so anything you put there is served verbatim to every visitor.
+              </p>
+              <CodeBlock
+                filename=".env"
+                code={`# Deployment-specific, and public by design — these ship in the bundle.
+VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
+
+# NEVER a seed phrase, a private key or an API secret. A VITE_ variable is not
+# configuration the browser keeps to itself: it is compiled into app.js and
+# downloaded by anyone who opens the page. A mnemonic put here is published.
+# Wallets come from the user at runtime (an import prompt) or from
+# autoGenerate; server-only secrets stay in a server-side process.`}
+              />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                The legacy <code className="text-amber-600 dark:text-amber-400">'testnet'</code> key is still accepted as an alias
-                for <code className="text-amber-600 dark:text-amber-400">'testnet2'</code>, but new code should not use it: it is
-                deliberately absent from <code className="text-amber-600 dark:text-amber-400">SPHERE_NETWORKS</code>, which is what a
-                dApp sends in a Connect handshake.
+                The legacy <code className="text-amber-600 dark:text-amber-400">'testnet'</code> key still resolves to the same
+                configuration as <code className="text-amber-600 dark:text-amber-400">'testnet2'</code>, but new code should not
+                use it. It is deliberately absent from <code className="text-amber-600 dark:text-amber-400">SPHERE_NETWORKS</code>,
+                which is what a dApp sends in a Connect handshake — and, more sharply, the init guard compares
+                <code className="text-amber-600 dark:text-amber-400"> walletApi.network</code> with
+                <code className="text-amber-600 dark:text-amber-400"> options.network</code> as raw strings. Passing
+                <code className="text-amber-600 dark:text-amber-400"> 'testnet'</code> to one and
+                <code className="text-amber-600 dark:text-amber-400"> 'testnet2'</code> to the other throws
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_CONFIG</code> even though both name the same network.
+                Use one literal — the <code className="text-amber-600 dark:text-amber-400">NETWORK</code> constant in the samples
+                above exists for exactly that reason.
               </p>
             </div>
           </section>
@@ -1342,12 +1371,12 @@ const recent = await sphere.market.getRecentListings();`}
                 <li><strong>Client</strong> — your dApp. Sends queries and intents to the wallet via a transport layer.</li>
               </ul>
               <p className="text-neutral-600 dark:text-neutral-300 mb-4">
-                The SDK ships three transports, but only two have a wallet behind them:
+                The SDK ships three transports. Only one of them reaches the hosted Sphere wallet:
               </p>
               <ul className="list-disc ml-6 text-neutral-600 dark:text-neutral-300 space-y-2">
-                <li><strong>PostMessageTransport</strong> — browser apps. This is the transport behind the supported path: your dApp runs <em>inside</em> Sphere, in an iframe, and talks to the wallet page that frames it.</li>
+                <li><strong>PostMessageTransport</strong> — <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 font-medium">Supported</span> the browser path, and the only transport the hosted wallet implements. In the supported arrangement your dApp runs <em>inside</em> Sphere, in an iframe, and talks to the wallet page that frames it; the popup fallback below rides the same transport against the wallet&rsquo;s <code>/connect</code> page.</li>
+                <li><strong>WebSocketTransport</strong> — for a wallet host you run yourself. Its server mode expects the <em>wallet</em> to listen on a WebSocket port, which a browser page cannot do, so the hosted wallet at sphere.unicity.network never sits behind it. Use it for Node.js / CLI setups where you supply both ends.</li>
                 <li><strong>ExtensionTransport</strong> — <span className="text-xs px-1.5 py-0.5 rounded-full bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 font-medium">Deprecated</span> the SDK still exports it, but there is no supported wallet behind it. The Sphere browser extension is discontinued — do not build against this transport.</li>
-                <li><strong>WebSocketTransport</strong> — Node.js / CLI applications.</li>
               </ul>
             </div>
 
@@ -1418,7 +1447,7 @@ const recent = await sphere.market.getRecentListings();`}
                     <tr className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-4 font-mono text-amber-600 dark:text-amber-400">P3</td>
                       <td className="py-2 pr-4">Popup <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-medium">Fallback</span></td>
-                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Last resort when the page is not framed: needs <code>walletUrl</code>, a popup the browser does not block, and your own session persistence to survive a reload. Not the arrangement to design for.</td>
+                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Last resort when the page is not framed: needs <code>walletUrl</code>, a popup the browser does not block, and your own session persistence to survive a reload. Not the arrangement to design for, but it is the usable one against a wallet you run yourself (a local Sphere dev server on <code>localhost:5173</code>).</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1431,17 +1460,39 @@ const recent = await sphere.market.getRecentListings();`}
                   open it as a custom agent:
                 </p>
                 <CodeBlock
-                  language="text"
                   filename="open in Sphere"
                   code={`https://sphere.unicity.network/agents/custom?url=<your https url>`}
                 />
-                <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-3">
                   <strong>The URL must be https.</strong> Sphere only frames a custom tab whose URL parses with an
                   <code className="text-amber-600 dark:text-amber-400"> https:</code> protocol; anything else falls through
-                  to the &ldquo;Load Custom URL&rdquo; prompt and never loads. The check is protocol-only, so
-                  <code className="text-amber-600 dark:text-amber-400"> https://localhost:5173</code> works for local
-                  development while <code className="text-amber-600 dark:text-amber-400">http://localhost:5173</code> does
-                  not — run your dev server over TLS.
+                  to the &ldquo;Load Custom URL&rdquo; prompt and never loads. The check is protocol-only, and it is not
+                  the only gate — see below.
+                </p>
+                <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-3">
+                  <strong>A localhost URL will not get that far.</strong> The CDN in front of
+                  <code className="text-amber-600 dark:text-amber-400"> sphere.unicity.network</code> rejects any request
+                  whose query string contains <code className="text-amber-600 dark:text-amber-400">localhost</code> or
+                  <code className="text-amber-600 dark:text-amber-400"> 127.0.0.1</code> with a
+                  <strong> 403</strong> and its own error page, before the request reaches the wallet at all. Measured with
+                  <code className="text-amber-600 dark:text-amber-400"> curl</code> on 2026-09-17: the same routes return
+                  <strong> 200</strong> without those substrings
+                  (<code className="text-amber-600 dark:text-amber-400">/connect</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> /connect?origin=…</code> and
+                  <code className="text-amber-600 dark:text-amber-400"> /agents/custom?url=…</code> all answered 200), and
+                  403 with them, on every route tried and regardless of request headers. It is a rule about local URLs in
+                  the query, not something specific to Connect or to the popup path.
+                </p>
+                <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                  So to try a local build against the <em>hosted</em> wallet, put it on a publicly reachable https origin —
+                  an https tunnel in front of your dev server is enough — and pass that URL. Plain http would not be framed
+                  anyway. (Typing an https URL into the wallet&rsquo;s own &ldquo;Load Custom URL&rdquo; prompt never sends
+                  that query string to the CDN, so it should clear the 403 and only face the https gate; that path has not
+                  been verified end to end.) Against a wallet you run yourself — this repo&rsquo;s dev server on
+                  <code className="text-amber-600 dark:text-amber-400"> localhost:5173</code> — no CDN is in the way at all,
+                  so the popup path over plain <code className="text-amber-600 dark:text-amber-400">http://localhost</code> is
+                  fine. The https rule above is the wallet&rsquo;s own, so it still applies to anything Sphere frames as a
+                  custom tab, local or not.
                 </p>
               </div>
 
@@ -1650,12 +1701,27 @@ const providers = createWalletApiProviders(
   { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
 );
 
-const { sphere } = await Sphere.init({
+// NEVER put a seed phrase in a build-time variable. Anything prefixed VITE_ is
+// inlined into the bundle and served to every visitor — that is publishing the
+// wallet, not configuring it. init() loads the wallet already in this browser's
+// storage; autoGenerate only fires when there is none, and hands the phrase to
+// the user to write down.
+const { sphere, created, generatedMnemonic } = await Sphere.init({
   ...providers,
   network: NETWORK,
-  mnemonic: import.meta.env.VITE_WALLET_MNEMONIC,
-});`}
+  autoGenerate: true,
+});
+
+if (created && generatedMnemonic) {
+  showBackupPrompt(generatedMnemonic); // your UI — the user saves it, you never store it
+}`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                To let a user bring an existing wallet, take the phrase from an input they fill in and pass it as
+                <code className="text-amber-600 dark:text-amber-400"> mnemonic</code> — see
+                <a href="#guide-wallet-backup" className="text-orange-500 hover:underline"> Wallet Backup &amp; Recovery</a>.
+                A seed that comes from your configuration rather than from the user is a seed you have distributed.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 2: Post Listings</h4>
               <CodeBlock
@@ -1743,11 +1809,15 @@ const txt = sphere.exportToTxt();`}
 // Every entry point needs the same \`network\` as walletApi.network.
 const NETWORK = 'testnet2';
 
-// Recover from mnemonic
+// Recover from a mnemonic the USER supplies at runtime — a textarea they paste
+// into, a hardware prompt, whatever your UI is. Never a build-time constant and
+// never import.meta.env: a VITE_ variable is inlined into the bundle and served
+// to every visitor, so a seed put there is a published seed.
+const phrase = mnemonicInput.value.trim();
 const { sphere } = await Sphere.init({
   ...providers,
   network: NETWORK,
-  mnemonic: 'abandon badge cable drama ...',
+  mnemonic: phrase,
 });
 
 // Import from JSON file
@@ -1795,11 +1865,18 @@ async function main() {
     createBrowserProviders({ network: NETWORK }),
     { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
   );
-  const { sphere } = await Sphere.init({
+  // Loads the wallet already in this browser's storage. autoGenerate only fires
+  // when there is none — a throwaway wallet whose phrase is handed straight to
+  // the user. A seed never comes from import.meta.env: VITE_ variables are
+  // inlined into the bundle and served to every visitor.
+  const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
     network: NETWORK,
-    mnemonic: import.meta.env.VITE_MNEMONIC,
+    autoGenerate: true,
   });
+  if (created && generatedMnemonic) {
+    console.log('New wallet — save this phrase:', generatedMnemonic);
+  }
 
   // Check balance
   const assets = await sphere.payments.assets();
@@ -1843,11 +1920,16 @@ async function main() {
     createBrowserProviders({ network: NETWORK, market: true }),
     { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
   );
-  const { sphere } = await Sphere.init({
+  // Existing wallet in this browser, or a throwaway one whose phrase goes to the
+  // user. Never a seed from import.meta.env — VITE_ variables ship in the bundle.
+  const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
     network: NETWORK,
-    mnemonic: import.meta.env.VITE_MNEMONIC,
+    autoGenerate: true,
   });
+  if (created && generatedMnemonic) {
+    console.log('New wallet — save this phrase:', generatedMnemonic);
+  }
 
   // Post items for sale
   await sphere.market.postIntent({
