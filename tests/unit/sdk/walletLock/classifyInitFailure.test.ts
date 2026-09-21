@@ -22,6 +22,15 @@ describe('classifyInitFailure', () => {
     const e = new SphereError('IndexedDB transaction failed', 'STORAGE_ERROR');
     expect(classifyInitFailure(e)).toBe('error');
   });
+  // sphere-sdk#801 (0.17.4+): the SDK refuses to import over an existing wallet without
+  // `overwrite: true`, and rejects BEFORE touching storage — so the destructive cleanup
+  // must not run for it. Anything but 'error' skips that cleanup.
+  it('maps the SDK refusal to overwrite an existing wallet to "refused"', () => {
+    const e = new SphereError('A wallet already exists on this storage.', 'ALREADY_INITIALIZED');
+    expect(classifyInitFailure(e)).toBe('refused');
+    expect(classifyInitFailure({ code: 'ALREADY_INITIALIZED' })).toBe('refused');
+  });
+
   it('maps everything else to "error"', () => {
     expect(classifyInitFailure({ code: 'STORAGE_ERROR' })).toBe('error');
     expect(classifyInitFailure(new Error('x'))).toBe('error');

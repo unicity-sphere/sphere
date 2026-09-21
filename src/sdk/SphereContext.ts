@@ -130,6 +130,12 @@ export interface CreateWalletOptions {
 export interface ImportWalletOptions {
   nametag?: string;
   password?: string;
+  /**
+   * Replace a wallet that is already on this device. Since SDK 0.17.4 an import over
+   * an existing wallet is refused (`ALREADY_INITIALIZED`) without it. Pass it ONLY
+   * where the user confirmed the erase, i.e. the lock-escape restore.
+   */
+  overwrite?: boolean;
 }
 
 export interface ImportFromFileOptions {
@@ -137,6 +143,8 @@ export interface ImportFromFileOptions {
   fileName: string;
   password?: string;
   nametag?: string;
+  /** See {@link ImportWalletOptions.overwrite}. */
+  overwrite?: boolean;
 }
 
 export interface ImportFromFileResult {

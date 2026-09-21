@@ -80,9 +80,13 @@ async function driveRestoreToSetPassword() {
   fillSeedWords(VALID_MNEMONIC);
   fireEvent.click(screen.getByRole('button', { name: /^restore$/i }));
 
-  // Imported PLAINTEXT immediately — no password option threaded in.
-  await waitFor(() => expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC));
-  expect(ctx.importWallet.mock.calls[0]).toHaveLength(1);
+  // Imported PLAINTEXT immediately — no password option threaded in. The options
+  // argument carries only `overwrite`, which is false here: this is normal onboarding,
+  // not the lock-escape restore, so no wallet may be replaced.
+  await waitFor(() =>
+    expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: false }),
+  );
+  expect(ctx.importWallet.mock.calls[0][1]).not.toHaveProperty('password');
 
   // No addresses / no nametag on the mocked instance → nametag screen next.
   await waitFor(() => expect(screen.getByText(/choose unicity id/i)).toBeDefined());
@@ -124,7 +128,8 @@ describe('restore-from-mnemonic offers the optional password AFTER import (#449 
     // password/options argument — the password is applied via the in-place
     // re-encrypt, never a second Sphere.import()-backed call.
     expect(ctx.importWallet).toHaveBeenCalledTimes(1);
-    expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC);
+    expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: false });
+    expect(ctx.importWallet.mock.calls[0][1]).not.toHaveProperty('password');
   });
 
   it('Skip finalizes a plaintext wallet without ever calling setWalletPassword', async () => {
