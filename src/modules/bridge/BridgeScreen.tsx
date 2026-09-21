@@ -36,7 +36,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [chainId, setChainId] = useState<string | null>(null);
   const [assetId, setAssetId] = useState<string | null>(null);
   const [amountInput, setAmountInput] = useState('');
-  const [maxApprove, setMaxApprove] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingLock[]>([]);
   const [resumingId, setResumingId] = useState<string | null>(null);
@@ -103,7 +102,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     }
     setStep('processing');
     try {
-      await bridgeIn({ asset, wallet, amount, maxApprove });
+      await bridgeIn({ asset, wallet, amount });
       setStep('success');
     } catch (e) {
       setError(getErrorMessage(e));
@@ -211,15 +210,10 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
               </div>
             </div>
 
-            <label className={`flex items-center gap-2 text-xs ${MUTED}`}>
-              <input type="checkbox" checked={maxApprove} onChange={(e) => setMaxApprove(e.target.checked)} className="accent-orange-500" />
-              One-time max approve (fewer prompts next time)
-            </label>
-
             <p className={`text-xs ${MUTED}`}>
-              You sign in your {chain.name} wallet: the lock, plus an approval first if the vault is not
-              approved yet. The bridged token appears as soon as the lock is in a block; other wallets accept
-              it after {asset.confirmations} confirmations.
+              You sign in your {chain.name} wallet: an approval for exactly this amount, then the lock. The
+              bridged token appears as soon as the lock is in a block; other wallets accept it after{' '}
+              {asset.confirmations} confirmations.
             </p>
 
             {error && <ErrorLine text={error} />}

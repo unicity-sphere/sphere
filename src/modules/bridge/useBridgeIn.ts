@@ -15,10 +15,7 @@ export interface BridgeInRequest {
   readonly asset: BridgeAsset;
   readonly wallet: BridgeWalletOption;
   readonly amount: bigint;
-  readonly maxApprove: boolean;
 }
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 export function useBridgeIn() {
   const { sphere } = useSphereContext();
@@ -32,7 +29,6 @@ export function useBridgeIn() {
         ...req.wallet.open(),
         ...side,
         amount: req.amount,
-        approveAmount: req.maxApprove ? MAX_UINT256 : req.amount,
         onProgress: setProgress,
       });
     },

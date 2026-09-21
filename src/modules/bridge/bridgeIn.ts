@@ -27,7 +27,6 @@ export interface WalletSide {
 
 export interface BridgeInArgs extends BridgeInDeps, WalletSide {
   readonly amount: bigint;
-  readonly approveAmount?: bigint;
   readonly onProgress?: (p: BridgeInProgress) => void;
 }
 
@@ -52,7 +51,6 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     amount,
     networkId,
     recipientPubkey: args.recipientPubkey,
-    approveAmount: args.approveAmount,
   });
 
   const lockRecord: PendingLock = {

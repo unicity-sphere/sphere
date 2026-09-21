@@ -121,7 +121,7 @@ function walletSide(store: FakeStore, payments = fakePayments()): WalletSide {
   return { payments, recipientPubkey: PUBKEY, networkId: 4, store: asStore(store) };
 }
 
-function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; approveAmount?: bigint; payments?: BridgePayments }) {
+function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; payments?: BridgePayments }) {
   return runBridgeIn({
     ...walletSide(over.store, over.payments),
     wallet: over.signer,
@@ -130,7 +130,6 @@ function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; approve
     expectedNetwork: CHAIN,
     chainLabel: bridge.manifest.label,
     amount: AMOUNT,
-    approveAmount: over.approveAmount,
   });
 }
 
@@ -157,6 +156,9 @@ describe('runBridgeIn', () => {
 
     expect(signer.sigs()).toEqual(['approve', 'lock']);
     expect(timeline.indexOf('send:lock')).toBeGreaterThan(timeline.indexOf('receipt:' + APPROVE_TX));
+    const approve = signer.sent[0];
+    expect(approve.functionSignature.startsWith('approve')).toBe(true);
+    expect(approve.parameters.map((p) => String(p.value))).toContain(AMOUNT.toString());
   });
 
   it('fails fast on a reverted approval and never locks', async () => {
