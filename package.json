@@ -22,7 +22,9 @@
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-table": "^8.21.3",
     "@types/katex": "^0.16.7",
-    "@unicitylabs/sphere-sdk": "0.17.6",
+    "@unicitylabs/bridge-core": "file:../packages/bridge-core",
+    "@unicitylabs/bridge-plugin-tron-usdt": "file:../packages/bridge-plugin-tron-usdt",
+    "@unicitylabs/sphere-sdk": "file:../sphere-sdk",
     "@unicitylabs/sphere-ui": "^0.1.44",
     "framer-motion": "^12.23.24",
     "katex": "^0.16.27",
@@ -31,6 +33,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.9.6",
+    "tronweb": "^6.3.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

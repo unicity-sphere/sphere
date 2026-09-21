@@ -6,10 +6,12 @@ import { useNavigate } from 'react-router-dom';
 import { useIdentity, useAssets, useTokens, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { describeCoin } from '../../../../modules/registry';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
 import { WalletActions } from '../components/WalletActions';
+import { ModuleActions } from '../components/ModuleActions';
 import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
@@ -387,6 +389,8 @@ export function L3WalletView({
           onSend={() => setIsSendModalOpen(true)}
           sendDisabled={sendableTokens.length === 0}
         />
+        {/* Actions contributed by wallet modules (src/modules), if any. */}
+        <ModuleActions />
 
       </div>
 
@@ -432,16 +436,22 @@ export function L3WalletView({
                   {assets.length === 0 ? (
                     <EmptyState />
                   ) : (
-                    assets.map((asset, index) => (
-                      <AssetRow
-                        key={asset.coinId}
-                        asset={asset}
-                        showBalances={showBalances}
-                        delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
-                        layer="L3"
-                        isNew={newAssetCoinIds.has(asset.coinId)}
-                      />
-                    ))
+                    assets.map((asset, index) => {
+                      // A coin the token registry does not list may still be one a
+                      // wallet module knows (a bridged asset); show it as the module says.
+                      const known = describeCoin(asset.coinId);
+                      return (
+                        <AssetRow
+                          key={asset.coinId}
+                          asset={known ? { ...asset, symbol: known.symbol, name: known.name, decimals: known.decimals } : asset}
+                          badge={known?.badge}
+                          showBalances={showBalances}
+                          delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
+                          layer="L3"
+                          isNew={newAssetCoinIds.has(asset.coinId)}
+                        />
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -487,16 +497,19 @@ export function L3WalletView({
                         tokens
                           .slice()
                           .sort((a, b) => b.createdAt - a.createdAt)
-                          .map((token, index) => (
-                            <TokenRow
-                              key={token.id}
-                              token={token}
-                              delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
-                              isNew={newTokenIds.has(token.id)}
-                              onSend={handleSendCoinToken}
-                              onInspect={handleInspectCoinToken}
-                            />
-                          ))}
+                          .map((token, index) => {
+                            const known = describeCoin(token.coinId);
+                            return (
+                              <TokenRow
+                                key={token.id}
+                                token={known ? { ...token, symbol: known.symbol, name: known.name, decimals: known.decimals } : token}
+                                delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
+                                isNew={newTokenIds.has(token.id)}
+                                onSend={handleSendCoinToken}
+                                onInspect={handleInspectCoinToken}
+                              />
+                            );
+                          })}
                     </>
                   )}
                 </div>
