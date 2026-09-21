@@ -36,6 +36,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingLock[]>([]);
   const [resumingId, setResumingId] = useState<string | null>(null);
+  const [availability, setAvailability] = useState<Record<string, boolean>>({});
 
   const { bridgeIn, progress, result, reset, pendingMints, resume, discard } = useBridgeIn();
 
@@ -43,6 +44,17 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   useEffect(() => {
     if (isOpen) setPending(pendingMints());
   }, [isOpen, pendingMints]);
+
+  // A wallet extension can inject itself after the page (or this screen) has
+  // rendered, so availability is re-checked while the screen is open rather
+  // than read once at render.
+  useEffect(() => {
+    if (!isOpen || !asset) return;
+    const check = () => setAvailability(Object.fromEntries(asset.wallets.map((w) => [w.id, w.isAvailable()])));
+    check();
+    const id = setInterval(check, 1000);
+    return () => clearInterval(id);
+  }, [isOpen, asset]);
 
   const close = () => {
     setStep('form');
@@ -146,7 +158,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
             <div className="space-y-2">
               {asset.wallets.map((w) => {
-                const available = w.isAvailable();
+                const available = availability[w.id] ?? w.isAvailable();
                 return (
                   <div key={w.id} className="space-y-1">
                     <Button onClick={() => start(w)} disabled={!available} className="w-full">

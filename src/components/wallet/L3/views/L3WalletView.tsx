@@ -11,7 +11,7 @@ import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hook
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
 import { WalletActions } from '../components/WalletActions';
-import { ModuleActions } from '../components/ModuleActions';
+import { ModuleActionButtons, ModuleScreens } from '../components/ModuleActions';
 import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
@@ -179,6 +179,8 @@ export function L3WalletView({
   const sendableTokens = tokens;
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
+  // Which wallet-module action (src/modules) has its screen open, if any.
+  const [openModuleAction, setOpenModuleAction] = useState<string | null>(null);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
@@ -390,7 +392,7 @@ export function L3WalletView({
           sendDisabled={sendableTokens.length === 0}
         />
         {/* Actions contributed by wallet modules (src/modules), if any. */}
-        <ModuleActions />
+        <ModuleActionButtons onOpen={setOpenModuleAction} />
 
       </div>
 
@@ -525,6 +527,7 @@ export function L3WalletView({
       <SendWholeTokenModal target={sendTarget} onClose={() => setSendTarget(null)} />
       <TokenDataModal target={inspectTarget} onClose={() => setInspectTarget(null)} />
       <SwapModal isOpen={isSwapModalOpen} onClose={() => setIsSwapModalOpen(false)} />
+      <ModuleScreens openId={openModuleAction} onClose={() => setOpenModuleAction(null)} />
       <PaymentRequestsModal
         isOpen={isRequestsOpen}
         onClose={() => setIsRequestsOpen(false)}
