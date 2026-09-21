@@ -1,5 +1,5 @@
 import { logger } from '@unicitylabs/sphere-sdk';
-import type { BridgeAsset, BridgeAssetProvider } from './types';
+import type { BridgeAsset, BridgeAssetProvider, BridgeChain } from './types';
 
 const providers = import.meta.glob<{ default: BridgeAssetProvider }>('./assets/*/index.ts', { eager: true });
 
@@ -34,6 +34,12 @@ export function bridgeAssets(): readonly BridgeAsset[] {
 
 export function bridgeAssetsFor(network: string): BridgeAsset[] {
   return bridgeAssets().filter((a) => a.networks.includes(network));
+}
+
+export function bridgeChainsFor(network: string): BridgeChain[] {
+  const seen = new Map<string, BridgeChain>();
+  for (const a of bridgeAssetsFor(network)) if (!seen.has(a.chain.id)) seen.set(a.chain.id, a.chain);
+  return [...seen.values()];
 }
 
 export function bridgeAssetByCoin(coinIdHex: string): BridgeAsset | undefined {

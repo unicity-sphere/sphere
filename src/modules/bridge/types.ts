@@ -28,6 +28,17 @@ export interface BridgeWalletOption {
   open(): BridgeInDeps;
 }
 
+/** The source chain an asset is bridged from, as the picker shows it. */
+export interface BridgeChain {
+  /** Stable id shared by every asset on the chain, e.g. the CAIP-2-style `tron:0xcd8690dc`. */
+  readonly id: string;
+  /** The chain family, e.g. "Tron". Also the badge on bridged coins. */
+  readonly name: string;
+  /** The concrete network on it, e.g. "Nile testnet" or "Mainnet". */
+  readonly networkName: string;
+  readonly testnet: boolean;
+}
+
 /** One bridgeable asset, as the screen and the flow see it. */
 export interface BridgeAsset {
   /** Stable id, e.g. `tron:0xcd8690dc:usdt`. */
@@ -38,8 +49,7 @@ export interface BridgeAsset {
   readonly decimals: number;
   readonly coinIdHex: string;
   readonly tokenTypeHex: string;
-  /** Source chain for badges and copy, e.g. "Tron". */
-  readonly chainName: string;
+  readonly chain: BridgeChain;
   /** Source-finality threshold other wallets enforce before accepting the token. */
   readonly confirmations: number;
   readonly networks: readonly string[];

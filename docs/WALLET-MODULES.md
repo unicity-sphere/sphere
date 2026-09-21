@@ -39,8 +39,13 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   from `@unicitylabs/bridge-core`, which turns "deposit X for this recipient"
   into opaque steps and builds the Unicity mint request;
 - **presentation**: explorer links and address rules;
+- **`chain`**: the source chain as the picker shows it (family name, network
+  name, testnet flag); assets sharing a chain id are grouped under one entry;
 - **`networks`**: which Unicity networks the asset may be bridged into (a
   testnet vault serves test networks only).
+
+The screen walks network → asset → amount and shows every step even with a
+single option, so what is supported is visible rather than implied.
 
 `assets/tron-usdt/` is the one asset today (USDT on Tron Nile, via
 `@unicitylabs/bridge-plugin-tron-usdt`). A second Tron asset is another

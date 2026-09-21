@@ -1,4 +1,4 @@
-import { TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
+import { TRON_MAINNET_CHAIN_ID, TRON_NILE_CHAIN_ID, TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
@@ -12,7 +12,7 @@ import {
 } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
-import type { BridgeAsset, BridgeAssetProvider, BridgeInDeps, BridgeWalletOption } from '../../types';
+import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { devKeySigner } from './devSigner';
 
 const provider: BridgeAssetProvider = {
@@ -62,7 +62,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     decimals: bridge.plugin.decimals,
     coinIdHex: bridge.plugin.coinIdHex,
     tokenTypeHex: bridge.plugin.tokenTypeHex,
-    chainName: 'Tron',
+    chain: tronChain(m.chainId, m.chainRef),
     confirmations: m.confirmations,
     networks: ['testnet', 'testnet2'],
     tokenPlugin: bridgeTokenPlugin(bridge),
@@ -70,6 +70,15 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     wallets,
     resumeDeps: () => ({ adapter: createTronSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
   };
+}
+
+function tronChain(chainId: number, chainRef: string): BridgeChain {
+  const known: Record<number, { networkName: string; testnet: boolean }> = {
+    [TRON_MAINNET_CHAIN_ID]: { networkName: 'Mainnet', testnet: false },
+    [TRON_NILE_CHAIN_ID]: { networkName: 'Nile testnet', testnet: true },
+  };
+  const net = known[chainId] ?? { networkName: `network ${chainId}`, testnet: true };
+  return { id: chainRef, name: 'Tron', ...net };
 }
 
 const NEVER_SIGNS: DepositWallet = {

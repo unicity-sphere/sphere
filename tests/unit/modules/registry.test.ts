@@ -27,3 +27,13 @@ describe('wallet module registry', () => {
     expect(moduleActions('mainnet').map((a) => a.id)).not.toContain('bridge');
   });
 });
+
+describe('bridge chains', () => {
+  it('groups assets by source chain for the picker', async () => {
+    const { bridgeChainsFor } = await import('@/modules/bridge/assets');
+    expect(bridgeChainsFor('testnet2')).toEqual([
+      { id: 'tron:0xcd8690dc', name: 'Tron', networkName: 'Nile testnet', testnet: true },
+    ]);
+    expect(bridgeChainsFor('mainnet')).toEqual([]);
+  });
+});

@@ -12,7 +12,7 @@ const bridgeModule: WalletModule = {
   describeCoin: (coinId) => {
     const asset = bridgeAssetByCoin(coinId);
     return asset
-      ? { symbol: asset.symbol, name: asset.label, decimals: asset.decimals, badge: asset.chainName }
+      ? { symbol: asset.symbol, name: asset.label, decimals: asset.decimals, badge: asset.chain.name }
       : undefined;
   },
 
