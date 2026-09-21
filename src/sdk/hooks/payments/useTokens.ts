@@ -6,6 +6,7 @@ import { useRegistryReady } from './useRegistryReady';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import type { Token } from '@unicitylabs/sphere-sdk';
+import { moduleTokenView } from '../../../modules/registry';
 
 export interface UseTokensReturn {
   tokens: Token[];
@@ -38,11 +39,11 @@ export function useTokens(): UseTokensReturn {
   // before the registry has loaded, so we override here.
   const tokens = useMemo(() => {
     const rawTokens = query.data ?? [];
-    if (!registryReady) return rawTokens;
+    if (!registryReady) return rawTokens.map(moduleTokenView);
     const registry = TokenRegistry.getInstance();
     return rawTokens.map((t) => {
       const def = registry.getDefinition(t.coinId);
-      if (!def) return t;
+      if (!def) return moduleTokenView(t);
       return {
         ...t,
         symbol: def.symbol || t.symbol,

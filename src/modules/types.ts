@@ -9,6 +9,7 @@ export interface CoinPresentation {
   readonly decimals: number;
   /** Short tag beside the symbol, e.g. where a bridged asset came from. */
   readonly badge?: string;
+  readonly priceUsd?: number;
 }
 
 export interface ModuleScreenProps {

@@ -506,7 +506,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                 {/* Asset header */}
                 <div className="flex flex-col items-center mb-8">
                   <img src={selectedAsset.iconUrl || ''} className="w-14 h-14 rounded-full mb-2" alt="" />
-                  <span className="text-neutral-900 dark:text-white font-semibold font-mono">{selectedAsset.name || selectedAsset.symbol}</span>
+                  <span className="text-neutral-900 dark:text-white font-semibold font-mono text-center break-all px-4">{selectedAsset.name || selectedAsset.symbol}</span>
                 </div>
 
                 {/* Recipient */}

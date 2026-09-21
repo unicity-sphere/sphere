@@ -439,14 +439,13 @@ export function L3WalletView({
                     <EmptyState />
                   ) : (
                     assets.map((asset, index) => {
-                      // A coin the token registry does not list may still be one a
-                      // wallet module knows (a bridged asset); show it as the module says.
-                      const known = describeCoin(asset.coinId);
+                      // useAssets already shows a module's coin as the module says; the
+                      // badge (where a bridged asset came from) is a row concern.
                       return (
                         <AssetRow
                           key={asset.coinId}
-                          asset={known ? { ...asset, symbol: known.symbol, name: known.name, decimals: known.decimals } : asset}
-                          badge={known?.badge}
+                          asset={asset}
+                          badge={describeCoin(asset.coinId)?.badge}
                           showBalances={showBalances}
                           delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
                           layer="L3"
@@ -499,19 +498,16 @@ export function L3WalletView({
                         tokens
                           .slice()
                           .sort((a, b) => b.createdAt - a.createdAt)
-                          .map((token, index) => {
-                            const known = describeCoin(token.coinId);
-                            return (
-                              <TokenRow
-                                key={token.id}
-                                token={known ? { ...token, symbol: known.symbol, name: known.name, decimals: known.decimals } : token}
-                                delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
-                                isNew={newTokenIds.has(token.id)}
-                                onSend={handleSendCoinToken}
-                                onInspect={handleInspectCoinToken}
-                              />
-                            );
-                          })}
+                          .map((token, index) => (
+                            <TokenRow
+                              key={token.id}
+                              token={token}
+                              delay={newTokenIds.has(token.id) ? index * 0.05 : 0}
+                              isNew={newTokenIds.has(token.id)}
+                              onSend={handleSendCoinToken}
+                              onInspect={handleInspectCoinToken}
+                            />
+                          ))}
                     </>
                   )}
                 </div>

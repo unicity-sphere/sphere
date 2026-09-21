@@ -63,6 +63,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     coinIdHex: bridge.plugin.coinIdHex,
     tokenTypeHex: bridge.plugin.tokenTypeHex,
     chain: tronChain(m.chainId, m.chainRef),
+    priceUsd: 1,
     confirmations: m.confirmations,
     networks: ['testnet', 'testnet2'],
     tokenPlugin: bridgeTokenPlugin(bridge),

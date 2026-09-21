@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { type Asset, TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { Box, Loader2 } from 'lucide-react';
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 interface AssetRowProps {
   asset: Asset;
@@ -89,6 +89,9 @@ function AnimatedAmount({ value, symbol, decimals, showBalances }: {
 }
 
 export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true, badge }: AssetRowProps) {
+  // A long name (a bridged asset's, say) is cut off by default; a click or tap
+  // shows it whole. Stops propagation so the row's own onClick is not triggered.
+  const [nameExpanded, setNameExpanded] = useState(false);
   const change24h = asset.change24h ?? 0;
   const changeColor = change24h >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
   const changeSign = change24h >= 0 ? '+' : '';
@@ -126,7 +129,15 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
                 {badge}
               </span>
             )}
-            <div className="text-xs text-neutral-500 truncate max-w-25">
+            <div
+              className={`text-xs text-neutral-500 cursor-pointer ${nameExpanded ? 'whitespace-normal break-words' : 'truncate max-w-25'}`}
+              title={asset.name}
+              role="button"
+              tabIndex={0}
+              aria-expanded={nameExpanded}
+              onClick={(e) => { e.stopPropagation(); setNameExpanded((v) => !v); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setNameExpanded((v) => !v); } }}
+            >
               {asset.name}
             </div>
             {asset.transferringTokenCount > 0 && (

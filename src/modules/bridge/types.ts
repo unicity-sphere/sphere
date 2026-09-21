@@ -50,6 +50,8 @@ export interface BridgeAsset {
   readonly coinIdHex: string;
   readonly tokenTypeHex: string;
   readonly chain: BridgeChain;
+  /** Reference price per whole unit in USD for display when the price feed has none; a stablecoin's peg. */
+  readonly priceUsd?: number;
   /** Source-finality threshold other wallets enforce before accepting the token. */
   readonly confirmations: number;
   readonly networks: readonly string[];
