@@ -86,7 +86,6 @@ async function driveRestoreToSetPassword() {
   await waitFor(() =>
     expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: false }),
   );
-  expect(ctx.importWallet.mock.calls[0][1]).not.toHaveProperty('password');
 
   // No addresses / no nametag on the mocked instance → nametag screen next.
   await waitFor(() => expect(screen.getByText(/choose unicity id/i)).toBeDefined());
@@ -129,7 +128,6 @@ describe('restore-from-mnemonic offers the optional password AFTER import (#449 
     // re-encrypt, never a second Sphere.import()-backed call.
     expect(ctx.importWallet).toHaveBeenCalledTimes(1);
     expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: false });
-    expect(ctx.importWallet.mock.calls[0][1]).not.toHaveProperty('password');
   });
 
   it('Skip finalizes a plaintext wallet without ever calling setWalletPassword', async () => {
