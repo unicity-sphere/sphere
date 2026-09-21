@@ -41,11 +41,21 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
 - **presentation**: explorer links and address rules;
 - **`chain`**: the source chain as the picker shows it (family name, network
   name, testnet flag); assets sharing a chain id are grouped under one entry;
+- **`out`** (optional): the assets-out side. `reasonFor` builds the canonical
+  return reason for an amount and a destination, `identify` reads a burned blob
+  back (its nullifier, destination and amount, or `null` when the blob is not
+  this asset's), and `returns` is the return service that proves the burn and
+  releases the funds. An asset without `out` is offered for bridging in only.
 - **`networks`**: which Unicity networks the asset may be bridged into (a
   testnet vault serves test networks only).
 
-The screen walks network → asset → amount and shows every step even with a
-single option, so what is supported is visible rather than implied.
+The screen walks direction → network → asset → form and shows every step even
+with a single option, so what is supported is visible rather than implied.
+Bridging in ends with an amount and the wallet that signs the deposit;
+bridging out ends with the tokens to burn (each whole) and the destination
+address. The first step lists what is in flight: deposits signed but not yet
+minted, with Resume, and burns waiting for their release, with the return
+service's status for each.
 
 `assets/tron-usdt/` is the one asset today (USDT on Tron Nile, via
 `@unicitylabs/bridge-plugin-tron-usdt`). A second Tron asset is another
@@ -65,6 +75,17 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
   landed lock and mints without signing anything.
 - The depositor's own mint runs at zero confirmations (it witnessed its lock);
   every other wallet re-verifies under the asset's `confirmations`.
+- Bridging out burns first and records second, in that order on purpose: the
+  burned blob is the claim on the vault and the only copy of it. `burnForReturn`
+  hands the blob to the module's store and releases the wallet's retained copy
+  only once the record is written; if writing fails the wallet keeps the blob and
+  `recoverBurns` turns it into a record on the next wallet start. Only then is
+  the blob sent to the return service, which may fail freely: the service is
+  idempotent on the burn's nullifier, the record is resubmitted on the next
+  sync, and a service that restarted (it holds nothing durable) is resent the
+  blob when it no longer knows the return id. A refusal the service marks as
+  not recoverable ends the return as failed, with the blob still in the record.
+- An open return cannot be dismissed; a finished one can.
 
 ### Development links
 
@@ -77,3 +98,5 @@ so the linked packages and the SDK share one runtime copy.
 
 `VITE_BRIDGE_DEV_TRON_KEY` (dev only) offers a "development key" signer in the
 bridge screen so a deposit can be exercised without the TronLink extension.
+`VITE_BRIDGE_RETURN_SERVICE_URL` points the return path at a service other
+than the manifest's default, the local container on port 8787.

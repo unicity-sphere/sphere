@@ -1,15 +1,20 @@
 /**
- * The bridge-in screen. Three choices, then the deposit: which source network,
- * which asset on it, then amount and the wallet that signs. Every step is
- * shown even when it has a single option, so what the wallet supports is
- * visible rather than implied. Coin- and chain-agnostic: everything here comes
- * from the {BridgeAsset}s the providers loaded. Deposits that were signed but
- * not minted (a reload mid-flow) are listed on the first step with a Resume
- * action, since their recovery record is the only way to mint them.
+ * The bridge screen. First a direction, then which source network and which
+ * asset on it, then the form: for assets in, an amount and the wallet that
+ * signs the deposit; for assets out, the tokens to burn and the destination
+ * address. Every step is shown even when it has a single option, so what the
+ * wallet supports is visible rather than implied. Coin- and chain-agnostic:
+ * everything here comes from the {BridgeAsset}s the providers loaded.
+ *
+ * The first step also lists what is in flight: deposits signed but not yet
+ * minted (a reload mid-flow), with Resume, and burns waiting for their release
+ * on the source chain, with their status from the return service.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, CheckCircle, ChevronRight, ExternalLink, Loader2, RotateCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, CheckCircle, ChevronRight, ExternalLink, Loader2, RotateCw, Trash2 } from 'lucide-react';
+import type { Token } from '@unicitylabs/sphere-sdk';
 
+import { useTokens } from '../../sdk';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../sdk/errors';
 import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
@@ -18,34 +23,58 @@ import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
 import { formatUnits, parseUnits } from './format';
 import type { BridgeInPhase } from './bridgeIn';
-import type { PendingLock } from './store';
+import { isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgeWalletOption } from './types';
 import { useBridgeIn } from './useBridgeIn';
+import { useBridgeOut } from './useBridgeOut';
 
-type Step = 'chain' | 'asset' | 'form' | 'processing' | 'success';
+type Direction = 'in' | 'out';
+type Step = 'direction' | 'chain' | 'asset' | 'form' | 'processing' | 'success';
 
 const FIELD = 'w-full px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-neutral-900 dark:text-white';
 const MUTED = 'text-neutral-500 dark:text-white/45';
 
 export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const { network } = useSphereContext();
-  const chains = useMemo(() => bridgeChainsFor(network), [network]);
   const allAssets = useMemo(() => bridgeAssetsFor(network), [network]);
 
-  const [step, setStep] = useState<Step>('chain');
+  const [direction, setDirection] = useState<Direction>('in');
+  const [step, setStep] = useState<Step>('direction');
   const [chainId, setChainId] = useState<string | null>(null);
   const [assetId, setAssetId] = useState<string | null>(null);
-  const [amountInput, setAmountInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // Assets in.
+  const [amountInput, setAmountInput] = useState('');
   const [pending, setPending] = useState<PendingLock[]>([]);
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [availability, setAvailability] = useState<Record<string, boolean>>({});
+  const { bridgeIn, progress, result, reset: resetIn, pendingMints, resume, discard } = useBridgeIn();
 
+  // Assets out.
+  const [destination, setDestination] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [burnProgress, setBurnProgress] = useState<{ done: number; total: number } | null>(null);
+  const { bridgeOut, returns, dismiss, reset: resetOut } = useBridgeOut();
+  const { tokens } = useTokens();
+
+  // The assets offered depend on the direction: out needs a return path.
+  const directionAssets = useMemo(
+    () => (direction === 'out' ? allAssets.filter((a) => a.out) : allAssets),
+    [allAssets, direction],
+  );
+  const chains = useMemo(() => bridgeChainsFor(network).filter((c) => directionAssets.some((a) => a.chain.id === c.id)), [network, directionAssets]);
   const chain: BridgeChain | undefined = chains.find((c) => c.id === chainId);
-  const chainAssets = useMemo(() => allAssets.filter((a) => a.chain.id === chainId), [allAssets, chainId]);
+  const chainAssets = useMemo(() => directionAssets.filter((a) => a.chain.id === chainId), [directionAssets, chainId]);
   const asset: BridgeAsset | undefined = chainAssets.find((a) => a.id === assetId);
 
-  const { bridgeIn, progress, result, reset, pendingMints, resume, discard } = useBridgeIn();
+  // Tokens of the chosen asset the wallet can burn: confirmed and not suspected spent.
+  const returnable = useMemo(
+    () => (asset ? tokens.filter((t) => t.coinId.toLowerCase() === asset.coinIdHex && t.status === 'confirmed' && t.suspectedSpent !== true) : []),
+    [tokens, asset],
+  );
+  const selectedTokens = useMemo(() => returnable.filter((t) => selectedIds.has(t.id)), [returnable, selectedIds]);
+  const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
 
   // Re-read the recovery records each time the screen opens.
   useEffect(() => {
@@ -56,29 +85,51 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   // rendered, so availability is re-checked while the form is open rather
   // than read once at render.
   useEffect(() => {
-    if (!isOpen || step !== 'form' || !asset) return;
+    if (!isOpen || step !== 'form' || direction !== 'in' || !asset) return;
     const check = () => setAvailability(Object.fromEntries(asset.wallets.map((w) => [w.id, w.isAvailable()])));
     check();
     const id = setInterval(check, 1000);
     return () => clearInterval(id);
-  }, [isOpen, step, asset]);
+  }, [isOpen, step, direction, asset]);
+
+  // Selection follows the live inventory.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const live = new Set(returnable.map((t) => t.id));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [returnable]);
 
   const close = () => {
-    setStep('chain');
+    setStep('direction');
     setChainId(null);
     setAssetId(null);
     setAmountInput('');
+    setDestination('');
+    setSelectedIds(new Set());
+    setBurnProgress(null);
     setError(null);
-    reset();
+    resetIn();
+    resetOut();
     onClose();
   };
 
   /** The header's back arrow: one step back, or close from the first step. */
   const back = () => {
     setError(null);
-    if (step === 'asset') setStep('chain');
+    if (step === 'chain') setStep('direction');
+    else if (step === 'asset') setStep('chain');
     else if (step === 'form') setStep('asset');
+    else if (step === 'success') setStep('direction');
     else close();
+  };
+
+  const pickDirection = (d: Direction) => {
+    setDirection(d);
+    setChainId(null);
+    setAssetId(null);
+    setStep('chain');
   };
 
   const pickChain = (c: BridgeChain) => {
@@ -92,7 +143,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     setStep('form');
   };
 
-  const start = async (wallet: BridgeWalletOption) => {
+  const startIn = async (wallet: BridgeWalletOption) => {
     if (!asset) return;
     setError(null);
     const amount = parseUnits(amountInput, asset.decimals);
@@ -108,6 +159,34 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
       setError(getErrorMessage(e));
       setStep('form');
       setPending(pendingMints());
+    }
+  };
+
+  const startOut = async () => {
+    if (!asset) return;
+    setError(null);
+    if (selectedTokens.length === 0) {
+      setError('Select at least one token to send out.');
+      return;
+    }
+    if (!asset.presentation.validateAddress(destination)) {
+      setError(`Enter a valid ${asset.chain.name} destination address.`);
+      return;
+    }
+    setStep('processing');
+    setBurnProgress({ done: 0, total: selectedTokens.length });
+    try {
+      // One burn per token, in order; each record lands in the returns list as it is made.
+      for (let i = 0; i < selectedTokens.length; i++) {
+        const t = selectedTokens[i];
+        await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination });
+        setBurnProgress({ done: i + 1, total: selectedTokens.length });
+      }
+      setSelectedIds(new Set());
+      setStep('success');
+    } catch (e) {
+      setError(getErrorMessage(e));
+      setStep('form');
     }
   };
 
@@ -129,27 +208,64 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     setPending(pendingMints());
   };
 
+  const toggleToken = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   if (!isOpen) return null;
 
+  const verb = direction === 'in' ? 'Bridge in' : 'Bridge out';
   const subtitle =
-    step === 'chain' ? 'Step 1 of 3 · From which network'
-    : step === 'asset' ? `Step 2 of 3 · ${chain?.name} ${chain?.networkName} · Which asset`
-    : `${chain?.name} · ${chain?.networkName} · ${asset?.symbol}`;
+    step === 'direction' ? 'Which way'
+    : step === 'chain' ? `${verb} · Step 1 of 3 · Which network`
+    : step === 'asset' ? `${verb} · Step 2 of 3 · ${chain?.name} ${chain?.networkName} · Which asset`
+    : `${verb} · ${chain?.name} · ${chain?.networkName} · ${asset?.symbol}`;
 
   return (
     <WalletScreen isOpen={isOpen} onClose={close}>
-      <ModalHeader variant="screen" title="Bridge in" subtitle={subtitle} onClose={back} closeDisabled={step === 'processing'} />
+      <ModalHeader variant="screen" title="Bridge" subtitle={subtitle} onClose={back} closeDisabled={step === 'processing'} />
 
       <div className="p-6 space-y-4 text-sm">
-        {chains.length === 0 && (
-          <p className={MUTED}>No bridgeable assets are configured for this network.</p>
+        {step === 'direction' && (
+          <>
+            <div className="space-y-2">
+              <ChoiceRow
+                icon={<ArrowDownLeft className="w-4 h-4 text-emerald-500" />}
+                title="Bring assets in"
+                detail="Lock on another network, receive here"
+                count={allAssets.length}
+                countNoun="asset"
+                onClick={() => pickDirection('in')}
+              />
+              <ChoiceRow
+                icon={<ArrowUpRight className="w-4 h-4 text-orange-500" />}
+                title="Send assets out"
+                detail="Burn here, receive on the other network"
+                count={allAssets.filter((a) => a.out).length}
+                countNoun="asset"
+                onClick={() => pickDirection('out')}
+              />
+            </div>
+            {error && <ErrorLine text={error} />}
+            {pending.length > 0 && (
+              <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} />
+            )}
+            {returns.length > 0 && <ReturnsList returns={returns} onDismiss={dismiss} />}
+          </>
         )}
 
-        {step === 'chain' && chains.length > 0 && (
+        {step === 'chain' && (
           <>
             <p className={`text-xs ${MUTED}`}>
-              Choose the network your funds are on. Only the networks listed here are supported.
+              {direction === 'in'
+                ? 'Choose the network your funds are on. Only the networks listed here are supported.'
+                : 'Choose the network to receive on. Only the networks listed here are supported.'}
             </p>
+            {chains.length === 0 && <p className={MUTED}>No assets can be bridged this way on this network.</p>}
             <div className="space-y-2">
               {chains.map((c) => (
                 <ChoiceRow
@@ -157,23 +273,19 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   title={c.name}
                   detail={c.networkName}
                   tag={c.testnet ? 'testnet' : undefined}
-                  count={allAssets.filter((a) => a.chain.id === c.id).length}
+                  count={directionAssets.filter((a) => a.chain.id === c.id).length}
                   countNoun="asset"
                   onClick={() => pickChain(c)}
                 />
               ))}
             </div>
-            {error && <ErrorLine text={error} />}
-            {pending.length > 0 && (
-              <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} />
-            )}
           </>
         )}
 
         {step === 'asset' && chain && (
           <>
             <p className={`text-xs ${MUTED}`}>
-              Assets that can be bridged from {chain.name} {chain.networkName}.
+              {direction === 'in' ? `Assets that can be bridged from ${chain.name} ${chain.networkName}.` : `Assets that can be sent back to ${chain.name} ${chain.networkName}.`}
             </p>
             <div className="space-y-2">
               {chainAssets.map((a) => (
@@ -181,8 +293,8 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   key={a.id}
                   title={a.symbol}
                   detail={a.label}
-                  count={a.wallets.length}
-                  countNoun="wallet"
+                  count={direction === 'in' ? a.wallets.length : tokens.filter((t) => t.coinId.toLowerCase() === a.coinIdHex).length}
+                  countNoun={direction === 'in' ? 'wallet' : 'token'}
                   onClick={() => pickAsset(a)}
                 />
               ))}
@@ -190,9 +302,9 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
           </>
         )}
 
-        {step === 'form' && chain && asset && (
+        {step === 'form' && chain && asset && direction === 'in' && (
           <>
-            <SelectionSummary chain={chain} asset={asset} onChange={() => setStep('chain')} />
+            <SelectionSummary chain={chain} asset={asset} prefix="From" onChange={() => setStep('chain')} />
 
             <div className="space-y-2">
               <label className={`text-xs ${MUTED}`}>Amount</label>
@@ -204,9 +316,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   placeholder="0.00"
                   className={`${FIELD} pr-16 text-lg font-mono`}
                 />
-                <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono ${MUTED}`}>
-                  {asset.symbol}
-                </span>
+                <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono ${MUTED}`}>{asset.symbol}</span>
               </div>
             </div>
 
@@ -223,12 +333,10 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                 const available = availability[w.id] ?? w.isAvailable();
                 return (
                   <div key={w.id} className="space-y-1">
-                    <Button onClick={() => start(w)} disabled={!available} className="w-full">
+                    <Button onClick={() => startIn(w)} disabled={!available} className="w-full">
                       Continue with {w.name}
                     </Button>
-                    {!available && w.unavailableHint && (
-                      <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>
-                    )}
+                    {!available && w.unavailableHint && <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>}
                   </div>
                 );
               })}
@@ -236,25 +344,106 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
           </>
         )}
 
+        {step === 'form' && chain && asset && direction === 'out' && (
+          <>
+            <SelectionSummary chain={chain} asset={asset} prefix="To" onChange={() => setStep('chain')} />
+
+            {returnable.length === 0 ? (
+              <p className={`text-xs ${MUTED}`}>No {asset.symbol} tokens to send out. Bridge some in first.</p>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className={`text-xs ${MUTED}`}>Tokens to send out</label>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds(selectedIds.size === returnable.length ? new Set() : new Set(returnable.map((t) => t.id)))}
+                      className="text-xs text-orange-500 hover:text-orange-600"
+                    >
+                      {selectedIds.size === returnable.length ? 'Clear' : 'All'}
+                    </button>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] divide-y divide-neutral-200 dark:divide-white/10">
+                    {returnable.map((t) => (
+                      <TokenChoice key={t.id} token={t} asset={asset} checked={selectedIds.has(t.id)} onToggle={() => toggleToken(t.id)} />
+                    ))}
+                  </div>
+                  <div className={`text-xs ${MUTED}`}>
+                    {selectedTokens.length} token{selectedTokens.length === 1 ? '' : 's'} · {formatUnits(selectedAmount, asset.decimals)} {asset.symbol}. Each token is sent whole; to send a
+                    different amount, send yourself that amount first and pick the new token.
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className={`text-xs ${MUTED}`}>{asset.chain.name} destination address</label>
+                  <input
+                    value={destination}
+                    onChange={(e) => setDestination(e.target.value.trim())}
+                    placeholder={asset.chain.name === 'Tron' ? 'T…' : 'address'}
+                    className={`${FIELD} font-mono`}
+                  />
+                </div>
+
+                <p className={`text-xs ${MUTED}`}>
+                  You sign only the burn here. The return service proves it and releases the funds to that address;
+                  you pay nothing on {asset.chain.name} to receive. The burned token is kept in this wallet's records until
+                  the release lands, and anyone holding it can resubmit it.
+                </p>
+
+                {error && <ErrorLine text={error} />}
+
+                <Button onClick={startOut} className="w-full" disabled={selectedTokens.length === 0}>
+                  {selectedTokens.length > 1 ? `Bridge out ${selectedTokens.length} tokens` : 'Bridge out'}
+                </Button>
+              </>
+            )}
+          </>
+        )}
+
         {step === 'processing' && chain && asset && (
           <div className="py-8 flex flex-col items-center gap-3 text-center">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
-            <div className="font-medium text-neutral-900 dark:text-white">{phaseLabel(progress?.phase, chain.name)}</div>
-            {progress?.message && <div className={`text-xs ${MUTED}`}>{progress.message}</div>}
-            {progress?.lockTxid && <TxLink href={asset.presentation.explorerTxUrl(progress.lockTxid)} label="lock transaction" />}
+            {direction === 'in' ? (
+              <>
+                <div className="font-medium text-neutral-900 dark:text-white">{phaseLabel(progress?.phase, chain.name)}</div>
+                {progress?.message && <div className={`text-xs ${MUTED}`}>{progress.message}</div>}
+                {progress?.lockTxid && <TxLink href={asset.presentation.explorerTxUrl(progress.lockTxid)} label="lock transaction" />}
+              </>
+            ) : (
+              <>
+                <div className="font-medium text-neutral-900 dark:text-white">Burning…</div>
+                {burnProgress && (
+                  <div className={`text-xs ${MUTED}`}>
+                    Token {Math.min(burnProgress.done + 1, burnProgress.total)} of {burnProgress.total}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
         {step === 'success' && chain && asset && (
           <div className="py-8 flex flex-col items-center gap-3 text-center">
             <CheckCircle className="w-10 h-10 text-emerald-500" />
-            <div className="font-medium text-neutral-900 dark:text-white">Bridged in</div>
-            {result && (
-              <div className={`text-xs ${MUTED}`}>
-                {formatUnits(result.amount, asset.decimals)} {asset.symbol} from {chain.name} is now in your wallet.
-              </div>
+            {direction === 'in' ? (
+              <>
+                <div className="font-medium text-neutral-900 dark:text-white">Bridged in</div>
+                {result && (
+                  <div className={`text-xs ${MUTED}`}>
+                    {formatUnits(result.amount, asset.decimals)} {asset.symbol} from {chain.name} is now in your wallet.
+                  </div>
+                )}
+                {progress?.lockTxid && <TxLink href={asset.presentation.explorerTxUrl(progress.lockTxid)} label="lock transaction" />}
+              </>
+            ) : (
+              <>
+                <div className="font-medium text-neutral-900 dark:text-white">Burned, release pending</div>
+                <div className={`text-xs ${MUTED}`}>
+                  The return service is proving the burn. The release lands on {chain.name} when the proof settles; follow it
+                  under Returns on the first screen.
+                </div>
+              </>
             )}
-            {progress?.lockTxid && <TxLink href={asset.presentation.explorerTxUrl(progress.lockTxid)} label="lock transaction" />}
             <Button onClick={close} className="w-full mt-2">Done</Button>
           </div>
         )}
@@ -263,8 +452,9 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   );
 }
 
-/** One selectable option in the network and asset steps. */
+/** One selectable option in the direction, network and asset steps. */
 function ChoiceRow({
+  icon,
   title,
   detail,
   tag,
@@ -272,6 +462,7 @@ function ChoiceRow({
   countNoun,
   onClick,
 }: {
+  icon?: React.ReactNode;
   title: string;
   detail: string;
   tag?: string;
@@ -285,13 +476,12 @@ function ChoiceRow({
       onClick={onClick}
       className="w-full p-4 flex items-center gap-3 rounded-2xl border text-left transition-colors bg-neutral-50 dark:bg-white/4 border-neutral-200 dark:border-white/8 hover:bg-neutral-100 dark:hover:bg-white/8"
     >
+      {icon && <div className="shrink-0">{icon}</div>}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-semibold font-mono text-neutral-900 dark:text-white">{title}</span>
           {tag && (
-            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
-              {tag}
-            </span>
+            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">{tag}</span>
           )}
         </div>
         <div className={`text-xs mt-0.5 ${MUTED}`}>
@@ -303,19 +493,83 @@ function ChoiceRow({
   );
 }
 
-/** What was chosen, kept in view above the form, with a way back to the first step. */
-function SelectionSummary({ chain, asset, onChange }: { chain: BridgeChain; asset: BridgeAsset; onChange: () => void }) {
+function TokenChoice({ token, asset, checked, onToggle }: { token: Token; asset: BridgeAsset; checked: boolean; onToggle: () => void }) {
+  return (
+    <label className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-neutral-200/60 dark:hover:bg-white/5">
+      <input type="checkbox" checked={checked} onChange={onToggle} className="h-4 w-4 accent-orange-500" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm text-neutral-900 dark:text-white">
+          {formatUnits(BigInt(token.amount || '0'), asset.decimals)} {asset.symbol}
+        </span>
+        <span className={`block truncate text-[11px] font-mono ${MUTED}`}>{token.id}</span>
+      </span>
+    </label>
+  );
+}
+
+/** What was chosen, kept in view above the form, with a way back to the first choice. */
+function SelectionSummary({ chain, asset, prefix, onChange }: { chain: BridgeChain; asset: BridgeAsset; prefix: string; onChange: () => void }) {
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
       <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
       <span className="flex-1 min-w-0 truncate text-neutral-900 dark:text-white">
-        From <span className="font-semibold">{chain.name}</span> · {chain.networkName} · <span className="font-semibold">{asset.symbol}</span>
+        {prefix} <span className="font-semibold">{chain.name}</span> · {chain.networkName} · <span className="font-semibold">{asset.symbol}</span>
       </span>
       <button type="button" onClick={onChange} className="text-orange-500 hover:text-orange-600 shrink-0">
         change
       </button>
     </div>
   );
+}
+
+/** Burns waiting for their release, with the service's status for each. */
+function ReturnsList({ returns, onDismiss }: { returns: PendingReturn[]; onDismiss: (id: string) => void }) {
+  return (
+    <div className="pt-2 space-y-2">
+      <div className={`text-xs ${MUTED}`}>Returns</div>
+      {returns.map((r) => {
+        const asset = bridgeAssetByCoin(r.coinIdHex);
+        const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
+        const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
+        return (
+          <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
+            <span className="flex-1 min-w-0">
+              <span className="block font-mono text-neutral-900 dark:text-white">
+                {amount}{asset ? ` → ${asset.chain.name}` : ''}
+              </span>
+              <span className={`block truncate ${MUTED}`} title={r.destination}>{r.destination}</span>
+              {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
+            </span>
+            <span className={`shrink-0 ${color}`}>{returnStatusLabel(r.status)}</span>
+            {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
+            {isTerminalReturn(r) && (
+              <button
+                type="button"
+                onClick={() => onDismiss(r.id)}
+                className="p-1.5 rounded-md text-neutral-400 hover:text-red-500 hover:bg-red-500/10"
+                title="Remove this record"
+                aria-label="Remove this record"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function returnStatusLabel(status: PendingReturn['status']): string {
+  switch (status) {
+    case 'burned': return 'burned, sending to the service';
+    case 'queued': return 'queued';
+    case 'proving': return 'proving';
+    case 'proven': return 'proven';
+    case 'submitted': return 'settling';
+    case 'settled': return 'released';
+    case 'failed': return 'failed';
+  }
 }
 
 function PendingList({
@@ -343,7 +597,7 @@ function PendingList({
                 {amount}{asset ? ` · ${asset.chain.name}` : ''}
               </span>
               <span className={`block ${MUTED}`}>
-                {lock.lockTxid ? (lock.status === 'locked' ? 'locked, not yet minted' : 'lock sent') : 'not signed'}
+                {lock.lockTxid ? (lock.status === 'locked' ? 'locked, not yet minted' : 'lock sent') : 'not signed, nothing is locked'}
               </span>
             </span>
             {lock.lockTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(lock.lockTxid)} label="tx" />}

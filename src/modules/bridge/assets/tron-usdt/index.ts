@@ -1,23 +1,37 @@
-import { TRON_MAINNET_CHAIN_ID, TRON_NILE_CHAIN_ID, TronHttpRpcClient } from '@unicitylabs/bridge-plugin-tron-usdt';
+import {
+  buildBridgeBackBurnReason,
+  burnIdentifiers,
+  burnTransitionId,
+  decodeBridgeBackReason,
+  nullifier,
+  TRON_MAINNET_CHAIN_ID,
+  TRON_NILE_CHAIN_ID,
+  TronHttpRpcClient,
+  type BridgeBackReason,
+} from '@unicitylabs/bridge-plugin-tron-usdt';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
   createTronSourceAdapter,
   loadBridges,
   NILE_USDT_BRIDGE,
+  ReturnServiceClient,
+  ReturnServiceError,
+  toEvmAddressHex,
   tronLinkProvider,
+  withReturnServiceUrl,
   type DepositWallet,
   type LoadedBridge,
   type TronSigner,
 } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
-import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
+import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeOutSide, BridgeWalletOption } from '../../types';
 import { devKeySigner } from './devSigner';
 
 const provider: BridgeAssetProvider = {
   id: 'tron-usdt',
-  load: () => loadBridges([NILE_USDT_BRIDGE]).map(tronAsset),
+  load: () => loadBridges([withServiceUrl(NILE_USDT_BRIDGE)]).map(tronAsset),
 };
 
 export default provider;
@@ -70,7 +84,82 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     presentation: bridgePresentation(bridge),
     wallets,
     resumeDeps: () => ({ adapter: createTronSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
+    out: tronOut(bridge),
   };
+}
+
+function withServiceUrl(m: typeof NILE_USDT_BRIDGE): typeof NILE_USDT_BRIDGE {
+  const url = import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL as string | undefined;
+  return url ? withReturnServiceUrl(m, url) : m;
+}
+
+const ZERO_ADDRESS = new Uint8Array(20);
+const RETURN_DEADLINE_SECONDS = 3600;
+
+function tronOut(bridge: LoadedBridge): BridgeOutSide {
+  const cfg = bridge.bridgeConfig;
+  const client = new ReturnServiceClient(bridge.manifest.returnServiceUrl);
+  return {
+    reasonFor: ({ amount, destination }) => {
+      const reason: BridgeBackReason = {
+        version: 1n,
+        recipient: fromHex(toEvmAddressHex(destination)),
+        amount,
+        feeRecipient: ZERO_ADDRESS,
+        feeAmount: 0n,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + RETURN_DEADLINE_SECONDS),
+      };
+      return buildBridgeBackBurnReason(cfg, reason).reasonBytes;
+    },
+    identify: async (burnedToken) => {
+      const ids = await burnIdentifiers(burnedToken);
+      let reason;
+      try {
+        reason = decodeBridgeBackReason(ids.reasonBytes);
+      } catch {
+        return null;
+      }
+      if (!bytesEqual(reason.vault, cfg.vault) || !bytesEqual(reason.coinId, cfg.coinId)) return null;
+      return {
+        nullifierHex: toHex(nullifier(bridge.configHash, burnTransitionId(ids.burnStateId, ids.burnTxHash))),
+        destination: `0x${toHex(reason.recipient)}`,
+        amount: reason.amount,
+      };
+    },
+    returns: {
+      submit: async (burnedToken, reasonBytes) => {
+        const rec = await client.postReturn({ tokenCbor: burnedToken, configHash: bridge.configHash, reasonBytes });
+        return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message };
+      },
+      status: async (returnId) => {
+        try {
+          const rec = await client.getReturn(returnId);
+          return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message };
+        } catch (err) {
+          if (err instanceof Error && /HTTP 404/.test(err.message)) return null;
+          throw err;
+        }
+      },
+      refusal: (err) => (err instanceof ReturnServiceError ? { message: err.message, recoverable: err.recoverable } : null),
+    },
+  };
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+function toHex(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += b.toString(16).padStart(2, '0');
+  return s;
+}
+
+function fromHex(hex: string): Uint8Array {
+  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+  return out;
 }
 
 function tronChain(chainId: number, chainRef: string): BridgeChain {

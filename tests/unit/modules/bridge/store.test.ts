@@ -46,3 +46,29 @@ describe('bridge recovery store', () => {
     expect(Object.keys(localStorage).every((k) => k.startsWith('sphere_'))).toBe(true);
   });
 });
+
+describe('bridge recovery store: returns', () => {
+  const ret = (id: string, status: 'burned' | 'settled' = 'burned') => ({
+    id, coinIdHex: 'aa'.repeat(32), assetId: 'a', burnedTokenHex: '01', reasonBytesHex: '02', destination: 'T', amount: '1', createdAt: 1, status,
+  });
+
+  it('keeps returns beside locks, per identity', () => {
+    localStorage.clear();
+    const store = bridgeStoreFor('alice');
+    store.persistPendingLock(lock('l'));
+    store.persistReturn(ret('r'));
+    expect(store.listLocks().map((l) => l.id)).toEqual(['l']);
+    expect(store.listReturns().map((r) => r.id)).toEqual(['r']);
+    expect(bridgeStoreFor('bob').listReturns()).toEqual([]);
+  });
+
+  it('lists only unfinished returns as active and refuses to remove them', () => {
+    localStorage.clear();
+    const store = bridgeStoreFor('alice');
+    store.persistReturn(ret('open'));
+    store.persistReturn(ret('done', 'settled'));
+    expect(store.activeReturns().map((r) => r.id)).toEqual(['open']);
+    expect(store.removeReturn('open')).toBe(false);
+    expect(store.removeReturn('done')).toBe(true);
+  });
+});
