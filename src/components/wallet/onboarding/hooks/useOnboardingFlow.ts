@@ -8,6 +8,7 @@ import { Sphere } from "@unicitylabs/sphere-sdk";
 import type { LegacyFileType } from "@unicitylabs/sphere-sdk";
 import { useSphereContext } from "../../../../sdk/hooks/core/useSphere";
 import { SPHERE_KEYS } from "../../../../sdk/queryKeys";
+import { getErrorMessage } from "../../../../sdk/errors";
 import { addrKey } from "../components/addrKey";
 import { createWalletThenRegister } from "./createWalletThenRegister";
 import { buildWalletBackup } from "./buildWalletBackup";
@@ -468,6 +469,10 @@ export function useOnboardingFlow(
       const result = await importFromFile({
         fileContent,
         fileName: selectedFile.name,
+        // Only the lock-escape restore replaces a wallet, and only after the user
+        // ticked the erase confirmation (RestoreMethodScreen). Elsewhere the SDK's
+        // ALREADY_INITIALIZED refusal is the guard that keeps a wallet alive.
+        overwrite: fromLock === true,
       });
 
       if (!result.success) {
@@ -497,7 +502,7 @@ export function useOnboardingFlow(
     } finally {
       setIsBusy(false);
     }
-  }, [fileContent, selectedFile, isEncrypted, importFromFile, routeAfterImport]);
+  }, [fileContent, selectedFile, isEncrypted, importFromFile, routeAfterImport, fromLock]);
 
   const handlePasswordSubmit = useCallback(async (password: string) => {
     if (!fileContent || !selectedFile) return;
@@ -519,6 +524,7 @@ export function useOnboardingFlow(
         fileContent,
         fileName: selectedFile.name,
         password,
+        overwrite: fromLock === true,
       });
 
       if (!result.success) {
@@ -578,7 +584,7 @@ export function useOnboardingFlow(
     } finally {
       setIsBusy(false);
     }
-  }, [fileContent, selectedFile, importFromFile, routeAfterImport, setWalletPassword]);
+  }, [fileContent, selectedFile, importFromFile, routeAfterImport, setWalletPassword, fromLock]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -649,16 +655,17 @@ export function useOnboardingFlow(
     setIsProcessingComplete(false);
 
     try {
-      const instance = await importWallet(mnemonic);
+      const instance = await importWallet(mnemonic, { overwrite: fromLock === true });
       routeAfterImport(instance);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Invalid recovery phrase";
-      setError(message);
+      // getErrorMessage maps the SDK's ALREADY_INITIALIZED refusal (sphere-sdk#801) to a
+      // way out the user can act on, instead of its "pass overwrite: true" wording.
+      setError(e ? getErrorMessage(e) : "Invalid recovery phrase");
       setStep("restore");
     } finally {
       setIsBusy(false);
     }
-  }, [seedWords, importWallet, routeAfterImport]);
+  }, [seedWords, importWallet, routeAfterImport, fromLock]);
 
   // Action: Create wallet WITH nametag (or register nametag on imported wallet)
   const handleMintNametag = useCallback(async () => {

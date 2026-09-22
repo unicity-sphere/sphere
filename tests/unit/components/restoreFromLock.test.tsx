@@ -102,10 +102,28 @@ describe('restore-from-lock guard (#449)', () => {
     // the flow, after address selection/nametag. With this mock returning no
     // tracked addresses and no nametag, that lands on the nametag screen
     // next.
-    await waitFor(() => expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC));
+    // `overwrite: true` is what makes the SDK replace the wallet still on this device
+    // (sphere-sdk#801, 0.17.4+): without it the import is refused. It is passed here, and
+    // only here, because RestoreMethodScreen took the user's erase confirmation first.
+    await waitFor(() =>
+      expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: true }),
+    );
     expect(screen.queryByText(/invalid recovery phrase/i)).toBeNull();
 
     await waitFor(() => expect(screen.getByText(/choose unicity id/i)).toBeDefined());
+  });
+
+  it('restores WITHOUT overwrite in normal onboarding, so an unexpected wallet is never replaced', async () => {
+    renderFlow({ initialStep: 'restore' });
+
+    fillSeedWords(VALID_MNEMONIC);
+    fireEvent.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    // No erase was confirmed here: the storage is meant to be empty. If it is not, the
+    // SDK's ALREADY_INITIALIZED refusal must win instead of a silent replace.
+    await waitFor(() =>
+      expect(ctx.importWallet).toHaveBeenCalledWith(VALID_MNEMONIC, { overwrite: false }),
+    );
   });
 
   it('gates both restore options behind an explicit erase-confirmation when entered from the lock screen', () => {

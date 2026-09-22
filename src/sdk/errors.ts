@@ -11,6 +11,9 @@ const FRIENDLY_OVERRIDES: Partial<Record<SphereErrorCode, string>> = {
   DECRYPTION_ERROR: 'Wrong password',
   STORAGE_ERROR: 'Storage error',
   MODULE_NOT_AVAILABLE: 'Feature not available',
+  // sphere-sdk#801: the SDK refused to import over the wallet already on this device.
+  // Its own message tells a developer to pass `overwrite: true`; a user needs the way out.
+  ALREADY_INITIALIZED: 'This device already has a wallet. Unlock it, or use "Forgot password" on the lock screen to replace it.',
   // #631/#633: a possibly-certified send. useTransfer already converts this to a pending
   // success (so the send path never re-sends); this is a friendly fallback for any other surface.
   CERTIFICATION_UNCONFIRMED: 'Payment sent — confirming on-chain. No need to resend.',

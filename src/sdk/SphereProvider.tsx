@@ -752,7 +752,9 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         // fromLock/goToStart) should prevent "Create New Wallet" from ever
         // being reachable while such a wallet is present; this is the last
         // line of defense against a stray/future path reaching it anyway.
-        if (classifyInitFailure(err) === 'locked') {
+        if (classifyInitFailure(err) !== 'error') {
+          // 'locked' (see above) or 'refused': the SDK never touched the wallet on
+          // this device, so cleaning up would destroy what it just protected.
           throw err;
         }
         await cleanupOnError(providers);
@@ -806,6 +808,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         mnemonic,
         nametag: options?.nametag,
         password: options?.password,
+        overwrite: options?.overwrite,
         onProgress: setInitProgress,
       });
       setInitProgress(null);
@@ -835,6 +838,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
           fileName: options.fileName,
           password: options.password,
           nametag: options.nametag,
+          overwrite: options.overwrite,
           onProgress: setInitProgress,
         });
         setInitProgress(null);
@@ -850,6 +854,15 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         };
       } catch (err) {
         setInitProgress(null);
+        // The SDK refuses to import over the wallet already on this device unless the
+        // caller passes `overwrite` (sphere-sdk#801): it rejects before touching storage,
+        // so that wallet is still there and must not be cleaned up.
+        if (classifyInitFailure(err) !== 'error') {
+          return {
+            success: false,
+            error: getErrorMessage(err),
+          };
+        }
         await cleanupOnError(providers);
         sphereRef.current = null;
         setSphere(null);
