@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Github, Linkedin, Key, Zap, MessageSquare, Store, type LucideIcon } from 'lucide-react';
+import { Github, Linkedin, Key, Zap, MessageSquare, type LucideIcon } from 'lucide-react';
 import { DiscordIcon, XIcon } from '../components/icons/SocialIcons';
 import { copyToClipboard } from '../utils/copyToClipboard';
 
-type ApiKey = 'init' | 'payments' | 'communication' | 'market';
+type ApiKey = 'init' | 'payments' | 'communication';
 
 interface ApiInfo {
   Icon: LucideIcon;
@@ -116,72 +116,8 @@ sphere.communications.onBroadcast((msg) => {
 });`,
       features: ['End-to-end encrypted', 'P2P via Nostr', 'Group chat (NIP-29)', 'Broadcast messages']
     },
-    market: {
-      Icon: Store,
-      title: 'Market',
-      tagline: 'Post intents. Find matches.',
-      description: 'Intent bulletin board for buy/sell/service intents. Semantic search. Live WebSocket feed.',
-      code: `await sphere.market.postIntent({ description: '...', intentType: 'sell' });`,
-      fullExample: `// Post a sell intent
-const result = await sphere.market.postIntent({
-  description: 'PSA-10 Charizard card - Mint condition',
-  intentType: 'sell',
-  category: 'collectibles',
-  price: 12000,
-  currency: 'UCT',
-});
-console.log('Intent posted:', result.intentId);
-
-// Search the marketplace
-const results = await sphere.market.search('charizard card');
-results.intents.forEach(intent => {
-  console.log(\`\${intent.description} - \${intent.price} \${intent.currency}\`);
-});
-
-// Subscribe to live feed
-const unsubscribe = sphere.market.subscribeFeed((listing) => {
-  console.log('New listing:', listing.description);
-});
-
-// Get your own intents
-const myIntents = await sphere.market.getMyIntents();`,
-      features: ['Intent bulletin board', 'Semantic search', 'Live WebSocket feed', 'Buy/sell/service intents']
-    }
   };
 
-  const marketplaceCode = `import { Sphere } from '@unicitylabs/sphere-sdk';
-import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
-
-// Initialize wallet with providers
-const providers = createBrowserProviders({ network: 'testnet' });
-const { sphere } = await Sphere.init({ ...providers, mnemonic: '...' });
-
-// Post a sell intent to the marketplace
-await sphere.market.postIntent({
-  description: 'PSA-10 Charizard - Mint condition',
-  intentType: 'sell',
-  price: 12000,
-  currency: 'UCT',
-});
-
-// Search for items
-const results = await sphere.market.search('charizard card');
-
-// Message a seller to negotiate
-const seller = results.intents[0];
-await sphere.communications.sendDM(seller.agentPubkey, JSON.stringify({
-  type: 'offer', intentId: seller.id, price: 11000
-}));
-
-// Listen for DMs and handle accepted offers
-sphere.communications.onDirectMessage(async (msg) => {
-  const data = JSON.parse(msg.content);
-  if (data.type === 'accepted') {
-    await sphere.payments.send({
-      coinId: '0x...', amount: String(data.price), recipient: msg.senderPubkey,
-    });
-  }
-});`;
 
   return (
     <motion.div
@@ -313,37 +249,6 @@ sphere.communications.onDirectMessage(async (msg) => {
               </pre>
             </div>
           </motion.div>
-        </div>
-      </section>
-
-      {/* Complete Marketplace Section */}
-      <section className="px-4 sm:px-6 py-12 sm:py-16">
-        <div className="no-text-shadow max-w-6xl mx-auto">
-          <div className="text-center mb-10 sm:mb-12">
-            <p className="text-xs font-mono uppercase tracking-widest text-orange-500 dark:text-brand-orange mb-3">Example</p>
-            <h2 className="text-2xl sm:text-3xl font-bold mb-4">A Complete Marketplace in 30 Lines</h2>
-            <p className="text-neutral-500 dark:text-white/55 leading-relaxed">Intents, search, negotiation, payment. All of it.</p>
-          </div>
-
-          <div className="bg-white dark:bg-white/4 dark:backdrop-blur-2xl rounded-2xl border border-neutral-200 dark:border-white/8 overflow-hidden shadow-xl">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-neutral-200 dark:border-white/8">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-              </div>
-              <span className="text-xs text-neutral-500 dark:text-white/35 font-mono">marketplace.ts</span>
-              <button
-                onClick={() => handleCopy(marketplaceCode, 'marketplace')}
-                className="text-xs text-neutral-500 dark:text-white/35 hover:text-neutral-700 dark:hover:text-white/75 transition"
-              >
-                {copiedIndex === 'marketplace' ? '✓ Copied' : 'Copy'}
-              </button>
-            </div>
-            <pre className="p-4 sm:p-6 text-sm font-mono text-neutral-600 dark:text-white/55 overflow-x-auto">
-              <code>{marketplaceCode}</code>
-            </pre>
-          </div>
         </div>
       </section>
 
