@@ -39,13 +39,10 @@ type Section =
   | 'api-comms-conversations'
   | 'api-comms-broadcast'
   | 'api-groupchat'
-  | 'api-market'
   | 'guides'
-  | 'guide-marketplace'
   | 'guide-wallet-backup'
   | 'examples'
   | 'example-payment'
-  | 'example-marketplace'
   | 'connect'
   | 'connect-overview'
   | 'connect-how-it-works'
@@ -127,10 +124,6 @@ const navigation: NavItem[] = [
     label: 'Group Chat',
   },
   {
-    id: 'api-market',
-    label: 'Market',
-  },
-  {
     id: 'connect',
     label: 'Sphere Connect',
     children: [
@@ -144,7 +137,6 @@ const navigation: NavItem[] = [
     id: 'guides',
     label: 'Guides',
     children: [
-      { id: 'guide-marketplace', label: 'Building a Marketplace' },
       { id: 'guide-wallet-backup', label: 'Wallet Backup & Recovery' },
     ],
   },
@@ -153,7 +145,6 @@ const navigation: NavItem[] = [
     label: 'Examples',
     children: [
       { id: 'example-payment', label: 'Simple Payment' },
-      { id: 'example-marketplace', label: 'P2P Marketplace' },
     ],
   },
 ];
@@ -446,7 +437,7 @@ export function DocsPage() {
               </a>
             </h1>
             <p className="text-lg text-neutral-600 dark:text-neutral-400 mb-8 max-w-2xl">
-              Build marketplaces where humans and AI agents trade anything. Payments, messaging, identity, and market intents in one SDK.
+              Build apps where humans and AI agents trade anything. Payments, messaging and identity in one SDK.
             </p>
 
             <div id="installation" data-section="installation" className="scroll-mt-24 mb-12">
@@ -535,7 +526,6 @@ const base = createBrowserProviders({
   network: NETWORK,
   price: { platform: 'coingecko', cacheTtlMs: 5 * 60_000 },
   groupChat: true,
-  market: true,
 });
 
 const providers = createWalletApiProviders(base, {
@@ -545,7 +535,7 @@ const providers = createWalletApiProviders(base, {
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 <code className="text-amber-600 dark:text-amber-400">base</code> carries storage, transport, oracle and —
-                because they were configured here — price, groupChat and market;{' '}
+                because they were configured here — price and groupChat;{' '}
                 <code className="text-amber-600 dark:text-amber-400">createWalletApiProviders</code> adds
                 <code className="text-amber-600 dark:text-amber-400"> walletApi</code> to it. The price block selects the
                 fiat provider and how long quotes are cached.
@@ -812,7 +802,6 @@ unsub();`}
                   { name: 'autoGenerate', type: 'boolean', description: 'Auto-generate mnemonic if wallet does not exist' },
                   { name: 'nametag', type: 'string', description: 'Register nametag on creation' },
                   { name: 'groupChat', type: 'boolean | config', description: 'Enable NIP-29 group chat module' },
-                  { name: 'market', type: 'boolean | config', description: 'Enable market intent module' },
                   { name: 'password', type: 'string', description: 'Encrypt wallet with password' },
                 ]}
               />
@@ -1608,68 +1597,7 @@ await chat.leaveGroup('group-id');`}
           </section>
 
           {/* ============================================================ */}
-          {/* API REFERENCE - MARKET                                       */}
           {/* ============================================================ */}
-          <section id="api-market" data-section="api-market" className="mb-16">
-            <h2 className="text-2xl font-bold mb-6 pb-2 border-b border-neutral-200 dark:border-neutral-700">
-              API Reference &mdash; Market
-            </h2>
-            <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-              Intent bulletin board via <code className="text-amber-600 dark:text-amber-400">sphere.market</code>.
-              Requires <code className="text-amber-600 dark:text-amber-400">market: true</code> in initialization.
-              Listings do not live on chain and are not carried by Nostr: they are served by the market API at
-              <code className="text-amber-600 dark:text-amber-400"> https://market-api.unicity.network</code>, which you can point elsewhere with
-              <code className="text-amber-600 dark:text-amber-400"> market: {'{ apiUrl }'}</code>. Search is public; posting, listing your own
-              intents and closing them register your wallet once
-              (<code className="text-amber-600 dark:text-amber-400">/api/agent/register</code>) and sign each request with your
-              address key, so an intent is tied to the identity that posted it. The live feed is a WebSocket on the same host
-              (<code className="text-amber-600 dark:text-amber-400">/ws/feed</code>).
-              <code className="text-amber-600 dark:text-amber-400"> sphere.market</code> is
-              <code className="text-amber-600 dark:text-amber-400"> MarketModule | null</code> — null until you enable it. The feed callback receives
-              either an initial batch or a single new listing; each listing carries
-              <code className="text-amber-600 dark:text-amber-400"> title</code> and
-              <code className="text-amber-600 dark:text-amber-400"> descriptionPreview</code> (<code className="text-amber-600 dark:text-amber-400">description</code> is
-              on search results only).
-            </p>
-            <CodeBlock
-              filename="market.ts"
-              code={`const market = sphere.market;
-if (!market) throw new Error('market is not enabled');
-
-const result = await market.postIntent({
-  description: 'PSA-10 Charizard card - Mint condition',
-  intentType: 'sell',
-  category: 'collectibles',
-  price: 12000,
-  currency: 'UCT',
-});
-console.log('Posted:', result.intentId);
-
-const results = await market.search('charizard card');
-results.intents.forEach(intent => {
-  console.log(intent.description, intent.price);
-});
-
-const myIntents = await market.getMyIntents();
-
-await market.closeIntent(intentId);
-
-const unsub = market.subscribeFeed((msg) => {
-  if (msg.type === 'new') console.log('New listing:', msg.listing.title);
-  else console.log('Initial batch:', msg.listings.length);
-});
-
-const recent = await market.getRecentListings();`}
-            />
-            <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
-              <li><code className="text-amber-600 dark:text-amber-400">postIntent()</code> posts an intent &mdash; <code className="text-amber-600 dark:text-amber-400">intentType</code> is what makes this one a sell</li>
-              <li><code className="text-amber-600 dark:text-amber-400">search(query)</code> searches the marketplace</li>
-              <li><code className="text-amber-600 dark:text-amber-400">getMyIntents()</code> returns the intents you posted</li>
-              <li><code className="text-amber-600 dark:text-amber-400">closeIntent(intentId)</code> closes one of them</li>
-              <li><code className="text-amber-600 dark:text-amber-400">subscribeFeed(listener)</code> subscribes to the live feed and returns an unsubscribe function</li>
-              <li><code className="text-amber-600 dark:text-amber-400">getRecentListings()</code> returns the recent listings</li>
-            </ul>
-          </section>
 
           {/* ============================================================ */}
           {/* SPHERE CONNECT                                                */}
@@ -2088,139 +2016,6 @@ disconnect();`}
               Guides
             </h2>
 
-            <div id="guide-marketplace" data-section="guide-marketplace" className="scroll-mt-24 mb-12">
-              <h3 className="text-xl font-semibold mb-4">Building a P2P Marketplace</h3>
-              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Build a complete peer-to-peer marketplace using the Market, Communications, and Payments modules.
-              </p>
-
-              <h4 className="font-medium text-lg mt-6 mb-3">Step 1: Initialize</h4>
-              <CodeBlock
-                filename="marketplace.ts"
-                code={`import {
-  Sphere, TokenRegistry, getCoinIdBySymbol, getTokenDecimals, parseTokenAmount,
-  isPossiblyCommittedSendOutcome,
-} from '@unicitylabs/sphere-sdk';
-import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
-import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
-
-const NETWORK = 'testnet2';
-
-const providers = createWalletApiProviders(
-  createBrowserProviders({ network: NETWORK, market: true }),
-  { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
-);
-
-const { sphere, created, generatedMnemonic } = await Sphere.init({
-  ...providers,
-  network: NETWORK,
-  autoGenerate: true,
-});
-
-if (created && generatedMnemonic) {
-  showBackupPrompt(generatedMnemonic); // your UI — the user saves it, you never store it
-}
-
-const market = sphere.market;
-if (!market) throw new Error('market is not enabled');`}
-              />
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                <code className="text-amber-600 dark:text-amber-400">init()</code> loads the wallet already in this
-                browser&rsquo;s storage. <code className="text-amber-600 dark:text-amber-400">autoGenerate</code> only
-                fires when there is none, and hands the phrase to the user to write down.
-              </p>
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                Never put a seed phrase in a build-time variable. Anything prefixed
-                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> is inlined into the bundle and served
-                to every visitor &mdash; that is publishing the wallet, not configuring it.
-              </p>
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                To let a user bring an existing wallet, take the phrase from an input they fill in and pass it as
-                <code className="text-amber-600 dark:text-amber-400"> mnemonic</code> — see
-                <a href="#guide-wallet-backup" className="text-orange-500 hover:underline"> Wallet Backup &amp; Recovery</a>.
-                A seed that comes from your configuration rather than from the user is a seed you have distributed.
-              </p>
-
-              <h4 className="font-medium text-lg mt-6 mb-3">Step 2: Post Listings</h4>
-              <CodeBlock
-                code={`await market.postIntent({
-  description: 'Vintage Rolex Submariner - Excellent condition',
-  intentType: 'sell',
-  category: 'watches',
-  price: 15000,
-  currency: 'UCT',
-});`}
-              />
-
-              <h4 className="font-medium text-lg mt-6 mb-3">Step 3: Search & Negotiate</h4>
-              <CodeBlock
-                code={`const results = await market.search('rolex submariner');
-const intent = results.intents[0];
-
-// Resolve the listing's currency yourself — never take a coinId off the wire.
-await TokenRegistry.waitForReady();
-const coinId = getCoinIdBySymbol(intent.currency);
-if (!coinId) throw new Error(\`Unknown currency: \${intent.currency}\`);
-
-// The offer YOU made. The payment below is checked against this, not against the DM.
-const offer = { agentPublicKey: intent.agentPublicKey, intentId: intent.id, price: 14000, coinId };
-
-await sphere.communications.sendDM(offer.agentPublicKey, JSON.stringify({
-  type: 'offer',
-  intentId: offer.intentId,
-  price: offer.price,
-}));
-
-sphere.communications.onDirectMessage(async (msg) => {
-  const data = JSON.parse(msg.content);
-  if (data.type !== 'accepted') return;
-  if (msg.senderPubkey !== offer.agentPublicKey || data.intentId !== offer.intentId) return;
-
-  try {
-    await sphere.payments.send({
-      coinId: offer.coinId,
-      amount: parseTokenAmount(String(offer.price), getTokenDecimals(offer.coinId)).toString(),
-      recipient: msg.senderPubkey,
-      memo: \`Payment for intent \${offer.intentId}\`,
-    });
-  } catch (err) {
-    // The money may already have left: converge the original, never send() again.
-    if (isPossiblyCommittedSendOutcome(err)) await sphere.payments.resumeNow();
-    else throw err;
-  }
-});`}
-              />
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                <code className="text-amber-600 dark:text-amber-400">onDirectMessage</code> fires for every inbound DM from
-                every peer, and <code className="text-amber-600 dark:text-amber-400">payments.send()</code> spends
-                immediately with no wallet confirmation — so never take
-                <code className="text-amber-600 dark:text-amber-400"> recipient</code>,
-                <code className="text-amber-600 dark:text-amber-400"> coinId</code> or
-                <code className="text-amber-600 dark:text-amber-400"> amount</code> from the message. Market
-                <code className="text-amber-600 dark:text-amber-400"> price</code> is a display number
-                (<code className="text-amber-600 dark:text-amber-400">15000</code> UCT) while
-                <code className="text-amber-600 dark:text-amber-400"> amount</code> is base units: convert with
-                <code className="text-amber-600 dark:text-amber-400"> parseTokenAmount(price, getTokenDecimals(coinId))</code>,
-                or you send 15000 of the smallest unit — 1.5e-14 UCT. Search results carry the seller&rsquo;s key as
-                <code className="text-amber-600 dark:text-amber-400"> agentPublicKey</code>.
-              </p>
-
-              <h4 className="font-medium text-lg mt-6 mb-3">Step 4: Handle Payments</h4>
-              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                This is the seller side. Listen for incoming payments, then send the buyer a confirmation DM.
-              </p>
-              <CodeBlock
-                code={`sphere.on('transfer:incoming', async (transfer) => {
-  console.log('Payment received:', transfer.tokens);
-
-  await sphere.communications.sendDM(transfer.senderPubkey, JSON.stringify({
-    type: 'payment_confirmed',
-    amount: transfer.tokens[0]?.amount,
-  }));
-});`}
-              />
-            </div>
-
             <div id="guide-wallet-backup" data-section="guide-wallet-backup" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">Wallet Backup & Recovery</h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
@@ -2376,111 +2171,6 @@ main();`}
                 seed never comes from <code className="text-amber-600 dark:text-amber-400">import.meta.env</code>:
                 <code className="text-amber-600 dark:text-amber-400"> VITE_</code> variables are inlined into the bundle
                 and served to every visitor.
-              </p>
-            </div>
-
-            <div id="example-marketplace" data-section="example-marketplace" className="scroll-mt-24 mb-12">
-              <h3 className="text-xl font-semibold mb-4">P2P Marketplace</h3>
-              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                A peer-to-peer marketplace with intents, negotiation via DM, and payment settlement.
-                <code className="text-amber-600 dark:text-amber-400"> postIntent()</code> takes
-                <code className="text-amber-600 dark:text-amber-400"> price</code> as a number, but
-                <code className="text-amber-600 dark:text-amber-400"> getMyIntents()</code> gives it back as an optional
-                string — coerce it before comparing.
-              </p>
-              <CodeBlock
-                filename="p2p-marketplace.ts"
-                code={`import { Sphere } from '@unicitylabs/sphere-sdk';
-import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
-import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
-
-const NETWORK = 'testnet2';
-
-async function main() {
-  const providers = createWalletApiProviders(
-    createBrowserProviders({ network: NETWORK, market: true }),
-    { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
-  );
-  const { sphere, created, generatedMnemonic } = await Sphere.init({
-    ...providers,
-    network: NETWORK,
-    autoGenerate: true,
-  });
-  if (created && generatedMnemonic) {
-    console.log('New wallet — save this phrase:', generatedMnemonic);
-  }
-
-  const market = sphere.market;
-  if (!market) throw new Error('market is not enabled');
-
-  await market.postIntent({
-    description: 'Vintage Rolex Submariner',
-    intentType: 'sell',
-    category: 'watches',
-    price: 15000,
-    currency: 'UCT',
-  });
-
-  await market.postIntent({
-    description: 'PSA-10 Charizard',
-    intentType: 'sell',
-    category: 'collectibles',
-    price: 12000,
-    currency: 'UCT',
-  });
-
-  console.log('Listings posted!');
-
-  sphere.communications.onDirectMessage(async (msg) => {
-    try {
-      const data = JSON.parse(msg.content);
-
-      if (data.type === 'offer') {
-        const myIntents = await market.getMyIntents();
-        const intent = myIntents.find(i => i.id === data.intentId);
-        if (!intent) return;
-
-        const listed = Number(intent.price);
-        if (Number.isFinite(listed) && data.price >= listed * 0.9) {
-          await sphere.communications.sendDM(msg.senderPubkey, JSON.stringify({
-            type: 'accepted',
-            intentId: intent.id,
-            price: data.price,
-            coinId: '<64-hex coin id>',
-          }));
-        } else {
-          await sphere.communications.sendDM(msg.senderPubkey, JSON.stringify({
-            type: 'rejected',
-            reason: 'Price too low',
-          }));
-        }
-      }
-    } catch {
-      // Not JSON - regular chat message
-    }
-  });
-
-  sphere.on('transfer:incoming', async (transfer) => {
-    console.log('Payment received:', transfer.tokens);
-    await sphere.communications.sendDM(transfer.senderPubkey, JSON.stringify({
-      type: 'payment_confirmed',
-    }));
-  });
-
-  console.log('Marketplace running...');
-}
-
-main();`}
-              />
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                <code className="text-amber-600 dark:text-amber-400">init()</code> loads the wallet already in this
-                browser, or creates a throwaway one and hands its phrase to the user. Never take a seed from
-                <code className="text-amber-600 dark:text-amber-400"> import.meta.env</code> &mdash;
-                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> variables ship in the bundle.
-              </p>
-              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
-                The seller here accepts any offer within 10% of the listed price and rejects the rest, then confirms each
-                incoming payment back to the buyer over DM.
               </p>
             </div>
           </section>
