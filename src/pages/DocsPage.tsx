@@ -471,36 +471,28 @@ import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wa
 
 const NETWORK = 'testnet2'; // 'mainnet' | 'testnet2'
 
-// 1. Base providers for your target network
 const base = createBrowserProviders({ network: NETWORK });
 
-// 2. Attach the wallet-api composition. Assets move only through this
-//    vertical: Sphere.init throws INVALID_CONFIG without a walletApi
-//    config, and walletApi.network must equal the Sphere network.
 const providers = createWalletApiProviders(base, {
-  baseUrl: import.meta.env.VITE_WALLET_API_URL, // deployment-specific
+  baseUrl: import.meta.env.VITE_WALLET_API_URL,
   network: NETWORK,
 });
 
-// 3. Initialize (auto-loads existing wallet or creates new one).
-//    Pass network here too — it selects the token registry.
 const { sphere, created, generatedMnemonic } = await Sphere.init({
   ...providers,
   network: NETWORK,
-  autoGenerate: true, // auto-generate mnemonic if no wallet exists
+  autoGenerate: true,
 });
 
 if (generatedMnemonic) {
   console.log('Save this mnemonic:', generatedMnemonic);
 }
 
-// 4. Check your identity
 console.log('Nametag:', sphere.getNametag());
 console.log('Identity:', sphere.identity);
 
-// 5. Send tokens. coinId is the 64-hex coin id — no '0x' prefix.
 await TokenRegistry.waitForReady();
-const coinId = getCoinIdBySymbol('UCT'); // string | undefined
+const coinId = getCoinIdBySymbol('UCT'); // the 64-hex id, never a symbol or '0x…'
 if (coinId) {
   await sphere.payments.send({
     coinId,
@@ -509,7 +501,6 @@ if (coinId) {
   });
 }
 
-// 6. Listen for incoming transfers
 sphere.on('transfer:incoming', (transfer) => {
   console.log('Received tokens:', transfer.tokens);
 });`}
@@ -542,23 +533,23 @@ const NETWORK = 'testnet2'; // 'mainnet' | 'testnet2'
 
 const base = createBrowserProviders({
   network: NETWORK,
-  price: {
-    platform: 'coingecko',      // fiat price provider
-    cacheTtlMs: 5 * 60_000,    // cache prices for 5 minutes
-  },
-  groupChat: true,              // enable NIP-29 group chat
-  market: true,                 // enable intent bulletin board
+  price: { platform: 'coingecko', cacheTtlMs: 5 * 60_000 },
+  groupChat: true,
+  market: true,
 });
-
-// base contains: storage, transport, oracle, price, groupChat, market
 
 const providers = createWalletApiProviders(base, {
   baseUrl: import.meta.env.VITE_WALLET_API_URL,
   network: NETWORK,             // must equal the Sphere network
-});
-
-// providers adds: walletApi`}
+});`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">base</code> carries storage, transport, oracle and —
+                because they were configured here — price, groupChat and market;{' '}
+                <code className="text-amber-600 dark:text-amber-400">createWalletApiProviders</code> adds
+                <code className="text-amber-600 dark:text-amber-400"> walletApi</code> to it. The price block selects the
+                fiat provider and how long quotes are cached.
+              </p>
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 The providers object is spread into <code className="text-amber-600 dark:text-amber-400">Sphere.init()</code>,
                 together with the same <code className="text-amber-600 dark:text-amber-400">network</code> value.
@@ -627,15 +618,32 @@ VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
                 <li>Multiple addresses from a single seed</li>
                 <li>Identity includes chain pubkey, direct address, and optional nametag</li>
               </ul>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">sphere.identity</code> is populated once
+                <code className="text-amber-600 dark:text-amber-400"> Sphere.init()</code> resolves. Its type is
+                <code className="text-amber-600 dark:text-amber-400"> Identity | null</code>.
+              </p>
               <CodeBlock
-                code={`// Access identity after initialization
-console.log(sphere.identity);
-// {
-//   chainPubkey: '02abc...',
-//   directAddress: 'DIRECT://...',
-//   nametag: 'alice'
-// }`}
+                code={`console.log(sphere.identity);`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                What it carries:
+              </p>
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">chainPubkey</code> &mdash; the compressed secp256k1
+                  chain public key as hex, such as <code className="text-amber-600 dark:text-amber-400">'02abc...'</code>
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the L3 address, such as
+                  <code className="text-amber-600 dark:text-amber-400"> 'DIRECT://...'</code>. Optional.
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">nametag</code> &mdash; the bare name, such as
+                  <code className="text-amber-600 dark:text-amber-400"> 'alice'</code>, with no leading
+                  <code className="text-amber-600 dark:text-amber-400"> @</code>. Optional.
+                </li>
+              </ul>
             </div>
 
             <div id="addresses" data-section="addresses" className="scroll-mt-24 mb-12">
@@ -654,16 +662,19 @@ console.log(sphere.identity);
                 <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>: &ldquo;Use @nametag, DIRECT://, or a hex pubkey.&rdquo;
               </p>
               <CodeBlock
-                code={`// Derive additional addresses
-const addr = sphere.deriveAddress(1); // second address
-console.log(addr.publicKey);  // chain pubkey (hex)
+                code={`const addr = sphere.deriveAddress(1);
+console.log(addr.publicKey);
 
-// Switch active address
 await sphere.switchToAddress(1);
 
-// List all tracked addresses
 const addresses = sphere.getActiveAddresses();`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The index is zero-based, so <code className="text-amber-600 dark:text-amber-400">deriveAddress(1)</code> derives the
+                second address. <code className="text-amber-600 dark:text-amber-400">addr.publicKey</code> is its chain pubkey as hex.
+                <code className="text-amber-600 dark:text-amber-400"> switchToAddress(1)</code> makes that address the active one, and
+                <code className="text-amber-600 dark:text-amber-400"> getActiveAddresses()</code> lists every address the wallet tracks.
+              </p>
             </div>
 
             <div id="nametags" data-section="nametags" className="scroll-mt-24 mb-12">
@@ -680,25 +691,32 @@ const addresses = sphere.getActiveAddresses();`}
                 <code className="text-amber-600 dark:text-amber-400"> resolve()</code> and
                 <code className="text-amber-600 dark:text-amber-400"> send()</code> accept either form.
               </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Register a nametag during wallet creation or at any time after it. Once registered it works as a recipient:
+                <code className="text-amber-600 dark:text-amber-400"> send()</code> resolves it to a DIRECT address for you.
+              </p>
               <CodeBlock
                 filename="nametags.ts"
-                code={`// Register a nametag (during wallet creation or later)
-await sphere.registerNametag('alice');
+                code={`await sphere.registerNametag('alice');
 
-// Check your nametag
-console.log(sphere.getNametag()); // 'alice' — stored without the '@'
+console.log(sphere.getNametag());
 
-// Use nametags when sending tokens
 await sphere.payments.send({
-  coinId: '<64-hex coin id>', // see Token Model — no '0x' prefix
+  coinId: '<64-hex coin id>', // no '0x' prefix — see Token Model
   amount: '100',
-  recipient: '@alice', // resolved automatically
+  recipient: '@alice',
 });
 
-// Resolve a nametag to peer info
 const peer = await sphere.resolve('@bob');
 console.log(peer?.directAddress);`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">getNametag()</code> prints
+                <code className="text-amber-600 dark:text-amber-400"> 'alice'</code>, stored without the
+                <code className="text-amber-600 dark:text-amber-400"> '@'</code>.
+                <code className="text-amber-600 dark:text-amber-400"> resolve()</code> turns a nametag into peer info, including the
+                peer's DIRECT address.
+              </p>
             </div>
 
             <div id="token-model" data-section="token-model" className="scroll-mt-24 mb-12">
@@ -724,13 +742,11 @@ console.log(peer?.directAddress);`}
                 <code className="text-amber-600 dark:text-amber-400"> {'{ success: false }'}</code> with nothing minted.
               </p>
               <CodeBlock
-                code={`// Get individual tokens
-const tokens = sphere.payments.tokens();
+                code={`const tokens = sphere.payments.tokens();
 tokens.forEach(t => {
   console.log(t.id, t.coinId, t.amount, t.status);
 });
 
-// Get aggregated balance per coin type
 const assets = await sphere.payments.assets();
 assets.forEach(a => {
   console.log(a.symbol, a.totalAmount, a.tokenCount);
@@ -745,20 +761,23 @@ assets.forEach(a => {
                 Returns an unsubscribe function.
               </p>
               <CodeBlock
-                code={`// Transfer events
-sphere.on('transfer:incoming', (data) => { /* incoming transfer */ });
-sphere.on('transfer:updated', (data) => { /* outgoing transfer updated */ });
+                code={`sphere.on('transfer:incoming', (transfer) => console.log(transfer.tokens));
+sphere.on('transfer:updated', (result) => console.log(result.status));
+sphere.on('message:dm', (msg) => console.log(msg.content));
+sphere.on('payment_request:incoming', (req) => console.log(req.amount));
 
-// Message events
-sphere.on('message:dm', (msg) => { /* direct message received */ });
-
-// Payment request events
-sphere.on('payment_request:incoming', (req) => { /* payment request */ });
-
-// Unsubscribe
 const unsub = sphere.on('transfer:incoming', handler);
-unsub(); // stop listening`}
+unsub();`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">transfer:incoming</code> &mdash; a transfer arrived</li>
+                <li><code className="text-amber-600 dark:text-amber-400">transfer:updated</code> &mdash; an outgoing transfer changed state</li>
+                <li><code className="text-amber-600 dark:text-amber-400">message:dm</code> &mdash; a direct message arrived</li>
+                <li><code className="text-amber-600 dark:text-amber-400">payment_request:incoming</code> &mdash; a payment request arrived</li>
+              </ul>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Calling the returned <code className="text-amber-600 dark:text-amber-400">unsub()</code> stops that listener.
+              </p>
             </div>
           </section>
 
@@ -801,13 +820,23 @@ unsub(); // stop listening`}
               <h4 className="font-medium text-lg mt-6 mb-3">Returns</h4>
               <CodeBlock
                 code={`interface SphereInitResult {
-  sphere: Sphere;              // The initialized instance
-  created: boolean;            // Whether wallet was newly created
-  generatedMnemonic?: string;  // Only if autoGenerate was used
+  sphere: Sphere;
+  created: boolean;
+  generatedMnemonic?: string;
 }`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">sphere</code> is the initialized instance.
+                <code className="text-amber-600 dark:text-amber-400"> created</code> says whether the wallet was newly created.
+                <code className="text-amber-600 dark:text-amber-400"> generatedMnemonic</code> is present only when
+                <code className="text-amber-600 dark:text-amber-400"> autoGenerate</code> was used.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Example</h4>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The first call auto-creates a wallet with a generated mnemonic. The second creates one from a mnemonic you
+                already hold.
+              </p>
               <CodeBlock
                 filename="init.ts"
                 code={`import { Sphere } from '@unicitylabs/sphere-sdk';
@@ -821,7 +850,6 @@ const providers = createWalletApiProviders(
   { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
 );
 
-// Auto-create with generated mnemonic
 const { sphere, generatedMnemonic } = await Sphere.init({
   ...providers,
   network: NETWORK,
@@ -829,7 +857,7 @@ const { sphere, generatedMnemonic } = await Sphere.init({
   nametag: 'myagent',
 });
 
-// Or create from a known mnemonic (IGNORED if a wallet already exists)
+// IGNORED if a wallet already exists
 const { sphere: imported } = await Sphere.init({
   ...providers,
   network: NETWORK,
@@ -889,16 +917,19 @@ if (hasWallet) {
                 Static helpers for generating and validating BIP39 mnemonics.
               </p>
               <CodeBlock
-                code={`// Generate a 12-word mnemonic (128-bit entropy)
-const mnemonic12 = Sphere.generateMnemonic();
-
-// Generate a 24-word mnemonic (256-bit entropy)
+                code={`const mnemonic12 = Sphere.generateMnemonic();
 const mnemonic24 = Sphere.generateMnemonic(256);
 
-// Validate a mnemonic
 const isValid = Sphere.validateMnemonic('abandon badge cable ...');
-console.log(isValid); // true or false`}
+console.log(isValid);`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">generateMnemonic()</code> returns 12 words from 128 bits of
+                entropy. Pass <code className="text-amber-600 dark:text-amber-400">256</code> for a 24-word mnemonic.
+                <code className="text-amber-600 dark:text-amber-400"> validateMnemonic()</code> returns
+                <code className="text-amber-600 dark:text-amber-400"> true</code> or
+                <code className="text-amber-600 dark:text-amber-400"> false</code>.
+              </p>
             </div>
           </section>
 
@@ -921,16 +952,21 @@ console.log(isValid); // true or false`}
               </p>
               <CodeBlock
                 code={`interface Identity {
-  readonly chainPubkey: string;      // secp256k1 public key (hex)
-  readonly directAddress?: string;   // DIRECT:// address for L3
+  readonly chainPubkey: string;
+  readonly directAddress?: string;
   readonly ipnsName?: string;
-  readonly nametag?: string;         // registered nametag, without the @
+  readonly nametag?: string;
 }
 
 console.log(sphere.identity?.chainPubkey);
 console.log(sphere.identity?.directAddress);
-console.log(sphere.identity?.nametag); // 'alice'`}
+console.log(sphere.identity?.nametag);`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">chainPubkey</code> &mdash; the secp256k1 public key as hex</li>
+                <li><code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the <code className="text-amber-600 dark:text-amber-400">DIRECT://</code> address used on L3</li>
+                <li><code className="text-amber-600 dark:text-amber-400">nametag</code> &mdash; the registered nametag without the <code className="text-amber-600 dark:text-amber-400">@</code>, such as <code className="text-amber-600 dark:text-amber-400">'alice'</code></li>
+              </ul>
             </div>
 
             <div id="api-instance-nametag" data-section="api-instance-nametag" className="scroll-mt-24 mb-12">
@@ -944,18 +980,19 @@ console.log(sphere.identity?.nametag); // 'alice'`}
                 nothing is minted on chain.
               </p>
               <CodeBlock
-                code={`// Get current nametag
-sphere.getNametag(); // 'alice' | undefined  (no @ prefix)
+                code={`sphere.getNametag();
+sphere.hasNametag();
 
-// Check if nametag is registered
-sphere.hasNametag(); // boolean
-
-// Register a new nametag
 await sphere.registerNametag('alice');
 
-// Check availability
-const available = await sphere.isNametagAvailable('bob'); // boolean`}
+const available = await sphere.isNametagAvailable('bob');`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">getNametag()</code> &mdash; the current nametag, <code className="text-amber-600 dark:text-amber-400">'alice' | undefined</code>, with no <code className="text-amber-600 dark:text-amber-400">@</code> prefix</li>
+                <li><code className="text-amber-600 dark:text-amber-400">hasNametag()</code> &mdash; a boolean: whether one is registered</li>
+                <li><code className="text-amber-600 dark:text-amber-400">registerNametag(name)</code> &mdash; registers a new nametag</li>
+                <li><code className="text-amber-600 dark:text-amber-400">isNametagAvailable(name)</code> &mdash; a boolean: whether the name is free</li>
+              </ul>
             </div>
 
             <div id="api-instance-resolve" data-section="api-instance-resolve" className="scroll-mt-24 mb-12">
@@ -972,7 +1009,7 @@ const available = await sphere.isNametagAvailable('bob'); // boolean`}
                 filename="resolve.ts"
                 code={`const peer = await sphere.resolve('@alice');
 if (peer) {
-  console.log(peer.directAddress);  // DIRECT://...
+  console.log(peer.directAddress);
   console.log(peer.transportPubkey);
 }`}
               />
@@ -1007,17 +1044,19 @@ off<T extends SphereEventType>(type: T, handler: (data: SphereEventMap[T]) => vo
 
               <CodeBlock
                 filename="events.ts"
-                code={`// Subscribe to incoming transfers
-const unsub = sphere.on('transfer:incoming', (transfer) => {
+                code={`const unsub = sphere.on('transfer:incoming', (transfer) => {
   console.log('Tokens received:', transfer.tokens);
 });
 
-// Unsubscribe later
 unsub();
 
-// Remove a specific handler
 sphere.off('transfer:incoming', myHandler);`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">on()</code> returns an unsubscribe function &mdash; call
+                <code className="text-amber-600 dark:text-amber-400"> unsub()</code> when you are done listening.
+                <code className="text-amber-600 dark:text-amber-400"> off()</code> removes one specific handler instead.
+              </p>
             </div>
 
             <div id="api-instance-wallet" data-section="api-instance-wallet" className="scroll-mt-24 mb-12">
@@ -1025,34 +1064,59 @@ sphere.off('transfer:incoming', myHandler);`}
                 <code className="text-amber-600 dark:text-amber-400">Wallet Management</code>
               </h3>
               <CodeBlock
-                code={`// Get backup mnemonic
-const mnemonic = sphere.getMnemonic(); // string | null
+                code={`const mnemonic = sphere.getMnemonic();
 
-// Export wallet as JSON — returns a WalletJSON object, stringify it before writing a file
 const backup = sphere.exportToJSON({
   includeMnemonic: true,
   password: 'optional-encryption',
 });
 const json = JSON.stringify(backup, null, 2);
 
-// Export as text file (already a string)
 const txt = sphere.exportToTxt();
 
-// Derive addresses
 const addr = sphere.deriveAddress(0);
-const addrs = sphere.deriveAddresses(5); // first 5 addresses
+const addrs = sphere.deriveAddresses(5);
 
-// Switch active address
 await sphere.switchToAddress(1);
 
-// Get wallet info
 const info = sphere.getWalletInfo();
-console.log(info.derivationMode); // 'bip32'
-console.log(info.source);         // 'mnemonic' | 'file' | 'unknown'
+console.log(info.derivationMode);
+console.log(info.source);
 
-// Cleanup
 await sphere.destroy();`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">getMnemonic()</code> &mdash; the backup mnemonic, typed
+                  <code className="text-amber-600 dark:text-amber-400"> string | null</code>
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">exportToJSON()</code> &mdash; returns a
+                  <code className="text-amber-600 dark:text-amber-400"> WalletJSON</code> object, not a string, so stringify it before
+                  writing a file. <code className="text-amber-600 dark:text-amber-400">includeMnemonic</code> puts the seed in the
+                  backup, and <code className="text-amber-600 dark:text-amber-400">password</code> encrypts it. Both are optional.
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">exportToTxt()</code> &mdash; the text export, already a string
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">deriveAddress(0)</code> derives one address;
+                  <code className="text-amber-600 dark:text-amber-400"> deriveAddresses(5)</code> derives the first five
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">switchToAddress(1)</code> changes the active address
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">getWalletInfo()</code> &mdash;
+                  <code className="text-amber-600 dark:text-amber-400"> derivationMode</code> logs
+                  <code className="text-amber-600 dark:text-amber-400"> 'bip32'</code>, and
+                  <code className="text-amber-600 dark:text-amber-400"> source</code> is
+                  <code className="text-amber-600 dark:text-amber-400"> 'mnemonic' | 'file' | 'unknown'</code>
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">destroy()</code> releases the wallet's resources
+                </li>
+              </ul>
             </div>
           </section>
 
@@ -1104,9 +1168,9 @@ await sphere.destroy();`}
               <h4 className="font-medium text-lg mt-6 mb-3">Returns</h4>
               <CodeBlock
                 code={`interface TransferResult {
-  id: string;                    // Transfer ID
-  status: TransferStatus;        // resolved send(): 'delivered' | 'confirmed'
-  tokens: Token[];               // the source tokens this send consumed
+  id: string;
+  status: TransferStatus;
+  tokens: Token[];
   tokenTransfers: TokenTransferDetail[];
   error?: string;
   deliveryPending?: boolean;
@@ -1114,6 +1178,7 @@ await sphere.destroy();`}
 }`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">id</code> is the transfer ID.
                 A resolved <code className="text-amber-600 dark:text-amber-400">send()</code> means the spend is final on-chain, so
                 <code className="text-amber-600 dark:text-amber-400"> status</code> is only ever
                 <code className="text-amber-600 dark:text-amber-400"> 'delivered'</code> (<code className="text-amber-600 dark:text-amber-400">deliveryState: 'landed'</code> — it
@@ -1189,30 +1254,42 @@ try {
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Returns aggregated balance per coin type, with fiat prices from the price provider. Async. Amounts are in smallest units,
                 and <code className="text-amber-600 dark:text-amber-400">totalAmount</code> excludes tokens in flight on an outgoing send — those are
-                reported separately so a UI can show a &ldquo;Sending&rdquo; badge without inflating the spendable balance.
+                reported separately, in <code className="text-amber-600 dark:text-amber-400">transferringAmount</code> and
+                <code className="text-amber-600 dark:text-amber-400"> transferringTokenCount</code>, so a UI can show a &ldquo;Sending&rdquo;
+                badge without inflating the spendable balance.
               </p>
               <CodeBlock code={`async assets(coinId?: string): Promise<Asset[]>`} />
               <CodeBlock
                 code={`interface Asset {
   coinId: string;
   symbol: string;
-  totalAmount: string;          // in smallest units, excludes in-flight sends
+  totalAmount: string;
   tokenCount: number;
-  transferringAmount: string;   // in flight on an outgoing send
+  transferringAmount: string;
   transferringTokenCount: number;
   decimals: number;
   priceUsd: number | null;
   fiatValueUsd: number | null;
-  // also: name, iconUrl, confirmed*/unconfirmed*, priceEur, change24h, fiatValueEur
 }`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4 mb-4">
+                An <code className="text-amber-600 dark:text-amber-400">Asset</code> also carries
+                <code className="text-amber-600 dark:text-amber-400"> name</code>,
+                <code className="text-amber-600 dark:text-amber-400"> iconUrl</code>, the
+                <code className="text-amber-600 dark:text-amber-400"> confirmed*</code>/<code className="text-amber-600 dark:text-amber-400">unconfirmed*</code> counterparts,
+                <code className="text-amber-600 dark:text-amber-400"> priceEur</code>,
+                <code className="text-amber-600 dark:text-amber-400"> change24h</code> and
+                <code className="text-amber-600 dark:text-amber-400"> fiatValueEur</code>.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Called with no argument it returns every asset. Pass a
+                <code className="text-amber-600 dark:text-amber-400"> coinId</code> to get only that one.
+              </p>
               <CodeBlock
                 filename="balance.ts"
-                code={`// All assets
-const assets = await sphere.payments.assets();
+                code={`const assets = await sphere.payments.assets();
 assets.forEach(a => console.log(\`\${a.symbol}: \${a.totalAmount} ($\${a.fiatValueUsd})\`));
 
-// Specific coin
 const [asset] = await sphere.payments.assets(coinId);
 console.log('Balance:', asset?.totalAmount);`}
               />
@@ -1247,10 +1324,8 @@ if (result.success) {
               <CodeBlock code={`tokens(filter?: { coinId?: string }): Token[]`} />
               <CodeBlock
                 filename="tokens.ts"
-                code={`// All tokens
-const tokens = sphere.payments.tokens();
+                code={`const tokens = sphere.payments.tokens();
 
-// Only tokens for a specific coin
 const filtered = sphere.payments.tokens({ coinId });
 
 tokens.forEach(t => {
@@ -1271,15 +1346,23 @@ tokens.forEach(t => {
                 filename="history.ts"
                 code={`const { entries, more, cursor } = await sphere.payments.history({ limit: 50 });
 entries.forEach(tx => {
-  console.log(tx.type, tx.amount, tx.timestamp); // timestamp: epoch ms
-  // type: 'SENT' | 'RECEIVED' | 'MINT'
+  console.log(tx.type, tx.amount, tx.timestamp);
 });
 
-// Older entries
 if (more && cursor) {
   const nextPage = await sphere.payments.history({ before: cursor, limit: 50 });
 }`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                Each entry's <code className="text-amber-600 dark:text-amber-400">type</code> is
+                <code className="text-amber-600 dark:text-amber-400"> 'SENT'</code>,
+                <code className="text-amber-600 dark:text-amber-400"> 'RECEIVED'</code> or
+                <code className="text-amber-600 dark:text-amber-400"> 'MINT'</code>, and
+                <code className="text-amber-600 dark:text-amber-400"> timestamp</code> is epoch ms. While
+                <code className="text-amber-600 dark:text-amber-400"> more</code> is true, pass
+                <code className="text-amber-600 dark:text-amber-400"> cursor</code> as
+                <code className="text-amber-600 dark:text-amber-400"> before</code> to get the next, older page.
+              </p>
             </div>
 
             <div id="api-payments-receive" data-section="api-payments-receive" className="scroll-mt-24 mb-12">
@@ -1294,8 +1377,7 @@ if (more && cursor) {
               <CodeBlock code={`async receive(): Promise<{ transfers: IncomingTransfer[] }>`} />
               <CodeBlock
                 filename="receive.ts"
-                code={`// Check for incoming transfers
-const { transfers } = await sphere.payments.receive();
+                code={`const { transfers } = await sphere.payments.receive();
 console.log('Received:', transfers.length, 'transfers');
 transfers.forEach(transfer => {
   console.log('Incoming coins:', transfer.tokens);
@@ -1321,32 +1403,32 @@ transfers.forEach(transfer => {
               </p>
               <CodeBlock
                 filename="payment-requests.ts"
-                code={`// Send a payment request to someone
-const req = await sphere.payments.requests.create('@buyer', {
+                code={`const req = await sphere.payments.requests.create('@buyer', {
   amount: '50000000',
   coinId,
   memo: 'Invoice #456',
 });
 if (!req.success) throw new Error(req.error);
 
-// Handle incoming payment requests
 sphere.on('payment_request:incoming', (request) => {
   console.log(\`\${request.senderNametag} requests \${request.amount}\`);
 });
 
-// List requests (filter by status as needed)
 const pending = sphere.payments.requests.list()
   .filter(r => r.status === 'pending');
 
-// Pay a request
 await sphere.payments.requests.pay(requestId);
-
-// Or decline
 await sphere.payments.requests.decline(requestId);
 
-// Clear terminal (paid/rejected/expired) requests from the list
 sphere.payments.requests.dismissProcessed();`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">create(recipient, terms)</code> sends a payment request to a peer</li>
+                <li><code className="text-amber-600 dark:text-amber-400">payment_request:incoming</code> fires for requests sent to you</li>
+                <li><code className="text-amber-600 dark:text-amber-400">list()</code> returns every request, so filter it by <code className="text-amber-600 dark:text-amber-400">status</code> yourself</li>
+                <li><code className="text-amber-600 dark:text-amber-400">pay(requestId)</code> settles one, <code className="text-amber-600 dark:text-amber-400">decline(requestId)</code> rejects it</li>
+                <li><code className="text-amber-600 dark:text-amber-400">dismissProcessed()</code> clears the paid, rejected and expired requests from the list</li>
+              </ul>
             </div>
           </section>
 
@@ -1366,7 +1448,8 @@ sphere.payments.requests.dismissProcessed();`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.communications.sendDM(recipient, content)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Sends an encrypted direct message to a peer.
+                Sends an encrypted direct message to a peer. The content is a string, so serialize structured data as JSON
+                yourself.
               </p>
               <CodeBlock code={`async sendDM(recipient: string, content: string): Promise<DirectMessage>`} />
               <ParamTable
@@ -1377,11 +1460,9 @@ sphere.payments.requests.dismissProcessed();`}
               />
               <CodeBlock
                 filename="send-dm.ts"
-                code={`// Simple text message
-const msg = await sphere.communications.sendDM('@alice', 'Hello!');
+                code={`const msg = await sphere.communications.sendDM('@alice', 'Hello!');
 console.log('Message ID:', msg.id);
 
-// Structured data (serialize as JSON)
 await sphere.communications.sendDM('@alice', JSON.stringify({
   type: 'offer',
   item: 'PSA-10 Charizard',
@@ -1405,37 +1486,42 @@ await sphere.communications.sendDM('@alice', JSON.stringify({
   console.log(\`From \${msg.senderNametag ?? msg.senderPubkey}\`);
   console.log('Content:', msg.content);
   console.log('Time:', new Date(msg.timestamp));
-});
-
-// Later: unsub();`}
+});`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                Call <code className="text-amber-600 dark:text-amber-400">unsub()</code> when you stop listening.
+              </p>
             </div>
 
             <div id="api-comms-conversations" data-section="api-comms-conversations" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">
                 <code className="text-amber-600 dark:text-amber-400">Conversations</code>
               </h3>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">getConversations()</code> returns every conversation grouped by
+                peer, as a <code className="text-amber-600 dark:text-amber-400">{'Map<string, DirectMessage[]>'}</code>.
+              </p>
               <CodeBlock
-                code={`// Get all conversations (grouped by peer)
-const conversations = sphere.communications.getConversations();
-// Map<string, DirectMessage[]>
+                code={`const conversations = sphere.communications.getConversations();
 
 conversations.forEach((messages, peerPubkey) => {
   console.log(\`\${peerPubkey}: \${messages.length} messages\`);
 });
 
-// Get messages with a specific peer
 const msgs = sphere.communications.getConversation(peerPubkey);
 
-// Delete a conversation
 await sphere.communications.deleteConversation(peerPubkey);
 
-// Mark messages as read
 await sphere.communications.markAsRead(['msg-id-1', 'msg-id-2']);
 
-// Get unread count
 const unread = sphere.communications.getUnreadCount();`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">getConversation(peerPubkey)</code> &mdash; the messages with one peer</li>
+                <li><code className="text-amber-600 dark:text-amber-400">deleteConversation(peerPubkey)</code> &mdash; deletes that conversation</li>
+                <li><code className="text-amber-600 dark:text-amber-400">markAsRead(ids)</code> &mdash; marks those message ids read</li>
+                <li><code className="text-amber-600 dark:text-amber-400">getUnreadCount()</code> &mdash; the unread count</li>
+              </ul>
             </div>
 
             <div id="api-comms-broadcast" data-section="api-comms-broadcast" className="scroll-mt-24 mb-12">
@@ -1446,20 +1532,22 @@ const unread = sphere.communications.getUnreadCount();`}
                 Send public messages to topics. Anyone subscribed to those tags will see them.
               </p>
               <CodeBlock
-                code={`// Broadcast a message with tags
-await sphere.communications.broadcast('New item listed!', ['marketplace', 'collectibles']);
+                code={`await sphere.communications.broadcast('New item listed!', ['marketplace', 'collectibles']);
 
-// Subscribe to broadcasts on specific tags
 const unsub = sphere.communications.subscribeToBroadcasts(['marketplace']);
 
-// Listen for incoming broadcasts
 sphere.communications.onBroadcast((msg) => {
   console.log(\`\${msg.content} [tags: \${msg.tags}]\`);
 });
 
-// Get recent broadcasts
 const recent = sphere.communications.getBroadcasts(50);`}
               />
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li><code className="text-amber-600 dark:text-amber-400">broadcast(content, tags)</code> publishes a message under those tags</li>
+                <li><code className="text-amber-600 dark:text-amber-400">subscribeToBroadcasts(tags)</code> subscribes to the given tags and returns an unsubscribe function</li>
+                <li><code className="text-amber-600 dark:text-amber-400">onBroadcast(handler)</code> delivers incoming broadcasts</li>
+                <li><code className="text-amber-600 dark:text-amber-400">getBroadcasts(50)</code> returns the 50 most recent broadcasts</li>
+              </ul>
             </div>
           </section>
 
@@ -1483,39 +1571,40 @@ const recent = sphere.communications.getBroadcasts(50);`}
               code={`const chat = sphere.groupChat;
 if (!chat) throw new Error('groupChat is not enabled');
 
-// Connect to NIP-29 relay
 await chat.connect();
 
-// Discover public groups
 const groups = await chat.fetchAvailableGroups();
 groups.forEach(g => console.log(g.id, g.name));
 
-// Join a group
 await chat.joinGroup('group-id');
 
-// Send a message
 await chat.sendMessage('group-id', 'Hello everyone!');
 
-// Fetch message history
 const messages = await chat.fetchMessages('group-id');
 
-// Listen for new messages
 chat.onMessage((msg) => {
   console.log(\`[\${msg.groupId}] \${msg.senderNametag ?? msg.senderPubkey}: \${msg.content}\`);
 });
 
-// Get your groups
 const myGroups = chat.getGroups();
 
-// Create a new group
 const newGroup = await chat.createGroup({
   name: 'Traders',
   description: 'Trading discussions',
 });
 
-// Leave a group
 await chat.leaveGroup('group-id');`}
             />
+            <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+              <li><code className="text-amber-600 dark:text-amber-400">connect()</code> opens the NIP-29 relay connection</li>
+              <li><code className="text-amber-600 dark:text-amber-400">fetchAvailableGroups()</code> discovers public groups</li>
+              <li><code className="text-amber-600 dark:text-amber-400">joinGroup(id)</code> joins one, <code className="text-amber-600 dark:text-amber-400">leaveGroup(id)</code> leaves it</li>
+              <li><code className="text-amber-600 dark:text-amber-400">sendMessage(id, content)</code> posts to a group</li>
+              <li><code className="text-amber-600 dark:text-amber-400">fetchMessages(id)</code> pulls the message history</li>
+              <li><code className="text-amber-600 dark:text-amber-400">onMessage(handler)</code> delivers new messages as they arrive</li>
+              <li><code className="text-amber-600 dark:text-amber-400">getGroups()</code> returns the groups you belong to</li>
+              <li><code className="text-amber-600 dark:text-amber-400">createGroup(options)</code> creates a new one</li>
+            </ul>
           </section>
 
           {/* ============================================================ */}
@@ -1528,6 +1617,13 @@ await chat.leaveGroup('group-id');`}
             <p className="text-neutral-600 dark:text-neutral-400 mb-4">
               Intent bulletin board via <code className="text-amber-600 dark:text-amber-400">sphere.market</code>.
               Requires <code className="text-amber-600 dark:text-amber-400">market: true</code> in initialization.
+              Listings do not live on chain and are not carried by Nostr: they are served by the market API at
+              <code className="text-amber-600 dark:text-amber-400"> https://market-api.unicity.network</code>, which you can point elsewhere with
+              <code className="text-amber-600 dark:text-amber-400"> market: {'{ apiUrl }'}</code>. Search is public; posting, listing your own
+              intents and closing them register your wallet once
+              (<code className="text-amber-600 dark:text-amber-400">/api/agent/register</code>) and sign each request with your
+              address key, so an intent is tied to the identity that posted it. The live feed is a WebSocket on the same host
+              (<code className="text-amber-600 dark:text-amber-400">/ws/feed</code>).
               <code className="text-amber-600 dark:text-amber-400"> sphere.market</code> is
               <code className="text-amber-600 dark:text-amber-400"> MarketModule | null</code> — null until you enable it. The feed callback receives
               either an initial batch or a single new listing; each listing carries
@@ -1540,7 +1636,6 @@ await chat.leaveGroup('group-id');`}
               code={`const market = sphere.market;
 if (!market) throw new Error('market is not enabled');
 
-// Post a sell intent
 const result = await market.postIntent({
   description: 'PSA-10 Charizard card - Mint condition',
   intentType: 'sell',
@@ -1550,27 +1645,30 @@ const result = await market.postIntent({
 });
 console.log('Posted:', result.intentId);
 
-// Search the marketplace
 const results = await market.search('charizard card');
 results.intents.forEach(intent => {
   console.log(intent.description, intent.price);
 });
 
-// Get your own intents
 const myIntents = await market.getMyIntents();
 
-// Close an intent
 await market.closeIntent(intentId);
 
-// Subscribe to live feed
 const unsub = market.subscribeFeed((msg) => {
   if (msg.type === 'new') console.log('New listing:', msg.listing.title);
   else console.log('Initial batch:', msg.listings.length);
 });
 
-// Get recent listings
 const recent = await market.getRecentListings();`}
             />
+            <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+              <li><code className="text-amber-600 dark:text-amber-400">postIntent()</code> posts an intent &mdash; <code className="text-amber-600 dark:text-amber-400">intentType</code> is what makes this one a sell</li>
+              <li><code className="text-amber-600 dark:text-amber-400">search(query)</code> searches the marketplace</li>
+              <li><code className="text-amber-600 dark:text-amber-400">getMyIntents()</code> returns the intents you posted</li>
+              <li><code className="text-amber-600 dark:text-amber-400">closeIntent(intentId)</code> closes one of them</li>
+              <li><code className="text-amber-600 dark:text-amber-400">subscribeFeed(listener)</code> subscribes to the live feed and returns an unsubscribe function</li>
+              <li><code className="text-amber-600 dark:text-amber-400">getRecentListings()</code> returns the recent listings</li>
+            </ul>
           </section>
 
           {/* ============================================================ */}
@@ -1722,123 +1820,196 @@ const recent = await market.getRecentListings();`}
                 </p>
               </div>
 
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                In the supported arrangement your dApp is already framed by Sphere, so
+                <code className="text-amber-600 dark:text-amber-400"> autoConnect</code> picks the iframe transport by itself.
+              </p>
               <CodeBlock
                 filename="connect-example.ts"
                 code={`import { autoConnect } from '@unicitylabs/sphere-sdk/connect/browser';
 import { SPHERE_NETWORKS, WALLET_EVENTS } from '@unicitylabs/sphere-sdk/connect';
-import type { WalletUnlockedPayload } from '@unicitylabs/sphere-sdk/connect';
+import type { PublicIdentity, WalletUnlockedPayload } from '@unicitylabs/sphere-sdk/connect';
 
-// Connect to the wallet. In the supported arrangement this page is already
-// framed by Sphere, so autoConnect picks the iframe transport by itself.
 const { client, connection, disconnect } = await autoConnect({
   dapp: {
     name: 'My App',
     url: location.origin,
-    icon: location.origin + '/icon.svg',  // shown in wallet approval dialog
+    icon: location.origin + '/icon.svg',
   },
-
-  // REQUIRED. The wallet's compatibility gate treats a missing or mismatched
-  // network as INCOMPATIBLE_NETWORK (4008) and refuses the handshake before any
-  // UI appears. Use the SPHERE_NETWORKS table so the id cannot drift.
-  network: SPHERE_NETWORKS.testnet2,   // or SPHERE_NETWORKS.mainnet
-
-  // Ask for exactly what this file uses. Every query, intent and event
-  // subscription below maps to one of these scopes:
-  //   identity:read    -> sphere_getIdentity
-  //   balance:read     -> sphere_getBalance
-  //   transfer:request -> the 'send' intent  (without it: PERMISSION_DENIED 4002)
-  //   events:subscribe -> client.on('transfer:incoming', ...) — the subscribe RPC
-  //                       fails silently, so without it the handler never fires
+  network: SPHERE_NETWORKS.testnet2,
   permissions: ['identity:read', 'balance:read', 'transfer:request', 'events:subscribe'],
-
-  // Only used by the popup fallback (P3): autoConnect opens
-  // <walletUrl>/connect?origin=<your origin>. Harmless to pass, but it is NOT
-  // what makes the iframe path work — that needs Sphere to frame your page.
   walletUrl: 'https://sphere.unicity.network',
-});
-
-// Query wallet
-const identity = await client.query('sphere_getIdentity');
+});`}
+              />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">dapp.icon</code> is shown in the wallet approval dialog.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">network</code> is required. The wallet&rsquo;s
+                compatibility gate treats a missing or mismatched network as
+                <code className="text-amber-600 dark:text-amber-400"> INCOMPATIBLE_NETWORK</code> (4008) and refuses the
+                handshake before any UI appears. Take the id from the
+                <code className="text-amber-600 dark:text-amber-400"> SPHERE_NETWORKS</code> table so it cannot drift:
+                <code className="text-amber-600 dark:text-amber-400"> SPHERE_NETWORKS.testnet2</code> or
+                <code className="text-amber-600 dark:text-amber-400"> SPHERE_NETWORKS.mainnet</code>.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">walletUrl</code> matters only to the popup fallback
+                (P3), where <code className="text-amber-600 dark:text-amber-400">autoConnect</code> opens
+                <code className="text-amber-600 dark:text-amber-400"> {'<walletUrl>'}/connect?origin={'<your origin>'}</code>.
+                Passing it is harmless. It is not what makes the iframe path work &mdash; that needs Sphere to frame your page.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Ask for exactly the scopes this file uses. Every query, intent and event subscription below maps to one:
+              </p>
+              <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">identity:read</code> &mdash;
+                  <code className="text-amber-600 dark:text-amber-400"> sphere_getIdentity</code>
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">balance:read</code> &mdash;
+                  <code className="text-amber-600 dark:text-amber-400"> sphere_getBalance</code>
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">transfer:request</code> &mdash; the
+                  <code className="text-amber-600 dark:text-amber-400"> send</code> intent. Without it the intent is refused
+                  with <code className="text-amber-600 dark:text-amber-400">PERMISSION_DENIED</code> (4002).
+                </li>
+                <li>
+                  <code className="text-amber-600 dark:text-amber-400">events:subscribe</code> &mdash;
+                  <code className="text-amber-600 dark:text-amber-400"> client.on('transfer:incoming', &hellip;)</code>. The
+                  subscribe RPC fails silently, so without this scope the handler never fires.
+                </li>
+              </ul>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Queries are read-only. The <code className="text-amber-600 dark:text-amber-400">send</code> intent is not:
+                it moves money, and the wallet asks the user to confirm it.
+              </p>
+              <CodeBlock
+                filename="connect-example.ts"
+                code={`const identity = await client.query('sphere_getIdentity');
 const balance = await client.query('sphere_getBalance');
 
-// Send tokens (requires user confirmation in wallet).
-// amount is in BASE UNITS (smallest indivisible unit) and coinId is
-// required — the wallet rejects the intent with INVALID_PARAMS otherwise.
+// 4201 INTENT_OUTCOME_UNKNOWN: it may or may not have moved — reconcile, never retry.
 const result = await client.intent('send', {
-  to: '@alice',                    // Unicity ID or DIRECT:// address
-  amount: '1000000000000000000',   // base units, positive integer string
-  coinId: '<lowercase hex coin id>', // e.g. from sphere_getAssets
+  to: '@alice',
+  amount: '1000000000000000000',
+  coinId: '<lowercase hex coin id>',
+});`}
+              />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">to</code> takes a Unicity ID or a
+                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address.
+                <code className="text-amber-600 dark:text-amber-400"> amount</code> is in base units &mdash; the smallest
+                indivisible unit &mdash; as a positive integer string.
+                <code className="text-amber-600 dark:text-amber-400"> coinId</code> is required, and it is the bare lowercase
+                hex id with no <code className="text-amber-600 dark:text-amber-400">0x</code> prefix; read one off
+                <code className="text-amber-600 dark:text-amber-400"> sphere_getAssets</code>. Omit it and the wallet rejects
+                the intent with <code className="text-amber-600 dark:text-amber-400">INVALID_PARAMS</code>.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The result is
+                <code className="text-amber-600 dark:text-amber-400"> {'{ success: true, transferId?: string, status: string, deliveryPending: boolean }'}</code>.
+                <code className="text-amber-600 dark:text-amber-400"> deliveryPending: true</code> means the spend is final
+                on-chain and the recipient&rsquo;s delivery is queued; it retries automatically. Never re-send it.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                A lock is a state, not a teardown. The session is still alive: do not disconnect, do not clear your saved
+                session, do not re-handshake. Until the wallet is unlocked, every request except
+                <code className="text-amber-600 dark:text-amber-400"> sphere_getIdentity</code>,
+                <code className="text-amber-600 dark:text-amber-400"> sphere_subscribe</code>,
+                <code className="text-amber-600 dark:text-amber-400"> sphere_unsubscribe</code> and
+                <code className="text-amber-600 dark:text-amber-400"> sphere_disconnect</code> is answered
+                <code className="text-amber-600 dark:text-amber-400"> WALLET_LOCKED</code> (4009).
+                <code className="text-amber-600 dark:text-amber-400"> sphere_getIdentity</code> is served from the pre-lock
+                snapshot, so keep showing the connected identity. Show a banner and keep everything else.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The wallet shows its own passive &ldquo;requests blocked &mdash; Unlock&rdquo; badge. Nothing you do can
+                raise its password field, and you should not try.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">ConnectEventHandler</code> is
+                <code className="text-amber-600 dark:text-amber-400"> (data: unknown) =&gt; void</code>, so destructuring the
+                payload directly does not compile under strict TypeScript. Narrow it with the exported payload type.
+              </p>
+              <CodeBlock
+                filename="connect-example.ts"
+                code={`client.on(WALLET_EVENTS.LOCKED, () => {
+  setWalletLocked(true);
 });
-// result: { success: true, transferId?: string, status: string,
-//           deliveryPending: boolean }
-// deliveryPending=true means the spend is FINAL on-chain but the recipient's
-// delivery is queued and retries automatically — never re-send it.
 
-// The wallet locked. The SESSION IS STILL ALIVE — do NOT disconnect, do NOT
-// clear your saved session, do NOT re-handshake. Every request except
-// sphere_getIdentity, sphere_subscribe, sphere_unsubscribe and sphere_disconnect
-// is answered WALLET_LOCKED (4009) until the wallet is unlocked — getIdentity is
-// served from the pre-lock snapshot, so keep showing the connected identity. The
-// wallet shows its own passive "requests blocked — Unlock" badge; nothing you do
-// can raise its password field, and you should not try.
-client.on(WALLET_EVENTS.LOCKED, () => {
-  setWalletLocked(true);   // show a banner, keep everything else
-});
-
-// The wallet was unlocked — the SAME session continues. No re-handshake, no
-// re-approval, and no re-subscribe: the host re-arms your event streams BEFORE
-// it sends this. The payload carries the wallet's identity at unlock time, and it
-// is NOT guaranteed to be the wallet you connected with — the lock screen's
-// "Forgot password → restore from recovery phrase" installs a different seed.
-// Compare before you retry anything.
-//
-// ConnectEventHandler is (data: unknown) => void, so destructuring the payload
-// directly does not compile under strict TypeScript. Narrow it with the exported
-// payload type instead:
 client.on(WALLET_EVENTS.UNLOCKED, (payload) => {
   const { identity } = (payload ?? {}) as WalletUnlockedPayload;
   if (identity?.chainPubkey !== connectedPubkey) {
-    // A different wallet came back — treat it as a new connection.
     disconnect();
     return;
   }
   setWalletLocked(false);
   retryLastQuery();        // queries only — NEVER auto-resume an intent
-});
-
-// The session is GONE (logout, wallet deleted, you called disconnect, the session
-// expired, or a different seed was restored behind the lock screen). THIS is the
-// teardown signal — clear your session and re-handshake to continue. Unlocking
-// does not cure it.
-client.on(WALLET_EVENTS.DISCONNECTED, () => {
+});`}
+              />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                On unlock the same session continues: no re-handshake, no re-approval, and no re-subscribe, because the host
+                re-arms your event streams before it sends the event. The payload carries the wallet&rsquo;s identity at
+                unlock time, and it is not guaranteed to be the wallet you connected with &mdash; the lock screen&rsquo;s
+                &ldquo;Forgot password &rarr; restore from recovery phrase&rdquo; installs a different seed. Compare before
+                you retry anything. A different wallet is a new connection, so disconnect and start over.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">wallet:disconnected</code> is the teardown signal. The
+                session is gone &mdash; logout, wallet deleted, you called
+                <code className="text-amber-600 dark:text-amber-400"> disconnect</code>, the session expired, or a different
+                seed was restored behind the lock screen. Clear your session and re-handshake to continue. Unlocking does not
+                cure it.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                An old wallet (Connect 2.0) never sends
+                <code className="text-amber-600 dark:text-amber-400"> wallet:unlocked</code>, so do not wait for one. There a
+                lock ends the session: reconnect on
+                <code className="text-amber-600 dark:text-amber-400"> wallet:locked</code> instead.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">identity:changed</code> fires when the active wallet
+                address switches. Its payload is the new public identity, narrowed the same way. Update the identity you
+                display.
+              </p>
+              <CodeBlock
+                filename="connect-example.ts"
+                code={`client.on(WALLET_EVENTS.DISCONNECTED, () => {
   clearSession();
   showConnectButton();
 });
 
-// An OLD wallet (Connect 2.0) never sends wallet:unlocked, so do not wait for one.
 if (client.walletProtocol === '2.0') {
-  // Legacy behaviour: a lock ends the session. Reconnect on wallet:locked.
+  client.on(WALLET_EVENTS.LOCKED, () => reconnect());
 }
 
-// Handle wallet address switch
-client.on(WALLET_EVENTS.IDENTITY_CHANGED, (newIdentity) => {
-  // Update displayed identity
-});
-
-// Listen for real-time events. Unlike the wallet:* events above, this one is NOT
-// auto-pushed: it goes through sphere_subscribe, which needs 'events:subscribe'.
-// Without that scope the subscribe is refused and swallowed — no throw, no error,
-// the handler simply never fires.
-client.on('transfer:incoming', (transfer) => {
+client.on(WALLET_EVENTS.IDENTITY_CHANGED, (payload) => {
+  showIdentity(payload as PublicIdentity);
+});`}
+              />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Unlike the <code className="text-amber-600 dark:text-amber-400">wallet:*</code> events above,
+                <code className="text-amber-600 dark:text-amber-400"> transfer:incoming</code> is not auto-pushed. It goes
+                through <code className="text-amber-600 dark:text-amber-400">sphere_subscribe</code>, which needs
+                <code className="text-amber-600 dark:text-amber-400"> events:subscribe</code>. Without that scope the
+                subscribe is refused and swallowed: no throw, no error, and the handler never fires.
+              </p>
+              <CodeBlock
+                filename="connect-example.ts"
+                code={`client.on('transfer:incoming', (transfer) => {
   console.log('Received:', transfer);
 });
 
-// Disconnect when done
-disconnect();
-
-// See the full guide:
-// github.com/unicity-sphere/sphere-sdk/blob/main/docs/CONNECT.md`}
+disconnect();`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Call <code className="text-amber-600 dark:text-amber-400">disconnect()</code> when you are done with the
+                wallet. The full guide is at
+                <code className="text-amber-600 dark:text-amber-400"> github.com/unicity-sphere/sphere-sdk/blob/main/docs/CONNECT.md</code>.
+              </p>
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 <strong>Session resume is an iframe-mode feature.</strong> In P1, save
                 <code className="text-amber-600 dark:text-amber-400"> connection.sessionId</code> and pass it back as
@@ -1940,11 +2111,6 @@ const providers = createWalletApiProviders(
   { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
 );
 
-// NEVER put a seed phrase in a build-time variable. Anything prefixed VITE_ is
-// inlined into the bundle and served to every visitor — that is publishing the
-// wallet, not configuring it. init() loads the wallet already in this browser's
-// storage; autoGenerate only fires when there is none, and hands the phrase to
-// the user to write down.
 const { sphere, created, generatedMnemonic } = await Sphere.init({
   ...providers,
   network: NETWORK,
@@ -1959,6 +2125,16 @@ const market = sphere.market;
 if (!market) throw new Error('market is not enabled');`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">init()</code> loads the wallet already in this
+                browser&rsquo;s storage. <code className="text-amber-600 dark:text-amber-400">autoGenerate</code> only
+                fires when there is none, and hands the phrase to the user to write down.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                Never put a seed phrase in a build-time variable. Anything prefixed
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> is inlined into the bundle and served
+                to every visitor &mdash; that is publishing the wallet, not configuring it.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 To let a user bring an existing wallet, take the phrase from an input they fill in and pass it as
                 <code className="text-amber-600 dark:text-amber-400"> mnemonic</code> — see
                 <a href="#guide-wallet-backup" className="text-orange-500 hover:underline"> Wallet Backup &amp; Recovery</a>.
@@ -1967,8 +2143,7 @@ if (!market) throw new Error('market is not enabled');`}
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 2: Post Listings</h4>
               <CodeBlock
-                code={`// Post items for sale
-await market.postIntent({
+                code={`await market.postIntent({
   description: 'Vintage Rolex Submariner - Excellent condition',
   intentType: 'sell',
   category: 'watches',
@@ -1979,8 +2154,7 @@ await market.postIntent({
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 3: Search & Negotiate</h4>
               <CodeBlock
-                code={`// Search for items
-const results = await market.search('rolex submariner');
+                code={`const results = await market.search('rolex submariner');
 const intent = results.intents[0];
 
 // Resolve the listing's currency yourself — never take a coinId off the wire.
@@ -1997,7 +2171,6 @@ await sphere.communications.sendDM(offer.agentPublicKey, JSON.stringify({
   price: offer.price,
 }));
 
-// Handle negotiation messages
 sphere.communications.onDirectMessage(async (msg) => {
   const data = JSON.parse(msg.content);
   if (data.type !== 'accepted') return;
@@ -2033,12 +2206,13 @@ sphere.communications.onDirectMessage(async (msg) => {
               </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 4: Handle Payments</h4>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                This is the seller side. Listen for incoming payments, then send the buyer a confirmation DM.
+              </p>
               <CodeBlock
-                code={`// As a seller - listen for incoming payments
-sphere.on('transfer:incoming', async (transfer) => {
+                code={`sphere.on('transfer:incoming', async (transfer) => {
   console.log('Payment received:', transfer.tokens);
 
-  // Send confirmation to buyer
   await sphere.communications.sendDM(transfer.senderPubkey, JSON.stringify({
     type: 'payment_confirmed',
     amount: transfer.tokens[0]?.amount,
@@ -2055,32 +2229,44 @@ sphere.on('transfer:incoming', async (transfer) => {
 
               <h4 className="font-medium text-lg mt-6 mb-3">Backup</h4>
               <CodeBlock
-                code={`// Get the mnemonic (most important backup)
+                code={`// This phrase recovers the entire wallet — store it securely.
 const mnemonic = sphere.getMnemonic();
-// Store this securely - it can recover the entire wallet
 
-// Export as JSON (includes addresses and metadata)
 const json = sphere.exportToJSON({
   includeMnemonic: true,
   password: 'optional-encryption-password',
   addressCount: 5,
 });
 
-// Export as plain text
 const txt = sphere.exportToTxt();`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                The mnemonic is the most important backup.
+                <code className="text-amber-600 dark:text-amber-400"> exportToJSON()</code> wraps it in the addresses and
+                the wallet metadata; <code className="text-amber-600 dark:text-amber-400">exportToTxt()</code> writes a
+                plain-text backup, and takes the same <code className="text-amber-600 dark:text-amber-400">password</code> and
+                <code className="text-amber-600 dark:text-amber-400"> addressCount</code> options.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Recovery</h4>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">providers</code> below is the composed bundle from
+                <a href="#browser-setup" className="text-orange-500 hover:underline"> Browser Setup</a> &mdash;
+                <code className="text-amber-600 dark:text-amber-400"> createBrowserProviders(...)</code> wrapped in
+                <code className="text-amber-600 dark:text-amber-400"> createWalletApiProviders(...)</code>. Every entry
+                point needs the same <code className="text-amber-600 dark:text-amber-400">network</code> as
+                <code className="text-amber-600 dark:text-amber-400"> walletApi.network</code>.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The mnemonic comes from the user at runtime &mdash; a textarea they paste into, a hardware prompt,
+                whatever your UI is. Never a build-time constant, and never
+                <code className="text-amber-600 dark:text-amber-400"> import.meta.env</code>: a
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> variable is inlined into the bundle
+                and served to every visitor, so a seed put there is a published seed.
+              </p>
               <CodeBlock
-                code={`// \`providers\` below is the composed bundle from Browser Setup —
-// createBrowserProviders(...) wrapped in createWalletApiProviders(...).
-// Every entry point needs the same \`network\` as walletApi.network.
-const NETWORK = 'testnet2';
+                code={`const NETWORK = 'testnet2';
 
-// Recover from a mnemonic the USER supplies at runtime — a textarea they paste
-// into, a hardware prompt, whatever your UI is. Never a build-time constant and
-// never import.meta.env: a VITE_ variable is inlined into the bundle and served
-// to every visitor, so a seed put there is a published seed.
 const phrase = mnemonicInput.value.trim();
 const { sphere } = await Sphere.init({
   ...providers,
@@ -2088,18 +2274,12 @@ const { sphere } = await Sphere.init({
   mnemonic: phrase,
 });
 
-// Import from JSON file. Since 0.17.4 an import over a storage that already holds
-// a wallet is REFUSED with ALREADY_INITIALIZED and that wallet is left untouched —
-// importFromJSON returns { success: false, error }, the other paths reject. Pass
-// overwrite: true only after the user has confirmed the replacement; the old wallet
-// is erased before the new one is brought up and is not restored if that fails.
 const fromJson = await Sphere.importFromJSON({
   ...providers,
   network: NETWORK,
   jsonContent: '{"version":...}',
 });
 
-// Import from a legacy wallet file (.txt / JSON backups; .dat was removed)
 const fromLegacy = await Sphere.importFromLegacyFile({
   ...providers,
   network: NETWORK,
@@ -2109,6 +2289,20 @@ const fromLegacy = await Sphere.importFromLegacyFile({
   overwrite: userConfirmedReplacement, // omit it to keep an existing wallet safe
 });`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                Since 0.17.4 an import over a storage that already holds a wallet is refused with
+                <code className="text-amber-600 dark:text-amber-400"> ALREADY_INITIALIZED</code>, and that wallet is left
+                untouched. <code className="text-amber-600 dark:text-amber-400">importFromJSON</code> returns that
+                refusal as <code className="text-amber-600 dark:text-amber-400">{'{ success: false, error }'}</code>; the
+                other paths reject. Pass <code className="text-amber-600 dark:text-amber-400">overwrite: true</code> only
+                after the user has confirmed the replacement &mdash; the old wallet is erased before the new one is
+                brought up, and it is not restored if that fails.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">importFromLegacyFile</code> reads the older backup
+                files: <code className="text-amber-600 dark:text-amber-400">.txt</code> and JSON exports.
+                <code className="text-amber-600 dark:text-amber-400"> .dat</code> was removed.
+              </p>
             </div>
           </section>
 
@@ -2139,10 +2333,6 @@ async function main() {
     createBrowserProviders({ network: NETWORK }),
     { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
   );
-  // Loads the wallet already in this browser's storage. autoGenerate only fires
-  // when there is none — a throwaway wallet whose phrase is handed straight to
-  // the user. A seed never comes from import.meta.env: VITE_ variables are
-  // inlined into the bundle and served to every visitor.
   const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
     network: NETWORK,
@@ -2152,14 +2342,13 @@ async function main() {
     console.log('New wallet — save this phrase:', generatedMnemonic);
   }
 
-  // Check balance
   const assets = await sphere.payments.assets();
   console.log('Balances:');
   assets.forEach(a => console.log(\`  \${a.symbol}: \${a.totalAmount}\`));
   const [asset] = assets;
   if (!asset) return console.log('Nothing to send yet — mint or receive tokens first.');
 
-  // Send payment. A rejection may still have spent: resumeNow() converges the original.
+  // A rejected send may already have spent: resumeNow() converges the original.
   try {
     const result = await sphere.payments.send({
       coinId: asset.coinId,
@@ -2173,7 +2362,6 @@ async function main() {
     else throw err;
   }
 
-  // Listen for incoming payments
   sphere.on('transfer:incoming', (transfer) => {
     console.log('Received tokens:', transfer.tokens);
   });
@@ -2181,6 +2369,14 @@ async function main() {
 
 main();`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">init()</code> loads the wallet already in this
+                browser&rsquo;s storage. <code className="text-amber-600 dark:text-amber-400">autoGenerate</code> only
+                fires when there is none, and the throwaway wallet it creates hands its phrase straight to the user. A
+                seed never comes from <code className="text-amber-600 dark:text-amber-400">import.meta.env</code>:
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> variables are inlined into the bundle
+                and served to every visitor.
+              </p>
             </div>
 
             <div id="example-marketplace" data-section="example-marketplace" className="scroll-mt-24 mb-12">
@@ -2205,8 +2401,6 @@ async function main() {
     createBrowserProviders({ network: NETWORK, market: true }),
     { baseUrl: import.meta.env.VITE_WALLET_API_URL, network: NETWORK },
   );
-  // Existing wallet in this browser, or a throwaway one whose phrase goes to the
-  // user. Never a seed from import.meta.env — VITE_ variables ship in the bundle.
   const { sphere, created, generatedMnemonic } = await Sphere.init({
     ...providers,
     network: NETWORK,
@@ -2219,7 +2413,6 @@ async function main() {
   const market = sphere.market;
   if (!market) throw new Error('market is not enabled');
 
-  // Post items for sale
   await market.postIntent({
     description: 'Vintage Rolex Submariner',
     intentType: 'sell',
@@ -2238,7 +2431,6 @@ async function main() {
 
   console.log('Listings posted!');
 
-  // Handle incoming offers via DM
   sphere.communications.onDirectMessage(async (msg) => {
     try {
       const data = JSON.parse(msg.content);
@@ -2250,7 +2442,6 @@ async function main() {
 
         const listed = Number(intent.price);
         if (Number.isFinite(listed) && data.price >= listed * 0.9) {
-          // Accept offers within 10%
           await sphere.communications.sendDM(msg.senderPubkey, JSON.stringify({
             type: 'accepted',
             intentId: intent.id,
@@ -2269,7 +2460,6 @@ async function main() {
     }
   });
 
-  // Handle incoming payments
   sphere.on('transfer:incoming', async (transfer) => {
     console.log('Payment received:', transfer.tokens);
     await sphere.communications.sendDM(transfer.senderPubkey, JSON.stringify({
@@ -2282,6 +2472,16 @@ async function main() {
 
 main();`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">init()</code> loads the wallet already in this
+                browser, or creates a throwaway one and hands its phrase to the user. Never take a seed from
+                <code className="text-amber-600 dark:text-amber-400"> import.meta.env</code> &mdash;
+                <code className="text-amber-600 dark:text-amber-400"> VITE_</code> variables ship in the bundle.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                The seller here accepts any offer within 10% of the listed price and rejects the rest, then confirms each
+                incoming payment back to the buyer over DM.
+              </p>
             </div>
           </section>
 
