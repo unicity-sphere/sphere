@@ -1820,7 +1820,11 @@ const { sphere } = await Sphere.init({
   mnemonic: phrase,
 });
 
-// Import from JSON file
+// Import from JSON file. Since 0.17.4 an import over a storage that already holds
+// a wallet is REFUSED with ALREADY_INITIALIZED and that wallet is left untouched —
+// importFromJSON returns { success: false, error }, the other paths reject. Pass
+// overwrite: true only after the user has confirmed the replacement; the old wallet
+// is erased before the new one is brought up and is not restored if that fails.
 const fromJson = await Sphere.importFromJSON({
   ...providers,
   network: NETWORK,
@@ -1834,6 +1838,7 @@ const fromLegacy = await Sphere.importFromLegacyFile({
   fileContent: fileData,
   fileName: 'wallet.txt',
   password: 'if-encrypted',
+  overwrite: userConfirmedReplacement, // omit it to keep an existing wallet safe
 });`}
               />
             </div>
