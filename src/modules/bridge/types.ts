@@ -49,6 +49,8 @@ export interface ReturnServiceRecord {
   /** The source-chain settlement transaction, once released. */
   readonly settleTxid?: string;
   readonly message?: string;
+  /** For a failed return: whether resubmitting the same blob may still succeed. */
+  readonly recoverable?: boolean;
 }
 
 /** A refusal from the return service. Not recoverable = the same blob will never be accepted. */
@@ -80,6 +82,8 @@ export interface BridgeOutSide {
   reasonFor(args: { amount: bigint; destination: string }): Uint8Array;
   /** Read a burned blob; `null` when it is not this asset's burn. */
   identify(burnedToken: Uint8Array): Promise<BurnIdentity | null>;
+  /** Whether a token's mint reason names the vault this side releases from. */
+  backs(justification: Uint8Array | null): boolean;
   readonly returns: BridgeReturnService;
 }
 

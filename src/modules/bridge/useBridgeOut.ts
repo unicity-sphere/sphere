@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { Sphere } from '@unicitylabs/sphere-sdk';
+import type { Sphere, Token } from '@unicitylabs/sphere-sdk';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssets } from './assets';
-import { dismissReturn, recoverBurns, runBridgeOut, syncReturns } from './bridgeOut';
-import { bridgeStoreFor, type BridgeStore, type PendingReturn } from './store';
+import { dismissReturn, recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
+import { splitReturnable, type ReturnableSplit } from './returnable';
+import { bridgeStoreFor, isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
 import type { BridgeAsset } from './types';
 
 export interface BridgeOutRequest {
@@ -45,7 +46,7 @@ export function useBridgeOut() {
     queryKey: returnsKey,
     enabled: !!store,
     queryFn: () => (store ? syncReturns(store, assetById) : Promise.resolve([] as PendingReturn[])),
-    refetchInterval: (query) => ((query.state.data ?? []).some((r) => r.status !== 'settled' && r.status !== 'failed') ? POLL_MS : false),
+    refetchInterval: (query) => ((query.state.data ?? []).some((r) => !isTerminalReturn(r)) ? POLL_MS : false),
   });
 
   const mutation = useMutation({
@@ -73,6 +74,16 @@ export function useBridgeOut() {
     [store, queryClient, returnsKey],
   );
 
+  const retry = useCallback(
+    async (id: string) => {
+      const asset = store && assetById(store.getReturn(id)?.assetId ?? '');
+      if (!store || !asset) return;
+      await retryReturn(store, asset, id);
+      queryClient.setQueryData(returnsKey, store.listReturns());
+    },
+    [store, assetById, queryClient, returnsKey],
+  );
+
   return {
     bridgeOut: mutation.mutateAsync,
     isRunning: mutation.isPending,
@@ -81,7 +92,28 @@ export function useBridgeOut() {
     returns: returns.data ?? [],
     refreshReturns: returns.refetch,
     dismiss,
+    retry,
   };
+}
+
+export function useReturnableTokens(asset: BridgeAsset | undefined, tokens: readonly Token[]): ReturnableSplit & { isLoading: boolean } {
+  const { sphere } = useSphereContext();
+  const candidates = useMemo(
+    () => (asset ? tokens.filter((t) => t.coinId.toLowerCase() === asset.coinIdHex && t.status === 'confirmed' && t.suspectedSpent !== true) : []),
+    [tokens, asset],
+  );
+  const query = useQuery({
+    queryKey: ['bridge', 'returnable', asset?.id, candidates.map((t) => t.id)],
+    enabled: !!sphere && !!asset?.out,
+    staleTime: Infinity,
+    queryFn: (): Promise<ReturnableSplit> => {
+      const payments = getPayments(sphere);
+      const out = asset?.out;
+      if (!payments || !out) return Promise.resolve({ eligible: [], ineligible: candidates });
+      return splitReturnable(payments as BridgePayments, out, candidates);
+    },
+  });
+  return { eligible: query.data?.eligible ?? [], ineligible: query.data?.ineligible ?? [], isLoading: query.isLoading };
 }
 
 function walletSide(sphere: Sphere | null): { payments: BridgePayments; store: BridgeStore } {

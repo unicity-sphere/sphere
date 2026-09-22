@@ -21,12 +21,12 @@ import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
-import { formatUnits, parseUnits } from './format';
+import { formatUnits, parseUnits, returnStatusSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgeWalletOption } from './types';
 import { useBridgeIn } from './useBridgeIn';
-import { useBridgeOut } from './useBridgeOut';
+import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
 type Step = 'direction' | 'chain' | 'asset' | 'form' | 'processing' | 'success';
@@ -55,7 +55,8 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [destination, setDestination] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [burnProgress, setBurnProgress] = useState<{ done: number; total: number } | null>(null);
-  const { bridgeOut, returns, dismiss, reset: resetOut } = useBridgeOut();
+  const [burned, setBurned] = useState<PendingReturn[]>([]);
+  const { bridgeOut, returns, dismiss, retry, reset: resetOut } = useBridgeOut();
   const { tokens } = useTokens();
 
   // The assets offered depend on the direction: out needs a return path.
@@ -68,11 +69,8 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const chainAssets = useMemo(() => directionAssets.filter((a) => a.chain.id === chainId), [directionAssets, chainId]);
   const asset: BridgeAsset | undefined = chainAssets.find((a) => a.id === assetId);
 
-  // Tokens of the chosen asset the wallet can burn: confirmed and not suspected spent.
-  const returnable = useMemo(
-    () => (asset ? tokens.filter((t) => t.coinId.toLowerCase() === asset.coinIdHex && t.status === 'confirmed' && t.suspectedSpent !== true) : []),
-    [tokens, asset],
-  );
+  // Tokens of the chosen asset this bridge can release, and those of the same coin it cannot.
+  const { eligible: returnable, ineligible: superseded } = useReturnableTokens(asset, tokens);
   const selectedTokens = useMemo(() => returnable.filter((t) => selectedIds.has(t.id)), [returnable, selectedIds]);
   const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
 
@@ -177,11 +175,13 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     setBurnProgress({ done: 0, total: selectedTokens.length });
     try {
       // One burn per token, in order; each record lands in the returns list as it is made.
+      const records: PendingReturn[] = [];
       for (let i = 0; i < selectedTokens.length; i++) {
         const t = selectedTokens[i];
-        await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination });
+        records.push(...(await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination })));
         setBurnProgress({ done: i + 1, total: selectedTokens.length });
       }
+      setBurned(records);
       setSelectedIds(new Set());
       setStep('success');
     } catch (e) {
@@ -254,7 +254,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             {pending.length > 0 && (
               <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} />
             )}
-            {returns.length > 0 && <ReturnsList returns={returns} onDismiss={dismiss} />}
+            {returns.length > 0 && <ReturnsList returns={returns} onDismiss={dismiss} onRetry={retry} />}
           </>
         )}
 
@@ -349,7 +349,10 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             <SelectionSummary chain={chain} asset={asset} prefix="To" onChange={() => setStep('chain')} />
 
             {returnable.length === 0 ? (
-              <p className={`text-xs ${MUTED}`}>No {asset.symbol} tokens to send out. Bridge some in first.</p>
+              <>
+                <p className={`text-xs ${MUTED}`}>No {asset.symbol} tokens to send out. Bridge some in first.</p>
+                <SupersededTokens tokens={superseded} asset={asset} />
+              </>
             ) : (
               <>
                 <div className="space-y-2">
@@ -372,6 +375,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                     {selectedTokens.length} token{selectedTokens.length === 1 ? '' : 's'} · {formatUnits(selectedAmount, asset.decimals)} {asset.symbol}. Each token is sent whole; to send a
                     different amount, send yourself that amount first and pick the new token.
                   </div>
+                  <SupersededTokens tokens={superseded} asset={asset} />
                 </div>
 
                 <div className="space-y-2">
@@ -436,13 +440,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                 {progress?.lockTxid && <TxLink href={asset.presentation.explorerTxUrl(progress.lockTxid)} label="lock transaction" />}
               </>
             ) : (
-              <>
-                <div className="font-medium text-neutral-900 dark:text-white">Burned, release pending</div>
-                <div className={`text-xs ${MUTED}`}>
-                  The return service is proving the burn. The release lands on {chain.name} when the proof settles; follow it
-                  under Returns on the first screen.
-                </div>
-              </>
+              <BurnedSummary asset={asset} burned={burned.map((b) => returns.find((r) => r.id === b.id) ?? b)} />
             )}
             <Button onClick={close} className="w-full mt-2">Done</Button>
           </div>
@@ -507,6 +505,18 @@ function TokenChoice({ token, asset, checked, onToggle }: { token: Token; asset:
   );
 }
 
+/** Tokens of this coin the active vault does not back: listed so the balance adds up, never offered for a burn. */
+function SupersededTokens({ tokens, asset }: { tokens: Token[]; asset: BridgeAsset }) {
+  if (tokens.length === 0) return null;
+  const total = tokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
+  return (
+    <div className={`text-xs ${MUTED}`}>
+      {tokens.length} token{tokens.length === 1 ? '' : 's'} · {formatUnits(total, asset.decimals)} {asset.symbol} cannot be sent out here:{' '}
+      {tokens.length === 1 ? 'it was' : 'they were'} bridged in through a vault this bridge no longer settles.
+    </div>
+  );
+}
+
 /** What was chosen, kept in view above the form, with a way back to the first choice. */
 function SelectionSummary({ chain, asset, prefix, onChange }: { chain: BridgeChain; asset: BridgeAsset; prefix: string; onChange: () => void }) {
   return (
@@ -522,40 +532,89 @@ function SelectionSummary({ chain, asset, prefix, onChange }: { chain: BridgeCha
   );
 }
 
+function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingReturn[] }) {
+  const total = burned.reduce((sum, r) => sum + BigInt(r.amount), 0n);
+  const destination = burned[0]?.destination ?? '';
+  return (
+    <>
+      <div className="font-medium text-neutral-900 dark:text-white">Burned on Unicity</div>
+      <div className={`text-xs ${MUTED}`}>
+        {formatUnits(total, asset.decimals)} {asset.symbol} left this wallet. The same amount is released as {asset.symbol} on{' '}
+        {asset.chain.name} to <span className="font-mono break-all">{destination}</span> once the return service has proved the burn.
+      </div>
+      {burned.map((r) => (
+        <div key={r.id} className={`text-xs ${MUTED}`}>
+          {burned.length > 1 && `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}: `}
+          {returnStatusSentence(r, asset.chain.name)}
+        </div>
+      ))}
+      <div className={`text-xs ${MUTED}`}>Open Bridge again to follow it under Returns.</div>
+    </>
+  );
+}
+
 /** Burns waiting for their release, with the service's status for each. */
-function ReturnsList({ returns, onDismiss }: { returns: PendingReturn[]; onDismiss: (id: string) => void }) {
+function ReturnsList({ returns, onDismiss, onRetry }: { returns: PendingReturn[]; onDismiss: (id: string) => void; onRetry: (id: string) => void }) {
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Returns</div>
-      {returns.map((r) => {
-        const asset = bridgeAssetByCoin(r.coinIdHex);
-        const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
-        const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
-        return (
-          <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
-            <span className="flex-1 min-w-0">
-              <span className="block font-mono text-neutral-900 dark:text-white">
-                {amount}{asset ? ` → ${asset.chain.name}` : ''}
-              </span>
-              <span className={`block truncate ${MUTED}`} title={r.destination}>{r.destination}</span>
-              {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
-            </span>
-            <span className={`shrink-0 ${color}`}>{returnStatusLabel(r.status)}</span>
-            {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
-            {isTerminalReturn(r) && (
-              <button
-                type="button"
-                onClick={() => onDismiss(r.id)}
-                className="p-1.5 rounded-md text-neutral-400 hover:text-red-500 hover:bg-red-500/10"
-                title="Remove this record"
-                aria-label="Remove this record"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {returns.map((r) => (
+        <ReturnRow key={r.id} r={r} onDismiss={onDismiss} onRetry={onRetry} />
+      ))}
+    </div>
+  );
+}
+
+function ReturnRow({ r, onDismiss, onRetry }: { r: PendingReturn; onDismiss: (id: string) => void; onRetry: (id: string) => void }) {
+  const [addressExpanded, setAddressExpanded] = useState(false);
+  const asset = bridgeAssetByCoin(r.coinIdHex);
+  const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
+  const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
+  const retryable = r.status === 'failed' && r.recoverable === true;
+  const toggleAddress = () => setAddressExpanded((v) => !v);
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
+      <span className="flex-1 min-w-0">
+        <span className="block font-mono text-neutral-900 dark:text-white">
+          {amount}{asset ? ` → ${asset.chain.name}` : ''}
+        </span>
+        <span
+          className={`block font-mono cursor-pointer ${MUTED} ${addressExpanded ? 'break-all' : 'truncate'}`}
+          title={r.destination}
+          role="button"
+          tabIndex={0}
+          aria-expanded={addressExpanded}
+          onClick={toggleAddress}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleAddress(); } }}
+        >
+          {r.destination}
+        </span>
+        {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
+      </span>
+      <span className={`shrink-0 ${color}`}>{returnStatusLabel(r.status)}</span>
+      {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
+      {retryable && (
+        <button
+          type="button"
+          onClick={() => onRetry(r.id)}
+          className="p-1.5 rounded-md text-neutral-400 hover:text-orange-500 hover:bg-orange-500/10"
+          title="Send this burn to the service again"
+          aria-label="Send this burn to the service again"
+        >
+          <RotateCw className="w-3.5 h-3.5" />
+        </button>
+      )}
+      {isTerminalReturn(r) && (
+        <button
+          type="button"
+          onClick={() => onDismiss(r.id)}
+          className="p-1.5 rounded-md text-neutral-400 hover:text-red-500 hover:bg-red-500/10"
+          title="Remove this record"
+          aria-label="Remove this record"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }

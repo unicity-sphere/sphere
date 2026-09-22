@@ -14,15 +14,16 @@ import {
   bridgeTokenPlugin,
   createTronSourceAdapter,
   loadBridges,
+  mintedAgainst,
   NILE_USDT_BRIDGE,
   ReturnServiceClient,
   ReturnServiceError,
   toEvmAddressHex,
   tronLinkProvider,
-  withReturnServiceUrl,
   type DepositWallet,
   type LoadedBridge,
   type TronSigner,
+  withReturnServiceUrl,
 } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
@@ -126,15 +127,16 @@ function tronOut(bridge: LoadedBridge): BridgeOutSide {
         amount: reason.amount,
       };
     },
+    backs: (justification) => mintedAgainst(bridge, justification),
     returns: {
       submit: async (burnedToken, reasonBytes) => {
         const rec = await client.postReturn({ tokenCbor: burnedToken, configHash: bridge.configHash, reasonBytes });
-        return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message };
+        return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message, recoverable: rec.failure?.recoverable };
       },
       status: async (returnId) => {
         try {
           const rec = await client.getReturn(returnId);
-          return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message };
+          return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message, recoverable: rec.failure?.recoverable };
         } catch (err) {
           if (err instanceof Error && /HTTP 404/.test(err.message)) return null;
           throw err;

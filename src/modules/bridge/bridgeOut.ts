@@ -1,7 +1,9 @@
 import { burnForReturn, recoverPendingBurns, type BridgePayments } from '@unicitylabs/bridge-core';
 
 import { isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
-import type { BridgeAsset, BridgeOutSide } from './types';
+import type { BridgeAsset, BridgeOutSide, ReturnServiceRecord } from './types';
+
+export const RETRY_DELAY_MS = 60_000;
 
 export interface BridgeOutArgs {
   readonly payments: BridgePayments;
@@ -50,11 +52,11 @@ export async function runBridgeOut(args: BridgeOutArgs): Promise<PendingReturn> 
 export async function submitReturn(store: BridgeStore, out: BridgeOutSide, record: PendingReturn): Promise<PendingReturn> {
   try {
     const rec = await out.returns.submit(fromHex(record.burnedTokenHex), fromHex(record.reasonBytesHex));
-    store.updateReturn(record.id, { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message });
+    store.updateReturn(record.id, fromService(rec, record));
   } catch (err) {
     const refusal = out.returns.refusal(err);
     if (refusal && !refusal.recoverable) {
-      store.updateReturn(record.id, { status: 'failed', message: refusal.message });
+      store.updateReturn(record.id, { status: 'failed', message: refusal.message, recoverable: false, failedAt: Date.now() });
     }
   }
   return store.getReturn(record.id) ?? record;
@@ -76,12 +78,37 @@ export async function syncReturns(store: BridgeStore, assetById: (id: string) =>
           await submitReturn(store, out, { ...record, returnId: undefined });
           return;
         }
-        store.updateReturn(record.id, { status: rec.status, settleTxid: rec.settleTxid, message: rec.message });
+        store.updateReturn(record.id, fromService(rec, record));
       } catch {
+        return;
       }
+      const current = store.getReturn(record.id);
+      if (current && dueForRetry(current)) await submitReturn(store, out, current);
     }),
   );
   return store.listReturns();
+}
+
+export async function retryReturn(store: BridgeStore, asset: BridgeAsset, id: string): Promise<PendingReturn | undefined> {
+  const record = store.getReturn(id);
+  if (!record || !asset.out) return record;
+  return submitReturn(store, asset.out, record);
+}
+
+function fromService(rec: ReturnServiceRecord, record: PendingReturn): Partial<PendingReturn> {
+  const failed = rec.status === 'failed';
+  return {
+    returnId: rec.returnId,
+    status: rec.status,
+    settleTxid: rec.settleTxid,
+    message: rec.message,
+    recoverable: failed ? rec.recoverable : undefined,
+    failedAt: failed ? (record.failedAt ?? Date.now()) : undefined,
+  };
+}
+
+function dueForRetry(r: PendingReturn): boolean {
+  return r.status === 'failed' && r.recoverable === true && Date.now() - (r.failedAt ?? 0) >= RETRY_DELAY_MS;
 }
 
 export async function recoverBurns(

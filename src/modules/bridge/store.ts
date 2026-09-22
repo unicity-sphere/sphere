@@ -32,12 +32,12 @@ export interface PendingReturn {
   status: ReturnStatus;
   settleTxid?: string;
   message?: string;
+  recoverable?: boolean;
+  failedAt?: number;
 }
 
-const TERMINAL: ReadonlySet<ReturnStatus> = new Set(['settled', 'failed']);
-
-export function isTerminalReturn(ret: Pick<PendingReturn, 'status'>): boolean {
-  return TERMINAL.has(ret.status);
+export function isTerminalReturn(ret: Pick<PendingReturn, 'status' | 'recoverable'>): boolean {
+  return ret.status === 'settled' || (ret.status === 'failed' && !ret.recoverable);
 }
 
 interface BridgeState {

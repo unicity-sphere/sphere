@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
-import { dismissReturn, recoverBurns, runBridgeOut, syncReturns, toHex } from '@/modules/bridge/bridgeOut';
+import { dismissReturn, recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns, toHex } from '@/modules/bridge/bridgeOut';
 import { bridgeStoreFor } from '@/modules/bridge/store';
 import type { BridgeAsset, BridgeReturnService, ReturnServiceRecord } from '@/modules/bridge/types';
 
@@ -40,6 +40,7 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     out: {
       reasonFor: ({ amount }) => new Uint8Array([Number(amount & 0xffn)]),
       identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n } : null),
+      backs: () => true,
       returns: service,
     },
     ...over,
@@ -128,6 +129,64 @@ describe('syncReturns', () => {
     expect(after.find((r) => r.id === 'n1')).toMatchObject({ status: 'settled', settleTxid: 'tx9' });
     expect(after.find((r) => r.id === 'n2')).toMatchObject({ returnId: 'r-1', status: 'queued' });
     expect(service.submitted).toBe(1);
+  });
+
+  it('keeps a return the service failed recoverably, and resubmits it once the retry delay has passed', async () => {
+    const service = fakeService({
+      status: vi.fn(async () => ({ returnId: 'r-1', status: 'failed' as const, message: 'out of gas', recoverable: true })),
+    });
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    const base = { coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: toHex(BLOB), reasonBytesHex: '07', destination: 'Tdest', amount: '7', createdAt: 1 };
+    store.persistReturn({ ...base, id: 'n1', returnId: 'r-1', status: 'proving' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+    let after = await syncReturns(store, () => asset);
+    expect(after[0]).toMatchObject({ status: 'failed', recoverable: true, message: 'out of gas', failedAt: 1_000_000 });
+    expect(store.activeReturns().map((r) => r.id)).toEqual(['n1']);
+    expect(service.submitted).toBe(0);
+
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS - 1);
+    after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(0);
+    expect(after[0].failedAt).toBe(1_000_000);
+
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS);
+    after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(1);
+    expect(after[0].status).toBe('queued');
+    expect(after[0].recoverable).toBeUndefined();
+    expect(after[0].failedAt).toBeUndefined();
+    clock.mockRestore();
+  });
+
+  it('retryReturn resubmits a failed return at once', async () => {
+    const service = fakeService();
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    const base = { coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: toHex(BLOB), reasonBytesHex: '07', destination: 'Tdest', amount: '7', createdAt: 1 };
+    store.persistReturn({ ...base, id: 'n1', returnId: 'r-1', status: 'failed', recoverable: true, failedAt: Date.now() });
+
+    const rec = await retryReturn(store, asset, 'n1');
+    expect(service.submitted).toBe(1);
+    expect(rec).toMatchObject({ status: 'queued' });
+  });
+
+  it('a final failure stays final: no resubmission, dismissable', async () => {
+    const service = fakeService({
+      status: vi.fn(async () => ({ returnId: 'r-1', status: 'failed' as const, message: 'config mismatch', recoverable: false })),
+    });
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    const base = { coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: toHex(BLOB), reasonBytesHex: '07', destination: 'Tdest', amount: '7', createdAt: 1 };
+    store.persistReturn({ ...base, id: 'n1', returnId: 'r-1', status: 'queued' });
+
+    await syncReturns(store, () => asset);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * RETRY_DELAY_MS);
+    await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(0);
+    expect(dismissReturn(store, 'n1')).toBe(true);
+    vi.restoreAllMocks();
   });
 
   it('only a finished return can be dismissed', () => {
