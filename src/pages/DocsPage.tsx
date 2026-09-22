@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { DEV_PORTAL_URL } from '../config/devPortal';
 import { SDK_VERSION } from '../config/sdkVersion';
@@ -158,6 +158,53 @@ const navigation: NavItem[] = [
   },
 ];
 
+/**
+ * Syntax colours for the samples on this page. Hand-rolled rather than a highlighter
+ * dependency: every sample is TypeScript, this page is the only consumer, and shiki or
+ * prism is a large addition for four token types. One pass, one regex; a comment or a
+ * string is matched whole, so keywords and numbers inside one are never re-coloured.
+ */
+const TOKENS = new RegExp(
+  [
+    '(//[^\\n]*|/\\*[\\s\\S]*?\\*/)',
+    '(\'(?:[^\'\\\\\\n]|\\\\.)*\'|"(?:[^"\\\\\\n]|\\\\.)*"|\\x60(?:[^\\x60\\\\]|\\\\.)*\\x60)',
+    '\\b(import|export|from|const|let|var|function|async|await|return|if|else|for|of|in|try|catch|finally|throw|new|class|extends|interface|type|typeof|instanceof|null|undefined|true|false|void|as|declare)\\b',
+    '\\b(0x[0-9a-fA-F]+|\\d[\\d_]*n?)\\b',
+  ].join('|'),
+  'g',
+);
+
+/** comment, string, keyword, number — in the order the alternation matches them. */
+const TOKEN_CLASS = ['text-neutral-500 italic', 'text-emerald-400', 'text-sky-400', 'text-amber-400'] as const;
+
+function highlight(source: string) {
+  const out: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  for (const m of source.matchAll(TOKENS)) {
+    const at = m.index;
+    if (at > last) out.push(source.slice(last, at));
+    out.push(
+      <span key={key++} className={TOKEN_CLASS[m.slice(1).findIndex(Boolean)]}>
+        {m[0]}
+      </span>,
+    );
+    last = at + m[0].length;
+  }
+  if (last < source.length) out.push(source.slice(last));
+  return out;
+}
+
+/**
+ * `language` defaults to typescript and most blocks pass only a filename, so the filename
+ * is what actually distinguishes the .env and terminal blocks from code.
+ */
+function isTypeScript(filename: string | undefined, language: string): boolean {
+  if (language !== 'typescript') return false;
+  if (!filename) return true;
+  return !/^(terminal|\.env|shell|bash|json|.*\.(env|sh|json|txt))$/i.test(filename.trim());
+}
+
 function CodeBlock({ code, filename, language = 'typescript' }: { code: string; filename?: string; language?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -181,7 +228,9 @@ function CodeBlock({ code, filename, language = 'typescript' }: { code: string; 
         </button>
       </div>
       <pre className="p-4 text-sm overflow-x-auto">
-        <code className="text-amber-400">{code}</code>
+        {/* Only TypeScript is tokenised: a .env or shell block would have its URLs and
+            words mis-painted by a TS tokenizer (# is not a comment here, // is not one there). */}
+        <code className="text-neutral-200">{isTypeScript(filename, language) ? highlight(code) : code}</code>
       </pre>
     </div>
   );
@@ -416,7 +465,7 @@ export function DocsPage() {
               </p>
               <CodeBlock
                 filename="app.ts"
-                code={`import { Sphere } from '@unicitylabs/sphere-sdk';
+                code={`import { Sphere, TokenRegistry, getCoinIdBySymbol } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
@@ -449,12 +498,16 @@ if (generatedMnemonic) {
 console.log('Nametag:', sphere.getNametag());
 console.log('Identity:', sphere.identity);
 
-// 5. Send tokens
-await sphere.payments.send({
-  coinId: '0x...',
-  amount: '100000000',
-  recipient: '@alice',
-});
+// 5. Send tokens. coinId is the 64-hex coin id — no '0x' prefix.
+await TokenRegistry.waitForReady();
+const coinId = getCoinIdBySymbol('UCT'); // string | undefined
+if (coinId) {
+  await sphere.payments.send({
+    coinId,
+    amount: '100000000',
+    recipient: '@alice',
+  });
+}
 
 // 6. Listen for incoming transfers
 sphere.on('transfer:incoming', (transfer) => {
@@ -471,6 +524,14 @@ sphere.on('transfer:incoming', (transfer) => {
                 platform providers (IndexedDB storage, Nostr transport, aggregator oracle), and
                 <code className="text-amber-600 dark:text-amber-400"> createWalletApiProviders()</code> attaches the
                 wallet-api transport config the payments vertical is built from.
+              </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <strong>TypeScript note:</strong> <code className="text-amber-600 dark:text-amber-400">@unicitylabs/sphere-sdk/impl/browser</code> ships
+                no type declarations in {SDK_VERSION}, so a strict project reports <code className="text-amber-600 dark:text-amber-400">TS7016</code> on
+                that import (here and in the Quick Start above). Add a
+                <code className="text-amber-600 dark:text-amber-400"> declare module '@unicitylabs/sphere-sdk/impl/browser'</code> shim &mdash; the SDK
+                README&rsquo;s <em>TypeScript: declarations for ./impl/browser</em> section has one ready to paste.
+                <code className="text-amber-600 dark:text-amber-400"> createWalletApiProviders</code> is typed normally.
               </p>
               <CodeBlock
                 filename="setup.ts"
@@ -489,7 +550,7 @@ const base = createBrowserProviders({
   market: true,                 // enable intent bulletin board
 });
 
-// base contains: storage, transport, oracle, groupChat, market
+// base contains: storage, transport, oracle, price, groupChat, market
 
 const providers = createWalletApiProviders(base, {
   baseUrl: import.meta.env.VITE_WALLET_API_URL,
@@ -572,7 +633,7 @@ console.log(sphere.identity);
 // {
 //   chainPubkey: '02abc...',
 //   directAddress: 'DIRECT://...',
-//   nametag: '@alice'
+//   nametag: 'alice'
 // }`}
               />
             </div>
@@ -580,12 +641,18 @@ console.log(sphere.identity);
             <div id="addresses" data-section="addresses" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">Addresses</h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Each identity has several address types:
+                There are two address formats:
               </p>
               <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
                 <li><strong>DIRECT address</strong> (<code className="text-amber-600 dark:text-amber-400">DIRECT://...</code>) - Used for L3 token transfers</li>
-                <li><strong>PROXY address</strong> (<code className="text-amber-600 dark:text-amber-400">PROXY://...</code>) - Derived from nametag, used when direct address is unknown</li>
+                <li><strong>@nametag</strong> (<code className="text-amber-600 dark:text-amber-400">@alice</code>) - A human-readable alias, resolved to a DIRECT address over transport</li>
               </ul>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                <code className="text-amber-600 dark:text-amber-400">PROXY://</code> is not an address type &mdash; it was removed from the SDK.
+                <code className="text-amber-600 dark:text-amber-400"> parseAddress()</code> returns
+                <code className="text-amber-600 dark:text-amber-400"> null</code> for one, and a send to it fails with
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>: &ldquo;Use @nametag, DIRECT://, or a hex pubkey.&rdquo;
+              </p>
               <CodeBlock
                 code={`// Derive additional addresses
 const addr = sphere.deriveAddress(1); // second address
@@ -604,17 +671,26 @@ const addresses = sphere.getActiveAddresses();`}
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Nametags are human-readable aliases registered on Nostr. Use them instead of addresses:
               </p>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                The <code className="text-amber-600 dark:text-amber-400">@</code> is an input and display sigil only. The SDK strips it on
+                registration and stores the bare name, so <code className="text-amber-600 dark:text-amber-400">getNametag()</code> and
+                <code className="text-amber-600 dark:text-amber-400"> identity.nametag</code> return
+                <code className="text-amber-600 dark:text-amber-400"> 'alice'</code> &mdash; prepend the
+                <code className="text-amber-600 dark:text-amber-400"> @</code> yourself for display.
+                <code className="text-amber-600 dark:text-amber-400"> resolve()</code> and
+                <code className="text-amber-600 dark:text-amber-400"> send()</code> accept either form.
+              </p>
               <CodeBlock
                 filename="nametags.ts"
                 code={`// Register a nametag (during wallet creation or later)
 await sphere.registerNametag('alice');
 
 // Check your nametag
-console.log(sphere.getNametag()); // '@alice'
+console.log(sphere.getNametag()); // 'alice' — stored without the '@'
 
 // Use nametags when sending tokens
 await sphere.payments.send({
-  coinId: '0x...',
+  coinId: '<64-hex coin id>', // see Token Model — no '0x' prefix
   amount: '100',
   recipient: '@alice', // resolved automatically
 });
@@ -633,9 +709,20 @@ console.log(peer?.directAddress);`}
               <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
                 <li><strong>Token</strong> - An individual token object with ID, coin type, amount, and state history</li>
                 <li><strong>Asset</strong> - Aggregated balance for a coin type (sum of all tokens with same coinId)</li>
-                <li><strong>coinId</strong> - Hex identifier for the token type (e.g., <code className="text-amber-600 dark:text-amber-400">0x...</code>)</li>
+                <li><strong>coinId</strong> - The token type&rsquo;s 64-character lowercase hex id, with no <code className="text-amber-600 dark:text-amber-400">0x</code> prefix</li>
                 <li>Amounts are strings in smallest units (like satoshis)</li>
               </ul>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                Get a coinId from <code className="text-amber-600 dark:text-amber-400">getCoinIdBySymbol('UCT')</code> after
+                <code className="text-amber-600 dark:text-amber-400"> await TokenRegistry.waitForReady()</code> (it returns
+                <code className="text-amber-600 dark:text-amber-400"> undefined</code> for an unknown symbol), or read it off
+                <code className="text-amber-600 dark:text-amber-400"> payments.assets()</code>. The money path resolves no symbols itself, so a
+                symbol or a <code className="text-amber-600 dark:text-amber-400">0x</code>-prefixed id matches no holdings:
+                <code className="text-amber-600 dark:text-amber-400"> send()</code> fails with
+                <code className="text-amber-600 dark:text-amber-400"> SEND_INSUFFICIENT_BALANCE</code>, and
+                <code className="text-amber-600 dark:text-amber-400"> mint()</code> resolves
+                <code className="text-amber-600 dark:text-amber-400"> {'{ success: false }'}</code> with nothing minted.
+              </p>
               <CodeBlock
                 code={`// Get individual tokens
 const tokens = sphere.payments.tokens();
@@ -700,7 +787,7 @@ unsub(); // stop listening`}
                   { name: 'storage', type: 'StorageProvider', description: 'Storage provider (IndexedDB in browser)', required: true },
                   { name: 'transport', type: 'TransportProvider', description: 'Transport provider (Nostr in browser)', required: true },
                   { name: 'oracle', type: 'OracleProvider', description: 'Aggregator oracle provider', required: true },
-                  { name: 'walletApi', type: 'WalletApiTransportConfig', description: 'Wallet-api transport config from createWalletApiProviders(). Missing it throws INVALID_CONFIG', required: true },
+                  { name: 'walletApi', type: "WalletApiTransportConfig | 'none'", description: "Wallet-api transport config from createWalletApiProviders(). Missing it throws INVALID_CONFIG; pass the literal 'none' for a messaging-only wallet with no payments, then check sphere.hasPayments before touching sphere.payments", required: true },
                   { name: 'network', type: "'mainnet' | 'testnet2'", description: 'Network this wallet runs on. Must equal walletApi.network; missing it throws INVALID_CONFIG', required: true },
                   { name: 'mnemonic', type: 'string', description: 'BIP39 mnemonic to create wallet from (if no wallet exists)' },
                   { name: 'autoGenerate', type: 'boolean', description: 'Auto-generate mnemonic if wallet does not exist' },
@@ -742,13 +829,23 @@ const { sphere, generatedMnemonic } = await Sphere.init({
   nametag: 'myagent',
 });
 
-// Or import with known mnemonic
+// Or create from a known mnemonic (IGNORED if a wallet already exists)
 const { sphere: imported } = await Sphere.init({
   ...providers,
   network: NETWORK,
   mnemonic: 'abandon badge cable drama ...',
 });`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">init()</code> never replaces a stored wallet: if one
+                already exists it is loaded and <code className="text-amber-600 dark:text-amber-400">mnemonic</code>,
+                <code className="text-amber-600 dark:text-amber-400"> nametag</code> and
+                <code className="text-amber-600 dark:text-amber-400"> autoGenerate</code> are ignored
+                (<code className="text-amber-600 dark:text-amber-400">created: false</code>). Seed-phrase restore is
+                <code className="text-amber-600 dark:text-amber-400"> Sphere.import()</code>, which rejects with
+                <code className="text-amber-600 dark:text-amber-400"> ALREADY_INITIALIZED</code> over an existing wallet
+                unless <code className="text-amber-600 dark:text-amber-400">overwrite: true</code> is passed.
+              </p>
             </div>
 
             <div id="api-sphere-exists" data-section="api-sphere-exists" className="scroll-mt-24 mb-12">
@@ -756,7 +853,14 @@ const { sphere: imported } = await Sphere.init({
                 <code className="text-amber-600 dark:text-amber-400">Sphere.exists(storage)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Checks whether a wallet already exists in the given storage.
+                Checks whether a wallet already exists in the given storage. It returns
+                <code className="text-amber-600 dark:text-amber-400"> false</code> both when no wallet is stored and when
+                the storage cannot be opened or read, so a single
+                <code className="text-amber-600 dark:text-amber-400"> false</code> is not proof the storage is empty.
+                <code className="text-amber-600 dark:text-amber-400"> init()</code>,
+                <code className="text-amber-600 dark:text-amber-400"> create()</code> and
+                <code className="text-amber-600 dark:text-amber-400"> import()</code> use a non-swallowing check instead:
+                a failing store makes them reject rather than pass for an empty one.
               </p>
               <CodeBlock code={`static async exists(storage: StorageProvider): Promise<boolean>`} />
               <CodeBlock
@@ -811,18 +915,21 @@ console.log(isValid); // true or false`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.identity</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                The current wallet identity. Available after initialization.
+                The current wallet identity. Available after initialization. Every field except
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> is optional, so guard
+                <code className="text-amber-600 dark:text-amber-400"> directAddress</code> before using it as a recipient.
               </p>
               <CodeBlock
                 code={`interface Identity {
-  chainPubkey: string;     // secp256k1 public key (hex)
-  directAddress: string;   // DIRECT:// address for L3
-  nametag?: string;        // registered @nametag
+  readonly chainPubkey: string;      // secp256k1 public key (hex)
+  readonly directAddress?: string;   // DIRECT:// address for L3
+  readonly ipnsName?: string;
+  readonly nametag?: string;         // registered nametag, without the @
 }
 
 console.log(sphere.identity?.chainPubkey);
 console.log(sphere.identity?.directAddress);
-console.log(sphere.identity?.nametag); // '@alice'`}
+console.log(sphere.identity?.nametag); // 'alice'`}
               />
             </div>
 
@@ -830,18 +937,21 @@ console.log(sphere.identity?.nametag); // '@alice'`}
               <h3 className="text-xl font-semibold mb-4">
                 <code className="text-amber-600 dark:text-amber-400">Nametag Methods</code>
               </h3>
+              <p className="text-neutral-600 dark:text-neutral-400 mb-4">
+                A nametag is a Nostr identity binding (UNIP-01) linking the name to your
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code>, not a token.
+                <code className="text-amber-600 dark:text-amber-400"> registerNametag()</code> publishes that binding, and
+                nothing is minted on chain.
+              </p>
               <CodeBlock
                 code={`// Get current nametag
-sphere.getNametag(); // '@alice' | undefined
+sphere.getNametag(); // 'alice' | undefined  (no @ prefix)
 
 // Check if nametag is registered
 sphere.hasNametag(); // boolean
 
-// Register a new nametag (publishes to Nostr)
+// Register a new nametag
 await sphere.registerNametag('alice');
-
-// Mint nametag as on-chain token
-const result = await sphere.mintNametag('alice');
 
 // Check availability
 const available = await sphere.isNametagAvailable('bob'); // boolean`}
@@ -853,7 +963,9 @@ const available = await sphere.isNametagAvailable('bob'); // boolean`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.resolve(identifier)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Resolves a @nametag, DIRECT:// address, PROXY:// address, or pubkey to full peer info.
+                Resolves a @nametag or bare nametag, a DIRECT:// address, a compressed chain pubkey (02/03 + 64 hex) or a
+                64-hex transport pubkey to full peer info. Anything else is tried as a nametag and resolves to
+                <code className="text-amber-600 dark:text-amber-400"> null</code>.
               </p>
               <CodeBlock code={`async resolve(identifier: string): Promise<PeerInfo | null>`} />
               <CodeBlock
@@ -871,19 +983,27 @@ if (peer) {
                 <code className="text-amber-600 dark:text-amber-400">sphere.on(type, handler)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Subscribe to SDK events. Returns an unsubscribe function.
+                Subscribe to SDK events. Returns an unsubscribe function. The generic is the event <em>name</em>: the
+                handler payload is derived from it, so pass the event as a literal and let it infer.
               </p>
-              <CodeBlock code={`on<T>(type: SphereEventType, handler: (data: T) => void): () => void`} />
+              <CodeBlock code={`on<T extends SphereEventType>(type: T, handler: (data: SphereEventMap[T]) => void): () => void
+off<T extends SphereEventType>(type: T, handler: (data: SphereEventMap[T]) => void): void`} />
 
               <h4 className="font-medium text-lg mt-6 mb-3">Event Types</h4>
               <ParamTable
                 params={[
-                  { name: 'transfer:incoming', type: 'IncomingTransfer', description: 'New incoming token transfer detected' },
+                  { name: 'transfer:incoming', type: 'IncomingTransfer', description: 'New incoming transfer. Fungible tokens are in .tokens, NFTs in .coinless' },
                   { name: 'transfer:updated', type: 'TransferResult', description: 'Outgoing transfer updated (confirmed, delivery pending or failed)' },
                   { name: 'message:dm', type: 'DirectMessage', description: 'Direct message received' },
-                  { name: 'payment_request:incoming', type: 'IncomingPaymentRequest', description: 'Payment request received' },
+                  { name: 'payment_request:incoming', type: 'PaymentRequestView', description: 'Payment request received' },
                 ]}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                Handlers are typed from the event name, so these rarely need importing. To name one yourself,
+                <code className="text-amber-600 dark:text-amber-400"> PaymentRequestView</code> comes from
+                <code className="text-amber-600 dark:text-amber-400"> @unicitylabs/sphere-sdk/payments-v2</code>; the other
+                three are exported from the package root.
+              </p>
 
               <CodeBlock
                 filename="events.ts"
@@ -908,13 +1028,14 @@ sphere.off('transfer:incoming', myHandler);`}
                 code={`// Get backup mnemonic
 const mnemonic = sphere.getMnemonic(); // string | null
 
-// Export wallet as JSON
-const json = sphere.exportToJSON({
+// Export wallet as JSON — returns a WalletJSON object, stringify it before writing a file
+const backup = sphere.exportToJSON({
   includeMnemonic: true,
   password: 'optional-encryption',
 });
+const json = JSON.stringify(backup, null, 2);
 
-// Export as text file
+// Export as text file (already a string)
 const txt = sphere.exportToTxt();
 
 // Derive addresses
@@ -927,7 +1048,7 @@ await sphere.switchToAddress(1);
 // Get wallet info
 const info = sphere.getWalletInfo();
 console.log(info.derivationMode); // 'bip32'
-console.log(info.source);         // 'generated' | 'imported'
+console.log(info.source);         // 'mnemonic' | 'file' | 'unknown'
 
 // Cleanup
 await sphere.destroy();`}
@@ -942,9 +1063,21 @@ await sphere.destroy();`}
             <h2 className="text-2xl font-bold mb-6 pb-2 border-b border-neutral-200 dark:border-neutral-700">
               API Reference &mdash; Payments (L3)
             </h2>
-            <p className="text-neutral-600 dark:text-neutral-400 mb-8">
+            <p className="text-neutral-600 dark:text-neutral-400 mb-4">
               All L3 payment operations are accessed via <code className="text-amber-600 dark:text-amber-400">sphere.payments</code> — available
-              on every wallet initialized with <code className="text-amber-600 dark:text-amber-400">Sphere.init</code>.
+              on every wallet composed with a wallet-api transport. The one exception is the messaging-only composition
+              <code className="text-amber-600 dark:text-amber-400"> walletApi: 'none'</code>, where the getter throws
+              <code className="text-amber-600 dark:text-amber-400"> PAYMENTS_NOT_COMPOSED</code>; branch on
+              <code className="text-amber-600 dark:text-amber-400"> sphere.hasPayments</code>.
+            </p>
+            <p className="text-neutral-600 dark:text-neutral-400 mb-8">
+              <code className="text-amber-600 dark:text-amber-400">coinId</code> is the 64-character lowercase hex coin id — no
+              <code className="text-amber-600 dark:text-amber-400"> 0x</code> prefix. Get it from
+              <code className="text-amber-600 dark:text-amber-400"> getCoinIdBySymbol('UCT')</code> after
+              <code className="text-amber-600 dark:text-amber-400"> await TokenRegistry.waitForReady()</code>, or take it from
+              <code className="text-amber-600 dark:text-amber-400"> assets()</code>. A prefixed id matches no holdings, and
+              <code className="text-amber-600 dark:text-amber-400"> mint()</code> resolves
+              <code className="text-amber-600 dark:text-amber-400"> {'{ success: false }'}</code> with nothing minted.
             </p>
 
             <div id="api-payments-send" data-section="api-payments-send" className="scroll-mt-24 mb-12">
@@ -961,7 +1094,7 @@ await sphere.destroy();`}
               <h4 className="font-medium text-lg mt-6 mb-3">Parameters</h4>
               <ParamTable
                 params={[
-                  { name: 'coinId', type: 'string', description: 'Token type ID (hex)', required: true },
+                  { name: 'coinId', type: 'string', description: '64-char lowercase hex coin id (no 0x prefix)', required: true },
                   { name: 'amount', type: 'string', description: 'Amount in smallest units', required: true },
                   { name: 'recipient', type: 'string', description: '@nametag or DIRECT:// address', required: true },
                   { name: 'memo', type: 'string', description: 'Optional memo' },
@@ -972,24 +1105,80 @@ await sphere.destroy();`}
               <CodeBlock
                 code={`interface TransferResult {
   id: string;                    // Transfer ID
-  status: TransferStatus;        // 'pending' | 'submitted' | 'confirmed' | ...
-  tokens: Token[];               // Resulting tokens
+  status: TransferStatus;        // resolved send(): 'delivered' | 'confirmed'
+  tokens: Token[];               // the source tokens this send consumed
   tokenTransfers: TokenTransferDetail[];
+  error?: string;
+  deliveryPending?: boolean;
+  deliveryState?: 'landed' | 'pending-delivery';
 }`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                A resolved <code className="text-amber-600 dark:text-amber-400">send()</code> means the spend is final on-chain, so
+                <code className="text-amber-600 dark:text-amber-400"> status</code> is only ever
+                <code className="text-amber-600 dark:text-amber-400"> 'delivered'</code> (<code className="text-amber-600 dark:text-amber-400">deliveryState: 'landed'</code> — it
+                reached the recipient's mailbox) or <code className="text-amber-600 dark:text-amber-400">'confirmed'</code> with
+                <code className="text-amber-600 dark:text-amber-400"> deliveryPending: true</code> — certified on-chain, delivery still being retried
+                automatically. Both mean the money left the wallet; neither is an error.
+                <code className="text-amber-600 dark:text-amber-400"> 'submitted'</code> and
+                <code className="text-amber-600 dark:text-amber-400"> 'failed'</code> appear only on the
+                <code className="text-amber-600 dark:text-amber-400"> transfer:updated</code> event, never as a resolved result.
+                <code className="text-amber-600 dark:text-amber-400"> tokens</code> holds the source tokens this send consumed — each carrying the full
+                source amount, not the amount sent, and not new holdings. Read
+                <code className="text-amber-600 dark:text-amber-400"> sphere.payments.tokens()</code> for what the wallet holds afterwards.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Example</h4>
               <CodeBlock
                 filename="send.ts"
                 code={`const result = await sphere.payments.send({
-  coinId: '0x...',
+  coinId,
   amount: '100000000',
   recipient: '@merchant',
   memo: 'Payment for order #123',
 });
 
 console.log('Transfer ID:', result.id);
-console.log('Status:', result.status);`}
+if (result.deliveryPending) console.log('Sent — delivery pending, retried automatically');`}
+              />
+
+              <div className="my-4 p-4 rounded-xl border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10">
+                <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                  <strong>A failure throws — and a retry must never call send() again.</strong> When
+                  <code className="text-amber-600 dark:text-amber-400"> isPossiblyCommittedSendOutcome(err)</code> is true
+                  (<code className="text-amber-600 dark:text-amber-400">SEND_SYNC_PENDING</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> CERTIFICATION_UNCONFIRMED</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> CHECKPOINT_PERSIST_FAILED</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> SPLIT_CHECKPOINT_LOST</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> CHECKPOINT_TRUSTBASE_MISMATCH</code>,
+                  <code className="text-amber-600 dark:text-amber-400"> SEND_PARTIALLY_COMPLETED</code>) the money may already have left the
+                  wallet and the SDK finishes the original transfer itself: surface it with
+                  <code className="text-amber-600 dark:text-amber-400"> sphere.payments.pendingTransfers()</code> and wire any Retry button to
+                  <code className="text-amber-600 dark:text-amber-400"> sphere.payments.resumeNow()</code>. A second
+                  <code className="text-amber-600 dark:text-amber-400"> send()</code> gets a new transfer ID and pays the recipient twice. A
+                  <code className="text-amber-600 dark:text-amber-400"> PartialSendConflictError</code> means part of the amount is already final and only
+                  <code className="text-amber-600 dark:text-amber-400"> err.remainingAmount</code> is still owed. Otherwise nothing left the wallet and a
+                  fresh <code className="text-amber-600 dark:text-amber-400">send()</code> is safe.
+                </p>
+              </div>
+              <CodeBlock
+                filename="send-errors.ts"
+                code={`import { PartialSendConflictError, isPossiblyCommittedSendOutcome } from '@unicitylabs/sphere-sdk';
+
+try {
+  await sphere.payments.send({ coinId, amount: '100000000', recipient: '@merchant' });
+} catch (err) {
+  if (err instanceof PartialSendConflictError) {
+    // Only err.remainingAmount is still owed — pay it as a NEW send of exactly that amount.
+    console.warn(\`Partly sent: \${err.remainingAmount} base units were not sent\`);
+  } else if (isPossiblyCommittedSendOutcome(err)) {
+    // May already have left the wallet — never re-send. Offer resumeNow(), not send().
+    console.warn('Sent, waiting for confirmation');
+  } else {
+    // Clean pre-commit failure: nothing left the wallet, a fresh send() is safe.
+    console.error(err instanceof Error ? err.message : String(err));
+  }
+}`}
               />
             </div>
 
@@ -998,18 +1187,23 @@ console.log('Status:', result.status);`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.payments.assets(coinId?)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Returns aggregated balance per coin type, with fiat prices from the price provider. Async.
+                Returns aggregated balance per coin type, with fiat prices from the price provider. Async. Amounts are in smallest units,
+                and <code className="text-amber-600 dark:text-amber-400">totalAmount</code> excludes tokens in flight on an outgoing send — those are
+                reported separately so a UI can show a &ldquo;Sending&rdquo; badge without inflating the spendable balance.
               </p>
               <CodeBlock code={`async assets(coinId?: string): Promise<Asset[]>`} />
               <CodeBlock
                 code={`interface Asset {
   coinId: string;
   symbol: string;
-  totalAmount: string;     // in smallest units
+  totalAmount: string;          // in smallest units, excludes in-flight sends
   tokenCount: number;
+  transferringAmount: string;   // in flight on an outgoing send
+  transferringTokenCount: number;
   decimals: number;
   priceUsd: number | null;
   fiatValueUsd: number | null;
+  // also: name, iconUrl, confirmed*/unconfirmed*, priceEur, change24h, fiatValueEur
 }`}
               />
               <CodeBlock
@@ -1019,7 +1213,7 @@ const assets = await sphere.payments.assets();
 assets.forEach(a => console.log(\`\${a.symbol}: \${a.totalAmount} ($\${a.fiatValueUsd})\`));
 
 // Specific coin
-const [asset] = await sphere.payments.assets('0x...');
+const [asset] = await sphere.payments.assets(coinId);
 console.log('Balance:', asset?.totalAmount);`}
               />
             </div>
@@ -1034,7 +1228,7 @@ console.log('Balance:', asset?.totalAmount);`}
               <CodeBlock code={`async mint(coinId: string, amount: bigint): Promise<MintResult>`} />
               <CodeBlock
                 filename="mint.ts"
-                code={`const result = await sphere.payments.mint('0x...', 100000000n);
+                code={`const result = await sphere.payments.mint(coinId, 100000000n);
 if (result.success) {
   console.log('Minted token:', result.tokenId);
 }`}
@@ -1046,7 +1240,9 @@ if (result.success) {
                 <code className="text-amber-600 dark:text-amber-400">sphere.payments.tokens(filter?)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Returns individual token objects. Optionally filter by coin ID. Synchronous.
+                Returns individual token objects. Optionally filter by coin ID. Synchronous. Coinless (NFT) holdings are never
+                returned here and never counted by <code className="text-amber-600 dark:text-amber-400">assets()</code> — read them with
+                <code className="text-amber-600 dark:text-amber-400"> sphere.payments.coinless()</code>.
               </p>
               <CodeBlock code={`tokens(filter?: { coinId?: string }): Token[]`} />
               <CodeBlock
@@ -1055,7 +1251,7 @@ if (result.success) {
 const tokens = sphere.payments.tokens();
 
 // Only tokens for a specific coin
-const filtered = sphere.payments.tokens({ coinId: '0x...' });
+const filtered = sphere.payments.tokens({ coinId });
 
 tokens.forEach(t => {
   console.log(t.id, t.coinId, t.amount, t.status);
@@ -1091,7 +1287,9 @@ if (more && cursor) {
                 <code className="text-amber-600 dark:text-amber-400">sphere.payments.receive()</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Explicitly checks for and processes incoming token transfers.
+                Explicitly checks for and processes incoming token transfers. A coinless (NFT) arrival is named in
+                <code className="text-amber-600 dark:text-amber-400"> transfer.coinless</code>, never in
+                <code className="text-amber-600 dark:text-amber-400"> transfer.tokens</code>, which is empty for it — read both.
               </p>
               <CodeBlock code={`async receive(): Promise<{ transfers: IncomingTransfer[] }>`} />
               <CodeBlock
@@ -1100,7 +1298,8 @@ if (more && cursor) {
 const { transfers } = await sphere.payments.receive();
 console.log('Received:', transfers.length, 'transfers');
 transfers.forEach(transfer => {
-  console.log('Incoming:', transfer.tokens);
+  console.log('Incoming coins:', transfer.tokens);
+  console.log('Incoming NFTs:', transfer.coinless ?? []);
 });`}
               />
             </div>
@@ -1111,15 +1310,24 @@ transfers.forEach(transfer => {
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Request payments from others and manage incoming requests via <code className="text-amber-600 dark:text-amber-400">sphere.payments.requests</code>.
+                <code className="text-amber-600 dark:text-amber-400"> create()</code> never throws — it resolves
+                <code className="text-amber-600 dark:text-amber-400"> {'{ success, requestId?, error? }'}</code>, so check
+                <code className="text-amber-600 dark:text-amber-400"> success</code>.
+                <code className="text-amber-600 dark:text-amber-400"> status</code> is
+                <code className="text-amber-600 dark:text-amber-400"> 'pending' | 'settling' | 'paid' | 'rejected' | 'expired'</code>;
+                <code className="text-amber-600 dark:text-amber-400"> 'settling'</code> means a <code className="text-amber-600 dark:text-amber-400">pay()</code> is
+                still converging, so the SDK refuses to pay that request again, and
+                <code className="text-amber-600 dark:text-amber-400"> dismissProcessed()</code> clears only the terminal three.
               </p>
               <CodeBlock
                 filename="payment-requests.ts"
                 code={`// Send a payment request to someone
-await sphere.payments.requests.create('@buyer', {
+const req = await sphere.payments.requests.create('@buyer', {
   amount: '50000000',
-  coinId: '0x...',
+  coinId,
   memo: 'Invoice #456',
 });
+if (!req.success) throw new Error(req.error);
 
 // Handle incoming payment requests
 sphere.on('payment_request:incoming', (request) => {
@@ -1136,7 +1344,7 @@ await sphere.payments.requests.pay(requestId);
 // Or decline
 await sphere.payments.requests.decline(requestId);
 
-// Clear processed (paid/declined/expired) requests from the list
+// Clear terminal (paid/rejected/expired) requests from the list
 sphere.payments.requests.dismissProcessed();`}
               />
             </div>
@@ -1188,6 +1396,7 @@ await sphere.communications.sendDM('@alice', JSON.stringify({
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Subscribes to incoming direct messages. Returns an unsubscribe function.
+                <code className="text-amber-600 dark:text-amber-400"> timestamp</code> is epoch ms.
               </p>
               <CodeBlock code={`onDirectMessage(handler: (message: DirectMessage) => void): () => void`} />
               <CodeBlock
@@ -1195,7 +1404,7 @@ await sphere.communications.sendDM('@alice', JSON.stringify({
                 code={`const unsub = sphere.communications.onDirectMessage((msg) => {
   console.log(\`From \${msg.senderNametag ?? msg.senderPubkey}\`);
   console.log('Content:', msg.content);
-  console.log('Time:', new Date(msg.timestamp * 1000));
+  console.log('Time:', new Date(msg.timestamp));
 });
 
 // Later: unsub();`}
@@ -1264,41 +1473,48 @@ const recent = sphere.communications.getBroadcasts(50);`}
             <p className="text-neutral-600 dark:text-neutral-400 mb-4">
               NIP-29 group messaging via <code className="text-amber-600 dark:text-amber-400">sphere.groupChat</code>.
               Requires <code className="text-amber-600 dark:text-amber-400">groupChat: true</code> in initialization.
+              <code className="text-amber-600 dark:text-amber-400"> sphere.groupChat</code> is
+              <code className="text-amber-600 dark:text-amber-400"> GroupChatModule | null</code> — null until you enable it, so narrow it once. Each
+              message carries <code className="text-amber-600 dark:text-amber-400">senderPubkey</code>, plus
+              <code className="text-amber-600 dark:text-amber-400"> senderNametag</code> when the sender published one.
             </p>
             <CodeBlock
               filename="group-chat.ts"
-              code={`// Connect to NIP-29 relay
-await sphere.groupChat.connect();
+              code={`const chat = sphere.groupChat;
+if (!chat) throw new Error('groupChat is not enabled');
+
+// Connect to NIP-29 relay
+await chat.connect();
 
 // Discover public groups
-const groups = await sphere.groupChat.fetchAvailableGroups();
+const groups = await chat.fetchAvailableGroups();
 groups.forEach(g => console.log(g.id, g.name));
 
 // Join a group
-await sphere.groupChat.joinGroup('group-id');
+await chat.joinGroup('group-id');
 
 // Send a message
-await sphere.groupChat.sendMessage('group-id', 'Hello everyone!');
+await chat.sendMessage('group-id', 'Hello everyone!');
 
 // Fetch message history
-const messages = await sphere.groupChat.fetchMessages('group-id');
+const messages = await chat.fetchMessages('group-id');
 
 // Listen for new messages
-sphere.groupChat.onMessage((msg) => {
-  console.log(\`[\${msg.groupId}] \${msg.pubkey}: \${msg.content}\`);
+chat.onMessage((msg) => {
+  console.log(\`[\${msg.groupId}] \${msg.senderNametag ?? msg.senderPubkey}: \${msg.content}\`);
 });
 
 // Get your groups
-const myGroups = sphere.groupChat.getGroups();
+const myGroups = chat.getGroups();
 
 // Create a new group
-const newGroup = await sphere.groupChat.createGroup({
+const newGroup = await chat.createGroup({
   name: 'Traders',
-  about: 'Trading discussions',
+  description: 'Trading discussions',
 });
 
 // Leave a group
-await sphere.groupChat.leaveGroup('group-id');`}
+await chat.leaveGroup('group-id');`}
             />
           </section>
 
@@ -1312,11 +1528,20 @@ await sphere.groupChat.leaveGroup('group-id');`}
             <p className="text-neutral-600 dark:text-neutral-400 mb-4">
               Intent bulletin board via <code className="text-amber-600 dark:text-amber-400">sphere.market</code>.
               Requires <code className="text-amber-600 dark:text-amber-400">market: true</code> in initialization.
+              <code className="text-amber-600 dark:text-amber-400"> sphere.market</code> is
+              <code className="text-amber-600 dark:text-amber-400"> MarketModule | null</code> — null until you enable it. The feed callback receives
+              either an initial batch or a single new listing; each listing carries
+              <code className="text-amber-600 dark:text-amber-400"> title</code> and
+              <code className="text-amber-600 dark:text-amber-400"> descriptionPreview</code> (<code className="text-amber-600 dark:text-amber-400">description</code> is
+              on search results only).
             </p>
             <CodeBlock
               filename="market.ts"
-              code={`// Post a sell intent
-const result = await sphere.market.postIntent({
+              code={`const market = sphere.market;
+if (!market) throw new Error('market is not enabled');
+
+// Post a sell intent
+const result = await market.postIntent({
   description: 'PSA-10 Charizard card - Mint condition',
   intentType: 'sell',
   category: 'collectibles',
@@ -1326,24 +1551,25 @@ const result = await sphere.market.postIntent({
 console.log('Posted:', result.intentId);
 
 // Search the marketplace
-const results = await sphere.market.search('charizard card');
+const results = await market.search('charizard card');
 results.intents.forEach(intent => {
   console.log(intent.description, intent.price);
 });
 
 // Get your own intents
-const myIntents = await sphere.market.getMyIntents();
+const myIntents = await market.getMyIntents();
 
 // Close an intent
-await sphere.market.closeIntent(intentId);
+await market.closeIntent(intentId);
 
 // Subscribe to live feed
-const unsub = sphere.market.subscribeFeed((listing) => {
-  console.log('New listing:', listing.description);
+const unsub = market.subscribeFeed((msg) => {
+  if (msg.type === 'new') console.log('New listing:', msg.listing.title);
+  else console.log('Initial batch:', msg.listings.length);
 });
 
 // Get recent listings
-const recent = await sphere.market.getRecentListings();`}
+const recent = await market.getRecentListings();`}
             />
           </section>
 
@@ -1447,7 +1673,7 @@ const recent = await sphere.market.getRecentListings();`}
                     <tr className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-4 font-mono text-amber-600 dark:text-amber-400">P3</td>
                       <td className="py-2 pr-4">Popup <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-medium">Fallback</span></td>
-                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Last resort when the page is not framed: needs <code>walletUrl</code>, a popup the browser does not block, and your own session persistence to survive a reload. Not the arrangement to design for, but it is the usable one against a wallet you run yourself (a local Sphere dev server on <code>localhost:5173</code>).</td>
+                      <td className="py-2 text-neutral-600 dark:text-neutral-400">Last resort when the page is not framed: needs <code>walletUrl</code>, a popup the browser does not block, and a fresh handshake on every reload — session resume does not work here. Not the arrangement to design for, but it is the usable one against a wallet you run yourself (a local Sphere dev server on <code>localhost:5173</code>).</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1549,10 +1775,12 @@ const result = await client.intent('send', {
 // delivery is queued and retries automatically — never re-send it.
 
 // The wallet locked. The SESSION IS STILL ALIVE — do NOT disconnect, do NOT
-// clear your saved session, do NOT re-handshake. Requests are answered
-// WALLET_LOCKED (4009) until the wallet is unlocked. The wallet shows its own
-// passive "requests blocked — Unlock" badge; nothing you do can raise its
-// password field, and you should not try.
+// clear your saved session, do NOT re-handshake. Every request except
+// sphere_getIdentity, sphere_subscribe, sphere_unsubscribe and sphere_disconnect
+// is answered WALLET_LOCKED (4009) until the wallet is unlocked — getIdentity is
+// served from the pre-lock snapshot, so keep showing the connected identity. The
+// wallet shows its own passive "requests blocked — Unlock" badge; nothing you do
+// can raise its password field, and you should not try.
 client.on(WALLET_EVENTS.LOCKED, () => {
   setWalletLocked(true);   // show a banner, keep everything else
 });
@@ -1608,11 +1836,19 @@ client.on('transfer:incoming', (transfer) => {
 // Disconnect when done
 disconnect();
 
-// TIP: in the popup fallback, save connection.sessionId to sessionStorage and
-// pass resumeSessionId to autoConnect() so a page refresh does not re-handshake.
 // See the full guide:
 // github.com/unicity-sphere/sphere-sdk/blob/main/docs/CONNECT.md`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <strong>Session resume is an iframe-mode feature.</strong> In P1, save
+                <code className="text-amber-600 dark:text-amber-400"> connection.sessionId</code> and pass it back as
+                <code className="text-amber-600 dark:text-amber-400"> resumeSessionId</code> so your dApp&rsquo;s own reload
+                reconnects without a prompt. In the popup fallback
+                <code className="text-amber-600 dark:text-amber-400"> autoConnect</code> opens a fresh
+                <code className="text-amber-600 dark:text-amber-400"> {'<walletUrl>'}/connect</code> page on every call, so a
+                reload always re-handshakes — there it is the wallet&rsquo;s stored approval for your origin, not the
+                sessionId, that keeps the prompt away.
+              </p>
             </div>
 
             {/* Resources & Links */}
@@ -1690,7 +1926,10 @@ disconnect();
               <h4 className="font-medium text-lg mt-6 mb-3">Step 1: Initialize</h4>
               <CodeBlock
                 filename="marketplace.ts"
-                code={`import { Sphere } from '@unicitylabs/sphere-sdk';
+                code={`import {
+  Sphere, TokenRegistry, getCoinIdBySymbol, getTokenDecimals, parseTokenAmount,
+  isPossiblyCommittedSendOutcome,
+} from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
@@ -1714,7 +1953,10 @@ const { sphere, created, generatedMnemonic } = await Sphere.init({
 
 if (created && generatedMnemonic) {
   showBackupPrompt(generatedMnemonic); // your UI — the user saves it, you never store it
-}`}
+}
+
+const market = sphere.market;
+if (!market) throw new Error('market is not enabled');`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mt-4">
                 To let a user bring an existing wallet, take the phrase from an input they fill in and pass it as
@@ -1726,7 +1968,7 @@ if (created && generatedMnemonic) {
               <h4 className="font-medium text-lg mt-6 mb-3">Step 2: Post Listings</h4>
               <CodeBlock
                 code={`// Post items for sale
-await sphere.market.postIntent({
+await market.postIntent({
   description: 'Vintage Rolex Submariner - Excellent condition',
   intentType: 'sell',
   category: 'watches',
@@ -1738,31 +1980,57 @@ await sphere.market.postIntent({
               <h4 className="font-medium text-lg mt-6 mb-3">Step 3: Search & Negotiate</h4>
               <CodeBlock
                 code={`// Search for items
-const results = await sphere.market.search('rolex submariner');
-
-// Message a seller to negotiate
+const results = await market.search('rolex submariner');
 const intent = results.intents[0];
-await sphere.communications.sendDM(intent.agentPubkey, JSON.stringify({
+
+// Resolve the listing's currency yourself — never take a coinId off the wire.
+await TokenRegistry.waitForReady();
+const coinId = getCoinIdBySymbol(intent.currency);
+if (!coinId) throw new Error(\`Unknown currency: \${intent.currency}\`);
+
+// The offer YOU made. The payment below is checked against this, not against the DM.
+const offer = { agentPublicKey: intent.agentPublicKey, intentId: intent.id, price: 14000, coinId };
+
+await sphere.communications.sendDM(offer.agentPublicKey, JSON.stringify({
   type: 'offer',
-  intentId: intent.id,
-  price: 14000,
+  intentId: offer.intentId,
+  price: offer.price,
 }));
 
 // Handle negotiation messages
 sphere.communications.onDirectMessage(async (msg) => {
   const data = JSON.parse(msg.content);
+  if (data.type !== 'accepted') return;
+  if (msg.senderPubkey !== offer.agentPublicKey || data.intentId !== offer.intentId) return;
 
-  if (data.type === 'accepted') {
-    // Seller accepted - send payment
+  try {
     await sphere.payments.send({
-      coinId: data.coinId,
-      amount: String(data.price),
+      coinId: offer.coinId,
+      amount: parseTokenAmount(String(offer.price), getTokenDecimals(offer.coinId)).toString(),
       recipient: msg.senderPubkey,
-      memo: \`Payment for intent \${data.intentId}\`,
+      memo: \`Payment for intent \${offer.intentId}\`,
     });
+  } catch (err) {
+    // The money may already have left: converge the original, never send() again.
+    if (isPossiblyCommittedSendOutcome(err)) await sphere.payments.resumeNow();
+    else throw err;
   }
 });`}
               />
+              <p className="text-neutral-600 dark:text-neutral-400 mt-4">
+                <code className="text-amber-600 dark:text-amber-400">onDirectMessage</code> fires for every inbound DM from
+                every peer, and <code className="text-amber-600 dark:text-amber-400">payments.send()</code> spends
+                immediately with no wallet confirmation — so never take
+                <code className="text-amber-600 dark:text-amber-400"> recipient</code>,
+                <code className="text-amber-600 dark:text-amber-400"> coinId</code> or
+                <code className="text-amber-600 dark:text-amber-400"> amount</code> from the message. Market
+                <code className="text-amber-600 dark:text-amber-400"> price</code> is a display number
+                (<code className="text-amber-600 dark:text-amber-400">15000</code> UCT) while
+                <code className="text-amber-600 dark:text-amber-400"> amount</code> is base units: convert with
+                <code className="text-amber-600 dark:text-amber-400"> parseTokenAmount(price, getTokenDecimals(coinId))</code>,
+                or you send 15000 of the smallest unit — 1.5e-14 UCT. Search results carry the seller&rsquo;s key as
+                <code className="text-amber-600 dark:text-amber-400"> agentPublicKey</code>.
+              </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Step 4: Handle Payments</h4>
               <CodeBlock
@@ -1856,10 +2124,11 @@ const fromLegacy = await Sphere.importFromLegacyFile({
               <h3 className="text-xl font-semibold mb-4">Simple Payment</h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 A minimal example: initialize, check balance, send tokens, listen for incoming transfers.
+                A brand-new wallet holds nothing, so the example stops before sending until there is a balance.
               </p>
               <CodeBlock
                 filename="simple-payment.ts"
-                code={`import { Sphere } from '@unicitylabs/sphere-sdk';
+                code={`import { Sphere, isPossiblyCommittedSendOutcome } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
 import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
@@ -1887,15 +2156,22 @@ async function main() {
   const assets = await sphere.payments.assets();
   console.log('Balances:');
   assets.forEach(a => console.log(\`  \${a.symbol}: \${a.totalAmount}\`));
+  const [asset] = assets;
+  if (!asset) return console.log('Nothing to send yet — mint or receive tokens first.');
 
-  // Send payment
-  const result = await sphere.payments.send({
-    coinId: assets[0].coinId,
-    amount: '100000000',
-    recipient: '@recipient',
-    memo: 'Test payment',
-  });
-  console.log(\`Sent! Transfer ID: \${result.id}\`);
+  // Send payment. A rejection may still have spent: resumeNow() converges the original.
+  try {
+    const result = await sphere.payments.send({
+      coinId: asset.coinId,
+      amount: '100000000',
+      recipient: '@recipient',
+      memo: 'Test payment',
+    });
+    console.log(\`Sent! Transfer ID: \${result.id}\`);
+  } catch (err) {
+    if (isPossiblyCommittedSendOutcome(err)) await sphere.payments.resumeNow();
+    else throw err;
+  }
 
   // Listen for incoming payments
   sphere.on('transfer:incoming', (transfer) => {
@@ -1911,6 +2187,10 @@ main();`}
               <h3 className="text-xl font-semibold mb-4">P2P Marketplace</h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 A peer-to-peer marketplace with intents, negotiation via DM, and payment settlement.
+                <code className="text-amber-600 dark:text-amber-400"> postIntent()</code> takes
+                <code className="text-amber-600 dark:text-amber-400"> price</code> as a number, but
+                <code className="text-amber-600 dark:text-amber-400"> getMyIntents()</code> gives it back as an optional
+                string — coerce it before comparing.
               </p>
               <CodeBlock
                 filename="p2p-marketplace.ts"
@@ -1936,8 +2216,11 @@ async function main() {
     console.log('New wallet — save this phrase:', generatedMnemonic);
   }
 
+  const market = sphere.market;
+  if (!market) throw new Error('market is not enabled');
+
   // Post items for sale
-  await sphere.market.postIntent({
+  await market.postIntent({
     description: 'Vintage Rolex Submariner',
     intentType: 'sell',
     category: 'watches',
@@ -1945,7 +2228,7 @@ async function main() {
     currency: 'UCT',
   });
 
-  await sphere.market.postIntent({
+  await market.postIntent({
     description: 'PSA-10 Charizard',
     intentType: 'sell',
     category: 'collectibles',
@@ -1961,17 +2244,18 @@ async function main() {
       const data = JSON.parse(msg.content);
 
       if (data.type === 'offer') {
-        const myIntents = await sphere.market.getMyIntents();
+        const myIntents = await market.getMyIntents();
         const intent = myIntents.find(i => i.id === data.intentId);
         if (!intent) return;
 
-        if (data.price >= intent.price * 0.9) {
+        const listed = Number(intent.price);
+        if (Number.isFinite(listed) && data.price >= listed * 0.9) {
           // Accept offers within 10%
           await sphere.communications.sendDM(msg.senderPubkey, JSON.stringify({
             type: 'accepted',
             intentId: intent.id,
             price: data.price,
-            coinId: '0x...',
+            coinId: '<64-hex coin id>',
           }));
         } else {
           await sphere.communications.sendDM(msg.senderPubkey, JSON.stringify({
