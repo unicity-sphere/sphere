@@ -48,7 +48,6 @@ vi.mock('../../../src/components/wallet/WalletPanel', () => ({ WalletPanel: () =
 vi.mock('../../../src/components/agents/WalletRequiredBlocker', () => ({
   WalletRequiredBlocker: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock('../../../src/components/activity', () => ({ ActivityTicker: () => null }));
 vi.mock('../../../src/components/layout/Footer', () => ({ Footer: () => null }));
 vi.mock('../../../src/components/agents/IframeAgent', () => ({
   IframeAgent: ({ agent }: { agent: AgentConfig }) => (

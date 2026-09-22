@@ -164,7 +164,6 @@ function buildProviders(network: NetworkType, apiKey?: string): SphereAppProvide
     oracle: { apiKey },
     price: { platform: 'coingecko', baseUrl: COINGECKO_BASE_URL, cacheTtlMs: 5 * 60_000 },
     groupChat: true,
-    market: true,
   });
 
   const engineOverride = getEngineOverride(network);
