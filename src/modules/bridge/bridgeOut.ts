@@ -104,6 +104,8 @@ function fromService(rec: ReturnServiceRecord, record: PendingReturn): Partial<P
     message: rec.message,
     recoverable: failed ? rec.recoverable : undefined,
     failedAt: failed ? (record.failedAt ?? Date.now()) : undefined,
+    queuePosition: rec.queuePosition,
+    sinceMs: rec.sinceMs,
   };
 }
 

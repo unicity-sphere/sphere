@@ -10,7 +10,7 @@ import { bridgeAssets } from './assets';
 import { dismissReturn, recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
 import { splitReturnable, type ReturnableSplit } from './returnable';
 import { bridgeStoreFor, isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
-import type { BridgeAsset } from './types';
+import type { BridgeAsset, ReturnServiceTiming } from './types';
 
 export interface BridgeOutRequest {
   readonly asset: BridgeAsset;
@@ -47,6 +47,14 @@ export function useBridgeOut() {
     enabled: !!store,
     queryFn: () => (store ? syncReturns(store, assetById) : Promise.resolve([] as PendingReturn[])),
     refetchInterval: (query) => ((query.state.data ?? []).some((r) => !isTerminalReturn(r)) ? POLL_MS : false),
+  });
+
+  const waiting = (returns.data ?? []).find((r) => r.status === 'queued' || r.status === 'proving');
+  const timing = useQuery({
+    queryKey: ['bridge', 'timing', identity, waiting?.assetId],
+    enabled: !!waiting,
+    queryFn: (): Promise<ReturnServiceTiming | null> => assetById(waiting?.assetId ?? '')?.out?.returns.timing() ?? Promise.resolve(null),
+    refetchInterval: POLL_MS,
   });
 
   const mutation = useMutation({
@@ -90,6 +98,7 @@ export function useBridgeOut() {
     error: mutation.error,
     reset: mutation.reset,
     returns: returns.data ?? [],
+    timing: timing.data ?? null,
     refreshReturns: returns.refetch,
     dismiss,
     retry,

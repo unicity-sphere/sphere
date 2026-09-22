@@ -18,6 +18,7 @@ import {
   NILE_USDT_BRIDGE,
   ReturnServiceClient,
   ReturnServiceError,
+  type ReturnRecord,
   toEvmAddressHex,
   tronLinkProvider,
   type DepositWallet,
@@ -27,7 +28,7 @@ import {
 } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
-import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeOutSide, BridgeWalletOption } from '../../types';
+import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeOutSide, BridgeWalletOption, ReturnServiceRecord } from '../../types';
 import { devKeySigner } from './devSigner';
 
 const provider: BridgeAssetProvider = {
@@ -129,21 +130,38 @@ function tronOut(bridge: LoadedBridge): BridgeOutSide {
     },
     backs: (justification) => mintedAgainst(bridge, justification),
     returns: {
-      submit: async (burnedToken, reasonBytes) => {
-        const rec = await client.postReturn({ tokenCbor: burnedToken, configHash: bridge.configHash, reasonBytes });
-        return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message, recoverable: rec.failure?.recoverable };
-      },
+      submit: async (burnedToken, reasonBytes) =>
+        serviceRecord(await client.postReturn({ tokenCbor: burnedToken, configHash: bridge.configHash, reasonBytes })),
       status: async (returnId) => {
         try {
-          const rec = await client.getReturn(returnId);
-          return { returnId: rec.returnId, status: rec.status, settleTxid: rec.settleTxid, message: rec.message, recoverable: rec.failure?.recoverable };
+          return serviceRecord(await client.getReturn(returnId));
         } catch (err) {
           if (err instanceof Error && /HTTP 404/.test(err.message)) return null;
           throw err;
         }
       },
       refusal: (err) => (err instanceof ReturnServiceError ? { message: err.message, recoverable: err.recoverable } : null),
+      timing: async () => {
+        try {
+          const health = await client.getHealth();
+          return { provingSinceMs: health.provingSinceMs ?? undefined, averageProofMs: health.averageProofMs ?? undefined };
+        } catch {
+          return null;
+        }
+      },
     },
+  };
+}
+
+function serviceRecord(rec: ReturnRecord): ReturnServiceRecord {
+  return {
+    returnId: rec.returnId,
+    status: rec.status,
+    settleTxid: rec.settleTxid,
+    message: rec.message,
+    recoverable: rec.failure?.recoverable,
+    queuePosition: rec.queuePosition ?? undefined,
+    sinceMs: rec.updatedAtMs,
   };
 }
 

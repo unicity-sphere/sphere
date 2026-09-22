@@ -17,6 +17,7 @@ function fakeService(over: Partial<BridgeReturnService> = {}): BridgeReturnServi
     }),
     status: vi.fn(async (): Promise<ReturnServiceRecord | null> => ({ returnId: 'r-1', status: 'proving' })),
     refusal: () => null,
+    timing: async () => null,
     ...over,
   };
   return svc;

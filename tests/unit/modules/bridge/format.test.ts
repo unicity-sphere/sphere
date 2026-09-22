@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatUnits, parseUnits, returnStatusSentence } from '@/modules/bridge/format';
+import { formatDuration, formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
 
 describe('bridge amount formatting', () => {
   it('parses decimals into smallest units without float rounding', () => {
@@ -33,5 +33,45 @@ describe('return status sentence', () => {
   it('quotes the service on a refusal', () => {
     expect(returnStatusSentence({ status: 'failed', message: 'stale config' }, 'Tron')).toBe('The return service refused the burn: stale config');
     expect(returnStatusSentence({ status: 'failed' }, 'Tron')).toBe('The return service refused the burn.');
+  });
+});
+
+const MIN = 60_000;
+
+describe('returnTimingSentence', () => {
+  it('says how long the proof has run and what a proof usually takes', () => {
+    expect(returnTimingSentence({ status: 'proving', sinceMs: 100 * MIN }, { averageProofMs: 58 * MIN }, 112 * MIN)).toBe(
+      'Proving for 12 min. A proof takes about 58 min on average.',
+    );
+  });
+
+  it('admits when no proof has finished on the service yet', () => {
+    expect(returnTimingSentence({ status: 'proving', sinceMs: 100 * MIN }, {}, 105 * MIN)).toBe(
+      'Proving for 5 min. No proof has finished on this service yet.',
+    );
+    expect(returnTimingSentence({ status: 'proving', sinceMs: 100 * MIN }, null, 105 * MIN)).toBe(
+      'Proving for 5 min. No proof has finished on this service yet.',
+    );
+  });
+
+  it('places a queued burn behind the batch that is proving', () => {
+    expect(
+      returnTimingSentence({ status: 'queued', queuePosition: 2 }, { provingSinceMs: 0, averageProofMs: 60 * MIN }, 30 * MIN),
+    ).toBe('Position 2 in the queue. Another batch has been proving for 30 min; this burn joins the next one. A proof takes about 1 h on average.');
+  });
+
+  it('has nothing to add once the proof is done', () => {
+    expect(returnTimingSentence({ status: 'proven' }, null, 0)).toBeNull();
+    expect(returnTimingSentence({ status: 'settled' }, null, 0)).toBeNull();
+  });
+});
+
+describe('formatDuration', () => {
+  it('rounds to the useful unit', () => {
+    expect(formatDuration(40_000)).toBe('40 s');
+    expect(formatDuration(12 * MIN)).toBe('12 min');
+    expect(formatDuration(65 * MIN)).toBe('1 h 5 min');
+    expect(formatDuration(120 * MIN)).toBe('2 h');
+    expect(formatDuration(-5_000)).toBe('0 s');
   });
 });

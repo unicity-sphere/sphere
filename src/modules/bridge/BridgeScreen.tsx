@@ -21,10 +21,10 @@ import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
-import { formatUnits, parseUnits, returnStatusSentence } from './format';
+import { formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isTerminalReturn, type PendingLock, type PendingReturn } from './store';
-import type { BridgeAsset, BridgeChain, BridgeWalletOption } from './types';
+import type { BridgeAsset, BridgeChain, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
 
@@ -56,7 +56,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [burnProgress, setBurnProgress] = useState<{ done: number; total: number } | null>(null);
   const [burned, setBurned] = useState<PendingReturn[]>([]);
-  const { bridgeOut, returns, dismiss, retry, reset: resetOut } = useBridgeOut();
+  const { bridgeOut, returns, timing, dismiss, retry, reset: resetOut } = useBridgeOut();
   const { tokens } = useTokens();
 
   // The assets offered depend on the direction: out needs a return path.
@@ -254,7 +254,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             {pending.length > 0 && (
               <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} />
             )}
-            {returns.length > 0 && <ReturnsList returns={returns} onDismiss={dismiss} onRetry={retry} />}
+            {returns.length > 0 && <ReturnsList returns={returns} timing={timing} onDismiss={dismiss} onRetry={retry} />}
           </>
         )}
 
@@ -554,26 +554,40 @@ function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingR
 }
 
 /** Burns waiting for their release, with the service's status for each. */
-function ReturnsList({ returns, onDismiss, onRetry }: { returns: PendingReturn[]; onDismiss: (id: string) => void; onRetry: (id: string) => void }) {
+interface ReturnsListProps {
+  returns: PendingReturn[];
+  timing: ReturnServiceTiming | null;
+  onDismiss: (id: string) => void;
+  onRetry: (id: string) => void;
+}
+
+function ReturnsList({ returns, timing, onDismiss, onRetry }: ReturnsListProps) {
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Returns</div>
       {returns.map((r) => (
-        <ReturnRow key={r.id} r={r} onDismiss={onDismiss} onRetry={onRetry} />
+        <ReturnRow key={r.id} r={r} timing={timing} onDismiss={onDismiss} onRetry={onRetry} />
       ))}
     </div>
   );
 }
 
-function ReturnRow({ r, onDismiss, onRetry }: { r: PendingReturn; onDismiss: (id: string) => void; onRetry: (id: string) => void }) {
+function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omit<ReturnsListProps, 'returns'>) {
   const [addressExpanded, setAddressExpanded] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const asset = bridgeAssetByCoin(r.coinIdHex);
   const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
   const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
   const retryable = r.status === 'failed' && r.recoverable === true;
+  const inFlight = !isTerminalReturn(r);
+  const detail = [returnStatusSentence(r, asset?.chain.name ?? 'the source chain'), returnTimingSentence(r, timing, Date.now())]
+    .filter(Boolean)
+    .join(' ');
   const toggleAddress = () => setAddressExpanded((v) => !v);
+  const toggleDetails = () => setDetailsOpen((v) => !v);
   return (
-    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
+    <div className="px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
+    <div className="flex items-center gap-2">
       <span className="flex-1 min-w-0">
         <span className="block font-mono text-neutral-900 dark:text-white">
           {amount}{asset ? ` → ${asset.chain.name}` : ''}
@@ -591,7 +605,17 @@ function ReturnRow({ r, onDismiss, onRetry }: { r: PendingReturn; onDismiss: (id
         </span>
         {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
       </span>
-      <span className={`shrink-0 ${color}`}>{returnStatusLabel(r.status)}</span>
+      <button
+        type="button"
+        onClick={toggleDetails}
+        className={`shrink-0 flex items-center gap-1 ${color}`}
+        title={detail}
+        aria-expanded={detailsOpen}
+        aria-label="What the return service is doing with this burn"
+      >
+        {inFlight && <Loader2 className="w-3 h-3 animate-spin" />}
+        {returnStatusLabel(r.status)}
+      </button>
       {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
       {retryable && (
         <button
@@ -615,6 +639,8 @@ function ReturnRow({ r, onDismiss, onRetry }: { r: PendingReturn; onDismiss: (id
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       )}
+    </div>
+    {detailsOpen && <div className={`mt-1.5 ${MUTED}`}>{detail}</div>}
     </div>
   );
 }

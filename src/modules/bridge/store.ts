@@ -34,6 +34,8 @@ export interface PendingReturn {
   message?: string;
   recoverable?: boolean;
   failedAt?: number;
+  queuePosition?: number;
+  sinceMs?: number;
 }
 
 export function isTerminalReturn(ret: Pick<PendingReturn, 'status' | 'recoverable'>): boolean {

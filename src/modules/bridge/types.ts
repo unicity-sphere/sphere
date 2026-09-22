@@ -51,6 +51,18 @@ export interface ReturnServiceRecord {
   readonly message?: string;
   /** For a failed return: whether resubmitting the same blob may still succeed. */
   readonly recoverable?: boolean;
+  /** Place among the burns waiting for the next proof, when queued. */
+  readonly queuePosition?: number;
+  /** When the current status began, service clock. */
+  readonly sinceMs?: number;
+}
+
+/** The pace of proving, from the service's health. */
+export interface ReturnServiceTiming {
+  /** When the batch now proving started, if one is. */
+  readonly provingSinceMs?: number;
+  /** Mean duration of the proofs this service has completed. */
+  readonly averageProofMs?: number;
 }
 
 /** A refusal from the return service. Not recoverable = the same blob will never be accepted. */
@@ -65,6 +77,8 @@ export interface BridgeReturnService {
   status(returnId: string): Promise<ReturnServiceRecord | null>;
   /** Classify a thrown error from either call. */
   refusal(error: unknown): ReturnRefusal | null;
+  /** How fast the service proves; `null` when it cannot be reached. */
+  timing(): Promise<ReturnServiceTiming | null>;
 }
 
 /** What a burned blob says about itself, when it is this asset's. */

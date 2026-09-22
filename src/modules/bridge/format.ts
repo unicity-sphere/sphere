@@ -1,4 +1,5 @@
 import type { PendingReturn } from './store';
+import type { ReturnServiceTiming } from './types';
 
 export function parseUnits(input: string, decimals: number): bigint {
   const [whole, frac = ''] = input.trim().split('.');
@@ -28,4 +29,36 @@ export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message'
     case 'settled': return `Released on ${chainName}.`;
     case 'failed': return `The return service refused the burn${r.message ? `: ${r.message}` : '.'}`;
   }
+}
+
+export function returnTimingSentence(
+  r: Pick<PendingReturn, 'status' | 'queuePosition' | 'sinceMs'>,
+  timing: ReturnServiceTiming | null,
+  now: number,
+): string | null {
+  const pace = timing?.averageProofMs
+    ? `A proof takes about ${formatDuration(timing.averageProofMs)} on average.`
+    : 'No proof has finished on this service yet.';
+  switch (r.status) {
+    case 'proving':
+      return `${r.sinceMs === undefined ? '' : `Proving for ${formatDuration(now - r.sinceMs)}. `}${pace}`;
+    case 'queued': {
+      const place = r.queuePosition ? `Position ${r.queuePosition} in the queue. ` : '';
+      const busy = timing?.provingSinceMs === undefined
+        ? ''
+        : `Another batch has been proving for ${formatDuration(now - timing.provingSinceMs)}; this burn joins the next one. `;
+      return `${place}${busy}${pace}`;
+    }
+    default:
+      return null;
+  }
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.max(0, Math.round(ms / 1000))} s`;
+  const minutes = Math.round(ms / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${rest} min`;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
