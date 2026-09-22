@@ -12,7 +12,6 @@ import { GroupChatSection } from '../chat/group/GroupChatSection';
 import { IframeAgent } from '../agents/IframeAgent';
 import { WalletPanel } from '../wallet/WalletPanel';
 import { WalletRequiredBlocker } from '../agents/WalletRequiredBlocker';
-import { ActivityTicker } from '../activity';
 import { Footer } from '../layout/Footer';
 import { normalizeUrl } from '../../utils/normalizeUrl';
 import { isHttpsUrl } from '../../utils/isHttpsUrl';
@@ -164,13 +163,6 @@ export function DesktopLayout() {
     <div className={`flex flex-col overflow-hidden bg-white dark:bg-transparent ${
       isFullscreen ? 'fixed inset-0 z-99999' : 'h-full'
     }`}>
-      {/* Activity ticker — hidden in fullscreen */}
-      {!isFullscreen && (
-        <div className="shrink-0 mt-0 sm:mt-2">
-          <ActivityTicker />
-        </div>
-      )}
-
       {/* Horizontal tab bar */}
       <div className="shrink-0">
         <TabBar
