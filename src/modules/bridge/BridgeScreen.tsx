@@ -267,17 +267,21 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             </p>
             {chains.length === 0 && <p className={MUTED}>No assets can be bridged this way on this network.</p>}
             <div className="space-y-2">
-              {chains.map((c) => (
-                <ChoiceRow
-                  key={c.id}
-                  title={c.name}
-                  detail={c.networkName}
-                  tag={c.testnet ? 'testnet' : undefined}
-                  count={directionAssets.filter((a) => a.chain.id === c.id).length}
-                  countNoun="asset"
-                  onClick={() => pickChain(c)}
-                />
-              ))}
+              {chains.map((c) => {
+                const onChain = directionAssets.filter((a) => a.chain.id === c.id);
+                return (
+                  <ChoiceRow
+                    key={c.id}
+                    title={c.name}
+                    detail={c.networkName}
+                    tag={c.testnet ? 'testnet' : undefined}
+                    count={onChain.length}
+                    countNoun="asset"
+                    disabled={chainDisabledReason(onChain)}
+                    onClick={() => pickChain(c)}
+                  />
+                );
+              })}
             </div>
           </>
         )}
@@ -452,6 +456,11 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 }
 
 /** One selectable option in the direction, network and asset steps. */
+/** A network is inert when every asset on it is; the first reason speaks for it. */
+function chainDisabledReason(assets: readonly BridgeAsset[]): string | undefined {
+  return assets.length > 0 && assets.every((a) => a.disabledReason) ? assets[0].disabledReason : undefined;
+}
+
 function ChoiceRow({
   icon,
   title,
