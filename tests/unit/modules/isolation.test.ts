@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 
 const SRC = join(process.cwd(), 'src');
 const MODULE_DIR = join(SRC, 'modules', 'bridge');
-const FORBIDDEN = [/modules\/bridge/, /@unicitylabs\/bridge-core/, /@unicitylabs\/bridge-plugin-tron-usdt/, /['"]tronweb['"]/];
+const FORBIDDEN = [/modules\/bridge/, /@unicitylabs\/bridge-core/, /@unicitylabs\/bridge-plugin/, /['"]tronweb['"]/];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

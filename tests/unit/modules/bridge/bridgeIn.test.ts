@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  createTronSourceAdapter,
+  createSourceAdapter,
   loadBridges,
   NILE_USDT_BRIDGE,
   type BridgeSourceAdapter,
-  type TronCall,
-  type TronSigner,
-} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
-import { LOCK_EVENT_TOPIC0, type TronTxInfo } from '@unicitylabs/bridge-plugin-tron-usdt';
+  type ContractCall,
+  type SourceSigner,
+} from '@unicitylabs/bridge-plugin/wallet';
+import { LOCK_EVENT_TOPIC0, type SourceTxInfo } from '@unicitylabs/bridge-plugin';
 import type { BridgePayments, ReceiptReader } from '@unicitylabs/bridge-core';
 
 import { runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
@@ -34,28 +34,28 @@ function fakePayments() {
   } as unknown as BridgePayments;
 }
 
-const okReceipt: TronTxInfo = { blockNumber: 10n, success: true, logs: [] };
-const revertedReceipt: TronTxInfo = { blockNumber: 10n, success: false, logs: [] };
-const lockMined: TronTxInfo = {
+const okReceipt: SourceTxInfo = { blockNumber: 10n, success: true, logs: [] };
+const revertedReceipt: SourceTxInfo = { blockNumber: 10n, success: false, logs: [] };
+const lockMined: SourceTxInfo = {
   blockNumber: 12n,
   success: true,
   logs: [{ address: VAULT_HEX, topics: [LOCK_EVENT_TOPIC0, '0'.repeat(64), '0'.repeat(64)], data: '0'.repeat(192) }],
 };
-const lockReverted: TronTxInfo = { blockNumber: 12n, success: false, logs: [] };
+const lockReverted: SourceTxInfo = { blockNumber: 12n, success: false, logs: [] };
 
 type FakeRpc = {
-  triggerConstantContract(): Promise<string>;
-  getTransactionInfo(txid: string): Promise<TronTxInfo | null>;
+  constantCall(): Promise<string>;
+  getTransactionInfo(txid: string): Promise<SourceTxInfo | null>;
 };
 function fakeRpc(
-  opts: { allowance: bigint; approve?: TronTxInfo | null; lock?: TronTxInfo | null },
+  opts: { allowance: bigint; approve?: SourceTxInfo | null; lock?: SourceTxInfo | null },
   timeline: string[] = [],
 ): FakeRpc {
   return {
-    async triggerConstantContract() {
+    async constantCall() {
       return opts.allowance.toString(16).padStart(64, '0');
     },
-    async getTransactionInfo(txid: string): Promise<TronTxInfo | null> {
+    async getTransactionInfo(txid: string): Promise<SourceTxInfo | null> {
       timeline.push('receipt:' + txid);
       return txid === APPROVE_TX ? (opts.approve ?? okReceipt) : (opts.lock ?? lockMined);
     },
@@ -63,12 +63,12 @@ function fakeRpc(
 }
 
 const receiptsOf = (rpc: FakeRpc): ReceiptReader => ({ getReceipt: (txid) => rpc.getTransactionInfo(txid) });
-const tronAdapterOf = (signer: TronSigner, rpc: FakeRpc): BridgeSourceAdapter => createTronSourceAdapter(bridge, signer, rpc);
+const tronAdapterOf = (signer: SourceSigner, rpc: FakeRpc): BridgeSourceAdapter => createSourceAdapter(bridge, signer, rpc);
 
-class FakeSigner implements TronSigner {
+class FakeSigner implements SourceSigner {
   public account = OWNER;
   public network = CHAIN;
-  public readonly sent: TronCall[] = [];
+  public readonly sent: ContractCall[] = [];
   public afterSend?: (sig: string) => void;
   private readonly timeline: string[];
   public constructor(timeline: string[] = []) {
@@ -83,7 +83,7 @@ class FakeSigner implements TronSigner {
   async getNetwork() {
     return this.network;
   }
-  async sendCall(call: TronCall) {
+  async sendCall(call: ContractCall) {
     this.sent.push(call);
     const kind = call.functionSignature.startsWith('approve') ? 'approve' : 'lock';
     this.timeline.push('send:' + kind);

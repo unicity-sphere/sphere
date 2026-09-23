@@ -76,6 +76,6 @@ describe('bridge development links', () => {
 
   it.skipIf(sdkLinked)('bridge packages are published ranges once sphere-sdk is', () => {
     expect(isLink('@unicitylabs/bridge-core')).toBe(false);
-    expect(isLink('@unicitylabs/bridge-plugin-tron-usdt')).toBe(false);
+    expect(isLink('@unicitylabs/bridge-plugin')).toBe(false);
   });
 });

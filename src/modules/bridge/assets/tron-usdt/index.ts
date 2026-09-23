@@ -8,11 +8,11 @@ import {
   TRON_NILE_CHAIN_ID,
   TronHttpRpcClient,
   type BridgeBackReason,
-} from '@unicitylabs/bridge-plugin-tron-usdt';
+} from '@unicitylabs/bridge-plugin';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
-  createTronSourceAdapter,
+  createSourceAdapter,
   loadBridges,
   mintedAgainst,
   NILE_USDT_BRIDGE,
@@ -23,9 +23,9 @@ import {
   tronLinkProvider,
   type DepositWallet,
   type LoadedBridge,
-  type TronSigner,
+  type SourceSigner,
   withReturnServiceUrl,
-} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
+} from '@unicitylabs/bridge-plugin/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeOutSide, BridgeWalletOption, ReturnServiceRecord } from '../../types';
@@ -40,13 +40,14 @@ export default provider;
 
 function tronAsset(bridge: LoadedBridge): BridgeAsset {
   const m = bridge.manifest;
+  if (m.family !== 'tron') throw new Error(`${m.label}: not a Tron manifest`);
   const rpc = new TronHttpRpcClient({ baseUrl: m.rpcUrl, apiKey: m.apiKey });
   const receipts: ReceiptReader = { getReceipt: (txid) => rpc.getTransactionInfo(txid) };
 
-  const depsFor = (signer: TronSigner): BridgeInDeps => ({
+  const depsFor = (signer: SourceSigner): BridgeInDeps => ({
     wallet: signer,
     receipts,
-    adapter: createTronSourceAdapter(bridge, signer, rpc),
+    adapter: createSourceAdapter(bridge, signer, rpc),
     expectedNetwork: m.chainId,
     chainLabel: m.label,
   });
@@ -85,7 +86,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     tokenPlugin: bridgeTokenPlugin(bridge),
     presentation: bridgePresentation(bridge),
     wallets,
-    resumeDeps: () => ({ adapter: createTronSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
+    resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: tronOut(bridge),
     disabledReason: m.disabledReason,
   };

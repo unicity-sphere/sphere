@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NILE_USDT_BRIDGE } from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
+import { NILE_USDT_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 import { WALLET_MODULES, describeCoin, moduleActions, moduleTokenPlugins } from '@/modules/registry';
 

@@ -58,7 +58,7 @@ minted, with Resume, and burns waiting for their release, with the return
 service's status for each.
 
 `assets/tron-usdt/` is the one asset today (USDT on Tron Nile, via
-`@unicitylabs/bridge-plugin-tron-usdt`). A second Tron asset is another
+`@unicitylabs/bridge-plugin`). A second Tron asset is another
 manifest in that file; a second chain family is another folder implementing
 the same interfaces from its own plugin package. A provider whose manifest
 fails its integrity pin is logged and skipped; the wallet starts without it.
@@ -91,7 +91,7 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
 
 While the SDK's token-plugin seam and the bridge are developed together,
 `package.json` points `@unicitylabs/sphere-sdk`, `@unicitylabs/bridge-core` and
-`@unicitylabs/bridge-plugin-tron-usdt` at sibling checkouts (`file:`). They
+`@unicitylabs/bridge-plugin` at sibling checkouts (`file:`). They
 revert to published versions before merge; `tests/unit/dependency-hygiene.test.ts`
 carries the tripwire. `vite.config.ts` dedupes `@unicitylabs/state-transition-sdk`
 so the linked packages and the SDK share one runtime copy.

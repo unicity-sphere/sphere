@@ -23,7 +23,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@types/katex": "^0.16.7",
     "@unicitylabs/bridge-core": "file:../packages/bridge-core",
-    "@unicitylabs/bridge-plugin-tron-usdt": "file:../packages/bridge-plugin-tron-usdt",
+    "@unicitylabs/bridge-plugin": "file:../packages/bridge-plugin",
     "@unicitylabs/sphere-sdk": "file:../sphere-sdk",
     "@unicitylabs/sphere-ui": "^0.1.44",
     "framer-motion": "^12.23.24",

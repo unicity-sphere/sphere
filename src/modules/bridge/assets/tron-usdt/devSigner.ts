@@ -2,12 +2,11 @@ import {
   ManagedTronSigner,
   type InjectedTronWeb,
   type TronBridgeManifest,
-  type TronSigner,
-  type TronCall,
-  type TronSendOptions,
-} from '@unicitylabs/bridge-plugin-tron-usdt/wallet';
+  type SourceSigner,
+  type ContractCall,
+} from '@unicitylabs/bridge-plugin/wallet';
 
-export function devKeySigner(m: TronBridgeManifest): (() => TronSigner) | null {
+export function devKeySigner(m: TronBridgeManifest): (() => SourceSigner) | null {
   const key = import.meta.env.DEV ? (import.meta.env.VITE_BRIDGE_DEV_TRON_KEY as string | undefined) : undefined;
   if (!key) return null;
   return () =>
@@ -22,15 +21,15 @@ export function devKeySigner(m: TronBridgeManifest): (() => TronSigner) | null {
     });
 }
 
-class LazySigner implements TronSigner {
-  private readonly build: () => Promise<TronSigner>;
-  private inner: Promise<TronSigner> | null = null;
+class LazySigner implements SourceSigner {
+  private readonly build: () => Promise<SourceSigner>;
+  private inner: Promise<SourceSigner> | null = null;
 
-  public constructor(build: () => Promise<TronSigner>) {
+  public constructor(build: () => Promise<SourceSigner>) {
     this.build = build;
   }
 
-  private signer(): Promise<TronSigner> {
+  private signer(): Promise<SourceSigner> {
     return (this.inner ??= this.build());
   }
 
@@ -46,7 +45,7 @@ class LazySigner implements TronSigner {
     return (await this.signer()).getNetwork();
   }
 
-  public async sendCall(call: TronCall, opts?: TronSendOptions): Promise<string> {
-    return (await this.signer()).sendCall(call, opts);
+  public async sendCall(call: ContractCall): Promise<string> {
+    return (await this.signer()).sendCall(call);
   }
 }
