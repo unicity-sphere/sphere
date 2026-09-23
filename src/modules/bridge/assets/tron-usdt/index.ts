@@ -17,7 +17,6 @@ import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { bridgeOut } from '../out';
-import { devKeySigner } from './devSigner';
 
 const provider: BridgeAssetProvider = {
   id: 'tron-usdt',
@@ -50,15 +49,6 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
       open: () => depsFor(tronLink.create(m.chainId)),
     },
   ];
-  const devKey = devKeySigner(m);
-  if (devKey) {
-    wallets.push({
-      id: 'dev-key',
-      name: 'development key',
-      isAvailable: () => true,
-      open: () => depsFor(devKey()),
-    });
-  }
 
   return {
     id: `${m.chainRef}:${m.symbol.toLowerCase()}`,

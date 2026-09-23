@@ -96,7 +96,5 @@ revert to published versions before merge; `tests/unit/dependency-hygiene.test.t
 carries the tripwire. `vite.config.ts` dedupes `@unicitylabs/state-transition-sdk`
 so the linked packages and the SDK share one runtime copy.
 
-`VITE_BRIDGE_DEV_TRON_KEY` (dev only) offers a "development key" signer in the
-bridge screen so a deposit can be exercised without the TronLink extension.
 `VITE_BRIDGE_RETURN_SERVICE_URL` points the return path at a service other
 than the manifest's default, the local container on port 8787.
