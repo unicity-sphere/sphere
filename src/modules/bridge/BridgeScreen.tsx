@@ -295,6 +295,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   detail={a.label}
                   count={direction === 'in' ? a.wallets.length : tokens.filter((t) => t.coinId.toLowerCase() === a.coinIdHex).length}
                   countNoun={direction === 'in' ? 'wallet' : 'token'}
+                  disabled={a.disabledReason}
                   onClick={() => pickAsset(a)}
                 />
               ))}
@@ -458,6 +459,7 @@ function ChoiceRow({
   tag,
   count,
   countNoun,
+  disabled,
   onClick,
 }: {
   icon?: React.ReactNode;
@@ -466,13 +468,16 @@ function ChoiceRow({
   tag?: string;
   count: number;
   countNoun: string;
+  /** The reason this choice cannot be taken; renders the row inert. */
+  disabled?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={!!disabled}
       onClick={onClick}
-      className="w-full p-4 flex items-center gap-3 rounded-2xl border text-left transition-colors bg-neutral-50 dark:bg-white/4 border-neutral-200 dark:border-white/8 hover:bg-neutral-100 dark:hover:bg-white/8"
+      className={`w-full p-4 flex items-center gap-3 rounded-2xl border text-left transition-colors bg-neutral-50 dark:bg-white/4 border-neutral-200 dark:border-white/8 ${disabled ? 'opacity-60 cursor-not-allowed' : 'hover:bg-neutral-100 dark:hover:bg-white/8'}`}
     >
       {icon && <div className="shrink-0">{icon}</div>}
       <div className="flex-1 min-w-0">
@@ -485,8 +490,9 @@ function ChoiceRow({
         <div className={`text-xs mt-0.5 ${MUTED}`}>
           {detail} · {count} {countNoun}{count === 1 ? '' : 's'}
         </div>
+        {disabled && <div className="text-xs mt-1 text-amber-600 dark:text-amber-400">{disabled}</div>}
       </div>
-      <ChevronRight className="w-4 h-4 text-neutral-400 dark:text-neutral-600 shrink-0" />
+      {!disabled && <ChevronRight className="w-4 h-4 text-neutral-400 dark:text-neutral-600 shrink-0" />}
     </button>
   );
 }

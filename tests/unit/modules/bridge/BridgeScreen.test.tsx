@@ -12,6 +12,11 @@ vi.mock('../../../../src/sdk/hooks/core/useSphere', () => ({
 }));
 // The screen lists the wallet's tokens for the assets-out form; none here.
 vi.mock('../../../../src/sdk', () => ({ useTokens: () => ({ tokens: [] }) }));
+// The live Nile deployment is disabled; the walkthrough needs an asset that can be picked.
+vi.mock('@unicitylabs/bridge-plugin-tron-usdt/wallet', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@unicitylabs/bridge-plugin-tron-usdt/wallet')>();
+  return { ...mod, NILE_USDT_BRIDGE: { ...mod.NILE_USDT_BRIDGE, disabledReason: undefined } };
+});
 
 import { BridgeScreen } from '@/modules/bridge/BridgeScreen';
 

@@ -87,6 +87,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     wallets,
     resumeDeps: () => ({ adapter: createTronSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: tronOut(bridge),
+    disabledReason: m.disabledReason,
   };
 }
 

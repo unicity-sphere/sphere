@@ -125,6 +125,8 @@ export interface BridgeAsset {
   resumeDeps(): Pick<BridgeInDeps, 'adapter' | 'receipts'>;
   /** Present when the asset can be bridged out again. */
   readonly out?: BridgeOutSide;
+  /** When set, the asset is listed but neither direction can start; the text says why. */
+  readonly disabledReason?: string;
 }
 
 /** What `assets/<name>/index.ts` default-exports: a lazy loader for one family of assets. */
