@@ -1,7 +1,7 @@
 /**
- * The picker shows every step even with one option, so what the wallet
- * supports is visible: network, then asset, then the form. Rendered against
- * the real Tron USDT asset (no wallet, no network calls).
+ * The picker shows every step, so what the wallet supports is visible:
+ * network, then asset, then the form. Rendered against the real Tron USDT and
+ * Ethereum USDC assets (no wallet extension, no network calls).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -31,7 +31,7 @@ function renderScreen() {
 }
 
 describe('BridgeScreen picker', () => {
-  it('walks direction, network, asset, then the form, showing each step with its single option', () => {
+  it('walks direction, network, asset, then the form, showing each step with its options', () => {
     const { onClose } = renderScreen();
 
     // Step 0: which way. Both directions are offered; out counts the assets with a return path.
@@ -39,11 +39,13 @@ describe('BridgeScreen picker', () => {
     expect(screen.getByText('Send assets out')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
 
-    // Step 1: the one supported network, named and tagged as a testnet.
+    // Step 1: the supported networks, named and tagged as testnets.
     expect(screen.getByText(/Step 1 of 3/)).toBeDefined();
+    expect(screen.getByText('Ethereum')).toBeDefined();
+    expect(screen.getByText(/Sepolia testnet/)).toBeDefined();
     expect(screen.getByText('Tron')).toBeDefined();
     expect(screen.getByText(/Nile testnet/)).toBeDefined();
-    expect(screen.getByText('testnet')).toBeDefined();
+    expect(screen.getAllByText('testnet')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: /Tron/ }));
 
     // Step 2: the one asset on it.
@@ -55,6 +57,17 @@ describe('BridgeScreen picker', () => {
     expect(screen.getByText(/^From/)).toBeDefined();
     expect(screen.getByRole('button', { name: /Continue with TronLink/ })).toBeDefined();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('walks to the Ethereum USDC form and names MetaMask as the signer', () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Ethereum/ }));
+    expect(screen.getByText(/Step 2 of 3/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /USDC/ }));
+    expect(screen.getByPlaceholderText('0.00')).toBeDefined();
+    expect(screen.getByRole('button', { name: /Continue with MetaMask/ })).toBeDefined();
+    expect(screen.getByText(/Install the MetaMask browser extension/)).toBeDefined();
   });
 
   it('offers the assets-out path and asks for tokens and a destination', () => {

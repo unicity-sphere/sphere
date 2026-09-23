@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NILE_USDT_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
+import { NILE_USDT_BRIDGE, SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 import { WALLET_MODULES, describeCoin, moduleActions, moduleTokenPlugins } from '@/modules/registry';
 
@@ -10,15 +10,18 @@ describe('wallet module registry', () => {
 
   it('collects one token plugin per bridged asset, carrying its strict verifier', () => {
     const plugins = moduleTokenPlugins();
-    const bridge = plugins.find((p) => p.id === 'bridge:tron:0xcd8690dc:usdt');
-    expect(bridge).toBeDefined();
-    expect(bridge?.mintJustificationVerifiers).toHaveLength(1);
+    for (const id of ['bridge:tron:0xcd8690dc:usdt', 'bridge:eip155:11155111:usdc']) {
+      const bridge = plugins.find((p) => p.id === id);
+      expect(bridge, id).toBeDefined();
+      expect(bridge?.mintJustificationVerifiers).toHaveLength(1);
+    }
   });
 
   it('describes a bridged coin the token registry does not list', () => {
     const coinId = NILE_USDT_BRIDGE.coinIdHex!;
     expect(describeCoin(coinId)).toEqual({ symbol: 'USDT', name: NILE_USDT_BRIDGE.label, decimals: 6, badge: 'Tron', priceUsd: 1 });
     expect(describeCoin(coinId.toUpperCase())).toBeDefined();
+    expect(describeCoin(SEPOLIA_USDC_BRIDGE.coinIdHex!)).toEqual({ symbol: 'USDC', name: SEPOLIA_USDC_BRIDGE.label, decimals: 6, badge: 'Ethereum', priceUsd: 1 });
     expect(describeCoin('00'.repeat(32))).toBeUndefined();
   });
 
@@ -32,6 +35,7 @@ describe('bridge chains', () => {
   it('groups assets by source chain for the picker', async () => {
     const { bridgeChainsFor } = await import('@/modules/bridge/assets');
     expect(bridgeChainsFor('testnet2')).toEqual([
+      { id: 'eip155:11155111', name: 'Ethereum', networkName: 'Sepolia testnet', testnet: true },
       { id: 'tron:0xcd8690dc', name: 'Tron', networkName: 'Nile testnet', testnet: true },
     ]);
     expect(bridgeChainsFor('mainnet')).toEqual([]);

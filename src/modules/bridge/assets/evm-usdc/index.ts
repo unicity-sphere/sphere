@@ -1,34 +1,33 @@
-import { TRON_MAINNET_CHAIN_ID, TRON_NILE_CHAIN_ID, TronHttpRpcClient } from '@unicitylabs/bridge-plugin';
+import { ETHEREUM_MAINNET_CHAIN_ID, EvmJsonRpcClient, SEPOLIA_CHAIN_ID, toEvmAddressHex } from '@unicitylabs/bridge-plugin';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
   createSourceAdapter,
+  injectedEvmProvider,
   loadBridges,
-  NILE_USDT_BRIDGE,
-  toEvmAddressHex,
-  tronLinkProvider,
+  SEPOLIA_USDC_BRIDGE,
+  withReturnServiceUrl,
   type DepositWallet,
+  type EvmBridgeManifest,
   type LoadedBridge,
   type SourceSigner,
-  withReturnServiceUrl,
 } from '@unicitylabs/bridge-plugin/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { bridgeOut } from '../out';
-import { devKeySigner } from './devSigner';
 
 const provider: BridgeAssetProvider = {
-  id: 'tron-usdt',
-  load: () => loadBridges([withServiceUrl(NILE_USDT_BRIDGE)]).map(tronAsset),
+  id: 'evm-usdc',
+  load: () => loadBridges([withServiceUrl(SEPOLIA_USDC_BRIDGE)]).map(evmAsset),
 };
 
 export default provider;
 
-function tronAsset(bridge: LoadedBridge): BridgeAsset {
+function evmAsset(bridge: LoadedBridge): BridgeAsset {
   const m = bridge.manifest;
-  if (m.family !== 'tron') throw new Error(`${m.label}: not a Tron manifest`);
-  const rpc = new TronHttpRpcClient({ baseUrl: m.rpcUrl, apiKey: m.apiKey });
+  if (m.family !== 'eip155') throw new Error(`${m.label}: not an Ethereum manifest`);
+  const rpc = new EvmJsonRpcClient({ rpcUrl: m.rpcUrl });
   const receipts: ReceiptReader = { getReceipt: (txid) => rpc.getTransactionInfo(txid) };
 
   const depsFor = (signer: SourceSigner): BridgeInDeps => ({
@@ -39,25 +38,16 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     chainLabel: m.label,
   });
 
-  const tronLink = tronLinkProvider();
+  const injected = injectedEvmProvider();
   const wallets: BridgeWalletOption[] = [
     {
-      id: 'tronlink',
-      name: 'TronLink',
-      unavailableHint: 'Install the TronLink browser extension to sign on Tron.',
-      isAvailable: () => tronLink.isAvailable(),
-      open: () => depsFor(tronLink.create(m.chainId)),
+      id: injected.id,
+      name: injected.name,
+      unavailableHint: 'Install the MetaMask browser extension to sign on Ethereum.',
+      isAvailable: () => injected.isAvailable(),
+      open: () => depsFor(injected.create(m.chainId)),
     },
   ];
-  const devKey = devKeySigner(m);
-  if (devKey) {
-    wallets.push({
-      id: 'dev-key',
-      name: 'development key',
-      isAvailable: () => true,
-      open: () => depsFor(devKey()),
-    });
-  }
 
   return {
     id: `${m.chainRef}:${m.symbol.toLowerCase()}`,
@@ -66,7 +56,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     decimals: bridge.plugin.decimals,
     coinIdHex: bridge.plugin.coinIdHex,
     tokenTypeHex: bridge.plugin.tokenTypeHex,
-    chain: tronChain(m.chainId, m.chainRef),
+    chain: evmChain(m.chainId, m.chainRef),
     priceUsd: 1,
     confirmations: m.confirmations,
     networks: ['testnet', 'testnet2'],
@@ -79,25 +69,18 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
   };
 }
 
-function withServiceUrl(m: typeof NILE_USDT_BRIDGE): typeof NILE_USDT_BRIDGE {
+function withServiceUrl(m: EvmBridgeManifest): EvmBridgeManifest {
   const url = import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL as string | undefined;
   return url ? withReturnServiceUrl(m, url) : m;
 }
 
-function fromHex(hex: string): Uint8Array {
-  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
-
-function tronChain(chainId: number, chainRef: string): BridgeChain {
+function evmChain(chainId: number, chainRef: string): BridgeChain {
   const known: Record<number, { networkName: string; testnet: boolean }> = {
-    [TRON_MAINNET_CHAIN_ID]: { networkName: 'Mainnet', testnet: false },
-    [TRON_NILE_CHAIN_ID]: { networkName: 'Nile testnet', testnet: true },
+    [ETHEREUM_MAINNET_CHAIN_ID]: { networkName: 'Mainnet', testnet: false },
+    [SEPOLIA_CHAIN_ID]: { networkName: 'Sepolia testnet', testnet: true },
   };
-  const net = known[chainId] ?? { networkName: `network ${chainId}`, testnet: true };
-  return { id: chainRef, name: 'Tron', ...net };
+  const net = known[chainId] ?? { networkName: `chain ${chainId}`, testnet: true };
+  return { id: chainRef, name: 'Ethereum', ...net };
 }
 
 const NEVER_SIGNS: DepositWallet = {
@@ -106,3 +89,10 @@ const NEVER_SIGNS: DepositWallet = {
     throw new Error('Resuming a mint never signs.');
   },
 };
+
+function fromHex(hex: string): Uint8Array {
+  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
