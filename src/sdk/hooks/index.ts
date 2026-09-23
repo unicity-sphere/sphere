@@ -12,6 +12,7 @@ export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtime
 
 // Payments (L3)
 export { useTokens } from './payments/useTokens';
+export { useTokenHolds } from './payments/useTokenHolds';
 export type { UseTokensReturn } from './payments/useTokens';
 export { useCoinlessTokens } from './payments/useCoinlessTokens';
 export { useTokenData } from './payments/useTokenData';

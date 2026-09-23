@@ -4,6 +4,7 @@ import {
   bridgeTokenPlugin,
   createSourceAdapter,
   loadBridges,
+  lockFinality,
   NILE_USDT_BRIDGE,
   toEvmAddressHex,
   tronLinkProvider,
@@ -76,6 +77,7 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))),
     disabledReason: m.disabledReason,
+    settling: (justification) => lockFinality(bridge, justification),
   };
 }
 

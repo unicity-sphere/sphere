@@ -69,6 +69,12 @@ describe('the Send affordance tracks spendability', () => {
     expect(sendButton()).toBeNull();
   });
 
+  it('withholds it from a bridged token still settling on its source chain, and says why', () => {
+    render(<TokenRow token={coin()} delay={0} isNew={false} onSend={vi.fn()} hold="Settling on Ethereum, about 2 min left" />);
+    expect(sendButton()).toBeNull();
+    expect(screen.getByText('Settling on Ethereum, about 2 min left')).toBeTruthy();
+  });
+
   it('offers Send for a settled coinless token', () => {
     render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />, withQueryClient());
     expect(sendButton()).toBeTruthy();

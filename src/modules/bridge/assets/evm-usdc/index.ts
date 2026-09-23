@@ -5,6 +5,7 @@ import {
   createSourceAdapter,
   injectedEvmProvider,
   loadBridges,
+  lockFinality,
   SEPOLIA_USDC_BRIDGE,
   withReturnServiceUrl,
   type DepositWallet,
@@ -66,6 +67,7 @@ function evmAsset(bridge: LoadedBridge): BridgeAsset {
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))),
     disabledReason: m.disabledReason,
+    settling: (justification) => lockFinality(bridge, justification),
   };
 }
 

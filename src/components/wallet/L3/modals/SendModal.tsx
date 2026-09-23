@@ -7,7 +7,7 @@ import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../connect/duplicateSendGuard';
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
-import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
+import { useAssets, useTokens, useTokenHolds, useTransfer, formatAmount } from '../../../../sdk';
 import { useSendProgress } from '../../../../sdk/hooks/payments/useSendProgress';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
@@ -50,6 +50,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   const { assets: sdkAssets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
   const { tokens: inventoryTokens } = useTokens();
+  const holds = useTokenHolds(inventoryTokens);
   const { sphere, subscriptionKeyStatus } = useSphereContext();
   const { openUpgrade } = useUpgrade();
   const utilization = useUtilization();
@@ -397,6 +398,11 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     setKeepOpen(null);
 
     try {
+      // The SDK picks the source tokens itself, so a coin with a held token
+      // (a bridged one still settling) cannot be sent by amount at all: the
+      // held token could be chosen and the receiver would reject it.
+      const held = inventoryTokens.find((t) => t.coinId === selectedAsset.coinId && holds.has(t.id));
+      if (held) throw new Error(`${selectedAsset.symbol} cannot be sent yet: ${holds.get(held.id)!.reason}.`);
       const amount = parseTokenAmount(amountInput, selectedAsset.decimals).toString();
 
       // Last gate before money moves. Only an explicit "Send anyway" gets past

@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useCoinlessTokens, useNfts } from '../../../../sdk';
+import { useIdentity, useAssets, useTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { describeCoin } from '../../../../modules/registry';
@@ -177,6 +177,7 @@ export function L3WalletView({
 
   const tokens = sdkTokens;
   const sendableTokens = tokens;
+  const holds = useTokenHolds(tokens);
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   // Which wallet-module action (src/modules) has its screen open, if any.
@@ -506,6 +507,7 @@ export function L3WalletView({
                               isNew={newTokenIds.has(token.id)}
                               onSend={handleSendCoinToken}
                               onInspect={handleInspectCoinToken}
+                              hold={holds.get(token.id)?.reason}
                             />
                           ))}
                     </>

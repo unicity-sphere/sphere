@@ -1,5 +1,5 @@
 import { logger, toHumanReadable, type Asset, type Token, type TokenPlugin } from '@unicitylabs/sphere-sdk';
-import type { CoinPresentation, WalletModule, WalletModuleAction } from './types';
+import type { CoinPresentation, TokenHold, TokenHoldContext, WalletModule, WalletModuleAction } from './types';
 
 const discovered = import.meta.glob<{ default: WalletModule }>('./*/module.ts', { eager: true });
 
@@ -40,6 +40,19 @@ export function moduleAssetView(asset: Asset): Asset {
 export function moduleTokenView(token: Token): Token {
   const known = describeCoin(token.coinId);
   return known ? { ...token, symbol: known.symbol, name: known.name, decimals: known.decimals } : token;
+}
+
+export async function moduleTokenHold(token: Token, ctx: TokenHoldContext): Promise<TokenHold | undefined> {
+  for (const m of WALLET_MODULES) {
+    if (!m.tokenHold) continue;
+    try {
+      const hold = await m.tokenHold(token, ctx);
+      if (hold) return hold;
+    } catch (err) {
+      logger.warn('Modules', `${m.id}: token hold check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return undefined;
 }
 
 export function moduleActions(network: string): WalletModuleAction[] {

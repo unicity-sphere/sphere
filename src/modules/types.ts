@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import type { TokenPlugin } from '@unicitylabs/sphere-sdk';
+import type { Token, TokenPlugin } from '@unicitylabs/sphere-sdk';
 
 /** How to show a coin the network's token registry does not list. */
 export interface CoinPresentation {
@@ -27,11 +27,24 @@ export interface WalletModuleAction {
   isAvailable?(network: string): boolean;
 }
 
+/** Why a token must not be sent yet, in words for the user. */
+export interface TokenHold {
+  readonly reason: string;
+}
+
+/** What a hold check may read about a token. */
+export interface TokenHoldContext {
+  /** The token's mint justification (its genesis reason), or null when it has none. */
+  justification(tokenId: string): Promise<Uint8Array | null>;
+}
+
 export interface WalletModule {
   readonly id: string;
   /** Token plugins handed to `Sphere.init({ plugins })`, so the wallet verifies the module's tokens. */
   tokenPlugins?(): readonly TokenPlugin[];
   /** Presentation for a coin the module knows and the registry does not; `undefined` for any other. */
   describeCoin?(coinId: string): CoinPresentation | undefined;
+  /** A hold on a token the module knows must not travel yet; `undefined` for any other token. */
+  tokenHold?(token: Token, ctx: TokenHoldContext): Promise<TokenHold | undefined>;
   readonly actions?: readonly WalletModuleAction[];
 }

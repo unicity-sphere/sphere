@@ -57,6 +57,7 @@ export const SPHERE_KEYS = {
       // already in the app refreshes coinless holdings too, by prefix match.
       coinless: ['sphere', 'payments', 'tokens', 'coinless'] as const,
       data: (id: string) => ['sphere', 'payments', 'tokens', 'data', id] as const,
+      holds: (ids: string) => ['sphere', 'payments', 'tokens', 'holds', ids] as const,
     },
 
     balance: {
