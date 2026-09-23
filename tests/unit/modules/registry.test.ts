@@ -8,13 +8,12 @@ describe('wallet module registry', () => {
     expect(WALLET_MODULES.map((m) => m.id)).toContain('bridge');
   });
 
-  it('collects one token plugin per bridged asset, carrying its strict verifier', () => {
+  it('collects one token plugin for all bridged assets: the lock tag is registered once', () => {
     const plugins = moduleTokenPlugins();
-    for (const id of ['bridge:tron:0xcd8690dc:usdt', 'bridge:eip155:11155111:usdc']) {
-      const bridge = plugins.find((p) => p.id === id);
-      expect(bridge, id).toBeDefined();
-      expect(bridge?.mintJustificationVerifiers).toHaveLength(1);
-    }
+    const bridge = plugins.filter((p) => p.id === 'bridge');
+    expect(bridge).toHaveLength(1);
+    expect(bridge[0].mintJustificationVerifiers).toHaveLength(1);
+    expect(plugins.filter((p) => p.id.startsWith('bridge'))).toHaveLength(1);
   });
 
   it('describes a bridged coin the token registry does not list', () => {

@@ -1,5 +1,5 @@
 import { ArrowLeftRight } from 'lucide-react';
-import type { TokenPlugin } from '@unicitylabs/sphere-sdk';
+import { mergeBridgeTokenPlugins } from '@unicitylabs/bridge-plugin/wallet';
 import type { WalletModule } from '../types';
 import { bridgeAssetByCoin, bridgeAssets, bridgeAssetsFor } from './assets';
 import { BridgeScreen } from './BridgeScreen';
@@ -7,7 +7,10 @@ import { BridgeScreen } from './BridgeScreen';
 const bridgeModule: WalletModule = {
   id: 'bridge',
 
-  tokenPlugins: () => bridgeAssets().map((a): TokenPlugin => a.tokenPlugin),
+  tokenPlugins: () => {
+    const assets = bridgeAssets();
+    return assets.length === 0 ? [] : [mergeBridgeTokenPlugins(assets.map((a) => a.tokenPlugin))];
+  },
 
   describeCoin: (coinId) => {
     const asset = bridgeAssetByCoin(coinId);
