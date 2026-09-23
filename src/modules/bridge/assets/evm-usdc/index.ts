@@ -6,6 +6,8 @@ import {
   injectedEvmProvider,
   loadBridges,
   lockFinality,
+  owedTo,
+  withdrawCall,
   SEPOLIA_USDC_BRIDGE,
   withReturnServiceUrl,
   type DepositWallet,
@@ -65,7 +67,18 @@ function evmAsset(bridge: LoadedBridge): BridgeAsset {
     presentation: bridgePresentation(bridge),
     wallets,
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
-    out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))),
+    out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
+      owed: (destination) => owedTo(bridge, rpc, destination),
+      collect: async (destination) => {
+        const signer = injected.create(m.chainId);
+        await signer.connect();
+        const from = await signer.getAddress();
+        if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
+          throw new Error(`Switch MetaMask to ${destination} to collect.`);
+        }
+        return signer.sendCall(withdrawCall(bridge));
+      },
+    }),
     disabledReason: m.disabledReason,
     settling: (justification) => lockFinality(bridge, justification),
   };

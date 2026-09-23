@@ -90,6 +90,13 @@ export interface BurnIdentity {
   readonly amount: bigint;
 }
 
+export interface BridgePayout {
+  /** What the vault owes `destination`, in the asset's smallest unit. */
+  owed(destination: string): Promise<bigint>;
+  /** Send the collecting transaction from a wallet holding `destination`; resolves to its id. */
+  collect(destination: string): Promise<string>;
+}
+
 /** The assets-out side of an asset: burn on Unicity, release on the source chain. */
 export interface BridgeOutSide {
   /** Canonical return-reason bytes for releasing `amount` to `destination`. The destination is validated first. */
@@ -99,6 +106,8 @@ export interface BridgeOutSide {
   /** Whether a token's mint reason names the vault this side releases from. */
   backs(justification: Uint8Array | null): boolean;
   readonly returns: BridgeReturnService;
+  /** Present when the vault credits payouts for the destination to collect. */
+  readonly payout?: BridgePayout;
 }
 
 /** One bridgeable asset, as the screen and the flow see it. */

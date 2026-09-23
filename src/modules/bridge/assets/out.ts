@@ -8,12 +8,12 @@ import {
   type ReturnRecord,
 } from '@unicitylabs/bridge-plugin/wallet';
 
-import type { BridgeOutSide, ReturnServiceRecord } from '../types';
+import type { BridgeOutSide, BridgePayout, ReturnServiceRecord } from '../types';
 
 const ZERO_ADDRESS = new Uint8Array(20);
 const RETURN_DEADLINE_SECONDS = 3600;
 
-export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: string) => Uint8Array): BridgeOutSide {
+export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: string) => Uint8Array, payout?: BridgePayout): BridgeOutSide {
   const cfg = bridge.bridgeConfig;
   const client = new ReturnServiceClient(bridge.manifest.returnServiceUrl);
   return {
@@ -44,6 +44,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
       };
     },
     backs: (justification) => mintedAgainst(bridge, justification),
+    ...(payout ? { payout } : {}),
     returns: {
       submit: async (burnedToken, reasonBytes) =>
         serviceRecord(await client.postReturn({ tokenCbor: burnedToken, configHash: bridge.configHash, reasonBytes })),

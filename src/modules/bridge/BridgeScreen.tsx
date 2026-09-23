@@ -16,6 +16,7 @@ import type { Token } from '@unicitylabs/sphere-sdk';
 
 import { useTokens } from '../../sdk';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { getErrorMessage } from '../../sdk/errors';
 import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
@@ -24,7 +25,7 @@ import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
 import { formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isTerminalReturn, type PendingLock, type PendingReturn } from './store';
-import type { BridgeAsset, BridgeChain, BridgeWalletOption, ReturnServiceTiming } from './types';
+import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
 
@@ -576,7 +577,7 @@ interface ReturnsListProps {
   onRetry: (id: string) => void;
 }
 
-function ReturnsList({ returns, timing, onDismiss, onRetry }: ReturnsListProps) {
+export function ReturnsList({ returns, timing, onDismiss, onRetry }: ReturnsListProps) {
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Returns</div>
@@ -632,6 +633,9 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         {returnStatusLabel(r.status)}
       </button>
       {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
+      {r.status === 'settled' && asset?.out?.payout && (
+        <CollectButton payout={asset.out.payout} destination={r.destination} asset={asset} />
+      )}
       {retryable && (
         <button
           type="button"
@@ -657,6 +661,35 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
     </div>
     {detailsOpen && <div className={`mt-1.5 ${MUTED}`}>{detail}</div>}
     </div>
+  );
+}
+
+/**
+ * A pull-payment vault credits the destination; this collects the credit. The
+ * amount is what the vault owes now, so several returns to one destination
+ * collect together, and a credit already taken shows nothing.
+ */
+function CollectButton({ payout, destination, asset }: { payout: BridgePayout; destination: string; asset: BridgeAsset }) {
+  const owed = useQuery({
+    queryKey: ['bridge', 'payout', asset.id, destination],
+    queryFn: () => payout.owed(destination),
+    refetchInterval: 30_000,
+  });
+  const collect = useMutation({ mutationFn: () => payout.collect(destination), onSuccess: () => owed.refetch() });
+  if (collect.data) return <TxLink href={asset.presentation.explorerTxUrl(collect.data)} label="collected" />;
+  if (!owed.data) return null;
+  return (
+    <span className="shrink-0 flex flex-col items-end gap-0.5">
+      <button
+        type="button"
+        onClick={() => collect.mutate()}
+        disabled={collect.isPending}
+        className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
+      >
+        {collect.isPending ? 'Collecting…' : `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}`}
+      </button>
+      {collect.error && <span className="text-red-500 max-w-[12rem] text-right">{getErrorMessage(collect.error)}</span>}
+    </span>
   );
 }
 
