@@ -12,4 +12,4 @@
  * forgets this file fails the suite. An unguarded literal is exactly how the
  * page came to advertise `v0.4.7` for many releases.
  */
-export const SDK_VERSION = '0.17.6';
+export const SDK_VERSION = '0.18.0-dev.2';

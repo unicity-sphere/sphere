@@ -14,6 +14,8 @@ interface TokenRowProps {
   onSend?: (token: Token) => void;
   /** Open the raw genesis payload. Omit to render the row uninspectable. */
   onInspect?: (token: Token) => void;
+  /** Why this token must not be sent yet (a bridged token whose lock is not final). Withholds Send. */
+  hold?: string;
 }
 
 // Custom comparison: allow re-render when amount changes (for number animation)
@@ -26,6 +28,7 @@ function areTokenPropsEqual(prev: TokenRowProps, next: TokenRowProps): boolean {
     prev.token.status === next.token.status &&
     prev.token.symbol === next.token.symbol &&
     prev.token.suspectedSpent === next.token.suspectedSpent &&
+    prev.hold === next.hold &&
     prev.isNew === next.isNew &&
     prev.delay === next.delay &&
     prev.onSend === next.onSend &&
@@ -90,7 +93,7 @@ function AnimatedTokenAmount({ amount, coinId, symbol }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend, onInspect }: TokenRowProps) {
+export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onSend, onInspect, hold }: TokenRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async (e: React.MouseEvent) => {
@@ -152,7 +155,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
           on-chain — the SDK refuses both, so offering Send would promise an
           action that can only fail. The row still shows: a demotion is
           recoverable by resync, and hiding the token would be worse. */}
-      {onSend && token.status === 'confirmed' && token.suspectedSpent !== true && (
+      {onSend && token.status === 'confirmed' && token.suspectedSpent !== true && !hold && (
         <button
           onClick={(e) => { e.stopPropagation(); onSend(token); }}
           aria-label="Send this token"
@@ -163,7 +166,12 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
         </button>
       )}
       <div className="flex flex-col items-end gap-1">
-        {token.status === 'confirmed' ? (
+        {hold ? (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center gap-1">
+            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+            Settling
+          </span>
+        ) : token.status === 'confirmed' ? (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
             Confirmed
           </span>
@@ -179,7 +187,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
           </span>
         )}
         <span className="text-[10px] text-neutral-400 dark:text-[rgba(255,255,255,0.28)]" style={{ fontFamily: "'Geist Mono', 'SF Mono', 'Fira Code', monospace" }}>
-          {new Date(token.createdAt).toLocaleDateString()}
+          {hold ?? new Date(token.createdAt).toLocaleDateString()}
         </span>
       </div>
       </div>

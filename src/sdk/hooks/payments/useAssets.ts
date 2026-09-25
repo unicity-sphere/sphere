@@ -7,6 +7,7 @@ import { SPHERE_KEYS } from '../../queryKeys';
 import { diag } from '../../diag';
 import { TokenRegistry, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import type { Asset } from '../..';
+import { moduleAssetView } from '../../../modules/registry';
 
 /**
  * Hardcoded fallback prices (USD) for tokens not yet listed on CoinGecko.
@@ -65,10 +66,11 @@ export function useAssets(): UseAssetsReturn {
   // Also applies fallback prices for tokens not yet listed on CoinGecko.
   const assets = useMemo(() => {
     const rawAssets = query.data ?? [];
-    if (!registryReady) return rawAssets;
+    if (!registryReady) return rawAssets.map(moduleAssetView);
     const registry = TokenRegistry.getInstance();
     return rawAssets.map((a) => {
       const def = registry.getDefinition(a.coinId);
+      if (!def) return moduleAssetView(a);
       const enriched = def
         ? {
             ...a,

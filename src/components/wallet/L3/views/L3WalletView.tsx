@@ -3,13 +3,15 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useCoinlessTokens, useNfts } from '../../../../sdk';
+import { useIdentity, useAssets, useTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
+import { describeCoin } from '../../../../modules/registry';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
 import { WalletActions } from '../components/WalletActions';
+import { ModuleActionButtons, ModuleScreens } from '../components/ModuleActions';
 import { NetworkBadge } from '../components/NetworkBadge';
 import { SendModal } from '../modals/SendModal';
 import { SendWholeTokenModal, type WholeTokenTarget } from '../modals/SendWholeTokenModal';
@@ -175,8 +177,11 @@ export function L3WalletView({
 
   const tokens = sdkTokens;
   const sendableTokens = tokens;
+  const holds = useTokenHolds(tokens);
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
+  // Which wallet-module action (src/modules) has its screen open, if any.
+  const [openModuleAction, setOpenModuleAction] = useState<string | null>(null);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState(false);
   const [isSeedPhraseOpen, setIsSeedPhraseOpen] = useState(false);
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
@@ -387,6 +392,8 @@ export function L3WalletView({
           onSend={() => setIsSendModalOpen(true)}
           sendDisabled={sendableTokens.length === 0}
         />
+        {/* Actions contributed by wallet modules (src/modules), if any. */}
+        <ModuleActionButtons onOpen={setOpenModuleAction} />
 
       </div>
 
@@ -432,16 +439,21 @@ export function L3WalletView({
                   {assets.length === 0 ? (
                     <EmptyState />
                   ) : (
-                    assets.map((asset, index) => (
-                      <AssetRow
-                        key={asset.coinId}
-                        asset={asset}
-                        showBalances={showBalances}
-                        delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
-                        layer="L3"
-                        isNew={newAssetCoinIds.has(asset.coinId)}
-                      />
-                    ))
+                    assets.map((asset, index) => {
+                      // useAssets already shows a module's coin as the module says; the
+                      // badge (where a bridged asset came from) is a row concern.
+                      return (
+                        <AssetRow
+                          key={asset.coinId}
+                          asset={asset}
+                          badge={describeCoin(asset.coinId)?.badge}
+                          showBalances={showBalances}
+                          delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
+                          layer="L3"
+                          isNew={newAssetCoinIds.has(asset.coinId)}
+                        />
+                      );
+                    })
                   )}
                 </div>
               )}
@@ -495,6 +507,7 @@ export function L3WalletView({
                               isNew={newTokenIds.has(token.id)}
                               onSend={handleSendCoinToken}
                               onInspect={handleInspectCoinToken}
+                              hold={holds.get(token.id)?.reason}
                             />
                           ))}
                     </>
@@ -512,6 +525,7 @@ export function L3WalletView({
       <SendWholeTokenModal target={sendTarget} onClose={() => setSendTarget(null)} />
       <TokenDataModal target={inspectTarget} onClose={() => setInspectTarget(null)} />
       <SwapModal isOpen={isSwapModalOpen} onClose={() => setIsSwapModalOpen(false)} />
+      <ModuleScreens openId={openModuleAction} onClose={() => setOpenModuleAction(null)} />
       <PaymentRequestsModal
         isOpen={isRequestsOpen}
         onClose={() => setIsRequestsOpen(false)}

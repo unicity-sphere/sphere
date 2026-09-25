@@ -66,3 +66,16 @@ describe('dependency hygiene', () => {
     expect(isFileLink || !hasScaffoldingMarker).toBe(true);
   });
 });
+
+describe('bridge development links', () => {
+  const packageJson = JSON.parse(
+    readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+  ) as { dependencies: Record<string, string> };
+  const isLink = (name: string) => packageJson.dependencies[name]?.startsWith('file:') ?? false;
+  const sdkLinked = isLink('@unicitylabs/sphere-sdk');
+
+  it.skipIf(sdkLinked)('bridge packages are published ranges once sphere-sdk is', () => {
+    expect(isLink('@unicitylabs/bridge-core')).toBe(false);
+    expect(isLink('@unicitylabs/bridge-plugin')).toBe(false);
+  });
+});
