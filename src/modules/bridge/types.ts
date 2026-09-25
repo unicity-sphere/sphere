@@ -104,7 +104,7 @@ export interface BridgeOutSide {
   /** Read a burned blob; `null` when it is not this asset's burn. */
   identify(burnedToken: Uint8Array): Promise<BurnIdentity | null>;
   /** Whether a token's mint reason names the vault this side releases from. */
-  backs(justification: Uint8Array | null): boolean;
+  backs(justification: Uint8Array | null): boolean | Promise<boolean>;
   readonly returns: BridgeReturnService;
   /** Present when the vault credits payouts for the destination to collect. */
   readonly payout?: BridgePayout;

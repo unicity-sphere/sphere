@@ -18,7 +18,7 @@ export async function splitReturnable(payments: BridgePayments, out: BridgeOutSi
 
 async function backedByVault(payments: BridgePayments, out: BridgeOutSide, tokenId: string): Promise<boolean> {
   try {
-    return out.backs(await payments.tokenJustification(tokenId));
+    return await out.backs(await payments.tokenJustification(tokenId));
   } catch {
     return false;
   }
