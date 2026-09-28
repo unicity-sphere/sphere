@@ -40,7 +40,7 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     resumeDeps: () => { throw new Error('unused'); },
     out: {
       reasonFor: ({ amount }) => new Uint8Array([Number(amount & 0xffn)]),
-      identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n } : null),
+      identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n, reasonBytes: new Uint8Array([7]) } : null),
       backs: () => true,
       returns: service,
     },
@@ -209,8 +209,18 @@ describe('recoverBurns', () => {
     });
     const recovered = await recoverBurns(payments, store, [fakeAsset(fakeService())]);
     expect(recovered.map((r) => r.id)).toEqual([NULLIFIER]);
-    expect(recovered[0]).toMatchObject({ destination: 'Tdest', amount: '7', status: 'burned' });
+    expect(recovered[0]).toMatchObject({ destination: 'Tdest', amount: '7', status: 'burned', reasonBytesHex: '07' });
     expect(payments.acknowledged).toEqual(['b-9']);
+  });
+
+  it('submits a record saved without its reason with the reason the burned token carries', async () => {
+    const service = fakeService();
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    store.persistReturn({ id: 'n1', coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: toHex(BLOB), reasonBytesHex: '', destination: 'Tdest', amount: '7', createdAt: 1, status: 'burned' });
+
+    await syncReturns(store, () => asset);
+    expect(service.submit).toHaveBeenCalledWith(BLOB, new Uint8Array([7]));
   });
 
   it('leaves a burn no asset recognises in the wallet', async () => {

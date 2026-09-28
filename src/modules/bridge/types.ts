@@ -88,6 +88,8 @@ export interface BurnIdentity {
   /** Destination and amount read back from the reason bytes, for a recovered record. */
   readonly destination: string;
   readonly amount: bigint;
+  /** The return reason the burn commits to, read back from the burned token. */
+  readonly reasonBytes: Uint8Array;
 }
 
 export interface BridgePayout {

@@ -51,7 +51,8 @@ export async function runBridgeOut(args: BridgeOutArgs): Promise<PendingReturn> 
 
 export async function submitReturn(store: BridgeStore, out: BridgeOutSide, record: PendingReturn): Promise<PendingReturn> {
   try {
-    const rec = await out.returns.submit(fromHex(record.burnedTokenHex), fromHex(record.reasonBytesHex));
+    const burnedToken = fromHex(record.burnedTokenHex);
+    const rec = await out.returns.submit(burnedToken, await reasonOf(out, record, burnedToken));
     store.updateReturn(record.id, fromService(rec, record));
   } catch (err) {
     const refusal = out.returns.refusal(err);
@@ -95,6 +96,11 @@ export async function retryReturn(store: BridgeStore, asset: BridgeAsset, id: st
   return submitReturn(store, asset.out, record);
 }
 
+async function reasonOf(out: BridgeOutSide, record: PendingReturn, burnedToken: Uint8Array): Promise<Uint8Array> {
+  if (record.reasonBytesHex) return fromHex(record.reasonBytesHex);
+  return (await out.identify(burnedToken))?.reasonBytes ?? new Uint8Array();
+}
+
 function fromService(rec: ReturnServiceRecord, record: PendingReturn): Partial<PendingReturn> {
   const failed = rec.status === 'failed';
   return {
@@ -128,7 +134,7 @@ export async function recoverBurns(
         coinIdHex: asset.coinIdHex,
         assetId: asset.id,
         burnedTokenHex: toHex(burnedToken),
-        reasonBytesHex: '',
+        reasonBytesHex: toHex(identity.reasonBytes),
         destination: identity.destination,
         amount: identity.amount.toString(),
         createdAt: Date.now(),

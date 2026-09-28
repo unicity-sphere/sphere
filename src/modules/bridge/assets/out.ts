@@ -41,6 +41,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
         nullifierHex: toHex(nullifier(bridge.configHash, burnTransitionId(ids.burnStateId, ids.burnTxHash))),
         destination: `0x${toHex(reason.recipient)}`,
         amount: reason.amount,
+        reasonBytes: ids.reasonBytes,
       };
     },
     backs: (justification) => mintedAgainst(bridge, justification),
