@@ -1,4 +1,4 @@
-import { TRON_MAINNET_CHAIN_ID, TRON_NILE_CHAIN_ID, TronHttpRpcClient } from '@unicitylabs/bridge-plugin';
+import { fromHex, TRON_MAINNET_CHAIN_ID, TRON_NILE_CHAIN_ID, TronHttpRpcClient } from '@unicitylabs/bridge-plugin';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
@@ -74,13 +74,6 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
 function withServiceUrl(m: typeof NILE_USDT_BRIDGE): typeof NILE_USDT_BRIDGE {
   const url = import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL as string | undefined;
   return url ? withReturnServiceUrl(m, url) : m;
-}
-
-function fromHex(hex: string): Uint8Array {
-  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
 }
 
 function tronChain(chainId: number, chainRef: string): BridgeChain {

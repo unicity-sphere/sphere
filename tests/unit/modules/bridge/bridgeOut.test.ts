@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
-import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns, toHex } from '@/modules/bridge/bridgeOut';
+import { toHex } from '@unicitylabs/bridge-plugin';
+
+import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns } from '@/modules/bridge/bridgeOut';
 import { bridgeStoreFor } from '@/modules/bridge/store';
 import type { BridgeAsset, BridgeReturnService, ReturnServiceRecord } from '@/modules/bridge/types';
 
@@ -130,6 +132,16 @@ describe('syncReturns', () => {
     expect(after.find((r) => r.id === 'n1')).toMatchObject({ status: 'settled', settleTxid: 'tx9' });
     expect(after.find((r) => r.id === 'n2')).toMatchObject({ returnId: 'r-1', status: 'queued' });
     expect(service.submitted).toBe(1);
+  });
+
+  it('never submits a stored blob whose hex is corrupt as zero bytes', async () => {
+    const service = fakeService();
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    store.persistReturn({ id: 'n1', coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: 'zz', reasonBytesHex: '07', destination: 'Tdest', amount: '7', createdAt: 1, status: 'burned' });
+
+    await syncReturns(store, () => asset);
+    expect(service.submit).not.toHaveBeenCalled();
   });
 
   it('keeps a return the service failed recoverably, and resubmits it once the retry delay has passed', async () => {

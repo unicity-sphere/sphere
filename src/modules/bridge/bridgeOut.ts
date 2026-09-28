@@ -1,4 +1,5 @@
 import { burnForReturn, recoverPendingBurns, type BridgePayments } from '@unicitylabs/bridge-core';
+import { fromHex, toHex } from '@unicitylabs/bridge-plugin';
 
 import type { BridgeStore, PendingReturn } from './store';
 import type { BridgeAsset, BridgeOutSide, ReturnServiceRecord } from './types';
@@ -155,17 +156,4 @@ export async function recoverBurns(
 function outSide(asset: BridgeAsset): BridgeOutSide {
   if (!asset.out) throw new Error(`${asset.label} cannot be bridged out from this wallet.`);
   return asset.out;
-}
-
-export function toHex(bytes: Uint8Array): string {
-  let s = '';
-  for (const b of bytes) s += b.toString(16).padStart(2, '0');
-  return s;
-}
-
-export function fromHex(hex: string): Uint8Array {
-  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
 }

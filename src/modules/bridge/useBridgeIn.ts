@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
+import { fromHex } from '@unicitylabs/bridge-plugin';
 
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
@@ -100,11 +101,4 @@ function refreshBalances(queryClient: QueryClient): void {
   queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.tokens.all });
   queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.balance.all });
   queryClient.refetchQueries({ queryKey: SPHERE_KEYS.payments.assets.all });
-}
-
-function fromHex(hex: string): Uint8Array {
-  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
 }

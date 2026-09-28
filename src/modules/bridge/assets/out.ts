@@ -1,4 +1,4 @@
-import { burnIdentifiers, burnTransitionId, decodeBridgeBackReason, nullifier, type BridgeBackReason } from '@unicitylabs/bridge-plugin';
+import { burnIdentifiers, burnTransitionId, bytesEqual, decodeBridgeBackReason, nullifier, toHex, type BridgeBackReason } from '@unicitylabs/bridge-plugin';
 import {
   buildBridgeBackBurnReason,
   mintedAgainst,
@@ -80,14 +80,4 @@ function serviceRecord(rec: ReturnRecord): ReturnServiceRecord {
     queuePosition: rec.queuePosition ?? undefined,
     sinceMs: rec.updatedAtMs,
   };
-}
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-
-function toHex(bytes: Uint8Array): string {
-  let s = '';
-  for (const b of bytes) s += b.toString(16).padStart(2, '0');
-  return s;
 }

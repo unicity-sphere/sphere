@@ -1,4 +1,4 @@
-import { ETHEREUM_MAINNET_CHAIN_ID, EvmJsonRpcClient, SEPOLIA_CHAIN_ID, toEvmAddressHex } from '@unicitylabs/bridge-plugin';
+import { ETHEREUM_MAINNET_CHAIN_ID, EvmJsonRpcClient, fromHex, SEPOLIA_CHAIN_ID, toEvmAddressHex } from '@unicitylabs/bridge-plugin';
 import {
   bridgePresentation,
   bridgeTokenPlugin,
@@ -104,10 +104,3 @@ const NEVER_SIGNS: DepositWallet = {
     throw new Error('Resuming a mint never signs.');
   },
 };
-
-function fromHex(hex: string): Uint8Array {
-  const s = hex.startsWith('0x') ? hex.slice(2) : hex;
-  const out = new Uint8Array(s.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
