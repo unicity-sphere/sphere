@@ -30,17 +30,6 @@ describe('wallet module registry', () => {
   });
 });
 
-describe('bridge chains', () => {
-  it('groups assets by source chain for the picker', async () => {
-    const { bridgeChainsFor } = await import('@/modules/bridge/assets');
-    expect(bridgeChainsFor('testnet2')).toEqual([
-      { id: 'eip155:11155111', name: 'Ethereum', networkName: 'Sepolia testnet', testnet: true },
-      { id: 'tron:0xcd8690dc', name: 'Tron', networkName: 'Nile testnet', testnet: true },
-    ]);
-    expect(bridgeChainsFor('mainnet')).toEqual([]);
-  });
-});
-
 describe('module coin views', () => {
   it('shows a bridged asset the registry does not list as the module says, priced at its reference', async () => {
     const { moduleAssetView, moduleTokenView } = await import('@/modules/registry');

@@ -1,6 +1,6 @@
 /**
- * The bridge screen. First a direction, then which source network and which
- * asset on it, then the form: for assets in, an amount and the wallet that
+ * The bridge screen. First a direction, then the asset and its network in one
+ * list, then the form: for assets in, an amount and the wallet that
  * signs the deposit; for assets out, the tokens to burn and the destination
  * address. Every step is shown even when it has a single option, so what the
  * wallet supports is visible rather than implied. Coin- and chain-agnostic:
@@ -21,7 +21,7 @@ import { getErrorMessage } from '../../sdk/errors';
 import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
-import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
+import { bridgeAssetByCoin, bridgeAssetsFor } from './assets';
 import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
@@ -30,7 +30,7 @@ import { useBridgeIn } from './useBridgeIn';
 import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
-type Step = 'direction' | 'chain' | 'asset' | 'form' | 'processing' | 'success';
+type Step = 'direction' | 'asset' | 'form' | 'processing' | 'success';
 
 const FIELD = 'w-full px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-neutral-900 dark:text-white';
 const MUTED = 'text-neutral-500 dark:text-white/45';
@@ -41,7 +41,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   const [direction, setDirection] = useState<Direction>('in');
   const [step, setStep] = useState<Step>('direction');
-  const [chainId, setChainId] = useState<string | null>(null);
   const [assetId, setAssetId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,13 +61,11 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   // The assets offered depend on the direction: out needs a return path.
   const directionAssets = useMemo(
-    () => (direction === 'out' ? allAssets.filter((a) => a.out) : allAssets),
+    () => allAssets.filter((a) => direction === 'in' || a.out).sort(byAssetThenNetwork),
     [allAssets, direction],
   );
-  const chains = useMemo(() => bridgeChainsFor(network).filter((c) => directionAssets.some((a) => a.chain.id === c.id)), [network, directionAssets]);
-  const chain: BridgeChain | undefined = chains.find((c) => c.id === chainId);
-  const chainAssets = useMemo(() => directionAssets.filter((a) => a.chain.id === chainId), [directionAssets, chainId]);
-  const asset: BridgeAsset | undefined = chainAssets.find((a) => a.id === assetId);
+  const asset: BridgeAsset | undefined = directionAssets.find((a) => a.id === assetId);
+  const chain: BridgeChain | undefined = asset?.chain;
 
   // Tokens of the chosen asset this bridge can release, and those of the same coin it cannot.
   const { eligible: returnable, ineligible: superseded } = useReturnableTokens(asset, tokens);
@@ -102,7 +99,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   const close = () => {
     setStep('direction');
-    setChainId(null);
     setAssetId(null);
     setAmountInput('');
     setDestination('');
@@ -117,8 +113,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   /** The header's back arrow: one step back, or close from the first step. */
   const back = () => {
     setError(null);
-    if (step === 'chain') setStep('direction');
-    else if (step === 'asset') setStep('chain');
+    if (step === 'asset') setStep('direction');
     else if (step === 'form') setStep('asset');
     else if (step === 'success') setStep('direction');
     else close();
@@ -126,13 +121,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   const pickDirection = (d: Direction) => {
     setDirection(d);
-    setChainId(null);
-    setAssetId(null);
-    setStep('chain');
-  };
-
-  const pickChain = (c: BridgeChain) => {
-    setChainId(c.id);
     setAssetId(null);
     setStep('asset');
   };
@@ -222,9 +210,8 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const verb = direction === 'in' ? 'Bridge in' : 'Bridge out';
   const subtitle =
     step === 'direction' ? 'Which way'
-    : step === 'chain' ? `${verb} · Step 1 of 3 · Which network`
-    : step === 'asset' ? `${verb} · Step 2 of 3 · ${chain?.name} ${chain?.networkName} · Which asset`
-    : `${verb} · ${chain?.name} · ${chain?.networkName} · ${asset?.symbol}`;
+    : step === 'asset' ? `${verb} · Step 1 of 2 · Which asset and network`
+    : `${verb} · ${asset?.symbol} · ${chain?.name} · ${chain?.networkName}`;
 
   return (
     <WalletScreen isOpen={isOpen} onClose={close}>
@@ -259,45 +246,21 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
           </>
         )}
 
-        {step === 'chain' && (
+        {step === 'asset' && (
           <>
             <p className={`text-xs ${MUTED}`}>
               {direction === 'in'
-                ? 'Choose the network your funds are on. Only the networks listed here are supported.'
-                : 'Choose the network to receive on. Only the networks listed here are supported.'}
+                ? 'Choose the asset and the network your funds are on. Only the pairs listed here are supported.'
+                : 'Choose the asset and the network to receive it on. Only the pairs listed here are supported.'}
             </p>
-            {chains.length === 0 && <p className={MUTED}>No assets can be bridged this way on this network.</p>}
+            {directionAssets.length === 0 && <p className={MUTED}>No assets can be bridged this way on this network.</p>}
             <div className="space-y-2">
-              {chains.map((c) => {
-                const onChain = directionAssets.filter((a) => a.chain.id === c.id);
-                return (
-                  <ChoiceRow
-                    key={c.id}
-                    title={c.name}
-                    detail={c.networkName}
-                    tag={c.testnet ? 'testnet' : undefined}
-                    count={onChain.length}
-                    countNoun="asset"
-                    disabled={chainDisabledReason(onChain)}
-                    onClick={() => pickChain(c)}
-                  />
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {step === 'asset' && chain && (
-          <>
-            <p className={`text-xs ${MUTED}`}>
-              {direction === 'in' ? `Assets that can be bridged from ${chain.name} ${chain.networkName}.` : `Assets that can be sent back to ${chain.name} ${chain.networkName}.`}
-            </p>
-            <div className="space-y-2">
-              {chainAssets.map((a) => (
+              {directionAssets.map((a) => (
                 <ChoiceRow
                   key={a.id}
-                  title={a.symbol}
-                  detail={a.label}
+                  title={`${a.symbol} ${a.chain.name}`}
+                  detail={a.chain.networkName}
+                  tag={a.chain.testnet ? 'testnet' : undefined}
                   count={direction === 'in' ? a.wallets.length : tokens.filter((t) => t.coinId.toLowerCase() === a.coinIdHex).length}
                   countNoun={direction === 'in' ? 'wallet' : 'token'}
                   disabled={a.disabledReason}
@@ -310,7 +273,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
         {step === 'form' && chain && asset && direction === 'in' && (
           <>
-            <SelectionSummary chain={chain} asset={asset} prefix="From" onChange={() => setStep('chain')} />
+            <SelectionSummary chain={chain} asset={asset} prefix="From" onChange={() => setStep('asset')} />
 
             <div className="space-y-2">
               <label className={`text-xs ${MUTED}`}>Amount</label>
@@ -352,7 +315,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
         {step === 'form' && chain && asset && direction === 'out' && (
           <>
-            <SelectionSummary chain={chain} asset={asset} prefix="To" onChange={() => setStep('chain')} />
+            <SelectionSummary chain={chain} asset={asset} prefix="To" onChange={() => setStep('asset')} />
 
             {returnable.length === 0 ? (
               <>
@@ -456,10 +419,10 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   );
 }
 
-/** One selectable option in the direction, network and asset steps. */
+/** One selectable option in the direction and asset steps. */
 /** A network is inert when every asset on it is; the first reason speaks for it. */
-function chainDisabledReason(assets: readonly BridgeAsset[]): string | undefined {
-  return assets.length > 0 && assets.every((a) => a.disabledReason) ? assets[0].disabledReason : undefined;
+function byAssetThenNetwork(a: BridgeAsset, b: BridgeAsset): number {
+  return a.symbol.localeCompare(b.symbol) || a.chain.name.localeCompare(b.chain.name) || a.chain.networkName.localeCompare(b.chain.networkName);
 }
 
 function ChoiceRow({

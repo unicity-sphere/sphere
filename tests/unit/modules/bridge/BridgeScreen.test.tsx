@@ -1,7 +1,7 @@
 /**
- * The picker shows every step, so what the wallet supports is visible:
- * network, then asset, then the form. Rendered against the real Tron USDT and
- * Ethereum USDC assets (no wallet extension, no network calls).
+ * The picker shows every step, so what the wallet supports is visible: the
+ * asset and its network in one list, then the form. Rendered against the real
+ * Tron USDT and Ethereum USDC assets (no wallet extension, no network calls).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -32,7 +32,7 @@ function renderScreen() {
 }
 
 describe('BridgeScreen picker', () => {
-  it('walks direction, network, asset, then the form, showing each step with its options', () => {
+  it('walks direction, then asset and network in one list, then the form', () => {
     const { onClose } = renderScreen();
 
     // Step 0: which way. Both directions are offered; out counts the assets with a return path.
@@ -40,20 +40,19 @@ describe('BridgeScreen picker', () => {
     expect(screen.getByText('Send assets out')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
 
-    // Step 1: the supported networks, named and tagged as testnets.
-    expect(screen.getByText(/Step 1 of 3/)).toBeDefined();
-    expect(screen.getByText('Ethereum')).toBeDefined();
+    // Step 1: every asset with its network, ordered by asset then network, tagged as testnets.
+    expect(screen.getByText(/Step 1 of 2/)).toBeDefined();
+    const rows = screen.getAllByRole('button').map((b) => b.textContent ?? '');
+    const usdc = rows.findIndex((t) => t.startsWith('USDC Ethereum'));
+    const usdt = rows.findIndex((t) => t.startsWith('USDT Tron'));
+    expect(usdc).toBeGreaterThanOrEqual(0);
+    expect(usdt).toBeGreaterThan(usdc);
     expect(screen.getByText(/Sepolia testnet/)).toBeDefined();
-    expect(screen.getByText('Tron')).toBeDefined();
     expect(screen.getByText(/Nile testnet/)).toBeDefined();
     expect(screen.getAllByText('testnet')).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: /Tron/ }));
+    fireEvent.click(screen.getByRole('button', { name: /USDT Tron/ }));
 
-    // Step 2: the one asset on it.
-    expect(screen.getByText(/Step 2 of 3/)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /USDT/ }));
-
-    // Step 3: the form keeps the choice in view and names the signer.
+    // Step 2: the form keeps the choice in view and names the signer.
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
     expect(screen.getByText(/^From/)).toBeDefined();
     expect(screen.getByRole('button', { name: /Continue with TronLink/ })).toBeDefined();
@@ -63,9 +62,7 @@ describe('BridgeScreen picker', () => {
   it('walks to the Ethereum USDC form and names MetaMask as the signer', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Ethereum/ }));
-    expect(screen.getByText(/Step 2 of 3/)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /USDC/ }));
+    fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
     expect(screen.getByRole('button', { name: /Continue with MetaMask/ })).toBeDefined();
     expect(screen.getByText(/Install the MetaMask browser extension/)).toBeDefined();
@@ -77,8 +74,7 @@ describe('BridgeScreen picker', () => {
     try {
       renderScreen();
       fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
-      fireEvent.click(screen.getByRole('button', { name: /Ethereum/ }));
-      fireEvent.click(screen.getByRole('button', { name: /USDC/ }));
+      fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
       for (const typed of ['1.2.3', '1.1234567']) {
         fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: typed } });
         fireEvent.click(screen.getByRole('button', { name: /Continue with MetaMask/ }));
@@ -93,8 +89,7 @@ describe('BridgeScreen picker', () => {
   it('offers the assets-out path and asks for tokens and a destination', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Send assets out/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Tron/ }));
-    fireEvent.click(screen.getByRole('button', { name: /USDT/ }));
+    fireEvent.click(screen.getByRole('button', { name: /USDT Tron/ }));
     // No tokens in this wallet: the form says so instead of offering a burn.
     expect(screen.getByText(/No USDT tokens to send out/)).toBeDefined();
     expect(screen.getByText(/^To/)).toBeDefined();
@@ -103,13 +98,13 @@ describe('BridgeScreen picker', () => {
   it('closes from the first step and steps back from later ones', () => {
     const { onClose } = renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Tron/ }));
-    expect(screen.getByText(/Step 2 of 3/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /USDT Tron/ }));
+    expect(screen.getByPlaceholderText('0.00')).toBeDefined();
 
     // The header's back arrow is the only icon-only button in the header.
     const back = screen.getAllByRole('button').find((b) => b.textContent === '')!;
     fireEvent.click(back);
-    expect(screen.getByText(/Step 1 of 3/)).toBeDefined();
+    expect(screen.getByText(/Step 1 of 2/)).toBeDefined();
     fireEvent.click(back);
     expect(screen.getByText('Bring assets in')).toBeDefined();
     fireEvent.click(back);
