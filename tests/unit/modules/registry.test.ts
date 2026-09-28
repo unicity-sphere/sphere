@@ -51,4 +51,19 @@ describe('module coin views', () => {
     expect(moduleTokenView({ id: 't', coinId, symbol: 'F16348', name: coinId, decimals: 0, amount: '10000000', status: 'confirmed', createdAt: 0, updatedAt: 0 }))
       .toMatchObject({ symbol: 'USDT', decimals: 6 });
   });
+
+  it('reads an unverified holding of a bridged coin in its units, but neither names nor prices it as the bridged asset', async () => {
+    const { moduleAssetView, moduleTokenView } = await import('@/modules/registry');
+    const coinId = NILE_USDT_BRIDGE.coinIdHex!;
+    const raw = {
+      coinId, symbol: 'F16348', name: coinId, decimals: 0, totalAmount: '10000000', tokenCount: 1,
+      confirmedAmount: '10000000', unconfirmedAmount: '0', confirmedTokenCount: 1, unconfirmedTokenCount: 0,
+      transferringTokenCount: 0, transferringAmount: '0', priceUsd: null, priceEur: null, change24h: null,
+      fiatValueUsd: null, fiatValueEur: null, unverified: true,
+    };
+
+    expect(moduleAssetView(raw)).toMatchObject({ symbol: 'USDT', name: coinId, decimals: 6, priceUsd: null, fiatValueUsd: null });
+    expect(moduleTokenView({ id: 't', coinId, symbol: 'F16348', name: coinId, decimals: 0, amount: '10000000', status: 'confirmed', createdAt: 0, updatedAt: 0, unverified: true }))
+      .toMatchObject({ symbol: 'USDT', name: coinId, decimals: 6 });
+  });
 });

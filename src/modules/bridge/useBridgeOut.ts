@@ -8,7 +8,7 @@ import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssets } from './assets';
 import { recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
-import { splitReturnable, type ReturnableSplit } from './returnable';
+import { returnCandidates, splitReturnable, type ReturnableSplit } from './returnable';
 import { bridgeStoreFor, isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
 import type { BridgeAsset, ReturnServiceTiming } from './types';
 
@@ -107,10 +107,7 @@ export function useBridgeOut() {
 
 export function useReturnableTokens(asset: BridgeAsset | undefined, tokens: readonly Token[]): ReturnableSplit & { isLoading: boolean } {
   const { sphere } = useSphereContext();
-  const candidates = useMemo(
-    () => (asset ? tokens.filter((t) => t.coinId.toLowerCase() === asset.coinIdHex && t.status === 'confirmed' && t.suspectedSpent !== true) : []),
-    [tokens, asset],
-  );
+  const candidates = useMemo(() => (asset ? returnCandidates(asset, tokens) : []), [tokens, asset]);
   const query = useQuery({
     queryKey: ['bridge', 'returnable', asset?.id, candidates.map((t) => t.id)],
     enabled: !!sphere && !!asset?.out,

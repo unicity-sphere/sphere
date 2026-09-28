@@ -27,6 +27,7 @@ function areAssetPropsEqual(prev: AssetRowProps, next: AssetRowProps): boolean {
     prev.asset.priceUsd === next.asset.priceUsd &&
     prev.asset.change24h === next.asset.change24h &&
     prev.asset.iconUrl === next.asset.iconUrl &&
+    prev.asset.unverified === next.asset.unverified &&
     prev.showBalances === next.showBalances &&
     prev.layer === next.layer &&
     prev.isNew === next.isNew &&
@@ -124,7 +125,11 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
                 {layer}
               </span>
             )}
-            {badge && (
+            {asset.unverified ? (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" title="Not verified as the asset it names. It is not counted and cannot be sent.">
+                Unverified
+              </span>
+            ) : badge && (
               <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400" title={`Bridged from ${badge}`}>
                 {badge}
               </span>

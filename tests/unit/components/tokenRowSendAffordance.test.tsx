@@ -75,6 +75,13 @@ describe('the Send affordance tracks spendability', () => {
     expect(screen.getByText('Settling on Ethereum, about 2 min left')).toBeTruthy();
   });
 
+  it('withholds it from an unverified token and marks the token unverified', () => {
+    render(<TokenRow token={coin({ unverified: true })} delay={0} isNew={false} onSend={vi.fn()} />);
+    expect(sendButton()).toBeNull();
+    expect(screen.getByText('Unverified')).toBeTruthy();
+    expect(screen.queryByText('Confirmed')).toBeNull();
+  });
+
   it('offers Send for a settled coinless token', () => {
     render(<CoinlessTokenRow token={nft()} delay={0} isNew={false} onSend={vi.fn()} />, withQueryClient());
     expect(sendButton()).toBeTruthy();

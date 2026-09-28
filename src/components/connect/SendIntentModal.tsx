@@ -5,6 +5,7 @@ import type { TransferResult } from '@unicitylabs/sphere-sdk';
 import { useAssets, useTransfer } from '../../sdk';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../sdk/errors';
 import { QuotaBlockedError } from '../../sdk/quotaGate';
+import { verifiedAssets } from '../../sdk/verifiedAssets';
 import { useUpgrade } from '../upgrade';
 import { showToast } from '../ui/toast-utils';
 import { IntentConfirmModal } from './IntentConfirmModal';
@@ -47,7 +48,7 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
 
   // Prefer the held asset (gives balance); fall back to the registry for
   // metadata when the coin isn't held, so we can still display it sensibly.
-  const asset = assets.find((a) => a.coinId === coinId);
+  const asset = verifiedAssets(assets).find((a) => a.coinId === coinId);
   const registry = TokenRegistry.getInstance();
   const def = registry.getDefinition(coinId);
   const decimals = asset?.decimals ?? def?.decimals ?? 0;

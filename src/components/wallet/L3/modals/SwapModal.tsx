@@ -8,6 +8,7 @@ import type { Asset } from '@unicitylabs/sphere-sdk';
 import { parseTokenAmount, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { useRegistryReady } from '../../../../sdk/hooks/payments/useRegistryReady';
+import { verifiedAssets } from '../../../../sdk/verifiedAssets';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { canSelfMint } from '../../../../config/networkCapabilities';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
@@ -55,7 +56,8 @@ interface SwapModalProps {
 }
 
 export function SwapModal({ isOpen, onClose }: SwapModalProps) {
-  const { assets } = useAssets();
+  const { assets: heldAssets } = useAssets();
+  const assets = verifiedAssets(heldAssets);
   const { transfer } = useTransfer();
   const { sphere, providers, network } = useSphereContext();
   const registryReady = useRegistryReady();

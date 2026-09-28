@@ -51,6 +51,13 @@ describe('bridge module token hold', () => {
     settling.mockReset();
   });
 
+  it('has no hold on an unverified token, which the wallet never spends, and does not ask the source chain', async () => {
+    const calls = settling.mock.calls.length;
+    const counterfeit = { ...token('bb'.repeat(32)), unverified: true } as Token;
+    expect(await bridgeModule.tokenHold!(counterfeit, ctx)).toBeUndefined();
+    expect(settling.mock.calls.length).toBe(calls);
+  });
+
   it('has no hold on a token of a coin the bridge does not know', async () => {
     const calls = settling.mock.calls.length;
     expect(await bridgeModule.tokenHold!(token('cc'.repeat(32)), ctx)).toBeUndefined();

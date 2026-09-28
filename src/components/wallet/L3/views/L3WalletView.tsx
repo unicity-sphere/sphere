@@ -7,6 +7,7 @@ import { useIdentity, useAssets, useTokens, useTokenHolds, useCoinlessTokens, us
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { describeCoin } from '../../../../modules/registry';
+import { assetKey } from '../../../../sdk/verifiedAssets';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
@@ -251,8 +252,8 @@ export function L3WalletView({
 
     const newIds = new Set<string>();
     assets.forEach(asset => {
-      if (!prevAssetCoinIdsRef.current.has(asset.coinId)) {
-        newIds.add(asset.coinId);
+      if (!prevAssetCoinIdsRef.current.has(assetKey(asset))) {
+        newIds.add(assetKey(asset));
       }
     });
     return newIds;
@@ -266,7 +267,7 @@ export function L3WalletView({
   }, [tokens]);
 
   useEffect(() => {
-    const currentIds = new Set(assets.map(a => a.coinId));
+    const currentIds = new Set(assets.map(assetKey));
     prevAssetCoinIdsRef.current = currentIds;
   }, [assets]);
 
@@ -444,13 +445,13 @@ export function L3WalletView({
                       // badge (where a bridged asset came from) is a row concern.
                       return (
                         <AssetRow
-                          key={asset.coinId}
+                          key={assetKey(asset)}
                           asset={asset}
                           badge={describeCoin(asset.coinId)?.badge}
                           showBalances={showBalances}
-                          delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
+                          delay={newAssetCoinIds.has(assetKey(asset)) ? (index + 1) * 0.05 : 0}
                           layer="L3"
-                          isNew={newAssetCoinIds.has(asset.coinId)}
+                          isNew={newAssetCoinIds.has(assetKey(asset))}
                         />
                       );
                     })

@@ -31,6 +31,7 @@ export function describeCoin(coinId: string): CoinPresentation | undefined {
 export function moduleAssetView(asset: Asset): Asset {
   const known = describeCoin(asset.coinId);
   if (!known) return asset;
+  if (asset.unverified) return { ...asset, symbol: known.symbol, decimals: known.decimals };
   const view: Asset = { ...asset, symbol: known.symbol, name: known.name, decimals: known.decimals };
   if (known.priceUsd === undefined || view.priceUsd != null) return view;
   const amount = Number(toHumanReadable(view.totalAmount, view.decimals));
@@ -39,7 +40,9 @@ export function moduleAssetView(asset: Asset): Asset {
 
 export function moduleTokenView(token: Token): Token {
   const known = describeCoin(token.coinId);
-  return known ? { ...token, symbol: known.symbol, name: known.name, decimals: known.decimals } : token;
+  if (!known) return token;
+  if (token.unverified) return { ...token, symbol: known.symbol, decimals: known.decimals };
+  return { ...token, symbol: known.symbol, name: known.name, decimals: known.decimals };
 }
 
 export async function moduleTokenHold(token: Token, ctx: TokenHoldContext): Promise<TokenHold | undefined> {

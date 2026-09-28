@@ -1,11 +1,17 @@
 import type { Token } from '@unicitylabs/sphere-sdk';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
-import type { BridgeOutSide } from './types';
+import type { BridgeAsset, BridgeOutSide } from './types';
 
 export interface ReturnableSplit {
   readonly eligible: Token[];
   readonly ineligible: Token[];
+}
+
+export function returnCandidates(asset: BridgeAsset, tokens: readonly Token[]): Token[] {
+  return tokens.filter(
+    (t) => t.coinId.toLowerCase() === asset.coinIdHex && t.status === 'confirmed' && t.suspectedSpent !== true && !t.unverified,
+  );
 }
 
 export async function splitReturnable(payments: BridgePayments, out: BridgeOutSide, tokens: readonly Token[]): Promise<ReturnableSplit> {

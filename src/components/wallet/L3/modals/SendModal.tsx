@@ -9,6 +9,7 @@ import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../conne
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
 import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
 import { useSendProgress } from '../../../../sdk/hooks/payments/useSendProgress';
+import { verifiedAssets } from '../../../../sdk/verifiedAssets';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
@@ -58,7 +59,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // now would go out keyless (→ 401). Disable Send until it's ready.
   const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
-  const assets = sdkAssets;
+  const assets = verifiedAssets(sdkAssets);
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const handleCopy = useCallback(async (text: string, key: string) => {

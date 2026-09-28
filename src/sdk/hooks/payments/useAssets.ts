@@ -86,7 +86,7 @@ export function useAssets(): UseAssetsReturn {
       // Apply fallback prices for tokens missing CoinGecko data
       const tokenName = (def?.name ?? enriched.name ?? '').toLowerCase();
       const fallback = FALLBACK_PRICES[tokenName];
-      if (fallback && !enriched.priceUsd) {
+      if (fallback && !enriched.priceUsd && !a.unverified) {
         const decimals = enriched.decimals ?? 0;
         const amount = Number(toHumanReadable(enriched.totalAmount, decimals));
         return {

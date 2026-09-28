@@ -11,6 +11,20 @@ const asset = {
   fiatValueUsd: 10, fiatValueEur: null,
 };
 
+describe('AssetRow verification', () => {
+  it('marks an unverified holding and never shows where a bridged asset came from on it', () => {
+    render(<AssetRow asset={{ ...asset, unverified: true }} badge="Tron" showBalances delay={0} isNew={false} />);
+    expect(screen.getByText('Unverified')).toBeTruthy();
+    expect(screen.queryByText('Tron')).toBeNull();
+  });
+
+  it('shows the source chain on a verified holding', () => {
+    render(<AssetRow asset={asset} badge="Tron" showBalances delay={0} isNew={false} />);
+    expect(screen.getByText('Tron')).toBeTruthy();
+    expect(screen.queryByText('Unverified')).toBeNull();
+  });
+});
+
 describe('AssetRow name', () => {
   it('is cut off by default and shown whole on click, without triggering the row', () => {
     let rowClicks = 0;

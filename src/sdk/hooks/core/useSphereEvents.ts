@@ -187,7 +187,7 @@ export function useSphereEvents(): void {
       }
 
       const firstToken = transfer.tokens[0];
-      const symbol = firstToken?.symbol ?? '?';
+      const symbol = firstToken?.unverified ? `unverified ${firstToken.symbol}` : (firstToken?.symbol ?? '?');
       const decimals = firstToken?.decimals ?? 0;
 
       // The SDK announces one event per TOKEN, not per payment, so a 54-token
@@ -198,7 +198,7 @@ export function useSphereEvents(): void {
       // Keyed on coinId, never symbol: two assets can share a display symbol
       // while differing in decimals, and summing those would render a number
       // that is wrong rather than merely merged.
-      const assetKey = firstToken?.coinId ?? symbol;
+      const assetKey = firstToken ? `${firstToken.coinId}${firstToken.unverified ? ':unverified' : ''}` : symbol;
       const groupKey = `incoming:${transfer.senderPubkey || sender}:${assetKey}`;
       const carried = incomingTotalsRef.current.get(groupKey);
       const totalSmallest =

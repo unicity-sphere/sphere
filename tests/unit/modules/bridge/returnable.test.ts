@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { Token } from '@unicitylabs/sphere-sdk';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
-import { splitReturnable } from '@/modules/bridge/returnable';
-import type { BridgeOutSide } from '@/modules/bridge/types';
+import { returnCandidates, splitReturnable } from '@/modules/bridge/returnable';
+import type { BridgeAsset, BridgeOutSide } from '@/modules/bridge/types';
 
 const REASON_V2 = new Uint8Array([2]);
 const REASON_V1 = new Uint8Array([1]);
@@ -20,6 +20,23 @@ function wallet(reasons: Record<string, Uint8Array | null | Error>): BridgePayme
 
 const out = { backs: (j: Uint8Array) => j[0] === 2 } as unknown as BridgeOutSide;
 const tokens = (...ids: string[]) => ids.map((id) => ({ id })) as Token[];
+
+describe('returnCandidates', () => {
+  it('offers the confirmed, verified tokens of the bridged coin', () => {
+    const asset = { coinIdHex: 'bb'.repeat(32) } as BridgeAsset;
+    const held = (id: string, over: Partial<Token> = {}) => ({ id, coinId: 'BB'.repeat(32), status: 'confirmed', ...over }) as Token;
+
+    const candidates = returnCandidates(asset, [
+      held('good'),
+      held('unverified', { unverified: true }),
+      held('moving', { status: 'transferring' }),
+      held('spent', { suspectedSpent: true }),
+      held('other', { coinId: 'cc'.repeat(32) }),
+    ]);
+
+    expect(candidates.map((t) => t.id)).toEqual(['good']);
+  });
+});
 
 describe('splitReturnable', () => {
   it('offers only tokens whose mint reason names the active vault', async () => {
