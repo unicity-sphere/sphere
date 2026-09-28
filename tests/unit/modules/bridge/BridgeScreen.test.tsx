@@ -71,6 +71,25 @@ describe('BridgeScreen picker', () => {
     expect(screen.getByText(/Install the MetaMask browser extension/)).toBeDefined();
   });
 
+  it('refuses a malformed amount or one finer than the asset divides before any wallet prompt', () => {
+    const request = vi.fn();
+    (window as { ethereum?: unknown }).ethereum = { request };
+    try {
+      renderScreen();
+      fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Ethereum/ }));
+      fireEvent.click(screen.getByRole('button', { name: /USDC/ }));
+      for (const typed of ['1.2.3', '1.1234567']) {
+        fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: typed } });
+        fireEvent.click(screen.getByRole('button', { name: /Continue with MetaMask/ }));
+        expect(screen.getByText('Enter an amount greater than zero, with at most 6 decimals.')).toBeDefined();
+      }
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      delete (window as { ethereum?: unknown }).ethereum;
+    }
+  });
+
   it('offers the assets-out path and asks for tokens and a destination', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Send assets out/ }));

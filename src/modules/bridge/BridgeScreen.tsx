@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, CheckCircle, ChevronRight, ExternalLink, Loader2, RotateCw, Trash2 } from 'lucide-react';
-import type { Token } from '@unicitylabs/sphere-sdk';
+import { safeParseTokenAmount, type Token } from '@unicitylabs/sphere-sdk';
 
 import { useTokens } from '../../sdk';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
@@ -22,7 +22,7 @@ import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
-import { formatUnits, parseUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
+import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
@@ -145,9 +145,9 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const startIn = async (wallet: BridgeWalletOption) => {
     if (!asset) return;
     setError(null);
-    const amount = parseUnits(amountInput, asset.decimals);
-    if (amount <= 0n) {
-      setError('Enter an amount greater than zero.');
+    const amount = safeParseTokenAmount(amountInput, asset.decimals);
+    if (amount === null || amount <= 0n) {
+      setError(`Enter an amount greater than zero, with at most ${asset.decimals} decimals.`);
       return;
     }
     setStep('processing');

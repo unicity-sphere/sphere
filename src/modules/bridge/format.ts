@@ -1,14 +1,6 @@
 import type { PendingLock, PendingReturn } from './store';
 import type { ReturnServiceTiming } from './types';
 
-export function parseUnits(input: string, decimals: number): bigint {
-  const [whole, frac = ''] = input.trim().split('.');
-  if (!/^\d*$/.test(whole) || !/^\d*$/.test(frac)) return 0n;
-  const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
-  const digits = (whole || '0') + fracPadded;
-  return BigInt(digits.replace(/^0+(?=\d)/, ''));
-}
-
 export function formatUnits(amount: bigint, decimals: number): string {
   const sign = amount < 0n ? '-' : '';
   const abs = amount < 0n ? -amount : amount;
