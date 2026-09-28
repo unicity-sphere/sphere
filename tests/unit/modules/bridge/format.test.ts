@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
+import { formatDuration, formatUnits, parseUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
 
 describe('bridge amount formatting', () => {
   it('parses decimals into smallest units without float rounding', () => {
@@ -73,5 +73,16 @@ describe('formatDuration', () => {
     expect(formatDuration(65 * MIN)).toBe('1 h 5 min');
     expect(formatDuration(120 * MIN)).toBe('2 h');
     expect(formatDuration(-5_000)).toBe('0 s');
+  });
+});
+
+describe('pendingLockSentence', () => {
+  it('tells a deposit the wallet never signed from one whose lock may have been sent', () => {
+    expect(pendingLockSentence({ status: 'locking' })).toBe('not signed, nothing is locked');
+    expect(pendingLockSentence({ status: 'locking', lockRequested: true })).toBe(
+      "the lock may have been sent; check your wallet's activity before discarding",
+    );
+    expect(pendingLockSentence({ status: 'locking', lockTxid: 'aa' })).toBe('lock sent');
+    expect(pendingLockSentence({ status: 'locked', lockTxid: 'aa' })).toBe('locked, not yet minted');
   });
 });

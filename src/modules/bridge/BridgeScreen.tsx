@@ -22,7 +22,7 @@ import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
-import { formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from './format';
+import { formatUnits, parseUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
@@ -729,7 +729,7 @@ function PendingList({
                 {amount}{asset ? ` · ${asset.chain.name}` : ''}
               </span>
               <span className={`block ${MUTED}`}>
-                {lock.lockTxid ? (lock.status === 'locked' ? 'locked, not yet minted' : 'lock sent') : 'not signed, nothing is locked'}
+                {pendingLockSentence(lock)}
               </span>
             </span>
             {lock.lockTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(lock.lockTxid)} label="tx" />}

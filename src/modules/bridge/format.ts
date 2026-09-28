@@ -1,4 +1,4 @@
-import type { PendingReturn } from './store';
+import type { PendingLock, PendingReturn } from './store';
 import type { ReturnServiceTiming } from './types';
 
 export function parseUnits(input: string, decimals: number): bigint {
@@ -61,4 +61,10 @@ export function formatDuration(ms: number): string {
   const rest = minutes % 60;
   if (hours === 0) return `${rest} min`;
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+export function pendingLockSentence(lock: Pick<PendingLock, 'status' | 'lockTxid' | 'lockRequested'>): string {
+  if (lock.lockTxid) return lock.status === 'locked' ? 'locked, not yet minted' : 'lock sent';
+  if (lock.lockRequested) return "the lock may have been sent; check your wallet's activity before discarding";
+  return 'not signed, nothing is locked';
 }

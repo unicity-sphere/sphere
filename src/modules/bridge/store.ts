@@ -10,6 +10,7 @@ export interface PendingLock {
   readonly tokenIdHex: string;
   readonly recipientCommitmentHex: string;
   readonly amount: string;
+  lockRequested?: boolean;
   lockTxid?: string;
   lockBlock?: number;
   logIndex?: number;

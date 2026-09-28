@@ -70,6 +70,7 @@ class FakeSigner implements SourceSigner {
   public network = CHAIN;
   public readonly sent: ContractCall[] = [];
   public afterSend?: (sig: string) => void;
+  public lockFailure?: unknown;
   private readonly timeline: string[];
   public constructor(timeline: string[] = []) {
     this.timeline = timeline;
@@ -88,6 +89,7 @@ class FakeSigner implements SourceSigner {
     const kind = call.functionSignature.startsWith('approve') ? 'approve' : 'lock';
     this.timeline.push('send:' + kind);
     this.afterSend?.(call.functionSignature);
+    if (kind === 'lock' && this.lockFailure) throw this.lockFailure;
     return kind === 'approve' ? APPROVE_TX : LOCK_TX;
   }
   sigs() {
@@ -209,6 +211,25 @@ describe('runBridgeIn', () => {
     const rec = store.only();
     expect(rec.lockTxid).toBe(LOCK_TX);
     expect(rec.status).toBe('failed');
+  });
+
+  it('keeps the salt when the lock step fails after the wallet may have sent it', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = new Error('Timed out broadcasting lock to Tron.');
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/Timed out/);
+
+    expect(store.only()).toMatchObject({ status: 'locking', lockRequested: true });
+    expect(store.only().lockTxid).toBeUndefined();
+  });
+
+  it('forgets the deposit when the wallet refuses to sign the lock, since nothing was sent', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = Object.assign(new Error('User rejected the request.'), { code: 4001 });
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/rejected/);
+
+    expect(store.locks.size).toBe(0);
   });
 
   it('keeps the record when the mint fails after a confirmed lock (the resumable case)', async () => {

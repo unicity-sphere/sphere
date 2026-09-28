@@ -77,6 +77,10 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
       await guardUnchanged(wallet, owner, network, expectedNetwork, chainLabel);
       const isCommit = i === deposit.commitIndex;
       progress({ phase: step.awaitReceipt ? 'approving' : 'locking', message: step.label });
+      if (isCommit) {
+        lockRecord.lockRequested = true;
+        store.updateLock(lockRecord.id, { lockRequested: true });
+      }
       const txid = await step.send();
       if (isCommit) {
         commitTxid = txid;
@@ -108,15 +112,18 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     progress({ phase: 'done', lockTxid: commitTxid });
     return { tokenId, amount };
   } catch (e) {
-    if (!lockConfirmed) {
-      if (lockRecord.lockTxid && e instanceof TxRevertedError) {
-        store.updateLock(lockRecord.id, { status: 'failed' });
-      } else if (!lockRecord.lockTxid) {
-        store.removeLock(lockRecord.id);
-      }
-    }
+    if (!lockConfirmed) recordUnconfirmedDeposit(store, lockRecord, e);
     throw e;
   }
+}
+
+function recordUnconfirmedDeposit(store: BridgeStore, lock: PendingLock, e: unknown): void {
+  if (lock.lockTxid && e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
+  else if (!lock.lockTxid && (!lock.lockRequested || refusedByWallet(e))) store.removeLock(lock.id);
+}
+
+function refusedByWallet(e: unknown): boolean {
+  return (e as { code?: unknown } | null)?.code === 4001;
 }
 
 export interface ResumeArgs {
