@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { bridgeStoreFor, type PendingLock } from '@/modules/bridge/store';
+import { bridgeStoreFor, type PendingLock, type PendingReturn } from '@/modules/bridge/store';
 
 const lock = (id: string, status: PendingLock['status'] = 'locking'): PendingLock => ({
   id,
@@ -48,7 +48,7 @@ describe('bridge recovery store', () => {
 });
 
 describe('bridge recovery store: returns', () => {
-  const ret = (id: string, status: 'burned' | 'settled' = 'burned') => ({
+  const ret = (id: string, status: PendingReturn['status'] = 'burned') => ({
     id, coinIdHex: 'aa'.repeat(32), assetId: 'a', burnedTokenHex: '01', reasonBytesHex: '02', destination: 'T', amount: '1', createdAt: 1, status,
   });
 
@@ -70,5 +70,14 @@ describe('bridge recovery store: returns', () => {
     expect(store.activeReturns().map((r) => r.id)).toEqual(['open']);
     expect(store.removeReturn('open')).toBe(false);
     expect(store.removeReturn('done')).toBe(true);
+  });
+
+  it('keeps a refused return, since its burned token exists nowhere else', () => {
+    localStorage.clear();
+    const store = bridgeStoreFor('alice');
+    store.persistReturn({ ...ret('refused', 'failed'), recoverable: false });
+    expect(store.activeReturns()).toEqual([]);
+    expect(store.removeReturn('refused')).toBe(false);
+    expect(store.getReturn('refused')?.burnedTokenHex).toBeDefined();
   });
 });

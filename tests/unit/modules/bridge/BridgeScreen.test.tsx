@@ -18,7 +18,8 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
   return { ...mod, NILE_USDT_BRIDGE: { ...mod.NILE_USDT_BRIDGE, disabledReason: undefined } };
 });
 
-import { BridgeScreen } from '@/modules/bridge/BridgeScreen';
+import { BridgeScreen, ReturnsList } from '@/modules/bridge/BridgeScreen';
+import type { PendingReturn } from '@/modules/bridge/store';
 
 function renderScreen() {
   const onClose = vi.fn();
@@ -94,5 +95,26 @@ describe('BridgeScreen picker', () => {
     expect(screen.getByText('Bring assets in')).toBeDefined();
     fireEvent.click(back);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ReturnsList', () => {
+  const failed: PendingReturn = {
+    id: 'n1', coinIdHex: 'cd'.repeat(32), assetId: 'test:usdx', burnedTokenHex: '01', reasonBytesHex: '07',
+    destination: 'Tdest', amount: '7', createdAt: 1, status: 'failed', recoverable: false, message: 'intake is not configured',
+  };
+
+  it('offers a retry on a refused return and never removes the only copy of its burned token', () => {
+    const onRetry = vi.fn();
+    render(<ReturnsList returns={[failed]} timing={null} onDismiss={vi.fn()} onRetry={onRetry} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Send this burn to the service again' }));
+    expect(onRetry).toHaveBeenCalledWith('n1');
+    expect(screen.queryByRole('button', { name: 'Remove this record' })).toBeNull();
+  });
+
+  it('lets a released return be removed', () => {
+    render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { burnForReturn, recoverPendingBurns, type BridgePayments } from '@unicitylabs/bridge-core';
 
-import { isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
+import type { BridgeStore, PendingReturn } from './store';
 import type { BridgeAsset, BridgeOutSide, ReturnServiceRecord } from './types';
 
 export const RETRY_DELAY_MS = 60_000;
@@ -150,12 +150,6 @@ export async function recoverBurns(
   }).catch(() => {
   });
   return recovered;
-}
-
-export function dismissReturn(store: BridgeStore, id: string): boolean {
-  const ret = store.getReturn(id);
-  if (!ret || !isTerminalReturn(ret)) return false;
-  return store.removeReturn(id);
 }
 
 function outSide(asset: BridgeAsset): BridgeOutSide {

@@ -24,7 +24,7 @@ import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor, bridgeChainsFor } from './assets';
 import { formatUnits, parseUnits, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
-import { isTerminalReturn, type PendingLock, type PendingReturn } from './store';
+import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
@@ -594,7 +594,6 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
   const asset = bridgeAssetByCoin(r.coinIdHex);
   const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
   const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
-  const retryable = r.status === 'failed' && r.recoverable === true;
   const inFlight = !isTerminalReturn(r);
   const detail = [returnStatusSentence(r, asset?.chain.name ?? 'the source chain'), returnTimingSentence(r, timing, Date.now())]
     .filter(Boolean)
@@ -636,7 +635,7 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
       {r.status === 'settled' && asset?.out?.payout && (
         <CollectButton payout={asset.out.payout} destination={r.destination} asset={asset} />
       )}
-      {retryable && (
+      {isRetryableReturn(r) && (
         <button
           type="button"
           onClick={() => onRetry(r.id)}
@@ -647,7 +646,7 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
           <RotateCw className="w-3.5 h-3.5" />
         </button>
       )}
-      {isTerminalReturn(r) && (
+      {isRemovableReturn(r) && (
         <button
           type="button"
           onClick={() => onDismiss(r.id)}

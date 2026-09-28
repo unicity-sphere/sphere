@@ -7,7 +7,7 @@ import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssets } from './assets';
-import { dismissReturn, recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
+import { recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
 import { splitReturnable, type ReturnableSplit } from './returnable';
 import { bridgeStoreFor, isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
 import type { BridgeAsset, ReturnServiceTiming } from './types';
@@ -76,7 +76,7 @@ export function useBridgeOut() {
   const dismiss = useCallback(
     (id: string) => {
       if (!store) return;
-      dismissReturn(store, id);
+      store.removeReturn(id);
       queryClient.setQueryData(returnsKey, store.listReturns());
     },
     [store, queryClient, returnsKey],

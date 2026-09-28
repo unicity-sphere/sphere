@@ -42,6 +42,14 @@ export function isTerminalReturn(ret: Pick<PendingReturn, 'status' | 'recoverabl
   return ret.status === 'settled' || (ret.status === 'failed' && !ret.recoverable);
 }
 
+export function isRetryableReturn(ret: Pick<PendingReturn, 'status'>): boolean {
+  return ret.status === 'failed';
+}
+
+export function isRemovableReturn(ret: Pick<PendingReturn, 'status'>): boolean {
+  return ret.status === 'settled';
+}
+
 interface BridgeState {
   locks: PendingLock[];
   returns: PendingReturn[];
@@ -131,7 +139,7 @@ export class BridgeStore {
   public removeReturn(id: string): boolean {
     const state = read(this.key);
     const ret = state.returns.find((r) => r.id === id);
-    if (!ret || !isTerminalReturn(ret)) return false;
+    if (!ret || !isRemovableReturn(ret)) return false;
     state.returns = state.returns.filter((r) => r.id !== id);
     return write(this.key, state);
   }

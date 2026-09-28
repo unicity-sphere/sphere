@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
-import { dismissReturn, recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns, toHex } from '@/modules/bridge/bridgeOut';
+import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns, toHex } from '@/modules/bridge/bridgeOut';
 import { bridgeStoreFor } from '@/modules/bridge/store';
 import type { BridgeAsset, BridgeReturnService, ReturnServiceRecord } from '@/modules/bridge/types';
 
@@ -173,7 +173,7 @@ describe('syncReturns', () => {
     expect(rec).toMatchObject({ status: 'queued' });
   });
 
-  it('a final failure stays final: no resubmission, dismissable', async () => {
+  it('a final failure is not resubmitted by itself, stays until retried by hand, and cannot be dismissed', async () => {
     const service = fakeService({
       status: vi.fn(async () => ({ returnId: 'r-1', status: 'failed' as const, message: 'config mismatch', recoverable: false })),
     });
@@ -186,19 +186,12 @@ describe('syncReturns', () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * RETRY_DELAY_MS);
     await syncReturns(store, () => asset);
     expect(service.submitted).toBe(0);
-    expect(dismissReturn(store, 'n1')).toBe(true);
+    expect(store.removeReturn('n1')).toBe(false);
+    await retryReturn(store, asset, 'n1');
+    expect(service.submitted).toBe(1);
     vi.restoreAllMocks();
   });
 
-  it('only a finished return can be dismissed', () => {
-    const store = bridgeStoreFor('alice');
-    const base = { coinIdHex: 'cd'.repeat(32), assetId: 'test:usdx', burnedTokenHex: '01', reasonBytesHex: '07', destination: 'T', amount: '7', createdAt: 1 };
-    store.persistReturn({ ...base, id: 'open', status: 'proving' });
-    store.persistReturn({ ...base, id: 'done', status: 'settled' });
-    expect(dismissReturn(store, 'open')).toBe(false);
-    expect(dismissReturn(store, 'done')).toBe(true);
-    expect(store.listReturns().map((r) => r.id)).toEqual(['open']);
-  });
 });
 
 describe('recoverBurns', () => {
