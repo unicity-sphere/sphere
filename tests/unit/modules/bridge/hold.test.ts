@@ -11,7 +11,9 @@ vi.mock('@/modules/bridge/assets', () => ({
 
 import bridgeModule from '@/modules/bridge/module';
 
-const token = (coinId: string): Token => ({ id: 'aa'.repeat(32), coinId, amount: '1000000', status: 'confirmed' }) as Token;
+let nextId = 0;
+const token = (coinId: string, id = (nextId++).toString(16).padStart(64, '0')): Token =>
+  ({ id, coinId, amount: '1000000', status: 'confirmed' }) as Token;
 const ctx = { justification: async () => new Uint8Array([1]) };
 
 describe('bridge module token hold', () => {
@@ -28,6 +30,25 @@ describe('bridge module token hold', () => {
   it('has no hold on a final token', async () => {
     settling.mockResolvedValueOnce({ final: true, secondsLeft: 0 });
     expect(await bridgeModule.tokenHold!(token('bb'.repeat(32)), ctx)).toBeUndefined();
+  });
+
+  it('does not ask the source chain again about a token whose lock was final', async () => {
+    settling.mockResolvedValueOnce({ final: true, secondsLeft: 0 });
+    const final = token('bb'.repeat(32));
+    await bridgeModule.tokenHold!(final, ctx);
+    const calls = settling.mock.calls.length;
+    expect(await bridgeModule.tokenHold!(final, ctx)).toBeUndefined();
+    expect(settling.mock.calls.length).toBe(calls);
+  });
+
+  it('keeps asking about a token that is still settling', async () => {
+    settling.mockResolvedValue({ final: false, secondsLeft: 20 });
+    const young = token('bb'.repeat(32));
+    await bridgeModule.tokenHold!(young, ctx);
+    const calls = settling.mock.calls.length;
+    await bridgeModule.tokenHold!(young, ctx);
+    expect(settling.mock.calls.length).toBe(calls + 1);
+    settling.mockReset();
   });
 
   it('has no hold on a token of a coin the bridge does not know', async () => {

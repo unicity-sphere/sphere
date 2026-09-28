@@ -36,16 +36,21 @@ const bridgeModule: WalletModule = {
 
 export default bridgeModule;
 
+const finalTokens = new Set<string>();
+
 async function holdWhileSettling(token: Token, ctx: TokenHoldContext): Promise<TokenHold | undefined> {
   const asset = bridgeAssetByCoin(token.coinId);
-  if (!asset?.settling) return undefined;
+  if (!asset?.settling || finalTokens.has(token.id)) return undefined;
   let state: { final: boolean; secondsLeft: number } | null;
   try {
     state = await asset.settling(await ctx.justification(token.id));
   } catch {
     return { reason: `Cannot confirm finality on ${asset.chain.name} right now` };
   }
-  if (!state || state.final) return undefined;
+  if (!state || state.final) {
+    finalTokens.add(token.id);
+    return undefined;
+  }
   return { reason: `Settling on ${asset.chain.name}, ${timeLeft(state.secondsLeft)}` };
 }
 
