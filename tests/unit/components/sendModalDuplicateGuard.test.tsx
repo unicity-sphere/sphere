@@ -61,7 +61,6 @@ vi.mock('../../../src/sdk', async () => {
     formatAmount,
     useAssets: () => ({ assets: [ASSET] }),
     // SendModal prices its live send-progress legs from the inventory.
-    useTokenHolds: () => new Map(),
     useTokens: () => ({
       tokens: [],
       isLoading: false,
