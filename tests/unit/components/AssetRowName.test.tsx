@@ -12,9 +12,16 @@ const asset = {
 };
 
 describe('AssetRow verification', () => {
-  it('marks an unverified holding and never shows where a bridged asset came from on it', () => {
-    render(<AssetRow asset={{ ...asset, unverified: true }} badge="Tron" showBalances delay={0} isNew={false} />);
+  it('marks a refused holding unverified and never shows where a bridged asset came from on it', () => {
+    render(<AssetRow asset={{ ...asset, unverified: 'refused' }} badge="Tron" showBalances delay={0} isNew={false} />);
     expect(screen.getByText('Unverified')).toBeTruthy();
+    expect(screen.queryByText('Tron')).toBeNull();
+  });
+
+  it('marks a holding still being verified as pending, not as unverified', () => {
+    render(<AssetRow asset={{ ...asset, unverified: 'pending' }} badge="Tron" showBalances delay={0} isNew={false} />);
+    expect(screen.getByText('Pending')).toBeTruthy();
+    expect(screen.queryByText('Unverified')).toBeNull();
     expect(screen.queryByText('Tron')).toBeNull();
   });
 

@@ -59,11 +59,11 @@ describe('module coin views', () => {
       coinId, symbol: 'F16348', name: coinId, decimals: 0, totalAmount: '10000000', tokenCount: 1,
       confirmedAmount: '10000000', unconfirmedAmount: '0', confirmedTokenCount: 1, unconfirmedTokenCount: 0,
       transferringTokenCount: 0, transferringAmount: '0', priceUsd: null, priceEur: null, change24h: null,
-      fiatValueUsd: null, fiatValueEur: null, unverified: true,
+      fiatValueUsd: null, fiatValueEur: null, unverified: 'refused' as const,
     };
 
     expect(moduleAssetView(raw)).toMatchObject({ symbol: 'USDT', name: coinId, decimals: 6, priceUsd: null, fiatValueUsd: null });
-    expect(moduleTokenView({ id: 't', coinId, symbol: 'F16348', name: coinId, decimals: 0, amount: '10000000', status: 'confirmed', createdAt: 0, updatedAt: 0, unverified: true }))
+    expect(moduleTokenView({ id: 't', coinId, symbol: 'F16348', name: coinId, decimals: 0, amount: '10000000', status: 'confirmed', createdAt: 0, updatedAt: 0, unverified: 'pending' }))
       .toMatchObject({ symbol: 'USDT', name: coinId, decimals: 6 });
   });
 });

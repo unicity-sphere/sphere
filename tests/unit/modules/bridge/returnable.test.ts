@@ -28,7 +28,8 @@ describe('returnCandidates', () => {
 
     const candidates = returnCandidates(asset, [
       held('good'),
-      held('unverified', { unverified: true }),
+      held('refused', { unverified: 'refused' }),
+      held('pending', { unverified: 'pending' }),
       held('moving', { status: 'transferring' }),
       held('spent', { suspectedSpent: true }),
       held('other', { coinId: 'cc'.repeat(32) }),

@@ -167,7 +167,7 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
         </button>
       )}
       <div className="flex flex-col items-end gap-1">
-        {token.unverified ? (
+        {token.unverified === 'refused' ? (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" title="Not verified as the asset it names. It cannot be sent.">
             Unverified
           </span>
@@ -175,6 +175,11 @@ export const TokenRow = memo(function TokenRow({ token, delay, isNew = true, onS
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center gap-1">
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
             Settling
+          </span>
+        ) : token.unverified === 'pending' ? (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center gap-1" title="Its proof is still being verified. It cannot be sent yet.">
+            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+            Pending
           </span>
         ) : token.status === 'confirmed' ? (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">

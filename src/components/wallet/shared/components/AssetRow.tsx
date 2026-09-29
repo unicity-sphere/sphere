@@ -125,9 +125,13 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
                 {layer}
               </span>
             )}
-            {asset.unverified ? (
+            {asset.unverified === 'refused' ? (
               <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" title="Not verified as the asset it names. It is not counted and cannot be sent.">
                 Unverified
+              </span>
+            ) : asset.unverified === 'pending' ? (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400" title="Its proof is still being verified, for example a deposit waiting for confirmations. It is not counted and cannot be sent yet.">
+                Pending
               </span>
             ) : badge && (
               <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400" title={`Bridged from ${badge}`}>

@@ -75,11 +75,25 @@ describe('the Send affordance tracks spendability', () => {
     expect(screen.getByText('Settling on Ethereum, about 2 min left')).toBeTruthy();
   });
 
-  it('withholds it from an unverified token and marks the token unverified', () => {
-    render(<TokenRow token={coin({ unverified: true })} delay={0} isNew={false} onSend={vi.fn()} />);
+  it('withholds it from a refused token and marks the token unverified', () => {
+    render(<TokenRow token={coin({ unverified: 'refused' })} delay={0} isNew={false} onSend={vi.fn()} />);
     expect(sendButton()).toBeNull();
     expect(screen.getByText('Unverified')).toBeTruthy();
     expect(screen.queryByText('Confirmed')).toBeNull();
+  });
+
+  it('withholds it from a token still being verified and marks it pending', () => {
+    render(<TokenRow token={coin({ unverified: 'pending' })} delay={0} isNew={false} onSend={vi.fn()} />);
+    expect(sendButton()).toBeNull();
+    expect(screen.getByText('Pending')).toBeTruthy();
+    expect(screen.queryByText('Unverified')).toBeNull();
+  });
+
+  it('shows why a pending bridged token waits, when its lock is not final yet', () => {
+    render(<TokenRow token={coin({ unverified: 'pending' })} delay={0} isNew={false} onSend={vi.fn()} hold="Settling on Ethereum, about 2 min left" />);
+    expect(sendButton()).toBeNull();
+    expect(screen.getByText('Settling')).toBeTruthy();
+    expect(screen.getByText('Settling on Ethereum, about 2 min left')).toBeTruthy();
   });
 
   it('offers Send for a settled coinless token', () => {
