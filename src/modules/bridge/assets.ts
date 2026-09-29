@@ -33,7 +33,7 @@ export function bridgeAssets(): readonly BridgeAsset[] {
 }
 
 export function bridgeAssetsFor(network: string): BridgeAsset[] {
-  return bridgeAssets().filter((a) => a.networks.includes(network));
+  return bridgeAssets().filter((a) => a.networks.includes(network) && !a.disabledReason);
 }
 
 export function bridgeAssetByCoin(coinIdHex: string): BridgeAsset | undefined {
