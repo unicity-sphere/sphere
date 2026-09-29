@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import type { Asset } from '@unicitylabs/sphere-sdk';
+import type { Asset, Token } from '@unicitylabs/sphere-sdk';
 
-import { assetKey, verifiedAssets } from '@/sdk/verifiedAssets';
+import { assetKey, shownAssets, shownTokens, verifiedAssets } from '@/sdk/verifiedAssets';
 
 const COIN = 'bb'.repeat(32);
 const holding = (over: Partial<Asset> = {}) => ({ coinId: COIN, totalAmount: '10', ...over }) as Asset;
@@ -16,5 +16,20 @@ describe('verified assets', () => {
   it('keeps only the holdings a send may spend', () => {
     const verified = holding();
     expect(verifiedAssets([holding({ unverified: 'refused' }), holding({ unverified: 'pending' }), verified])).toEqual([verified]);
+  });
+
+  it('shows the counted holdings and then the unverified ones, which the SDK reads apart', async () => {
+    const counted = holding();
+    const refused = holding({ unverified: 'refused' });
+    const token = (id: string, unverified?: 'pending') => ({ id, ...(unverified ? { unverified } : {}) }) as Token;
+    const payments = {
+      assets: async () => [counted],
+      unverifiedAssets: async () => [refused],
+      tokens: () => [token('a')],
+      unverifiedTokens: () => [token('b', 'pending')],
+    };
+
+    expect(await shownAssets(payments)).toEqual([counted, refused]);
+    expect(shownTokens(payments).map((t) => t.id)).toEqual(['a', 'b']);
   });
 });

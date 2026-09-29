@@ -8,6 +8,7 @@ import { diag } from '../../diag';
 import { TokenRegistry, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import type { Asset } from '../..';
 import { moduleAssetView } from '../../../modules/registry';
+import { shownAssets } from '../../verifiedAssets';
 
 /**
  * Hardcoded fallback prices (USD) for tokens not yet listed on CoinGecko.
@@ -35,7 +36,7 @@ export function useAssets(): UseAssetsReturn {
     queryFn: async (): Promise<Asset[]> => {
       const payments = getPayments(sphere);
       if (!payments) return [];
-      const result = await payments.assets();
+      const result = await shownAssets(payments);
       diag(`assets:refetch total=${result.map((a) => a.totalAmount).join(',') || 'none'}`);
       return result;
     },

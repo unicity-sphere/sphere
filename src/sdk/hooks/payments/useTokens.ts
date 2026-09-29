@@ -7,6 +7,7 @@ import { SPHERE_KEYS } from '../../queryKeys';
 import { TokenRegistry } from '@unicitylabs/sphere-sdk';
 import type { Token } from '@unicitylabs/sphere-sdk';
 import { moduleTokenView } from '../../../modules/registry';
+import { shownTokens } from '../../verifiedAssets';
 
 export interface UseTokensReturn {
   tokens: Token[];
@@ -28,7 +29,7 @@ export function useTokens(): UseTokensReturn {
     queryFn: async () => {
       const payments = getPayments(sphere);
       if (!payments) return [];
-      return payments.tokens();
+      return shownTokens(payments);
     },
     enabled: !!sphere,
     staleTime: 30_000,
