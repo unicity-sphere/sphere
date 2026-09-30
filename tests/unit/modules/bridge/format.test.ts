@@ -24,6 +24,9 @@ describe('return status sentence', () => {
   it('quotes the service on a refusal', () => {
     expect(returnStatusSentence({ status: 'failed', message: 'stale config' }, 'Tron')).toBe('The return service refused the burn: stale config');
     expect(returnStatusSentence({ status: 'failed' }, 'Tron')).toBe('The return service refused the burn.');
+    expect(returnStatusSentence({ status: 'failed', message: 'chain not synced', recoverable: true }, 'Tron')).toBe(
+      'The return service could not accept the burn yet: chain not synced. This wallet keeps the burned token and retries by itself.',
+    );
   });
 });
 

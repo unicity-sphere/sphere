@@ -18,8 +18,10 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
   return { ...mod, NILE_USDT_BRIDGE: { ...mod.NILE_USDT_BRIDGE, disabledReason: undefined } };
 });
 
-import { BridgeScreen, ReturnsList } from '@/modules/bridge/BridgeScreen';
-import type { PendingReturn } from '@/modules/bridge/store';
+import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
+
+import { BridgeScreen, PendingList, ReturnsList } from '@/modules/bridge/BridgeScreen';
+import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
 function renderScreen() {
   const onClose = vi.fn();
@@ -130,5 +132,44 @@ describe('ReturnsList', () => {
     render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
+  });
+});
+
+describe('PendingList', () => {
+  const TXID = 'ab'.repeat(32);
+  const lock: PendingLock = {
+    id: 'l1', coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, tokenTypeHex: SEPOLIA_USDC_BRIDGE.tokenTypeHex!, chainId: SEPOLIA_USDC_BRIDGE.chainId,
+    saltHex: '11'.repeat(32), tokenIdHex: '22'.repeat(32), recipientCommitmentHex: '33'.repeat(32), amount: '1000000', createdAt: 1, status: 'locking',
+  };
+  const renderList = (l: PendingLock) => {
+    const onDiscard = vi.fn();
+    const onResume = vi.fn();
+    render(<PendingList locks={[l]} resumingId={null} onResume={onResume} onDiscard={onDiscard} />);
+    return { onDiscard, onResume };
+  };
+
+  it('discards a deposit that was never signed in one click', () => {
+    const { onDiscard } = renderList(lock);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
+    expect(onDiscard).toHaveBeenCalledWith(lock);
+  });
+
+  it('asks again before discarding a deposit whose lock may have been sent', () => {
+    const { onDiscard } = renderList({ ...lock, lockRequested: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
+    expect(onDiscard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard anyway' }));
+    expect(onDiscard).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
+  });
+
+  it('resumes a deposit whose lock may have been sent from the lock transaction id the user pastes', () => {
+    const { onResume } = renderList({ ...lock, lockRequested: true });
+    const input = screen.getByLabelText('Lock transaction id');
+    const resume = screen.getByRole('button', { name: 'Resume from this transaction' });
+    fireEvent.change(input, { target: { value: 'nonsense' } });
+    expect(resume).toHaveProperty('disabled', true);
+    fireEvent.change(input, { target: { value: TXID } });
+    fireEvent.click(resume);
+    expect(onResume).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1', lockTxid: `0x${TXID}` }));
   });
 });

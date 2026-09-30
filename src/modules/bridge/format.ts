@@ -11,7 +11,7 @@ export function formatUnits(amount: bigint, decimals: number): string {
   return `${sign}${whole.toString()}.${frac.toString().padStart(decimals, '0').replace(/0+$/, '')}`;
 }
 
-export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message'>, chainName: string): string {
+export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message' | 'recoverable'>, chainName: string): string {
   switch (r.status) {
     case 'burned': return 'The return service has not accepted the burn yet. This wallet keeps the burned token and retries by itself.';
     case 'queued': return 'The return service accepted the burn and queued it for proving.';
@@ -19,7 +19,10 @@ export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message'
     case 'proven': return `The burn is proven. The release is being sent to ${chainName}.`;
     case 'submitted': return `The release is waiting for confirmation on ${chainName}.`;
     case 'settled': return `Released on ${chainName}.`;
-    case 'failed': return `The return service refused the burn${r.message ? `: ${r.message}` : '.'}`;
+    case 'failed':
+      return r.recoverable
+        ? `The return service could not accept the burn yet${r.message ? `: ${r.message}` : ''}. This wallet keeps the burned token and retries by itself.`
+        : `The return service refused the burn${r.message ? `: ${r.message}` : '.'}`;
   }
 }
 
