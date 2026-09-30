@@ -203,6 +203,10 @@ export interface ConnectContextValue {
    * Answer a specific network-switch prompt. BY ID, like resolveIntent: a late click on a
    * prompt that was already settled (a lock, a closing host) finds no entry and does nothing,
    * and can never answer a DIFFERENT origin's prompt that has since taken the slot.
+   *
+   * This is the USER's answer, and the only path that remembers a decline for the rest of the
+   * page session (any `accepted: false`, however it was made): the settles a lock, a closing
+   * host or the deadline timer perform are internal and record nothing.
    */
   answerNetworkSwitch: (id: number, answer: NetworkSwitchAnswer) => void;
   /**
