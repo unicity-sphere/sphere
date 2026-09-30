@@ -81,8 +81,18 @@ function mount(loaded: Loaded) {
   return { handle, note, asked };
 }
 
-/** One dApp handshake against a wallet on another network, driven through the handler. */
-const handshake = (handle: ReturnType<typeof mount>['handle']) => handle(DAPP, mismatchCtx());
+/**
+ * One dApp handshake against a wallet on another network, driven through the handler. The
+ * handler reaches the provider synchronously, and that queues (or refuses) state inside the
+ * provider, so the call is made inside act.
+ */
+function handshake(handle: ReturnType<typeof mount>['handle']) {
+  let pending!: ReturnType<typeof handle>;
+  act(() => {
+    pending = handle(DAPP, mismatchCtx());
+  });
+  return pending;
+}
 
 const promptIsOpen = () => screen.queryByTestId('network-switch-prompt') !== null;
 
