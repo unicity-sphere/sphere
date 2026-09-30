@@ -112,9 +112,11 @@ export interface ConnectContextValue {
    *
    * One prompt at a time, and never over another consent surface, so it is REFUSED
    * IMMEDIATELY (resolved, never queued) while the wallet is locked, while any approval or
-   * intent modal is pending, and while a network-switch prompt is already open. Those checks
-   * live here, not in the hosts, so no host can forget one. A refusal the user never saw
-   * resolves `{ accepted: false, suppressFuturePrompts: false }`.
+   * intent modal is pending, while a network-switch prompt is already open, and for an
+   * origin that already turned down this same target in this page session (kept in memory
+   * only; the persisted "do not ask again" record is the caller's, and separate). Those
+   * checks live here, not in the hosts, so no host can forget one. A refusal the user never
+   * saw resolves `{ accepted: false, suppressFuturePrompts: false }`.
    *
    * This provider never writes the "do not ask again" record: `suppressFuturePrompts` rides
    * back in the answer and the caller, which also owns the origin and the target, writes it.

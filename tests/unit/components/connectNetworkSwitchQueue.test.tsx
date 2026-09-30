@@ -59,6 +59,15 @@ const OFFER: PendingNetworkSwitch['offer'] = {
   isMainnet: false,
 };
 
+// A second target, so "per origin AND target" can be told apart from "per origin".
+const MAINNET_OFFER: PendingNetworkSwitch['offer'] = {
+  kind: 'offer',
+  target: 'mainnet',
+  targetLabel: 'Mainnet',
+  currentLabel: 'Testnet',
+  isMainnet: true,
+};
+
 const UNSEEN: NetworkSwitchAnswer = { accepted: false, suppressFuturePrompts: false };
 
 let ctx: ConnectContextValue | null = null;
@@ -76,11 +85,28 @@ function tree() {
 }
 
 /** Ask for a switch and record every settlement, so "exactly once" is countable. */
-function ask(host: ConnectHost, origin: string, expiresAt?: number): ReturnType<typeof vi.fn> {
+function ask(
+  host: ConnectHost,
+  origin: string,
+  expiresAt?: number,
+  offer: PendingNetworkSwitch['offer'] = OFFER,
+): ReturnType<typeof vi.fn> {
   const settled = vi.fn();
   act(() => {
-    void ctx!.requestNetworkSwitch(host, origin, OFFER, expiresAt).then(settled);
+    void ctx!.requestNetworkSwitch(host, origin, offer, expiresAt).then(settled);
   });
+  return settled;
+}
+
+/** Ask, then answer the prompt with the modal's own "Not now" button. */
+async function askAndDecline(
+  host: ConnectHost,
+  origin: string,
+  offer: PendingNetworkSwitch['offer'] = OFFER,
+): Promise<ReturnType<typeof vi.fn>> {
+  const settled = ask(host, origin, undefined, offer);
+  fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+  await flush();
   return settled;
 }
 
@@ -145,18 +171,205 @@ describe('network-switch prompt queue', () => {
     expect(declined).toHaveBeenCalledWith({ accepted: false, suppressFuturePrompts: true });
   });
 
-  it('admits the next request once the previous prompt is answered', async () => {
+  it('admits the next request once the previous prompt is answered, unless it is the pair the user just declined', async () => {
     render(tree());
-    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    act(() => {
+      ctx!.attachHost(hostA, ORIGIN_A);
+      ctx!.attachHost(hostB, ORIGIN_B);
+    });
 
-    ask(hostA, ORIGIN_A);
-    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
-    await flush();
+    await askAndDecline(hostA, ORIGIN_A);
 
-    const second = ask(hostA, ORIGIN_A);
+    // The slot is free again, so a DIFFERENT origin is admitted...
+    const other = ask(hostB, ORIGIN_B);
     expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
     await flush();
-    expect(second).not.toHaveBeenCalled(); // queued and shown, not refused
+    expect(other).not.toHaveBeenCalled(); // queued and shown, not refused
+
+    // ...but the pair the user declined is not asked about again (see the next block).
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Testnet' }));
+    await flush();
+    const same = ask(hostA, ORIGIN_A);
+    await flush();
+    expect(same).toHaveBeenCalledWith(UNSEEN);
+    expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+  });
+
+  // Spec 2.1 and 6.1: a plain "Not now" is remembered for the rest of the page session, in
+  // memory, per origin AND target. Without it a framed app could call connect() in a loop, and
+  // each failed handshake would reopen a modal over the whole wallet the moment the user
+  // closed the last one: the slot frees on the click, so "one prompt at a time" alone does
+  // not bound anything. The persisted "do not ask again" record is a different thing.
+  describe('a decline the user made is remembered for the page session', () => {
+    it('refuses the same origin and target again, as unseen, without opening a prompt', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const declined = await askAndDecline(hostA, ORIGIN_A);
+      expect(declined).toHaveBeenCalledWith({ accepted: false, suppressFuturePrompts: false });
+
+      const again = ask(hostA, ORIGIN_A);
+      await flush();
+
+      // Answered on the spot, and NOT as a mute: nobody saw this refusal, so it must not be
+      // recorded as a choice the user made.
+      expect(again).toHaveBeenCalledTimes(1);
+      expect(again).toHaveBeenCalledWith(UNSEEN);
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+      expect(ctx!.pendingNetworkSwitch).toBeNull();
+    });
+
+    it('bounds a framed app that calls connect() in a loop: the user is asked once, not once per call', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const first = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      await flush();
+      expect(first).toHaveBeenCalledTimes(1);
+
+      const repeats = Array.from({ length: 25 }, () => ask(hostA, ORIGIN_A));
+      await flush();
+
+      for (const repeat of repeats) expect(repeat).toHaveBeenCalledWith(UNSEEN);
+      // No modal was raised by any of them, at any point.
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+      expect(ctx!.pendingNetworkSwitch).toBeNull();
+    });
+
+    it('is keyed by origin AND target: another target, or another origin, is still admitted', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+      });
+      await askAndDecline(hostA, ORIGIN_A); // A + testnet2 declined
+
+      // Same origin, different target.
+      const otherTarget = ask(hostA, ORIGIN_A, undefined, MAINNET_OFFER);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe(ORIGIN_A);
+      await flush();
+      expect(otherTarget).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' })); // A + mainnet declined
+      await flush();
+
+      // Different origin, the same target as the first decline.
+      const otherOrigin = ask(hostB, ORIGIN_B);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe(ORIGIN_B);
+      await flush();
+      expect(otherOrigin).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' })); // B + testnet2 declined
+      await flush();
+
+      // And each declined pair stays declined, not just the latest one.
+      for (const [origin, offer] of [
+        [ORIGIN_A, OFFER],
+        [ORIGIN_A, MAINNET_OFFER],
+        [ORIGIN_B, OFFER],
+      ] as const) {
+        const refused = ask(hostA, origin, undefined, offer);
+        await flush();
+        expect(refused).toHaveBeenCalledWith(UNSEEN);
+      }
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+    });
+
+    it('remembers a dismissal by the close button or the backdrop, which is a decline too', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      ask(hostA, ORIGIN_A);
+      fireEvent.click(screen.getByTestId('modal-backdrop'));
+      await flush();
+
+      const again = ask(hostA, ORIGIN_A);
+      await flush();
+      expect(again).toHaveBeenCalledWith(UNSEEN);
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+    });
+
+    it('does not remember an accepted switch', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      ask(hostA, ORIGIN_A);
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Testnet' }));
+      await flush();
+
+      const again = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      await flush();
+      expect(again).not.toHaveBeenCalled();
+    });
+
+    it('does not remember a prompt that a lock settled, since the user never answered it', async () => {
+      const { rerender } = render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const settled = ask(hostA, ORIGIN_A);
+      sphereMock.isLocked = true;
+      await act(async () => { rerender(tree()); });
+      expect(settled).toHaveBeenCalledWith(UNSEEN);
+      sphereMock.isLocked = false;
+      await act(async () => { rerender(tree()); });
+
+      const again = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      await flush();
+      expect(again).not.toHaveBeenCalled();
+    });
+
+    it('does not remember a prompt that a closing host settled, since the user never answered it', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const settled = ask(hostA, ORIGIN_A);
+      act(() => ctx!.releaseHost(hostA));
+      await flush();
+      expect(settled).toHaveBeenCalledWith(UNSEEN);
+
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+      const again = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      await flush();
+      expect(again).not.toHaveBeenCalled();
+    });
+
+    it('is in-memory only: a remounted provider, which is what a page reload is, starts with none', async () => {
+      const first = render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+      await askAndDecline(hostA, ORIGIN_A);
+
+      const refused = ask(hostA, ORIGIN_A);
+      await flush();
+      expect(refused).toHaveBeenCalledWith(UNSEEN); // it is remembered while this provider lives
+
+      first.unmount();
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const afresh = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      await flush();
+      expect(afresh).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing to storage: the persisted record belongs to the tick alone', async () => {
+      const setItem = vi.spyOn(Storage.prototype, 'setItem');
+      try {
+        render(tree());
+        act(() => ctx!.attachHost(hostA, ORIGIN_A));
+        await askAndDecline(hostA, ORIGIN_A);
+        ask(hostA, ORIGIN_A);
+        await flush();
+        expect(setItem).not.toHaveBeenCalled();
+      } finally {
+        setItem.mockRestore();
+      }
+    });
   });
 
   describe('admission: refused without the user ever seeing a prompt', () => {
@@ -361,7 +574,8 @@ describe('network-switch prompt queue', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
       await flush();
 
-      const current = ask(hostA, ORIGIN_A);
+      // Another origin: the pair just declined would be refused, not queued.
+      const current = ask(hostB, ORIGIN_B);
       act(() => ctx!.answerNetworkSwitch(staleId, { accepted: true, suppressFuturePrompts: true }));
       await flush();
 
@@ -463,6 +677,22 @@ describe('deadline: an abandoned prompt frees its slot', () => {
     expect(settled).toHaveBeenCalledWith(UNSEEN);
     expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
     expect(ctx!.pendingNetworkSwitch).toBeNull();
+  });
+
+  it('does not remember a prompt the deadline settled, since the user never answered it', async () => {
+    // Only the user's own answer is a decision. A prompt taken down by the timer was never
+    // declined by anyone, so the same origin must be asked again on its next attempt.
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + 1_000);
+    await advance(1_000);
+    expect(settled).toHaveBeenCalledWith(UNSEEN);
+
+    const again = ask(hostA, ORIGIN_A);
+    expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+    await flush();
+    expect(again).not.toHaveBeenCalled();
   });
 
   it('frees the slot: another origin is admitted once the abandoned prompt is gone', async () => {

@@ -49,6 +49,12 @@ const ALWAYS_ASK_INTENTS: ReadonlySet<string> = new Set<string>([INTENT_ACTIONS.
 const unseenRefusal = (): NetworkSwitchAnswer => ({ accepted: false, suppressFuturePrompts: false });
 
 /**
+ * The key of one origin and target pair in the session's declined set. JSON of a tuple, not
+ * a joined string, so no origin can be spelled to collide with another pair.
+ */
+const declineKey = (origin: string, target: string): string => JSON.stringify([origin, target]);
+
+/**
  * The largest delay setTimeout honours. A longer one is read as 1 ms, which would
  * dismiss a prompt the instant it opened, so a far-future deadline is clamped to this.
  */
@@ -70,6 +76,13 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   // The deadline timer of each open prompt that came with one, by entry id. Held here
   // rather than on the entry so the public entry type stays what the modal needs.
   const switchDeadlinesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  // Origin AND target pairs the user has turned down in THIS page session (spec 2.1, 6.1).
+  // Memory only, deliberately: it dies with the provider, which is to say with the page, and
+  // is never written anywhere. Persistence is the "do not ask again" tick's job, and that
+  // record is a separate thing the user chose on purpose. This is what stops a framed app
+  // from calling connect() in a loop: every failed handshake reaches the hook, and without
+  // it each one would put a fresh modal over the wallet the instant the last was closed.
+  const declinedSwitchesRef = useRef<Set<string>>(new Set());
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [pendingIntent, setPendingIntent] = useState<PendingIntent | null>(null);
   const [pendingNetworkSwitch, setPendingNetworkSwitch] = useState<PendingNetworkSwitch | null>(null);
@@ -130,6 +143,28 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       syncHeads();
     },
     [clearSwitchDeadline, syncHeads],
+  );
+
+  /**
+   * The USER answered a network-switch prompt. The only way an answer reaches a prompt from a
+   * person, and so the only place a decline may be remembered: the deadline timer, the lock
+   * effect and releaseHost all settle entries too, but through settleNetworkSwitch(es) and
+   * with an unseen refusal, because nobody decided anything. Recording from those would turn
+   * "the wallet locked while you were away" into "you said no to this site".
+   *
+   * Every refusal counts, whichever control made it: "Not now", the close button and the
+   * backdrop are all a person turning the prompt down, and a modal that returns the instant
+   * it is closed is exactly the loop this exists to end. The tick decides the persistent
+   * mute; this is only the page-session memory.
+   */
+  const answerNetworkSwitch = useCallback(
+    (id: number, answer: NetworkSwitchAnswer) => {
+      const entry = networkSwitchQueueRef.current.find((e) => e.id === id);
+      if (!entry) return; // already settled: a late click records nothing and answers nothing
+      if (!answer.accepted) declinedSwitchesRef.current.add(declineKey(entry.origin, entry.offer.target));
+      settleNetworkSwitch(id, answer);
+    },
+    [settleNetworkSwitch],
   );
 
   /** Settle every queued intent matching `match` (all of them when it returns true). */
@@ -307,7 +342,9 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         const remaining = expiresAt === undefined ? Infinity : expiresAt - Date.now();
         // Admission lives here, not in the two hosts, so neither can forget a rule.
         // A refusal resolves on the spot and never queues: the user never sees it,
-        // so it is answered as unseen. The queues are read from the refs, not from
+        // so it is answered as unseen (and so never a mute, even when it is refused
+        // BECAUSE the user declined this pair: the earlier decline is already remembered,
+        // and this one is not a new choice). The queues are read from the refs, not from
         // state — a settle lands there synchronously, before any re-render. A deadline
         // that has already passed is refused like an aborted intent is: the host has
         // answered the dApp itself, so nobody is asked.
@@ -316,6 +353,8 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
           approvalQueueRef.current.length > 0 ||
           intentQueueRef.current.length > 0 ||
           networkSwitchQueueRef.current.length > 0 ||
+          // The user already turned this origin down for this target in this session.
+          declinedSwitchesRef.current.has(declineKey(origin, offer.target)) ||
           !(remaining > 0)
         ) {
           resolve(unseenRefusal());
@@ -450,7 +489,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     armIntentShield,
     approveConnection,
     denyConnection,
-    answerNetworkSwitch: settleNetworkSwitch,
+    answerNetworkSwitch,
     resolveIntent,
     rejectIntent,
     isIntentPending,
