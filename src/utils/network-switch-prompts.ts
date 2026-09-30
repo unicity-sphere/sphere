@@ -95,10 +95,10 @@ function emptyStore(): SuppressionStore {
   return { v: 1, byNetwork: dict() };
 }
 
-function readStore(): SuppressionStore {
+/** An absent, unparseable or wrong-shaped value is an empty store. */
+function parseStore(raw: string | null): SuppressionStore {
+  if (!raw) return emptyStore();
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.NETWORK_SWITCH_SUPPRESSED);
-    if (!raw) return emptyStore();
     const parsed: unknown = JSON.parse(raw);
     if (!isPlainObject(parsed) || parsed.v !== 1 || !isPlainObject(parsed.byNetwork)) {
       return emptyStore();
@@ -110,57 +110,99 @@ function readStore(): SuppressionStore {
     }
     return { v: 1, byNetwork };
   } catch {
-    // Blocked storage (the localStorage getter itself throws), or unparseable JSON.
     return emptyStore();
   }
 }
 
-function writeStore(store: SuppressionStore): void {
+/**
+ * The persisted store, or `null` when storage itself is unavailable — blocked
+ * site data makes the `localStorage` getter throw. Kept apart from "empty" so a
+ * write can tell "nothing recorded" from "could not look": with storage
+ * unreadable it cannot know what it would be overwriting, nor confirm that a
+ * mute it was asked to remove is gone.
+ */
+function readStore(): SuppressionStore | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEYS.NETWORK_SWITCH_SUPPRESSED);
+  } catch {
+    return null;
+  }
+  return parseStore(raw);
+}
+
+/** Did the store actually land? False for blocked, full or write-protected storage. */
+function writeStore(store: SuppressionStore): boolean {
   try {
     localStorage.setItem(STORAGE_KEYS.NETWORK_SWITCH_SUPPRESSED, JSON.stringify(store));
-  } catch { /* ignore — the user is simply asked again */ }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Public API (synchronous — localStorage)
 // ---------------------------------------------------------------------------
 
-/** Has the user muted offering `target` to `origin`, on the ACTIVE network? */
+/**
+ * Has the user muted offering `target` to `origin`, on the ACTIVE network?
+ * Unreadable storage answers false: the user is asked.
+ */
 export function isSwitchPromptSuppressed(origin: string, target: NetworkType): boolean {
-  return readStore().byNetwork[SPHERE_NETWORK]?.[origin]?.targets[target] !== undefined;
+  const store = readStore() ?? emptyStore();
+  return store.byNetwork[SPHERE_NETWORK]?.[origin]?.targets[target] !== undefined;
 }
 
 /**
  * Mute offering `target` to `origin`, on the ACTIVE network. Idempotent: muting
- * again keeps the original timestamp. Best-effort — if storage is blocked or
- * full nothing is saved and the user is asked again next time.
+ * again keeps the original timestamp.
+ *
+ * Returns whether the mute now stands: `true` once it is stored, and also when
+ * it already was; `false` when it could not be saved (storage blocked, full or
+ * write-protected). There is deliberately no in-memory fallback — a second
+ * source of truth for a consent record is worse than an honest `false`. On
+ * `false` the user will be asked again, so a caller that has just shown "won't
+ * ask again" should say it could not be remembered.
  */
-export function suppressSwitchPrompt(origin: string, target: NetworkType): void {
+export function suppressSwitchPrompt(origin: string, target: NetworkType): boolean {
   const store = readStore();
+  if (!store) return false;
   const forNetwork = store.byNetwork[SPHERE_NETWORK] ?? dict<SuppressedOriginEntry>();
   const entry = forNetwork[origin] ?? { targets: dict<SuppressedTarget>() };
-  if (entry.targets[target] !== undefined) return;
+  if (entry.targets[target] !== undefined) return true;
   entry.targets[target] = { at: Date.now() };
   forNetwork[origin] = entry;
   store.byNetwork[SPHERE_NETWORK] = forNetwork;
-  writeStore(store);
+  return writeStore(store);
 }
 
 /**
  * Forget every muted target of `origin` on the ACTIVE network, so it may be
  * offered a switch again. Other origins and other networks are untouched.
+ *
+ * Returns whether the origin is now clear: `true` once removed, and also when
+ * nothing was muted; `false` when the removal could not be saved or storage
+ * could not be read.
+ *
+ * A `false` here is the more serious direction. A failed `suppressSwitchPrompt`
+ * only means the user is asked once more; a failed clear leaves a mute standing
+ * that the user asked to remove, and that origin stays silenced with the UI
+ * having said otherwise.
  */
-export function clearSwitchPromptSuppression(origin: string): void {
+export function clearSwitchPromptSuppression(origin: string): boolean {
   const store = readStore();
+  if (!store) return false;
   const forNetwork = store.byNetwork[SPHERE_NETWORK];
-  if (!forNetwork?.[origin]) return;
+  if (!forNetwork?.[origin]) return true;
   delete forNetwork[origin];
-  writeStore(store);
+  return writeStore(store);
 }
 
-/** origin -> muted targets, on the ACTIVE network. */
+/** origin -> muted targets, on the ACTIVE network. Unreadable storage lists none. */
 export function getSuppressedOrigins(): Record<string, string[]> {
-  const forNetwork = readStore().byNetwork[SPHERE_NETWORK] ?? {};
+  const store = readStore() ?? emptyStore();
+  const forNetwork = store.byNetwork[SPHERE_NETWORK] ?? {};
   return Object.fromEntries(
     Object.entries(forNetwork).map(([origin, entry]) => [origin, Object.keys(entry.targets)]),
   );

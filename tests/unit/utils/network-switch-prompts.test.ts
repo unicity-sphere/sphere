@@ -289,6 +289,39 @@ describe('the record is separate from the Connect approval store', () => {
     localStorageMock[STORAGE_KEYS.CONNECTED_SITES] = storeWith(ORIGIN, 'mainnet');
 
     expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    // The direction that would GRANT something: the same bytes must not read as
+    // an approval either. Asserting only the line above proves the safe half.
+    expect(getApprovedOrigin(ORIGIN)).toBeNull();
+    expect(getApprovedOrigins()).toEqual({});
+  });
+
+  describe('approval-shaped bytes planted under the suppression key', () => {
+    /** The exact bytes a real approval writes, lifted out from under its own key. */
+    const realApprovalBytes = (): string => {
+      saveApprovedOrigin(ORIGIN, DAPP, PERMISSIONS);
+      const bytes = localStorageMock[STORAGE_KEYS.CONNECTED_SITES];
+      delete localStorageMock[STORAGE_KEYS.CONNECTED_SITES];
+      return bytes;
+    };
+
+    // Two plants, because two independent checks each refuse an approval: its
+    // version (2, not 1) and its shape (no `targets`, no `at`). The second plant
+    // relabels the record `v: 1` so the version check is out of the picture and
+    // the shape check has to hold on its own.
+    const PLANTS: Array<[string, () => string]> = [
+      ['exactly as an approval writes them', realApprovalBytes],
+      ['inside a v1 envelope', () => JSON.stringify({ ...JSON.parse(realApprovalBytes()), v: 1 })],
+    ];
+
+    for (const [name, plant] of PLANTS) {
+      it(`reads nothing from approval records ${name}`, () => {
+        localStorageMock[KEY] = plant();
+
+        expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+        expect(isSwitchPromptSuppressed(ORIGIN, 'testnet2')).toBe(false);
+        expect(getSuppressedOrigins()).toEqual({});
+      });
+    }
   });
 });
 
@@ -296,17 +329,35 @@ describe('the record is separate from the Connect approval store', () => {
 // Degrades quietly
 // ==========================================
 
-describe('a blocked localStorage degrades to "not suppressed"', () => {
-  // The real failure: with site data blocked, merely READING window.localStorage
-  // throws a SecurityError — the getter throws, not just getItem.
-  beforeEach(() => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      get() {
-        throw new DOMException('The operation is insecure.', 'SecurityError');
-      },
-    });
+/**
+ * The real failure: with site data blocked, merely READING window.localStorage
+ * throws a SecurityError — the getter throws, not just getItem.
+ */
+function blockLocalStorage(): void {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    },
   });
+}
+
+/** localStorage that reads fine but refuses every write (quota, write-protected). */
+function failWrites(): void {
+  vi.mocked(localStorage.setItem).mockImplementation(() => {
+    throw new DOMException('quota', 'QuotaExceededError');
+  });
+}
+
+/** localStorage whose reads throw while writes would still succeed. */
+function failReads(): void {
+  vi.mocked(localStorage.getItem).mockImplementation(() => {
+    throw new DOMException('The operation is insecure.', 'SecurityError');
+  });
+}
+
+describe('a blocked localStorage degrades to "not suppressed"', () => {
+  beforeEach(blockLocalStorage);
 
   it('is really blocked (control for the tests below)', () => {
     expect(() => localStorage.getItem('x')).toThrow();
@@ -331,9 +382,7 @@ describe('a blocked localStorage degrades to "not suppressed"', () => {
 
 describe('a full or write-protected localStorage does not break suppression', () => {
   it('suppressSwitchPrompt swallows a throwing setItem', () => {
-    vi.mocked(localStorage.setItem).mockImplementation(() => {
-      throw new DOMException('quota', 'QuotaExceededError');
-    });
+    failWrites();
 
     expect(() => suppressSwitchPrompt(ORIGIN, 'mainnet')).not.toThrow();
     expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
@@ -341,11 +390,112 @@ describe('a full or write-protected localStorage does not break suppression', ()
 
   it('clearSwitchPromptSuppression swallows a throwing setItem', () => {
     localStorageMock[KEY] = storeWith(ORIGIN, 'mainnet');
-    vi.mocked(localStorage.setItem).mockImplementation(() => {
-      throw new DOMException('quota', 'QuotaExceededError');
-    });
+    failWrites();
 
     expect(() => clearSwitchPromptSuppression(ORIGIN)).not.toThrow();
+  });
+});
+
+// ==========================================
+// The writes say whether they landed
+// ==========================================
+
+/**
+ * Failing toward "ask again" is the right direction, but the caller must be able
+ * to know: a user who has just clicked "never ask again" and is asked again a
+ * minute later, with nothing visibly wrong, has been lied to. `true` means the
+ * store now holds what was asked for — including "it already did".
+ */
+describe('the writes report whether they landed', () => {
+  describe('suppressSwitchPrompt', () => {
+    it('returns true once the mute is stored', () => {
+      expect(suppressSwitchPrompt(ORIGIN, 'mainnet')).toBe(true);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
+
+    it('returns true, without writing, when it was already muted', () => {
+      localStorageMock[KEY] = storeWith(ORIGIN, 'mainnet');
+
+      expect(suppressSwitchPrompt(ORIGIN, 'mainnet')).toBe(true);
+      expect(localStorage.setItem).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the write is refused, and nothing is remembered', () => {
+      failWrites();
+
+      expect(suppressSwitchPrompt(ORIGIN, 'mainnet')).toBe(false);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    });
+
+    it('returns false when localStorage is blocked', () => {
+      blockLocalStorage();
+
+      expect(suppressSwitchPrompt(ORIGIN, 'mainnet')).toBe(false);
+    });
+
+    it('returns false, and overwrites nothing, when the store cannot be read', () => {
+      // Reads fail but writes would go through: writing now would replace
+      // records it could not see with a store holding only this one mute.
+      localStorageMock[KEY] = storeWith(OTHER_ORIGIN, 'mainnet');
+      const before = localStorageMock[KEY];
+      failReads();
+
+      expect(suppressSwitchPrompt(ORIGIN, 'mainnet')).toBe(false);
+      expect(localStorage.setItem).not.toHaveBeenCalled();
+      expect(localStorageMock[KEY]).toBe(before);
+    });
+
+    it('a refused second target reports false and leaves the first mute standing', () => {
+      suppressSwitchPrompt(ORIGIN, 'mainnet');
+      failWrites();
+
+      expect(suppressSwitchPrompt(ORIGIN, 'testnet2')).toBe(false);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'testnet2')).toBe(false);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
+  });
+
+  describe('clearSwitchPromptSuppression', () => {
+    it('returns true once the mute is removed', () => {
+      suppressSwitchPrompt(ORIGIN, 'mainnet');
+
+      expect(clearSwitchPromptSuppression(ORIGIN)).toBe(true);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    });
+
+    it('returns true, without writing, when nothing was muted', () => {
+      localStorageMock[KEY] = storeWith(ORIGIN, 'mainnet');
+
+      expect(clearSwitchPromptSuppression(OTHER_ORIGIN)).toBe(true);
+      expect(localStorage.setItem).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the removal is refused — and the mute still stands', () => {
+      // The serious direction: the user asked for this origin to be heard from
+      // again, and it stays silenced.
+      localStorageMock[KEY] = storeWith(ORIGIN, 'mainnet');
+      failWrites();
+
+      expect(clearSwitchPromptSuppression(ORIGIN)).toBe(false);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
+
+    it('returns false when localStorage is blocked', () => {
+      blockLocalStorage();
+
+      expect(clearSwitchPromptSuppression(ORIGIN)).toBe(false);
+    });
+
+    it('returns false, not "already clear", when the store cannot be read', () => {
+      // Unreadable is not empty: a mute may be standing that it cannot see.
+      localStorageMock[KEY] = storeWith(ORIGIN, 'mainnet');
+      const before = localStorageMock[KEY];
+      failReads();
+
+      expect(clearSwitchPromptSuppression(ORIGIN)).toBe(false);
+      expect(localStorage.setItem).not.toHaveBeenCalled();
+      expect(localStorageMock[KEY]).toBe(before);
+    });
   });
 });
 
@@ -470,10 +620,47 @@ describe('a corrupt persisted value is discarded, not trusted', () => {
  * reads a real function; both would make the record lie about what was stored.
  */
 describe('origins and targets named like prototype properties', () => {
-  it('are ordinary keys, and never suppressed by default', () => {
-    expect(isSwitchPromptSuppressed('constructor', 'mainnet')).toBe(false);
-    expect(isSwitchPromptSuppressed('__proto__', 'mainnet')).toBe(false);
-    expect(isSwitchPromptSuppressed(ORIGIN, 'constructor' as NetworkType)).toBe(false);
+  const INHERITED = ['constructor', 'toString', 'hasOwnProperty', 'valueOf', '__proto__'];
+
+  // With NO record written there is nothing for an inherited-property read to
+  // trip over — the network bucket is simply absent — so these need a record
+  // first. Against plain-object dictionaries, a bucket read of 'constructor'
+  // yields the Object function and `.targets[target]` on it throws a TypeError,
+  // and a target read of 'constructor' yields that function too: a phantom
+  // "never ask" for something the user never muted.
+  describe('with a record already stored', () => {
+    beforeEach(() => {
+      suppressSwitchPrompt(ORIGIN, 'mainnet');
+      // Control: the record really is there, so the reads below have a bucket.
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
+
+    for (const name of INHERITED) {
+      it(`origin "${name}" is not suppressed and does not throw`, () => {
+        expect(() => isSwitchPromptSuppressed(name, 'mainnet')).not.toThrow();
+        expect(isSwitchPromptSuppressed(name, 'mainnet')).toBe(false);
+      });
+
+      it(`target "${name}" is not suppressed for a real origin, and does not throw`, () => {
+        expect(() => isSwitchPromptSuppressed(ORIGIN, name as NetworkType)).not.toThrow();
+        expect(isSwitchPromptSuppressed(ORIGIN, name as NetworkType)).toBe(false);
+      });
+    }
+
+    it('clearing an inherited-property origin is a no-op that does not write', () => {
+      vi.mocked(localStorage.setItem).mockClear();
+
+      expect(clearSwitchPromptSuppression('constructor')).toBe(true);
+      expect(localStorage.setItem).not.toHaveBeenCalled();
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
+
+    it('suppressing an inherited-property origin leaves the existing record intact', () => {
+      expect(() => suppressSwitchPrompt('constructor', 'mainnet')).not.toThrow();
+
+      expect(isSwitchPromptSuppressed('constructor', 'mainnet')).toBe(true);
+      expect(isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    });
   });
 
   it('round-trip through storage when actually suppressed', () => {
