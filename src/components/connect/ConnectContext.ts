@@ -85,7 +85,12 @@ export type AutoIntentHandler = (
 ) => Promise<IntentAnswer | null>;
 
 export interface ConnectContextValue {
-  /** Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection. */
+  /**
+   * Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection.
+   * Queued FIFO, except that it is denied on the spot (`approved: false`, never shown) while
+   * a network-switch prompt is open: an approval queued behind it would be uncovered under
+   * the cursor when the prompt is answered.
+   */
   requestApproval: (
     host: ConnectHost,
     dapp: DAppMetadata,
@@ -97,6 +102,11 @@ export interface ConnectContextValue {
    * Called by a ConnectHost when a dApp sends an intent. Queued FIFO per wallet. Pass the
    * host's `IntentContext.signal`: the SDK requires the wallet to dismiss an intent's
    * modal once it aborts.
+   *
+   * An intent that needs a modal is refused on the spot, as `INTENT_CANCELLED` (nothing was
+   * started, so the dApp may ask again), while a network-switch prompt is open: it would
+   * otherwise be uncovered under the cursor when the prompt is answered. An auto-approved
+   * intent opens no modal and is unaffected.
    */
   requestIntent: (
     host: ConnectHost,

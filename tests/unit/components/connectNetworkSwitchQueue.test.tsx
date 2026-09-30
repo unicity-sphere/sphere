@@ -18,6 +18,7 @@ import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import type { ConnectHost } from '@unicitylabs/sphere-sdk/connect';
+import { ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
 
 const sphereMock = vi.hoisted(() => ({ isLocked: false }));
 
@@ -481,6 +482,135 @@ describe('network-switch prompt queue', () => {
       await flush();
       expect(refused).toHaveBeenCalledWith(UNSEEN);
       expect(ctx!.pendingNetworkSwitch).toBeNull();
+    });
+  });
+
+  // The refusals above stop the PROMPT opening over another surface. This is the other
+  // direction. Both modals paint at one z-index and the prompt paints last, so an approval or
+  // an intent that opened underneath it would be revealed, live, exactly where "Switch to X"
+  // was the moment the user clicked it: a swap under a stationary cursor, the hazard the
+  // intent settle shield exists for. So while the prompt is open neither may open a modal.
+  describe('admission the other way: nothing opens a modal under an open prompt', () => {
+    const APP = { name: 'App', url: ORIGIN_B };
+
+    it('refuses a connection approval on the spot, and leaves the open prompt alone', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+      });
+      const prompt = ask(hostA, ORIGIN_A);
+      const promptId = ctx!.pendingNetworkSwitch!.id;
+
+      const approval = vi.fn();
+      act(() => {
+        void ctx!.requestApproval(hostB, APP, [], ORIGIN_B).then(approval);
+      });
+      await flush();
+
+      // Denied without ever being shown, and never queued behind the prompt.
+      expect(approval).toHaveBeenCalledTimes(1);
+      expect(approval).toHaveBeenCalledWith({ approved: false, grantedPermissions: [] });
+      expect(ctx!.pendingApproval).toBeNull();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(ctx!.pendingNetworkSwitch!.id).toBe(promptId);
+
+      // Answering the prompt must not reveal an approval that was waiting behind it.
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      await flush();
+      expect(ctx!.pendingApproval).toBeNull();
+      expect(approval).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses an intent that needs a modal, as cancelled with nothing done, and shows none', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+      });
+      const prompt = ask(hostA, ORIGIN_A);
+
+      const intent = vi.fn();
+      act(() => {
+        void ctx!.requestIntent(hostB, ORIGIN_B, 'send', {}).then(intent);
+      });
+      await flush();
+
+      expect(intent).toHaveBeenCalledTimes(1);
+      const answer = intent.mock.calls[0]![0] as { result?: unknown; error?: { code: number } };
+      expect(answer.result).toBeUndefined();
+      // INTENT_CANCELLED, not WALLET_LOCKED (which invites a retry after an unlock that is not
+      // coming) and not INTENT_OUTCOME_UNKNOWN (which says the wallet may have acted): the
+      // wallet never started anything.
+      expect(answer.error?.code).toBe(ERROR_CODES.INTENT_CANCELLED);
+      expect(ctx!.pendingIntent).toBeNull();
+      expect(screen.queryByTestId('intent-modal')).toBeNull();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      await flush();
+      expect(screen.queryByTestId('intent-modal')).toBeNull();
+      expect(intent).toHaveBeenCalledTimes(1);
+    });
+
+    it('still answers an auto-approved intent: it opens no modal, so there is nothing to swap in', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+        ctx!.registerAutoIntent(hostB, 'send', async () => ({ result: { auto: true } }));
+      });
+      ask(hostA, ORIGIN_A);
+
+      const intent = vi.fn();
+      act(() => {
+        void ctx!.requestIntent(hostB, ORIGIN_B, 'send', {}).then(intent);
+      });
+      await flush();
+
+      expect(intent).toHaveBeenCalledWith({ result: { auto: true } });
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+    });
+
+    it('admits an approval and an intent again once the prompt is gone', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+      });
+      ask(hostA, ORIGIN_A);
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      await flush();
+
+      act(() => {
+        void ctx!.requestApproval(hostB, APP, [], ORIGIN_B);
+        void ctx!.requestIntent(hostB, ORIGIN_B, 'send', {});
+      });
+      expect(ctx!.pendingApproval).not.toBeNull();
+      expect(ctx!.pendingIntent).not.toBeNull();
+    });
+
+    it('does not make approvals refuse each other: they still queue behind one another', async () => {
+      render(tree());
+      act(() => {
+        ctx!.attachHost(hostA, ORIGIN_A);
+        ctx!.attachHost(hostB, ORIGIN_B);
+      });
+      const first = vi.fn();
+      const second = vi.fn();
+      act(() => {
+        void ctx!.requestApproval(hostA, APP, [], ORIGIN_A).then(first);
+        void ctx!.requestApproval(hostB, APP, [], ORIGIN_B).then(second);
+      });
+      await flush();
+
+      expect(first).not.toHaveBeenCalled();
+      expect(second).not.toHaveBeenCalled(); // queued, not refused
+      act(() => ctx!.denyConnection());
+      await flush();
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(ctx!.pendingApproval).not.toBeNull(); // the second is now at the head
     });
   });
 

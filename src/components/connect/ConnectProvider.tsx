@@ -60,6 +60,9 @@ const declineKey = (origin: string, target: string): string => JSON.stringify([o
  */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+/** The three consent modals Connect owns, named so admission can say which one is asking. */
+type ConsentSurface = 'approval' | 'intent' | 'networkSwitch';
+
 interface ConnectProviderProps {
   children: ReactNode;
 }
@@ -324,14 +327,44 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [settleIntentsWhere, settleNetworkSwitchesWhere, syncHeads],
   );
 
+  /**
+   * May the caller NOT open its consent UI right now, because another surface is up?
+   * The one place that answers it for all three entry points, so the rule cannot drift.
+   *
+   * The network-switch prompt is exclusive in both directions. It does not open over an
+   * approval or an intent, and neither of those opens under it. That second half is the
+   * one that matters for clickjacking: all three modals paint at one z-index and the
+   * prompt paints last, so a modal that opened beneath it would be uncovered, live, at
+   * the very spot "Switch to X" was the instant the user clicked it. That is a swap under
+   * a stationary cursor, the hazard the intent settle shield exists for.
+   *
+   * Approvals and intents are otherwise left as they were: an approval queues behind
+   * another approval, an intent behind another intent, and one of each may be up together,
+   * so `asking` only matters for the prompt, which additionally refuses to open over
+   * either of them. Read from the refs, not from state: a settle lands there synchronously,
+   * before any re-render.
+   */
+  const anotherConsentSurfaceIsUp = useCallback((asking: ConsentSurface): boolean => {
+    if (networkSwitchQueueRef.current.length > 0) return true;
+    if (asking !== 'networkSwitch') return false;
+    return approvalQueueRef.current.length > 0 || intentQueueRef.current.length > 0;
+  }, []);
+
   const requestApproval = useCallback(
     (host: ConnectHost, dapp: DAppMetadata, permissions: PermissionScope[], origin: string) =>
       new Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>((resolve) => {
+        // Never queued behind an open network-switch prompt (see anotherConsentSurfaceIsUp): a
+        // queued approval would be revealed under the cursor when the prompt is answered. The
+        // user never saw this request, so it is denied like an approval a lock takes down.
+        if (anotherConsentSurfaceIsUp('approval')) {
+          resolve({ approved: false, grantedPermissions: [] });
+          return;
+        }
         const id = ++nextIdRef.current;
         approvalQueueRef.current.push({ id, host, dapp, permissions, origin, resolve });
         syncHeads();
       }),
-    [syncHeads],
+    [anotherConsentSurfaceIsUp, syncHeads],
   );
 
   const requestNetworkSwitch = useCallback(
@@ -350,9 +383,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         // answered the dApp itself, so nobody is asked.
         if (
           isLockedRef.current ||
-          approvalQueueRef.current.length > 0 ||
-          intentQueueRef.current.length > 0 ||
-          networkSwitchQueueRef.current.length > 0 ||
+          anotherConsentSurfaceIsUp('networkSwitch') ||
           // The user already turned this origin down for this target in this session.
           declinedSwitchesRef.current.has(declineKey(origin, offer.target)) ||
           !(remaining > 0)
@@ -380,7 +411,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         }
         syncHeads();
       }),
-    [settleNetworkSwitch, syncHeads],
+    [anotherConsentSurfaceIsUp, settleNetworkSwitch, syncHeads],
   );
 
   const registerAutoIntent = useCallback(
@@ -434,6 +465,19 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         error: { code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN, message: 'The Connect host stopped waiting for this intent' },
       };
       if (signal?.aborted) return stopped;
+      // Nor may it open a modal under an open network-switch prompt (see
+      // anotherConsentSurfaceIsUp). Refused as cancelled: the wallet has not started anything,
+      // so the dApp may ask again. Not WALLET_LOCKED, which promises an unlock that is not
+      // coming, and not INTENT_OUTCOME_UNKNOWN, which says the wallet may have acted. An
+      // auto-approved intent never gets here: it opens no modal, so it has nothing to hide.
+      if (anotherConsentSurfaceIsUp('intent')) {
+        return {
+          error: {
+            code: ERROR_CODES.INTENT_CANCELLED,
+            message: 'The wallet is busy with another request. Try again in a moment.',
+          },
+        };
+      }
       return new Promise((resolve) => {
         const id = ++nextIdRef.current;
         intentQueueRef.current.push({ id, host, origin, action, params, resolve, ...(signal ? { signal } : {}) });
@@ -441,7 +485,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         syncHeads();
       });
     },
-    [settleIntent, syncHeads],
+    [anotherConsentSurfaceIsUp, settleIntent, syncHeads],
   );
 
   const approveConnection = useCallback(
