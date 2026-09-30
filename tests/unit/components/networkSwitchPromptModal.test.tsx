@@ -45,7 +45,7 @@ interface HoistedPending {
     target: NetworkType;
     targetLabel: string;
     currentLabel: string;
-    isMainnet: boolean;
+    movesRealFunds: boolean;
   };
   resolve: () => void;
   // Peer-supplied decoration that must NEVER render. Not part of the real entry's
@@ -75,14 +75,14 @@ const TESTNET_OFFER = {
   target: 'testnet2' as NetworkType,
   targetLabel: 'Testnet',
   currentLabel: 'Mainnet',
-  isMainnet: false,
+  movesRealFunds: false,
 };
 const MAINNET_OFFER = {
   kind: 'offer' as const,
   target: 'mainnet' as NetworkType,
   targetLabel: 'Mainnet',
   currentLabel: 'Testnet',
-  isMainnet: true,
+  movesRealFunds: true,
 };
 
 function pend(overrides: Partial<HoistedPending> = {}): HoistedPending {
@@ -297,17 +297,31 @@ describe('NetworkSwitchPromptModal', () => {
     // The confirmation is the one gate between a click and real funds, so it must not
     // hang on two fields of a structural type staying in sync. A hand-built offer (a
     // fixture, a future refactor of evaluateSwitchOffer) that disagrees with itself
-    // still gets it, whichever field is the one that says "mainnet".
+    // still gets it, whichever signal is the one that says "real funds".
+    //
+    // Both signals come from the wallet's fail-closed test-money allowlist, never from the
+    // literal name 'mainnet': a network that list does not name is denied, so the third row
+    // is a target with no resemblance to mainnet at all.
     it.each([
       {
-        name: 'target is mainnet but isMainnet says false',
-        offer: { ...MAINNET_OFFER, isMainnet: false },
+        name: 'the target is off the test-money allowlist (mainnet) but movesRealFunds says false',
+        offer: { ...MAINNET_OFFER, movesRealFunds: false },
         button: 'Switch to Mainnet',
       },
       {
-        name: 'isMainnet says true but the target is not mainnet',
-        offer: { ...TESTNET_OFFER, isMainnet: true },
+        name: 'movesRealFunds says true but the target is on the allowlist',
+        offer: { ...TESTNET_OFFER, movesRealFunds: true },
         button: 'Switch to Testnet',
+      },
+      {
+        name: 'the target is a network the allowlist does not list, called nothing like mainnet, and movesRealFunds says false',
+        offer: {
+          ...TESTNET_OFFER,
+          target: 'a-future-network' as NetworkType,
+          targetLabel: 'Futurenet',
+          movesRealFunds: false,
+        },
+        button: 'Switch to Futurenet',
       },
     ])('still demands the confirmation when the offer disagrees with itself: $name', ({ offer, button }) => {
       state.pending = pend({ offer });

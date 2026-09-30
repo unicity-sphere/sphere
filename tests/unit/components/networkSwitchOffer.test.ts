@@ -39,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock('../../../src/config/networkCapabilities');
   vi.unstubAllEnvs();
   setRuntimeConfig({});
   localStorage.clear();
@@ -66,8 +67,39 @@ describe('evaluateSwitchOffer', () => {
       target: 'mainnet',
       targetLabel: 'Mainnet',
       currentLabel: 'Testnet',
-      isMainnet: true,
+      movesRealFunds: true,
     });
+  });
+
+  // "Does this target move real funds" is asked of the wallet's fail-closed test-money
+  // allowlist (config/networkCapabilities), the same predicate every other money gate uses,
+  // not of the name 'mainnet'. The only way to see that from here is to take a target OUT of
+  // the allowlist: with two served networks there is no third to try, and a second
+  // real-value network is exactly what the allowlist exists to deny until it is listed on
+  // purpose. The name is never 'mainnet' in this case, so a string compare cannot pass it.
+  it('flags a served target the test-money allowlist does not list, whatever it is called', async () => {
+    vi.resetModules();
+    setRuntimeConfig(MAINNET_LIVE);
+    localStorage.setItem('sphere_active_network', 'mainnet');
+    vi.doMock('../../../src/config/networkCapabilities', async (importOriginal) => {
+      const real = await importOriginal<typeof import('../../../src/config/networkCapabilities')>();
+      return { ...real, isTestMoney: (network: string) => network !== 'testnet2' && real.isTestMoney(network) };
+    });
+    const { evaluateSwitchOffer } = await import('../../../src/components/connect/networkSwitchOffer');
+
+    const r = evaluateSwitchOffer({
+      clientNetwork: { id: 4 },
+      walletNetwork: { id: 1 },
+      suppressed: false,
+    });
+
+    expect(r).toMatchObject({ kind: 'offer', target: 'testnet2', movesRealFunds: true });
+  });
+
+  it('does not flag a target the allowlist lists, so the flag is not simply always on', async () => {
+    const { evaluateSwitchOffer } = await load(MAINNET_LIVE, { walletOn: 'mainnet' });
+    const r = evaluateSwitchOffer({ clientNetwork: { id: 4 }, walletNetwork: { id: 1 }, suppressed: false });
+    expect(r).toMatchObject({ kind: 'offer', target: 'testnet2', movesRealFunds: false });
   });
 
   it('flags a non-mainnet target so the caller does not need the network table', async () => {
@@ -83,7 +115,7 @@ describe('evaluateSwitchOffer', () => {
       target: 'testnet2',
       targetLabel: 'Testnet',
       currentLabel: 'Mainnet',
-      isMainnet: false,
+      movesRealFunds: false,
     });
   });
 
@@ -101,21 +133,21 @@ describe('evaluateSwitchOffer', () => {
       client: { id: 1, name: 'Testnet' },
       walletOn: undefined,
       wallet: { id: 4 },
-      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', isMainnet: true },
+      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', movesRealFunds: true },
     },
     {
       why: 'id 1 named testnet2 (registry key)',
       client: { id: 1, name: 'testnet2' },
       walletOn: undefined,
       wallet: { id: 4 },
-      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', isMainnet: true },
+      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', movesRealFunds: true },
     },
     {
       why: 'id 4 named Mainnet (the reverse)',
       client: { id: 4, name: 'Mainnet' },
       walletOn: 'mainnet' as const,
       wallet: { id: 1 },
-      expected: { target: 'testnet2', targetLabel: 'Testnet', currentLabel: 'Mainnet', isMainnet: false },
+      expected: { target: 'testnet2', targetLabel: 'Testnet', currentLabel: 'Mainnet', movesRealFunds: false },
     },
   ])('takes target and both labels from the id alone: $why', async ({ client, walletOn, wallet, expected }) => {
     const { evaluateSwitchOffer } = await load(MAINNET_LIVE, { walletOn });

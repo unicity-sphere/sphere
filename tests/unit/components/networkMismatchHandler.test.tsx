@@ -224,7 +224,7 @@ describe('resolve first, switch after', () => {
 
     expect(decision).toEqual({ action: 'switch', to: { id: 1 } });
     const [, , offer] = request.mock.calls[0]!;
-    expect(offer).toMatchObject({ target: 'mainnet', targetLabel: 'Mainnet', isMainnet: true });
+    expect(offer).toMatchObject({ target: 'mainnet', targetLabel: 'Mainnet', movesRealFunds: true });
     expect(JSON.stringify(request.mock.calls[0]!.slice(1))).not.toContain(DAPP.name);
   });
 

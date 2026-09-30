@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeftRight } from 'lucide-react';
 import { BaseModal, ModalHeader, Button } from '../wallet/ui';
 import { useConnectContext, type NetworkSwitchAnswer, type PendingNetworkSwitch } from './ConnectContext';
+import { isTestMoney } from '../../config/networkCapabilities';
 import { INTENT_SETTLE_MS } from './settleWindow';
 
 /**
@@ -21,7 +22,7 @@ import { INTENT_SETTLE_MS } from './settleWindow';
 export function NetworkSwitchPromptModal() {
   const { pendingNetworkSwitch, answerNetworkSwitch } = useConnectContext();
   if (!pendingNetworkSwitch) return null;
-  // Keyed on the entry, so the checkbox and the half-way mainnet step belong to ONE
+  // Keyed on the entry, so the checkbox and the half-way live-network step belong to ONE
   // prompt and are gone with it: one origin's tick can never carry onto the next.
   return (
     <NetworkSwitchPrompt
@@ -41,13 +42,18 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
   const { id, origin, offer } = pending;
   const { targetLabel, currentLabel } = offer;
   // The one gate between a click and real funds, so it must not rest on two fields of a
-  // structural type staying in sync: either one saying "mainnet" is enough. An offer that
-  // disagrees with itself (a hand-built fixture, a future refactor of evaluateSwitchOffer)
-  // gets the confirmation rather than a one-click accept under a correct-looking label,
-  // which is drawn from the target. Gating too often costs a click; too seldom costs funds.
-  const needsLiveNetworkConfirmation = offer.isMainnet || offer.target === 'mainnet';
+  // structural type staying in sync: either signal saying "real funds" is enough. An offer
+  // that disagrees with itself (a hand-built fixture, a future refactor of
+  // evaluateSwitchOffer) gets the confirmation rather than a one-click accept under a
+  // correct-looking label, which is drawn from the target. Gating too often costs a click;
+  // too seldom costs funds.
+  //
+  // BOTH signals come from the fail-closed test-money allowlist, never from a literal
+  // network name: the offer's flag was computed from it, and the second asks it again about
+  // the target itself. A network that list does not name is real money until it is listed.
+  const needsLiveNetworkConfirmation = offer.movesRealFunds || !isTestMoney(offer.target);
   const [suppress, setSuppress] = useState(false);
-  const [confirmingMainnet, setConfirmingMainnet] = useState(false);
+  const [confirmingLiveNetwork, setConfirmingLiveNetwork] = useState(false);
 
   const accept = () => onAnswer(id, { accepted: true, suppressFuturePrompts: suppress });
   // The explicit "Not now": the only refusal that can carry a mute.
@@ -59,9 +65,9 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
   const dismiss = () => onAnswer(id, { accepted: false, suppressFuturePrompts: false });
 
   const handleSwitch = () => {
-    // The live network is the one target where a mistaken click moves real funds,
-    // so accepting it takes a second, explicit confirmation.
-    if (needsLiveNetworkConfirmation) setConfirmingMainnet(true);
+    // A network whose money is real is the one target where a mistaken click moves real
+    // funds, so accepting it takes a second, explicit confirmation.
+    if (needsLiveNetworkConfirmation) setConfirmingLiveNetwork(true);
     else accept();
   };
 
@@ -100,11 +106,11 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
       </div>
 
       <div className="relative z-10 px-6 py-4 border-t border-neutral-200/50 dark:border-white/8 shrink-0">
-        {confirmingMainnet ? (
-          <MainnetConfirmation
+        {confirmingLiveNetwork ? (
+          <LiveNetworkConfirmation
             targetLabel={targetLabel}
             onContinue={accept}
-            onCancel={() => setConfirmingMainnet(false)}
+            onCancel={() => setConfirmingLiveNetwork(false)}
           />
         ) : (
           <div className="flex gap-3">
@@ -121,7 +127,7 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
   );
 }
 
-interface MainnetConfirmationProps {
+interface LiveNetworkConfirmationProps {
   targetLabel: string;
   onContinue: () => void;
   onCancel: () => void;
@@ -135,7 +141,7 @@ interface MainnetConfirmationProps {
  * the intent modals and SendModal's confirm step (settleWindow.ts). Cancel is never
  * held back: backing out is always safe.
  */
-function MainnetConfirmation({ targetLabel, onContinue, onCancel }: MainnetConfirmationProps) {
+function LiveNetworkConfirmation({ targetLabel, onContinue, onCancel }: LiveNetworkConfirmationProps) {
   const [live, setLive] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setLive(true), INTENT_SETTLE_MS);

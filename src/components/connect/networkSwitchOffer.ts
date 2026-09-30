@@ -3,6 +3,7 @@ import type { NetworkInfo } from '@unicitylabs/sphere-sdk/connect';
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { SPHERE_NETWORK, SUPPORTED_NETWORKS, isSwitchableNetwork } from '../../config/network';
+import { isTestMoney } from '../../config/networkCapabilities';
 
 /**
  * Why a network switch cannot be offered. Every value is a state the caller can
@@ -26,7 +27,13 @@ export type SwitchOffer =
       target: NetworkType;
       targetLabel: string;
       currentLabel: string;
-      isMainnet: boolean;
+      /**
+       * Whether switching to `target` puts the user on a network whose money is real.
+       * Answered by the wallet's fail-closed test-money allowlist, so it is true for
+       * every network that list does not name, mainnet or not, and stays true for a
+       * network added later until someone lists it as play money on purpose.
+       */
+      movesRealFunds: boolean;
     }
   | { kind: 'refuse'; reason: SwitchRefusal };
 
@@ -103,8 +110,13 @@ export function evaluateSwitchOffer(input: {
     target,
     targetLabel: NETWORKS[target].name,
     currentLabel: NETWORKS[SPHERE_NETWORK].name,
-    // So the modal never needs the network table to decide whether real funds
-    // are involved.
-    isMainnet: target === 'mainnet',
+    // The wallet's own question, answered the wallet's own way: config/networkCapabilities
+    // is where "is this play money" lives, and it FAILS CLOSED (an explicit allowlist, so a
+    // network nobody has listed is treated as real). Every other money gate in the wallet,
+    // including the Settings switcher that also calls setActiveNetwork, asks it. A literal
+    // `target === 'mainnet'` would fail open the day a second real-value network is served:
+    // one click onto real funds here while every other gate refuses it. So the modal never
+    // needs the network table to decide, and nothing here needs to know it is mainnet.
+    movesRealFunds: !isTestMoney(target),
   };
 }

@@ -196,7 +196,7 @@ describe('ConnectPage: onNetworkMismatch', () => {
       target: 'mainnet',
       targetLabel: 'Mainnet',
       currentLabel: 'Testnet',
-      isMainnet: true,
+      movesRealFunds: true,
     });
 
     // The answer is out and nothing has moved yet: not the reload, not the stored choice.

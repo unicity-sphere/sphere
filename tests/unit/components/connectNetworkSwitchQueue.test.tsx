@@ -57,7 +57,7 @@ const OFFER: PendingNetworkSwitch['offer'] = {
   target: 'testnet2',
   targetLabel: 'Testnet',
   currentLabel: 'Mainnet',
-  isMainnet: false,
+  movesRealFunds: false,
 };
 
 // A second target, so "per origin AND target" can be told apart from "per origin".
@@ -66,7 +66,7 @@ const MAINNET_OFFER: PendingNetworkSwitch['offer'] = {
   target: 'mainnet',
   targetLabel: 'Mainnet',
   currentLabel: 'Testnet',
-  isMainnet: true,
+  movesRealFunds: true,
 };
 
 const UNSEEN: NetworkSwitchAnswer = { accepted: false, suppressFuturePrompts: false };
