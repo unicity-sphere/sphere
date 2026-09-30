@@ -186,8 +186,26 @@ export function useSphereEvents(): void {
         return;
       }
 
+      const refused = transfer.unverifiedTokens ?? [];
+      if (transfer.tokens.length === 0 && refused.length > 0) {
+        const first = refused[0]!;
+        const smallest = refused.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
+        showTransferToast(
+          {
+            sender,
+            amount: formatAmount(smallest.toString(), first.decimals),
+            symbol: `unverified ${first.symbol}`,
+            iconUrl: first.iconUrl,
+            memo: transfer.memo,
+          },
+          INCOMING_TOAST_MS,
+          `incoming-unverified:${transfer.senderPubkey || sender}:${first.coinId}`,
+        );
+        return;
+      }
+
       const firstToken = transfer.tokens[0];
-      const symbol = firstToken?.unverified ? `unverified ${firstToken.symbol}` : (firstToken?.symbol ?? '?');
+      const symbol = firstToken?.symbol ?? '?';
       const decimals = firstToken?.decimals ?? 0;
 
       // The SDK announces one event per TOKEN, not per payment, so a 54-token
@@ -198,7 +216,7 @@ export function useSphereEvents(): void {
       // Keyed on coinId, never symbol: two assets can share a display symbol
       // while differing in decimals, and summing those would render a number
       // that is wrong rather than merely merged.
-      const assetKey = firstToken ? `${firstToken.coinId}${firstToken.unverified ? ':unverified' : ''}` : symbol;
+      const assetKey = firstToken?.coinId ?? symbol;
       const groupKey = `incoming:${transfer.senderPubkey || sender}:${assetKey}`;
       const carried = incomingTotalsRef.current.get(groupKey);
       const totalSmallest =
