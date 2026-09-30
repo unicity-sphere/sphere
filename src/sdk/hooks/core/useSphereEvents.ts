@@ -8,6 +8,7 @@ import { showToast, showTransferToast, type TransferToastData } from '../../../c
 import { CHAT_KEYS, GROUP_CHAT_KEYS, type DmReceivedDetail } from '../../../components/chat/data/chatTypes';
 import { sendWelcomeDM } from '../../welcomeDM';
 import { getPayments } from '../../payments';
+import { moduleTokenView } from '../../../modules/registry';
 import type { IncomingTransfer } from '@unicitylabs/sphere-sdk';
 
 // SDK DM shape (local mirror — SDK DTS not always available)
@@ -134,6 +135,29 @@ export function useSphereEvents(): void {
       }
     };
 
+    const announceUnverified = (sender: string, senderPubkey: string, refused: IncomingTransfer['tokens']) => {
+      const first = moduleTokenView(refused[0]!);
+      const groupKey = `incoming-unverified:${senderPubkey || sender}:${first.coinId}`;
+      const carried = incomingTotalsRef.current.get(groupKey)?.smallest ?? 0n;
+      const smallest = carried + refused.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
+      incomingTotalsRef.current.set(groupKey, { smallest, decimals: first.decimals });
+      const stale = incomingGroupTimersRef.current.get(groupKey);
+      if (stale !== undefined) clearTimeout(stale);
+      incomingGroupTimersRef.current.set(
+        groupKey,
+        setTimeout(() => {
+          incomingTotalsRef.current.delete(groupKey);
+          incomingGroupTimersRef.current.delete(groupKey);
+        }, INCOMING_TOAST_MS + 500),
+      );
+      showToast(
+        `${sender} sent ${formatAmount(smallest.toString(), first.decimals)} ${first.symbol} this wallet could not verify. It is not counted and cannot be sent.`,
+        'warning',
+        INCOMING_TOAST_MS,
+        { groupId: groupKey },
+      );
+    };
+
     const handleIncomingTransfer = (transfer: IncomingTransfer) => {
       diag('event:transfer:incoming');
       invalidatePayments();
@@ -188,19 +212,7 @@ export function useSphereEvents(): void {
 
       const refused = transfer.unverifiedTokens ?? [];
       if (transfer.tokens.length === 0 && refused.length > 0) {
-        const first = refused[0]!;
-        const smallest = refused.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n);
-        showTransferToast(
-          {
-            sender,
-            amount: formatAmount(smallest.toString(), first.decimals),
-            symbol: `unverified ${first.symbol}`,
-            iconUrl: first.iconUrl,
-            memo: transfer.memo,
-          },
-          INCOMING_TOAST_MS,
-          `incoming-unverified:${transfer.senderPubkey || sender}:${first.coinId}`,
-        );
+        announceUnverified(sender, transfer.senderPubkey, refused);
         return;
       }
 
