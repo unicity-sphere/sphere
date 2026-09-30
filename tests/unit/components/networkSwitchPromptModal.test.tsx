@@ -294,6 +294,41 @@ describe('NetworkSwitchPromptModal', () => {
       expect(state.answer).not.toHaveBeenCalled();
     });
 
+    // The confirmation is the one gate between a click and real funds, so it must not
+    // hang on two fields of a structural type staying in sync. A hand-built offer (a
+    // fixture, a future refactor of evaluateSwitchOffer) that disagrees with itself
+    // still gets it, whichever field is the one that says "mainnet".
+    it.each([
+      {
+        name: 'target is mainnet but isMainnet says false',
+        offer: { ...MAINNET_OFFER, isMainnet: false },
+        button: 'Switch to Mainnet',
+      },
+      {
+        name: 'isMainnet says true but the target is not mainnet',
+        offer: { ...TESTNET_OFFER, isMainnet: true },
+        button: 'Switch to Testnet',
+      },
+    ])('still demands the confirmation when the offer disagrees with itself: $name', ({ offer, button }) => {
+      state.pending = pend({ offer });
+      render(<NetworkSwitchPromptModal />);
+
+      // One click cannot accept...
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(state.answer).not.toHaveBeenCalled();
+      // ...it opens the second step, naming real funds, and nothing has been answered.
+      expect(screen.getByTestId('network-switch-mainnet-confirm').textContent).toContain(
+        'Transactions there move real funds.',
+      );
+      expect(screen.queryByRole('button', { name: button })).toBeNull();
+
+      // Only the explicit Continue accepts, once its settle window has passed.
+      settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      expect(state.answer).toHaveBeenCalledTimes(1);
+      expect(state.answer).toHaveBeenCalledWith(7, { accepted: true, suppressFuturePrompts: false });
+    });
+
     it('a mainnet decline needs no second step', () => {
       state.pending = pend({ offer: MAINNET_OFFER });
       render(<NetworkSwitchPromptModal />);
@@ -334,19 +369,41 @@ describe('NetworkSwitchPromptModal', () => {
       expect(removeItem).not.toHaveBeenCalled();
     });
 
+    // A persistent mute must come from an explicit "Not now", not from an accidental
+    // dismissal: failing to honour a tick asks again, honouring a stray click hides
+    // the prompt for good. On mobile the modal is a full-screen bottom sheet, so the
+    // BACKDROP is the most likely accidental dismissal there is.
     it('dismissing with the close button declines but never mutes, even with the box ticked', () => {
-      // A persistent mute must come from an explicit "Not now", not from an
-      // accidental dismissal: failing to honour a tick asks again, honouring a
-      // stray click hides the prompt for good.
       state.pending = pend();
       render(<NetworkSwitchPromptModal />);
 
       fireEvent.click(screen.getByLabelText('Do not ask again for this site'));
-      // ModalHeader's close control is the only button that is neither of ours.
-      const close = screen
-        .getAllByRole('button')
-        .find((b) => !['Switch to Testnet', 'Not now'].includes(b.textContent ?? ''))!;
-      fireEvent.click(close);
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      expect(state.answer).toHaveBeenCalledTimes(1);
+      expect(state.answer).toHaveBeenCalledWith(7, { accepted: false, suppressFuturePrompts: false });
+    });
+
+    it('dismissing with the backdrop declines but never mutes, even with the box ticked', () => {
+      state.pending = pend();
+      render(<NetworkSwitchPromptModal />);
+
+      fireEvent.click(screen.getByLabelText('Do not ask again for this site'));
+      fireEvent.click(screen.getByTestId('modal-backdrop'));
+
+      expect(state.answer).toHaveBeenCalledTimes(1);
+      expect(state.answer).toHaveBeenCalledWith(7, { accepted: false, suppressFuturePrompts: false });
+    });
+
+    it('a backdrop click on the mainnet confirmation declines: it can never accept', () => {
+      state.pending = pend({ offer: MAINNET_OFFER });
+      render(<NetworkSwitchPromptModal />);
+
+      fireEvent.click(screen.getByLabelText('Do not ask again for this site'));
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Mainnet' }));
+      expect(screen.getByTestId('network-switch-mainnet-confirm')).toBeDefined();
+      settle(); // even once Continue is live
+      fireEvent.click(screen.getByTestId('modal-backdrop'));
 
       expect(state.answer).toHaveBeenCalledTimes(1);
       expect(state.answer).toHaveBeenCalledWith(7, { accepted: false, suppressFuturePrompts: false });

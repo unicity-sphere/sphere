@@ -16,6 +16,12 @@ interface ModalHeaderProps {
   subtitle?: ReactNode;
   /** Disable close button */
   closeDisabled?: boolean;
+  /**
+   * Accessible name for the close control, which is icon-only. Opt-in so no existing
+   * modal's accessible tree changes; a modal whose tests (or users) need to find the
+   * control by name passes it.
+   */
+  closeLabel?: string;
   /** 'modal' (default): X on right. 'screen': ‹ back on left, title centred. */
   variant?: 'modal' | 'screen';
 }
@@ -38,6 +44,7 @@ export function ModalHeader({
   iconVariant = 'neutral',
   subtitle,
   closeDisabled = false,
+  closeLabel,
   variant = 'modal',
 }: ModalHeaderProps) {
   const iconStyles = iconVariantClasses[iconVariant];
@@ -50,6 +57,7 @@ export function ModalHeader({
           whileTap={{ scale: 0.9 }}
           onClick={onClose}
           disabled={closeDisabled}
+          aria-label={closeLabel}
           className="w-9 h-9 flex items-center justify-center rounded-xl transition-colors hover:bg-neutral-100 dark:hover:bg-white/6 text-neutral-400 dark:text-white/35 hover:text-neutral-700 dark:hover:text-white"
         >
           <ChevronLeft className="w-5 h-5" />
@@ -90,6 +98,7 @@ export function ModalHeader({
         whileTap={closeDisabled ? {} : { scale: 0.9 }}
         onClick={onClose}
         disabled={closeDisabled}
+        aria-label={closeLabel}
         className={`w-9 h-9 flex items-center justify-center rounded-xl transition-colors ${
           closeDisabled
             ? 'bg-neutral-100 dark:bg-white/5 text-neutral-400 dark:text-white/28 cursor-not-allowed'

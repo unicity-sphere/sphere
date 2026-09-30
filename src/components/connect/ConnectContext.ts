@@ -118,11 +118,18 @@ export interface ConnectContextValue {
    *
    * This provider never writes the "do not ask again" record: `suppressFuturePrompts` rides
    * back in the answer and the caller, which also owns the origin and the target, writes it.
+   *
+   * `expiresAt` (epoch ms, the `NetworkMismatchContext` deadline) is when the SDK host stops
+   * waiting and answers its own refusal. It exists so an abandoned prompt frees its slot: the
+   * entry settles as unseen when it passes, and a request whose deadline is already past is
+   * refused on the spot. It is NOT the guard against a late accept (a user can answer in the
+   * last instant before it fires): the caller re-checks the deadline after the answer.
    */
   requestNetworkSwitch: (
     host: ConnectHost,
     origin: string,
     offer: PendingNetworkSwitch['offer'],
+    expiresAt?: number,
   ) => Promise<NetworkSwitchAnswer>;
 
   /**

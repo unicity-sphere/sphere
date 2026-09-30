@@ -48,6 +48,12 @@ const ALWAYS_ASK_INTENTS: ReadonlySet<string> = new Set<string>([INTENT_ACTIONS.
  */
 const unseenRefusal = (): NetworkSwitchAnswer => ({ accepted: false, suppressFuturePrompts: false });
 
+/**
+ * The largest delay setTimeout honours. A longer one is read as 1 ms, which would
+ * dismiss a prompt the instant it opened, so a far-future deadline is clamped to this.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 interface ConnectProviderProps {
   children: ReactNode;
 }
@@ -61,6 +67,9 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   // The third surface. Admission (requestNetworkSwitch) keeps it at zero or one
   // entry, but it is a queue of the same shape so it settles through the same paths.
   const networkSwitchQueueRef = useRef<PendingNetworkSwitch[]>([]);
+  // The deadline timer of each open prompt that came with one, by entry id. Held here
+  // rather than on the entry so the public entry type stays what the modal needs.
+  const switchDeadlinesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [pendingIntent, setPendingIntent] = useState<PendingIntent | null>(null);
   const [pendingNetworkSwitch, setPendingNetworkSwitch] = useState<PendingNetworkSwitch | null>(null);
@@ -103,15 +112,24 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [syncHeads],
   );
 
+  /** Stop an entry's deadline timer. Every way out of the queue goes through this. */
+  const clearSwitchDeadline = useCallback((id: number) => {
+    const timer = switchDeadlinesRef.current.get(id);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    switchDeadlinesRef.current.delete(id);
+  }, []);
+
   const settleNetworkSwitch = useCallback(
     (id: number, answer: NetworkSwitchAnswer) => {
       const index = networkSwitchQueueRef.current.findIndex((entry) => entry.id === id);
       if (index === -1) return; // already settled — never resolve the same prompt twice
       const [entry] = networkSwitchQueueRef.current.splice(index, 1);
+      clearSwitchDeadline(id);
       entry!.resolve(answer);
       syncHeads();
     },
-    [syncHeads],
+    [clearSwitchDeadline, syncHeads],
   );
 
   /** Settle every queued intent matching `match` (all of them when it returns true). */
@@ -135,11 +153,23 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       const doomed = networkSwitchQueueRef.current.filter(match);
       if (doomed.length === 0) return;
       networkSwitchQueueRef.current = networkSwitchQueueRef.current.filter((entry) => !match(entry));
-      for (const entry of doomed) entry.resolve(unseenRefusal());
+      for (const entry of doomed) {
+        clearSwitchDeadline(entry.id);
+        entry.resolve(unseenRefusal());
+      }
       syncHeads();
     },
-    [syncHeads],
+    [clearSwitchDeadline, syncHeads],
   );
+
+  // An unmounting provider must not leave a timer behind to settle into a dead tree.
+  useEffect(() => {
+    const deadlines = switchDeadlinesRef.current;
+    return () => {
+      for (const timer of deadlines.values()) clearTimeout(timer);
+      deadlines.clear();
+    };
+  }, []);
 
   const { isLocked } = useSphereContext();
 
@@ -270,26 +300,48 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   );
 
   const requestNetworkSwitch = useCallback(
-    (host: ConnectHost, origin: string, offer: PendingNetworkSwitch['offer']) =>
+    (host: ConnectHost, origin: string, offer: PendingNetworkSwitch['offer'], expiresAt?: number) =>
       new Promise<NetworkSwitchAnswer>((resolve) => {
+        // Time left before the host stops waiting; unbounded when no deadline came.
+        // Written so a deadline that is not a number at all reads as already passed.
+        const remaining = expiresAt === undefined ? Infinity : expiresAt - Date.now();
         // Admission lives here, not in the two hosts, so neither can forget a rule.
         // A refusal resolves on the spot and never queues: the user never sees it,
         // so it is answered as unseen. The queues are read from the refs, not from
-        // state — a settle lands there synchronously, before any re-render.
+        // state — a settle lands there synchronously, before any re-render. A deadline
+        // that has already passed is refused like an aborted intent is: the host has
+        // answered the dApp itself, so nobody is asked.
         if (
           isLockedRef.current ||
           approvalQueueRef.current.length > 0 ||
           intentQueueRef.current.length > 0 ||
-          networkSwitchQueueRef.current.length > 0
+          networkSwitchQueueRef.current.length > 0 ||
+          !(remaining > 0)
         ) {
           resolve(unseenRefusal());
           return;
         }
         const id = ++nextIdRef.current;
         networkSwitchQueueRef.current.push({ id, host, origin, offer, resolve });
+        // Why this timer exists, and what it is NOT. The SDK host answers its own
+        // refusal at `expiresAt` and has no way to tell the wallet (NetworkMismatchContext
+        // carries no AbortSignal, deliberately), so without this an abandoned prompt would
+        // sit for the life of the page and refuse every OTHER origin as unseen. It frees
+        // the slot and takes down a prompt nobody is listening to any more, settling the
+        // entry through the same one path as everything else (so exactly once).
+        //
+        // It is NOT what stops a late accept from reloading the wallet: a user can answer
+        // in the last instant before this fires. The handler re-checks the deadline after
+        // the answer comes back, and that check, not this timer, is what guards the switch.
+        if (expiresAt !== undefined) {
+          switchDeadlinesRef.current.set(
+            id,
+            setTimeout(() => settleNetworkSwitch(id, unseenRefusal()), Math.min(remaining, MAX_TIMER_MS)),
+          );
+        }
         syncHeads();
       }),
-    [syncHeads],
+    [settleNetworkSwitch, syncHeads],
   );
 
   const registerAutoIntent = useCallback(

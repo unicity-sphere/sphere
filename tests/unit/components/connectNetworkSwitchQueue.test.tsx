@@ -76,10 +76,10 @@ function tree() {
 }
 
 /** Ask for a switch and record every settlement, so "exactly once" is countable. */
-function ask(host: ConnectHost, origin: string): ReturnType<typeof vi.fn> {
+function ask(host: ConnectHost, origin: string, expiresAt?: number): ReturnType<typeof vi.fn> {
   const settled = vi.fn();
   act(() => {
-    void ctx!.requestNetworkSwitch(host, origin, OFFER).then(settled);
+    void ctx!.requestNetworkSwitch(host, origin, OFFER, expiresAt).then(settled);
   });
   return settled;
 }
@@ -407,5 +407,207 @@ describe('network-switch prompt queue', () => {
       expect(answered).toHaveBeenCalledTimes(1);
       expect(first).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('dismissal through the provider', () => {
+  it('a backdrop click resolves declined and NOT muted, even with the box ticked', async () => {
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+    const settled = ask(hostA, ORIGIN_A);
+    fireEvent.click(screen.getByLabelText('Do not ask again for this site'));
+    fireEvent.click(screen.getByTestId('modal-backdrop'));
+    await flush();
+
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith({ accepted: false, suppressFuturePrompts: false });
+    expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+  });
+});
+
+/**
+ * The provider frees the slot of a prompt nobody is listening to any more. The SDK
+ * host answers its own refusal at ctx.expiresAt and has no way to tell the wallet, so
+ * without this an abandoned prompt would sit for the life of the page and refuse every
+ * OTHER origin as unseen. It is not what stops a late accept: a user can answer in the
+ * last instant before the timer fires, and the handler re-checks the deadline itself.
+ *
+ * Timers only (setTimeout, clearTimeout, Date), so nothing else in the tree is slowed.
+ */
+describe('deadline: an abandoned prompt frees its slot', () => {
+  const MINUTE = 60_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const advance = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
+
+  it('settles an open prompt as unseen when the deadline passes, and takes the modal down', async () => {
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + 1_000);
+    expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+
+    await advance(999);
+    expect(settled).not.toHaveBeenCalled();
+    expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+
+    await advance(1);
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(UNSEEN);
+    expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+    expect(ctx!.pendingNetworkSwitch).toBeNull();
+  });
+
+  it('frees the slot: another origin is admitted once the abandoned prompt is gone', async () => {
+    render(tree());
+    act(() => {
+      ctx!.attachHost(hostA, ORIGIN_A);
+      ctx!.attachHost(hostB, ORIGIN_B);
+    });
+
+    ask(hostA, ORIGIN_A, Date.now() + MINUTE);
+    const whileOpen = ask(hostB, ORIGIN_B);
+    await flush();
+    expect(whileOpen).toHaveBeenCalledWith(UNSEEN); // refused: the slot is taken
+
+    await advance(MINUTE);
+    const afterwards = ask(hostB, ORIGIN_B);
+    expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe(ORIGIN_B);
+    await flush();
+    expect(afterwards).not.toHaveBeenCalled(); // queued and shown this time
+  });
+
+  it('a normal answer clears the timer, and the old deadline never touches a later prompt', async () => {
+    render(tree());
+    act(() => {
+      ctx!.attachHost(hostA, ORIGIN_A);
+      ctx!.attachHost(hostB, ORIGIN_B);
+    });
+    const baseline = vi.getTimerCount();
+
+    const first = ask(hostA, ORIGIN_A, Date.now() + MINUTE);
+    expect(vi.getTimerCount()).toBe(baseline + 1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Testnet' }));
+    await flush();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledWith({ accepted: true, suppressFuturePrompts: false });
+    expect(vi.getTimerCount()).toBe(baseline); // cleared, not merely ignored
+
+    const second = ask(hostB, ORIGIN_B); // no deadline of its own
+    await advance(2 * MINUTE);
+    expect(second).not.toHaveBeenCalled();
+    expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe(ORIGIN_B);
+    expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  it('a lock settles the prompt and clears its timer, and the deadline then settles nothing twice', async () => {
+    const { rerender } = render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    const baseline = vi.getTimerCount();
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + MINUTE);
+    expect(vi.getTimerCount()).toBe(baseline + 1);
+
+    sphereMock.isLocked = true;
+    await act(async () => { rerender(tree()); });
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(UNSEEN);
+    expect(vi.getTimerCount()).toBe(baseline);
+
+    await advance(2 * MINUTE);
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it('releaseHost settles the prompt and clears its timer', async () => {
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    const baseline = vi.getTimerCount();
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + MINUTE);
+    act(() => ctx!.releaseHost(hostA));
+    await flush();
+
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(UNSEEN);
+    expect(vi.getTimerCount()).toBe(baseline);
+
+    await advance(2 * MINUTE);
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it('a deadline that has already passed is refused on the spot and never queued or armed', async () => {
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    const baseline = vi.getTimerCount();
+
+    // The past, this very instant, and a value that is not a time at all: with no
+    // deadline to trust the host has already stopped waiting, so nobody is asked.
+    for (const expiresAt of [Date.now() - 1, Date.now(), Number.NaN]) {
+      const refused = ask(hostA, ORIGIN_A, expiresAt);
+      await flush();
+      expect(refused).toHaveBeenCalledTimes(1);
+      expect(refused).toHaveBeenCalledWith(UNSEEN);
+      expect(ctx!.pendingNetworkSwitch).toBeNull();
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+    }
+    expect(vi.getTimerCount()).toBe(baseline);
+  });
+
+  it('with no deadline nothing is armed, and the prompt stays', async () => {
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    const baseline = vi.getTimerCount();
+
+    const settled = ask(hostA, ORIGIN_A);
+    expect(vi.getTimerCount()).toBe(baseline);
+
+    await advance(24 * 60 * MINUTE);
+    expect(settled).not.toHaveBeenCalled();
+    expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+  });
+
+  it('a deadline beyond the timer range does not fire at once', async () => {
+    // setTimeout reads a delay past 2^31-1 ms as 1 ms, which would dismiss a prompt the
+    // instant it opened.
+    render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + 2 ** 31 + 60_000);
+    await advance(1_000);
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+  });
+
+  it('unmounting the provider clears the timer', async () => {
+    const { unmount } = render(tree());
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+    const baseline = vi.getTimerCount();
+
+    ask(hostA, ORIGIN_A, Date.now() + MINUTE);
+    expect(vi.getTimerCount()).toBe(baseline + 1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(baseline);
+  });
+
+  it('settles exactly once at the deadline under StrictMode', async () => {
+    render(<StrictMode>{tree()}</StrictMode>);
+    act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+    const settled = ask(hostA, ORIGIN_A, Date.now() + 1_000);
+    await advance(1_000);
+    await advance(MINUTE);
+
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(UNSEEN);
   });
 });

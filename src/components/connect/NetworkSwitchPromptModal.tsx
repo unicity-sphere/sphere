@@ -39,7 +39,13 @@ interface NetworkSwitchPromptProps {
 
 function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
   const { id, origin, offer } = pending;
-  const { targetLabel, currentLabel, isMainnet } = offer;
+  const { targetLabel, currentLabel } = offer;
+  // The one gate between a click and real funds, so it must not rest on two fields of a
+  // structural type staying in sync: either one saying "mainnet" is enough. An offer that
+  // disagrees with itself (a hand-built fixture, a future refactor of evaluateSwitchOffer)
+  // gets the confirmation rather than a one-click accept under a correct-looking label,
+  // which is drawn from the target. Gating too often costs a click; too seldom costs funds.
+  const needsLiveNetworkConfirmation = offer.isMainnet || offer.target === 'mainnet';
   const [suppress, setSuppress] = useState(false);
   const [confirmingMainnet, setConfirmingMainnet] = useState(false);
 
@@ -55,13 +61,13 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
   const handleSwitch = () => {
     // The live network is the one target where a mistaken click moves real funds,
     // so accepting it takes a second, explicit confirmation.
-    if (isMainnet) setConfirmingMainnet(true);
+    if (needsLiveNetworkConfirmation) setConfirmingMainnet(true);
     else accept();
   };
 
   return (
     <BaseModal isOpen={true} onClose={dismiss}>
-      <ModalHeader title="Switch network?" icon={ArrowLeftRight} onClose={dismiss} />
+      <ModalHeader title="Switch network?" icon={ArrowLeftRight} onClose={dismiss} closeLabel="Close" />
 
       <div
         data-testid="network-switch-prompt"

@@ -109,6 +109,7 @@ export interface NetworkMismatchDeps {
     host: ConnectHost,
     origin: string,
     offer: PendingNetworkSwitch['offer'],
+    expiresAt?: number,
   ) => Promise<NetworkSwitchAnswer>;
   /** Persist the choice and reload. Injectable because a reload cannot run under jsdom. */
   switchNetwork: (target: NetworkType, origin: string) => void;
@@ -149,7 +150,10 @@ export function createNetworkMismatchHandler(deps: NetworkMismatchDeps): Mismatc
       return refuse();
     }
 
-    const answer = await deps.requestNetworkSwitch(host, origin, offer);
+    // The deadline goes along so the provider can free the prompt's slot when it passes
+    // (an abandoned prompt would otherwise refuse every other origin for the life of the
+    // page). That is housekeeping only: the check right below is what guards the switch.
+    const answer = await deps.requestNetworkSwitch(host, origin, offer, ctx.expiresAt);
 
     // Deadline check 2 of 2: the prompt may have been open past it. The host has already
     // answered the dApp and ignores whatever this returns, so do nothing that has an effect,
@@ -205,7 +209,7 @@ export function useNetworkMismatchHandler(): MakeNetworkMismatchHandler {
         host,
         origin,
         note,
-        requestNetworkSwitch: (h, o, offer) => requestRef.current(h, o, offer),
+        requestNetworkSwitch: (h, o, offer, expiresAt) => requestRef.current(h, o, offer, expiresAt),
         switchNetwork: (target, forOrigin) => setActiveNetwork(target, { forOrigin }),
       }),
     [],

@@ -200,6 +200,21 @@ describe('resolve first, switch after', () => {
     expect(JSON.stringify(request.mock.calls[0]!.slice(1))).not.toContain(DAPP.name);
   });
 
+  it('hands the host\'s deadline to the prompt, so the provider can free the slot when it passes', async () => {
+    const loaded = await load();
+    const request = vi.fn().mockResolvedValue(ACCEPT);
+    const { view } = renderFactory(loaded, request);
+    const note = loaded.handler.createSwitchRefusalNote();
+    const ctx = mismatchCtx({ expiresAt: Date.now() + 12_345 });
+
+    await view.result.current(fakeHost(), ORIGIN, note)(DAPP, ctx);
+
+    // The fourth argument, exactly as the SDK supplied it. No SDK signal exists; this is
+    // the only way the wallet learns the host stopped waiting.
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]![3]).toBe(ctx.expiresAt);
+  });
+
   it('tells the user when the switch itself fails, after the host has already said it is switching', async () => {
     const loaded = await load();
     const request = vi.fn().mockResolvedValue(ACCEPT);
