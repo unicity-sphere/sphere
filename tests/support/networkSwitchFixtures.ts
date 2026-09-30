@@ -141,3 +141,27 @@ export function freshModules(reload: () => void): void {
     };
   });
 }
+
+export const SUPPRESSED_KEY = 'sphere_network_switch_suppressed';
+export const ACTIVE_NETWORK_KEY = 'sphere_active_network';
+
+/**
+ * The keys written to localStorage, in order, with every write passed through. Lets a test
+ * say "the mute landed BEFORE the active network was persisted", which is an ordering no
+ * assertion on the final state can see. Restored by `vi.restoreAllMocks()` in afterEach.
+ */
+export function recordStorageWrites(): string[] {
+  const writes: string[] = [];
+  const real = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    if (this === localStorage) writes.push(key);
+    real.call(this, key, value);
+  });
+  return writes;
+}
+
+/** The mute store as persisted, parsed, or null when nothing was written. */
+export function rawSuppressed(): { byNetwork: Record<string, Record<string, { targets: Record<string, unknown> }>> } | null {
+  const raw = localStorage.getItem(SUPPRESSED_KEY);
+  return raw === null ? null : JSON.parse(raw);
+}

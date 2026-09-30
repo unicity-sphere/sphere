@@ -171,6 +171,26 @@ export function createNetworkMismatchHandler(deps: NetworkMismatchDeps): Mismatc
     }
 
     const { target, targetLabel } = offer;
+
+    // The tick is honoured on ACCEPT as well as on decline. The box is drawn above both
+    // buttons and the answer carries it on both paths, so dropping it here would leave a
+    // consent control that is shown, accepted and then ignored.
+    //
+    // WRITE IT NOW, BEFORE THE SWITCH IS SCHEDULED. The mute is keyed by the ACTIVE network,
+    // and while this page lives that is still the network the user is leaving: the one the
+    // prompt was raised on, and so the one "do not ask again for this site" is about. The
+    // switch ends in a reload, after which nothing this page does is guaranteed to run, and
+    // the page that comes back resolves SPHERE_NETWORK to the TARGET. A write that slipped
+    // behind the switch would land in the wrong bucket, or not land at all. In the right
+    // bucket the record is dormant on the new network and in force again, and listable, the
+    // moment the user returns to this one.
+    //
+    // A failed write never blocks the switch the user just asked for. A toast would die with
+    // the reload a few milliseconds from now, so the failure is logged instead.
+    if (answer.suppressFuturePrompts && !suppressSwitchPrompt(origin, target)) {
+      console.warn('[Connect] Could not save "do not ask again" for the network switch; switching anyway');
+    }
+
     // Resolve FIRST, switch after (see the header). The timer is what puts the reload
     // behind the host's frame.
     setTimeout(() => {

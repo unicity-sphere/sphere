@@ -39,6 +39,8 @@ vi.mock('../../../src/components/ui/toast-utils', async (importOriginal) => {
 });
 
 const ORIGIN = 'https://dapp.example';
+const SUPPRESSED_KEY = 'sphere_network_switch_suppressed';
+const ACTIVE_NETWORK_KEY = 'sphere_active_network';
 const ACCEPT = { accepted: true, suppressFuturePrompts: false };
 
 /** Fresh module graph under the pinned config, with everything these tests touch. */
@@ -95,15 +97,27 @@ afterEach(async () => {
 });
 
 describe('resolve first, switch after', () => {
-  it('posts the SDK host frame to the dApp BEFORE the wallet reloads (real ConnectHost, real ConnectClient)', async () => {
+  /**
+   * One handshake from a mainnet dApp against a wallet on testnet2, on a REAL ConnectHost and
+   * ConnectClient over an in-memory transport. Returns ONE timeline of everything whose order
+   * matters: the mute landing in storage ('mute'), the host posting its frame ('frame:<code>'),
+   * the active network being persisted ('active-network') and the reload ('reload').
+   */
+  async function handshakeAgainstRealHost(answer: { accepted: boolean; suppressFuturePrompts: boolean }) {
     const loaded = await load();
     const { ConnectHost, ConnectClient, ERROR_CODES } = loaded.sdk;
-    const request = vi.fn().mockResolvedValue(ACCEPT);
+    const request = vi.fn().mockResolvedValue(answer);
     const { view } = renderFactory(loaded, request);
     const note = loaded.handler.createSwitchRefusalNote();
 
     const timeline: string[] = [];
     mocks.reload.mockImplementation(() => timeline.push('reload'));
+    const realSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === localStorage && key === SUPPRESSED_KEY) timeline.push('mute');
+      if (this === localStorage && key === ACTIVE_NETWORK_KEY) timeline.push('active-network');
+      realSetItem.call(this, key, value);
+    });
 
     // In-memory transport pair. The host side records the frames it POSTS.
     type Msg = { type?: string; direction?: string; error?: { code: number } };
@@ -163,8 +177,22 @@ describe('resolve first, switch after', () => {
     await expect(client.connect()).rejects.toMatchObject({ code: ERROR_CODES.INCOMPATIBLE_NETWORK });
     await macrotask();
 
+    return { timeline, request, frame: `frame:${ERROR_CODES.INCOMPATIBLE_NETWORK}` };
+  }
+
+  it('posts the SDK host frame to the dApp BEFORE the wallet reloads (real ConnectHost, real ConnectClient)', async () => {
+    const { timeline, request, frame } = await handshakeAgainstRealHost(ACCEPT);
+
     expect(request).toHaveBeenCalledOnce();
-    expect(timeline).toEqual([`frame:${ERROR_CODES.INCOMPATIBLE_NETWORK}`, 'reload']);
+    expect(timeline).toEqual([frame, 'active-network', 'reload']);
+    expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+  });
+
+  it('writes the mute of a ticked ACCEPT before the frame, the persisted network and the reload', async () => {
+    const { timeline, frame } = await handshakeAgainstRealHost({ accepted: true, suppressFuturePrompts: true });
+
+    // The mute lands while the wallet is still on the network the prompt was raised on.
+    expect(timeline).toEqual(['mute', frame, 'active-network', 'reload']);
     expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
   });
 
@@ -396,6 +424,31 @@ describe('the hook', () => {
     const marker = JSON.parse(sessionStorage.getItem(MARKER_KEY) ?? 'null') as { origin: string; to: string };
     expect(marker.origin).toBe(ORIGIN);
     expect(marker.to).toBe('mainnet');
+  });
+});
+
+describe('a mute written on accept', () => {
+  it('lands in the network being LEFT: dormant on the new one, in force and listed on return', async () => {
+    const first = await load();
+    const request = vi.fn().mockResolvedValue({ accepted: true, suppressFuturePrompts: true });
+    const { view } = renderFactory(first, request);
+    await view.result.current(fakeHost(), ORIGIN, first.handler.createSwitchRefusalNote())(DAPP, mismatchCtx());
+    await macrotask();
+    view.unmount();
+
+    // The page that comes back from the switch runs on mainnet, where nothing is muted yet.
+    const onMainnet = await load();
+    expect(onMainnet.net.SPHERE_NETWORK).toBe('mainnet');
+    expect(onMainnet.store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    expect(onMainnet.store.getSuppressedOrigins()).toEqual({});
+
+    // The user goes back to testnet2, which is the network the prompt was raised on: the
+    // record is in force again, and it is the one Task 7's list will show.
+    localStorage.setItem('sphere_active_network', 'testnet2');
+    const back = await load();
+    expect(back.net.SPHERE_NETWORK).toBe('testnet2');
+    expect(back.store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    expect(back.store.getSuppressedOrigins()).toEqual({ [ORIGIN]: ['mainnet'] });
   });
 });
 

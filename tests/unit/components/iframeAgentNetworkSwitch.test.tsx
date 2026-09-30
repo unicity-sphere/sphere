@@ -18,6 +18,8 @@ import type { AgentConfig } from '../../../src/config/activities';
 import {
   DAPP,
   MARKER_KEY,
+  SUPPRESSED_KEY,
+  ACTIVE_NETWORK_KEY,
   controllableClock,
   deferred,
   freshModules,
@@ -25,6 +27,8 @@ import {
   mismatchCtx,
   networkRejection,
   pinNetworkConfig,
+  rawSuppressed,
+  recordStorageWrites,
   seedSwitchMarker,
   unpinNetworkConfig,
   type CapturedHostConfig,
@@ -267,15 +271,120 @@ describe('IframeAgent: onNetworkMismatch', () => {
     expect(hostMock.showToast).toHaveBeenCalledWith(expect.stringContaining('may ask again'), 'warning');
   });
 
-  it('does not act on the tick of an ACCEPTED switch: only a decline writes the mute', async () => {
-    hostMock.requestNetworkSwitch.mockResolvedValue({ accepted: true, suppressFuturePrompts: true });
+  it('leaves no trace of the decline on the network: no switch, and nothing but the mute is stored', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue({ accepted: false, suppressFuturePrompts: true });
+    const { config } = await mount();
+    const writes = recordStorageWrites();
+
+    expect(await config.onNetworkMismatch(DAPP, mismatchCtx())).toEqual({ action: 'refuse' });
+    await macrotask();
+
+    expect(writes).toEqual([SUPPRESSED_KEY]);
+    expect(hostMock.reload).not.toHaveBeenCalled();
+    expect(localStorage.getItem(ACTIVE_NETWORK_KEY)).toBeNull();
+  });
+});
+
+describe('IframeAgent: the "do not ask again" tick on an ACCEPTED switch', () => {
+  const TICKED = { accepted: true, suppressFuturePrompts: true };
+
+  it('is honoured: the mute is written for this origin and target, and the switch still happens', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(TICKED);
     const { config, store } = await mount();
+
+    expect(await config.onNetworkMismatch(DAPP, mismatchCtx())).toEqual({ action: 'switch', to: { id: 1 } });
+    await macrotask();
+
+    expect(store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+    expect(store.isSwitchPromptSuppressed('https://other.example', 'mainnet')).toBe(false);
+    expect(store.isSwitchPromptSuppressed(ORIGIN, 'testnet2')).toBe(false);
+    expect(hostMock.reload).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(ACTIVE_NETWORK_KEY)).toBe('mainnet');
+  });
+
+  it('is written in the bucket of the network being LEFT, not the one being entered', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(TICKED);
+    const { config } = await mount();
+
+    await config.onNetworkMismatch(DAPP, mismatchCtx());
+    await macrotask();
+
+    const store = rawSuppressed();
+    expect(Object.keys(store?.byNetwork ?? {})).toEqual(['testnet2']);
+    expect(Object.keys(store?.byNetwork.testnet2?.[ORIGIN]?.targets ?? {})).toEqual(['mainnet']);
+  });
+
+  it('is written BEFORE the switch is scheduled: already stored when the answer is out, and before the active network is persisted', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(TICKED);
+    const { config, store } = await mount();
+    const writes = recordStorageWrites();
+
+    const decision = await config.onNetworkMismatch(DAPP, mismatchCtx());
+
+    // Answer out, switch not yet run: and the mute is already in storage.
+    expect(decision).toEqual({ action: 'switch', to: { id: 1 } });
+    expect(hostMock.reload).not.toHaveBeenCalled();
+    expect(writes).toEqual([SUPPRESSED_KEY]);
+    expect(store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(true);
+
+    await macrotask();
+
+    // The switch persists its choice only after the mute has landed.
+    expect(writes).toEqual([SUPPRESSED_KEY, ACTIVE_NETWORK_KEY]);
+    expect(hostMock.reload).toHaveBeenCalledOnce();
+  });
+
+  it('is not needed for a plain accept: without the tick nothing is written but the switch itself', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(ACCEPT);
+    const { config, store } = await mount();
+    const writes = recordStorageWrites();
+
+    expect(await config.onNetworkMismatch(DAPP, mismatchCtx())).toEqual({ action: 'switch', to: { id: 1 } });
+    await macrotask();
+
+    expect(writes).toEqual([ACTIVE_NETWORK_KEY]);
+    expect(store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    expect(rawSuppressed()).toBeNull();
+    expect(hostMock.reload).toHaveBeenCalledOnce();
+  });
+
+  it('never blocks the switch when the mute cannot be saved', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(TICKED);
+    const { config, store } = await mount();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const real = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === localStorage && key === SUPPRESSED_KEY) throw new Error('quota');
+      real.call(this, key, value);
+    });
 
     expect(await config.onNetworkMismatch(DAPP, mismatchCtx())).toEqual({ action: 'switch', to: { id: 1 } });
     await macrotask();
 
     expect(store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
     expect(hostMock.reload).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(ACTIVE_NETWORK_KEY)).toBe('mainnet');
+    // A toast would die with the reload a few milliseconds away, so it is logged instead.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not save'));
+    expect(hostMock.showToast).not.toHaveBeenCalled();
+  });
+
+  it('is not honoured for a LATE accept: the host already refused, so nothing is written at all', async () => {
+    clock = controllableClock();
+    const prompt = deferred<typeof TICKED>();
+    hostMock.requestNetworkSwitch.mockReturnValue(prompt.promise);
+    const { config, store } = await mount();
+
+    const pending = config.onNetworkMismatch(DAPP, mismatchCtx({ expiresAt: Date.now() + 60_000 }));
+    await macrotask();
+    clock.advance(61_000);
+    prompt.resolve(TICKED);
+
+    expect(await pending).toEqual({ action: 'refuse' });
+    await macrotask();
+    expect(store.isSwitchPromptSuppressed(ORIGIN, 'mainnet')).toBe(false);
+    expect(rawSuppressed()).toBeNull();
+    expect(hostMock.reload).not.toHaveBeenCalled();
   });
 });
 
