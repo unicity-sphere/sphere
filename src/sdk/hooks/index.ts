@@ -11,7 +11,7 @@ export { useRealtimeStatus } from './core/useRealtimeStatus';
 export type { RealtimeStatus, UseRealtimeStatusReturn } from './core/useRealtimeStatus';
 
 // Payments (L3)
-export { useTokens } from './payments/useTokens';
+export { useTokens, useUnverifiedTokens } from './payments/useTokens';
 export { useTokenHolds } from './payments/useTokenHolds';
 export type { UseTokensReturn } from './payments/useTokens';
 export { useCoinlessTokens } from './payments/useCoinlessTokens';
@@ -31,7 +31,7 @@ export type {
 } from './payments/useNftDocument';
 export { useBalance } from './payments/useBalance';
 export type { UseBalanceReturn } from './payments/useBalance';
-export { useAssets } from './payments/useAssets';
+export { useAssets, useUnverifiedAssets } from './payments/useAssets';
 export type { UseAssetsReturn } from './payments/useAssets';
 export { useTransfer } from './payments/useTransfer';
 export type { UseTransferReturn, TransferParams, CoinTransferParams, WholeTransferParams } from './payments/useTransfer';

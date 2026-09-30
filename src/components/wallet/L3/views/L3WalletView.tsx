@@ -3,11 +3,11 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
+import { useIdentity, useAssets, useUnverifiedAssets, useTokens, useUnverifiedTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { describeCoin } from '../../../../modules/registry';
-import { assetKey } from '../../../../sdk/verifiedAssets';
+import { assetKey } from '../../../../sdk/assetKey';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
@@ -163,8 +163,10 @@ export function L3WalletView({
   // SDK hooks
   const { identity, isLoading: isLoadingIdentity } = useIdentity();
   const { assets: sdkAssets, isLoading: isLoadingAssets } = useAssets();
+  const { assets: unverifiedAssets } = useUnverifiedAssets();
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
+  const { tokens: unverifiedTokens } = useUnverifiedTokens();
   const { coinless } = useCoinlessTokens();
   const [activeTab, setActiveTab] = useState<Tab>('assets');
   // NFT readings for the coinless rows (#785), read only while the Tokens tab shows them:
@@ -174,10 +176,10 @@ export function L3WalletView({
   const { views: nftViews } = useNfts(activeTab === 'tokens' ? coinless.map((t) => t.tokenId) : []);
   const { sphere, deleteWallet } = useSphereContext();
 
-  const assets = sdkAssets;
+  const assets = useMemo(() => [...sdkAssets, ...unverifiedAssets], [sdkAssets, unverifiedAssets]);
 
-  const tokens = sdkTokens;
-  const sendableTokens = tokens;
+  const tokens = useMemo(() => [...sdkTokens, ...unverifiedTokens], [sdkTokens, unverifiedTokens]);
+  const sendableTokens = sdkTokens;
   const holds = useTokenHolds(tokens);
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);

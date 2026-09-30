@@ -4,7 +4,6 @@ import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import type { Asset } from '../..';
 import { formatAmount } from '../../utils/format';
-import { verifiedAssets } from '../../verifiedAssets';
 
 export interface UseBalanceReturn {
   asset: Asset | null;
@@ -32,7 +31,7 @@ export function useBalance(coinId?: string): UseBalanceReturn {
 
       if (coinId) {
         // Get specific asset with price data
-        const assets = verifiedAssets(await payments.assets(coinId));
+        const assets = await payments.assets(coinId);
         return assets.length > 0 ? assets[0] : null;
       } else {
         // Get all assets and sum fiat values for total portfolio value

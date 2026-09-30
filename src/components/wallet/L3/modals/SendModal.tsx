@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { getPayments } from '../../../../sdk/payments';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react';
@@ -9,7 +9,6 @@ import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../conne
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
 import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
 import { useSendProgress } from '../../../../sdk/hooks/payments/useSendProgress';
-import { verifiedAssets } from '../../../../sdk/verifiedAssets';
 import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
@@ -48,7 +47,7 @@ function sendTargetPubkey(
 }
 
 export function SendModal({ isOpen, onClose }: SendModalProps) {
-  const { assets: sdkAssets } = useAssets();
+  const { assets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
   const { tokens: inventoryTokens } = useTokens();
   const { sphere, subscriptionKeyStatus } = useSphereContext();
@@ -59,7 +58,6 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // now would go out keyless (→ 401). Disable Send until it's ready.
   const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
-  const assets = useMemo(() => verifiedAssets(sdkAssets), [sdkAssets]);
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const handleCopy = useCallback(async (text: string, key: string) => {
