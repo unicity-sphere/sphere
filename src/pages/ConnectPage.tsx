@@ -42,7 +42,8 @@ type RejectionInfo = {
  * before the switch, nothing retries it, and this page cannot reach across to do so. So the
  * user has to go back and press Connect, and this says so. It also says they will be asked
  * to approve again, because approvals are per network: without that, the modal that
- * follows reads as the wallet forgetting them.
+ * follows reads as the wallet forgetting them. That last sentence is dropped when the origin
+ * already holds an approval on this network, since it is then connected with no modal.
  *
  * The network is named from the wallet's own table, keyed by the network this session
  * really runs on. Nothing the dApp declared on the wire ever reaches this component.
@@ -61,6 +62,11 @@ function NetworkSwitchedNotice({
   locked: boolean;
 }) {
   const label = NETWORKS[network].name;
+  // Read at render, synchronously: the approval store is scoped to the ACTIVE network, which after
+  // the reload is the target one. An origin that already holds an approval there is auto-approved
+  // by onConnectionRequest with no modal, so "you will be asked" would promise a checkpoint that
+  // does not happen (and its old permissions are reused).
+  const alreadyApproved = getApprovedOrigin(origin) !== null;
   const Icon = locked ? Lock : ArrowLeftRight;
   return (
     <div
@@ -82,15 +88,15 @@ function NetworkSwitchedNotice({
           {locked ? (
             <>
               Your wallet is now on <strong>{label}</strong>, and it is locked. Unlock it first, then go back to{' '}
-              <span className="font-mono break-all">{origin}</span> and press Connect.{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.
             </>
           ) : (
             <>
               Your wallet is now on <strong>{label}</strong>. Go back to{' '}
-              <span className="font-mono break-all">{origin}</span> and press Connect.{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.
             </>
           )}
-          You will be asked to approve the connection on {label}.
+          {!alreadyApproved && <> You will be asked to approve the connection on {label}.</>}
         </p>
       </div>
     </div>
@@ -108,6 +114,10 @@ export function ConnectPage() {
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
   const [errorMsg, setErrorMsg] = useState('');
   const [connectedDapp, setConnectedDapp] = useState<string | null>(null);
+  // Latched: has this page life EVER held a connection? `connectedDapp` goes back to null on a
+  // disconnect, but the network-switch notice below must not come back with it. Its "now" is
+  // stale by then and the person has moved on. Set wherever a connection is recorded.
+  const [hasConnected, setHasConnected] = useState(false);
   const [rejection, setRejection] = useState<RejectionInfo | null>(null);
 
   // Did the wallet just change networks for THIS popup's site? Read from the RECORD
@@ -269,6 +279,7 @@ export function ConnectPage() {
         if (saved) {
           updateLastSeen(origin);
           setConnectedDapp(saved.dapp.name);
+          setHasConnected(true);
           return { approved: true, grantedPermissions: saved.permissions };
         }
 
@@ -285,6 +296,7 @@ export function ConnectPage() {
         const result = await requestApprovalRef.current(hostRef.current!, dapp, perms, origin);
         if (result.approved) {
           setConnectedDapp(dapp.name);
+          setHasConnected(true);
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
         return result;
@@ -373,9 +385,10 @@ export function ConnectPage() {
         </div>
       )}
 
-      {/* Only while it is TRUE. Once the dApp is connected there is no Connect left to press, and
-          a wallet that is neither live nor locked (init failed) has no connection to promise. */}
-      {status === 'ready' && switchedForThisPopup && origin && connectedDapp === null && (isLocked || sphere) && (
+      {/* Only while it is TRUE. Once this page has held a connection there is no Connect left to
+          press (and after a disconnect its "now" is stale), and a wallet that is neither live
+          nor locked (init failed) has no connection to promise. */}
+      {status === 'ready' && switchedForThisPopup && origin && !hasConnected && (isLocked || sphere) && (
         <NetworkSwitchedNotice origin={origin} network={switchedForThisPopup.to} locked={isLocked} />
       )}
 

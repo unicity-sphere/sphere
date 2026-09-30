@@ -725,6 +725,73 @@ describe('ConnectPage: the screen after a switch THIS popup asked for', () => {
     expect(document.body.textContent).toContain('Connected to Hostile Swap');
   });
 
+  // A repeat switcher: the origin already holds an approval on the network the wallet moved to.
+  // Approvals persist per network and never expire, and onConnectionRequest auto-approves a saved
+  // origin with NO modal, so "you will be asked" would promise a checkpoint that does not happen.
+  const LIVE_APPROVED =
+    'Your wallet is now on Mainnet. Go back to https://dapp.example and press Connect.';
+  const LOCKED_APPROVED =
+    'Your wallet is now on Mainnet, and it is locked. Unlock it first, then go back to ' +
+    'https://dapp.example and press Connect.';
+
+  /**
+   * Save an approval for ORIGIN under `network`, through the real writer, BEFORE the marker is
+   * seeded: importing a module graph reads and consumes the marker at load, so seeding it first
+   * would hand it to this throwaway graph instead of the one `mount()` builds.
+   */
+  async function approvedBefore(network: 'testnet2' | 'mainnet') {
+    if (network === 'mainnet') localStorage.setItem(ACTIVE_NETWORK_KEY, 'mainnet');
+    else localStorage.removeItem(ACTIVE_NETWORK_KEY);
+    freshModules(hostMock.reload);
+    const sites = await import('../../../src/utils/connected-sites');
+    sites.saveApprovedOrigin(ORIGIN, DAPP, ['identity:read']);
+    expect(sites.getApprovedOrigin(ORIGIN)).not.toBeNull();
+  }
+
+  it('drops the promise of an approval when the origin already holds one on this network', async () => {
+    await approvedBefore('mainnet');
+    cameBackOnMainnet();
+    await mount();
+
+    expect(screenText()).toBe(LIVE_APPROVED);
+  });
+
+  it('drops it in the LOCKED line too', async () => {
+    await approvedBefore('mainnet');
+    cameBackOnMainnet();
+    sphereMock.sphere = null;
+    sphereMock.isLocked = true;
+    await mount();
+
+    expect(screenText()).toBe(LOCKED_APPROVED);
+  });
+
+  it('keeps the promise when the only approval is on the network the wallet LEFT', async () => {
+    await approvedBefore('testnet2'); // approved on testnet2, then switched to mainnet: nothing there
+    cameBackOnMainnet();
+    await mount();
+
+    expect(screenText()).toBe(LIVE);
+  });
+
+  it('does not come back after a disconnect: the page has moved on, and "now" would be stale', async () => {
+    cameBackOnMainnet();
+    hostMock.requestApproval.mockResolvedValue({ approved: true, grantedPermissions: ['identity:read'] });
+    const { config } = await mount();
+    expect(screenText()).toBe(LIVE);
+
+    await act(async () => {
+      await config.onConnectionRequest(DAPP, ['identity:read'], false);
+    });
+    expect(screenText()).toBeNull();
+
+    act(() => (config as unknown as { onDisconnect: () => void }).onDisconnect());
+
+    // The status block is back to "ready" and the notice stays gone.
+    expect(document.body.textContent).toContain('Ready for connections');
+    expect(screenText()).toBeNull();
+  });
+
   it('only READS the marker: showing the screen leaves the silent-handshake grace unspent', async () => {
     cameBackOnMainnet();
     hostMock.requestApproval.mockResolvedValue({ approved: false, grantedPermissions: [] });

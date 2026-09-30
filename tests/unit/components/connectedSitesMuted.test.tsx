@@ -26,6 +26,8 @@ import {
   suppressSwitchPrompt,
 } from '../../../src/utils/network-switch-prompts';
 import { getApprovedOrigins, saveApprovedOrigin } from '../../../src/utils/connected-sites';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import { SPHERE_NETWORK } from '../../../src/config/network';
 import { SUPPRESSED_KEY } from '../../support/networkSwitchFixtures';
 
 const MUTED_A = 'https://muted-a.example';
@@ -177,7 +179,7 @@ describe('Connected Sites: an Unmute that could not be saved', () => {
     expect(screen.getByRole('alert').textContent).toContain('Could not unmute');
   });
 
-  it('clears the message once a later Unmute lands', () => {
+  it('clears the message once a retry of THAT origin lands', () => {
     suppressSwitchPrompt(MUTED_A, 'mainnet');
     suppressSwitchPrompt(MUTED_B, 'mainnet');
     open();
@@ -191,5 +193,72 @@ describe('Connected Sites: an Unmute that could not be saved', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText(MUTED_A)).toBeNull();
     expect(within(document.body).getByText(MUTED_B)).toBeTruthy();
+  });
+
+  it('keeps the message while ITS origin is still muted, when a DIFFERENT site is unmuted', () => {
+    suppressSwitchPrompt(MUTED_A, 'mainnet');
+    suppressSwitchPrompt(MUTED_B, 'mainnet');
+    open();
+    breakStore('setItem');
+    fireEvent.click(screen.getByRole('button', { name: `Unmute ${MUTED_A}` }));
+    expect(screen.getByRole('alert').textContent).toContain(MUTED_A);
+
+    vi.restoreAllMocks();
+    fireEvent.click(screen.getByRole('button', { name: `Unmute ${MUTED_B}` }));
+
+    // B is gone, and A is still muted, so A still says why.
+    expect(screen.queryByRole('button', { name: `Unmute ${MUTED_B}` })).toBeNull();
+    expect(isSwitchPromptSuppressed(MUTED_A, 'mainnet')).toBe(true);
+    expect(screen.getByRole('button', { name: `Unmute ${MUTED_A}` })).toBeTruthy();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Could not unmute');
+    expect(alert.textContent).toContain(MUTED_A);
+  });
+
+  it('keeps one message per failed origin: a second failure does not replace the first', () => {
+    suppressSwitchPrompt(MUTED_A, 'mainnet');
+    suppressSwitchPrompt(MUTED_B, 'mainnet');
+    open();
+    breakStore('setItem');
+
+    fireEvent.click(screen.getByRole('button', { name: `Unmute ${MUTED_A}` }));
+    fireEvent.click(screen.getByRole('button', { name: `Unmute ${MUTED_B}` }));
+
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts.some((a) => a.textContent?.includes(MUTED_A))).toBe(true);
+    expect(alerts.some((a) => a.textContent?.includes(MUTED_B))).toBe(true);
+
+    // Retrying one clears only its own message.
+    vi.restoreAllMocks();
+    fireEvent.click(screen.getByRole('button', { name: `Unmute ${MUTED_A}` }));
+    const left = screen.getAllByRole('alert');
+    expect(left).toHaveLength(1);
+    expect(left[0]!.textContent).toContain(MUTED_B);
+  });
+});
+
+describe('Connected Sites: which network the muted list is for', () => {
+  it('names the network it is showing, from the wallet\'s own table', () => {
+    suppressSwitchPrompt(MUTED_A, 'mainnet');
+    open();
+
+    const caption = screen.getByTestId('muted-prompts-network');
+    expect(caption.textContent).toContain(NETWORKS[SPHERE_NETWORK].name);
+    // Says the list is not every mute the wallet holds, since the store is scoped per network.
+    expect(caption.textContent).toContain('another network');
+  });
+
+  it('leaves the row subtitle as it was', () => {
+    suppressSwitchPrompt(MUTED_A, 'mainnet');
+    open();
+
+    expect(screen.getByText('Will not ask to switch networks')).toBeTruthy();
+  });
+
+  it('is absent with the section, when nothing is muted', () => {
+    open();
+
+    expect(screen.queryByTestId('muted-prompts-network')).toBeNull();
   });
 });
