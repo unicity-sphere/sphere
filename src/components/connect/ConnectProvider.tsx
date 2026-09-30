@@ -20,6 +20,7 @@ import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
 import { NetworkSwitchPromptModal } from './NetworkSwitchPromptModal';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
+import { isUsableOrigin } from '../../config/agentOrigins';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBadge';
 import { INTENT_SETTLE_MS } from './settleWindow';
@@ -384,6 +385,11 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         if (
           isLockedRef.current ||
           anotherConsentSurfaceIsUp('networkSwitch') ||
+          // The prompt's whole trust story is the origin it displays, and the popup hands
+          // over its raw ?origin= parameter. Something that is not the canonical form of ONE
+          // origin ('null', '*', a path, an upper-case host) names nobody, so nobody is
+          // asked in its name, and the session memory below could not key it either.
+          !isUsableOrigin(origin) ||
           // The user already turned this origin down for this target in this session.
           declinedSwitchesRef.current.has(declineKey(origin, offer.target)) ||
           !(remaining > 0)

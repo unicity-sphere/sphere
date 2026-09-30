@@ -457,6 +457,42 @@ describe('network-switch prompt queue', () => {
       expect(admitted).not.toHaveBeenCalled();
     });
 
+    // The prompt's whole trust story is the origin it displays, and the popup passes its raw
+    // ?origin= query parameter. A value that is not the canonical form of one origin ('null'
+    // is every sandboxed frame, '*' is allow-all, a path or an upper-case host is not what the
+    // transport compares against) names nobody in particular, so nobody is asked on its behalf.
+    it.each([
+      ['the empty string', ''],
+      ["'null' (every opaque or sandboxed frame)", 'null'],
+      ["'*' (allow-all)", '*'],
+      ['a path', 'https://a.example/path'],
+      ['a trailing slash', 'https://a.example/'],
+      ['an upper-case host', 'https://A.example'],
+      ['a default port', 'https://a.example:443'],
+      ['something that is not a URL', 'not a url'],
+    ])('refuses %s as an origin, immediately, and never shows a prompt', async (_label, origin) => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const refused = ask(hostA, origin);
+      await flush();
+
+      expect(refused).toHaveBeenCalledTimes(1);
+      expect(refused).toHaveBeenCalledWith(UNSEEN);
+      expect(ctx!.pendingNetworkSwitch).toBeNull();
+      expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
+    });
+
+    it('admits a canonical origin with a port, which is what a dev server sends', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, 'http://localhost:5173'));
+
+      const settled = ask(hostA, 'http://localhost:5173');
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe('http://localhost:5173');
+      await flush();
+      expect(settled).not.toHaveBeenCalled();
+    });
+
     it('refuses while the wallet is locked, without queueing', async () => {
       sphereMock.isLocked = true;
       render(tree());
