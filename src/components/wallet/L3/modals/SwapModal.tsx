@@ -57,7 +57,7 @@ interface SwapModalProps {
 
 export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const { assets: heldAssets } = useAssets();
-  const assets = verifiedAssets(heldAssets);
+  const assets = useMemo(() => verifiedAssets(heldAssets), [heldAssets]);
   const { transfer } = useTransfer();
   const { sphere, providers, network } = useSphereContext();
   const registryReady = useRegistryReady();
