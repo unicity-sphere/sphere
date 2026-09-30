@@ -55,10 +55,15 @@ export interface PendingIntent {
  * whether this origin may ask again. A user can decline once without muting, and
  * can mute while still accepting this one switch.
  *
- * Every path that refuses WITHOUT the user ever seeing the prompt (locked,
- * another modal up, a prompt already open, a closing host) resolves
+ * Every path that ends WITHOUT the user having answered resolves
  * `{ accepted: false, suppressFuturePrompts: false }`: a refusal nobody saw must
- * never be recorded as a decision they made.
+ * never be recorded as a decision they made. Those paths are the ones refused at
+ * the door (locked, another modal up, a prompt already open, an origin that is not
+ * usable, an origin and target the user already declined this session, a deadline
+ * already past) and the ones that settle a prompt that was open: a lock, a closing
+ * host, and the deadline timer that takes down a prompt whose host has stopped
+ * waiting. None of them is the user's decline, and none may be recorded as one.
+ * Note the consequence: a caller cannot tell any of them from a plain "Not now".
  */
 export interface NetworkSwitchAnswer {
   accepted: boolean;

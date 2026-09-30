@@ -6,12 +6,23 @@ import { SPHERE_NETWORK, SUPPORTED_NETWORKS, isSwitchableNetwork } from '../../c
 import { isTestMoney } from '../../config/networkCapabilities';
 
 /**
- * Why a network switch cannot be offered. Every value is a state the caller can
+ * Why evaluateSwitchOffer will not offer a switch. Every value is a state the caller can
  * log and word honestly; none of them is a generic "something went wrong".
  *
- * A dApp that declared no network never reaches this function (the SDK does not
- * call the hook for it), so there is deliberately no such member: that case's
- * copy belongs to the rejection message (describeConnectRejection).
+ * This is NOT every case of spec section 9, and cannot be. It names only what this pure
+ * function decides: the id and wallet-network checks, availability, and the mute.
+ *  - A dApp that declared no network never reaches this function (the SDK does not call
+ *    the hook for it), so there is deliberately no such member: that case's copy belongs to
+ *    the rejection message (describeConnectRejection). The same holds for a failure that
+ *    is not the network check, and for a silent attempt.
+ *  - A locked wallet and another consent modal being up (the rest of section 9's last
+ *    item) are decided by ConnectProvider.requestNetworkSwitch, which also refuses an
+ *    origin that is not usable, a pair the user already declined this session, and a
+ *    deadline already past. Its unseen refusals come back as
+ *    `{ accepted: false, suppressFuturePrompts: false }`, which is exactly what a user's
+ *    plain "Not now" looks like, so the caller cannot tell them apart and no reason
+ *    reaches the rejection copy for them. Only the generic sentence is shown. Widening
+ *    the answer type to say why was considered and left out.
  */
 export type SwitchRefusal =
   | 'unknown-network'

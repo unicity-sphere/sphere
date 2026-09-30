@@ -38,10 +38,12 @@ import type { SwitchRefusal } from './networkSwitchOffer';
  *    whole path from our return to `transport.send` is microtasks.
  *
  * 3. THE ORIGIN. `origin` is the transport-verified one the host was built with, the
- *    same variable its `onConnectionRequest` closes over. The mute store and the switch
- *    marker only accept it in canonical form, and the grace claim compares it with `===`,
- *    so a re-derived spelling would fail closed and silently: the dApp comes back to a
- *    refused handshake with no UI. Never `ctx.origin`, never `dapp.url`.
+ *    same variable its `onConnectionRequest` closes over. The prompt (requestNetworkSwitch
+ *    refuses an origin that is not in canonical form, so the mute, which is only ever
+ *    written from an answered prompt, inherits that) and the switch marker only accept it
+ *    in canonical form, and the grace claim compares it with `===`, so a re-derived
+ *    spelling would fail closed and silently: the dApp comes back to a refused handshake
+ *    with no UI. Never `ctx.origin`, never `dapp.url`.
  *
  * Nothing the peer typed is read. `dapp` is ignored, and only `ctx.clientNetwork.id`
  * decides the target (evaluateSwitchOffer).
@@ -59,6 +61,11 @@ type MismatchHandler = (
  * right after for the SAME handshake. The reason is only known to the first, and the
  * copy is drawn by the second, so it has to travel. One note per host; both callbacks
  * run on the same host, in that order, with only microtasks between them.
+ *
+ * Handshakes are not serialized, and the note holds a single reason. Two interleaved
+ * handshakes on the same host can have the second one's `discard()` or `record()` drop
+ * the first one's reason before its rejection takes it; that rejection then shows the
+ * generic copy. Never wrong, only less specific.
  */
 export interface SwitchRefusalNote {
   /** Remember why this network id was not offered a switch. Overwrites. */

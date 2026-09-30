@@ -42,8 +42,9 @@ const ALWAYS_ASK_INTENTS: ReadonlySet<string> = new Set<string>([INTENT_ACTIONS.
 
 /**
  * The answer for every network-switch request that ends WITHOUT the user having
- * decided anything: refused at the door, settled by a lock, or orphaned by a host
- * that went away. `suppressFuturePrompts` is false on purpose — a refusal nobody
+ * decided anything: refused at the door, settled by a lock, orphaned by a host
+ * that went away, or taken down by its deadline timer once the host stopped
+ * waiting. `suppressFuturePrompts` is false on purpose — a refusal nobody
  * saw must never be recorded as a decision they made. A fresh object per call, so
  * one consumer can never see another's mutation.
  */
