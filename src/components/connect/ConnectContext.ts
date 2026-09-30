@@ -5,6 +5,7 @@ import type {
   LockedRequestContext,
   PermissionScope,
 } from '@unicitylabs/sphere-sdk/connect';
+import type { SwitchOffer } from './networkSwitchOffer';
 
 export interface PendingApproval {
   /** Monotonic id — approvals queue, so entries need identity. */
@@ -49,6 +50,35 @@ export interface PendingIntent {
   signal?: AbortSignal;
 }
 
+/**
+ * Two independent facts, so they cannot be conflated: whether to switch now, and
+ * whether this origin may ask again. A user can decline once without muting, and
+ * can mute while still accepting this one switch.
+ *
+ * Every path that refuses WITHOUT the user ever seeing the prompt (locked,
+ * another modal up, a prompt already open, a closing host) resolves
+ * `{ accepted: false, suppressFuturePrompts: false }`: a refusal nobody saw must
+ * never be recorded as a decision they made.
+ */
+export interface NetworkSwitchAnswer {
+  accepted: boolean;
+  suppressFuturePrompts: boolean;
+}
+
+export interface PendingNetworkSwitch {
+  id: number;
+  host: ConnectHost;
+  /** The transport-verified origin. NEVER dapp.url — this is what the prompt names. */
+  origin: string;
+  /**
+   * What the prompt says, resolved by evaluateSwitchOffer from the wallet's own
+   * network table. Both labels come from there, never from the peer's declared
+   * network name.
+   */
+  offer: Extract<SwitchOffer, { kind: 'offer' }>;
+  resolve: (answer: NetworkSwitchAnswer) => void;
+}
+
 export type AutoIntentHandler = (
   action: string,
   params: Record<string, unknown>,
@@ -77,6 +107,25 @@ export interface ConnectContextValue {
   ) => Promise<IntentAnswer>;
 
   /**
+   * Called by a ConnectHost when a dApp's declared network differs from the wallet's and the
+   * wallet could switch. Resolves with the user's answer; the caller acts on it.
+   *
+   * One prompt at a time, and never over another consent surface, so it is REFUSED
+   * IMMEDIATELY (resolved, never queued) while the wallet is locked, while any approval or
+   * intent modal is pending, and while a network-switch prompt is already open. Those checks
+   * live here, not in the hosts, so no host can forget one. A refusal the user never saw
+   * resolves `{ accepted: false, suppressFuturePrompts: false }`.
+   *
+   * This provider never writes the "do not ask again" record: `suppressFuturePrompts` rides
+   * back in the answer and the caller, which also owns the origin and the target, writes it.
+   */
+  requestNetworkSwitch: (
+    host: ConnectHost,
+    origin: string,
+    offer: PendingNetworkSwitch['offer'],
+  ) => Promise<NetworkSwitchAnswer>;
+
+  /**
    * NOTIFY-ONLY: a host has just answered WALLET_LOCKED (4009). The host has
    * ALREADY answered and never waits for this.
    *
@@ -93,6 +142,8 @@ export interface ConnectContextValue {
   pendingApproval: PendingApproval | null;
   /** Head of the intent queue (for modal rendering). */
   pendingIntent: PendingIntent | null;
+  /** The open network-switch prompt (for modal rendering). At most one is ever open. */
+  pendingNetworkSwitch: PendingNetworkSwitch | null;
   /**
    * False for a short settle window after the intent modal's contents change.
    * All intent modals share button geometry, so a swap under a stationary cursor
@@ -120,6 +171,12 @@ export interface ConnectContextValue {
 
   approveConnection: (grantedPermissions: PermissionScope[]) => void;
   denyConnection: () => void;
+  /**
+   * Answer a specific network-switch prompt. BY ID, like resolveIntent: a late click on a
+   * prompt that was already settled (a lock, a closing host) finds no entry and does nothing,
+   * and can never answer a DIFFERENT origin's prompt that has since taken the slot.
+   */
+  answerNetworkSwitch: (id: number, answer: NetworkSwitchAnswer) => void;
   /**
    * Settle a specific queued intent. The ID IS REQUIRED — settling "the head" was correct only
    * while there was one slot. With a FIFO queue the head advances while a modal's async work is
