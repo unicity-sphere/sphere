@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BridgePayments } from '@unicitylabs/bridge-core';
 
 import { toHex } from '@unicitylabs/bridge-plugin';
+import { logger } from '@unicitylabs/sphere-sdk';
 
 import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns } from '@/modules/bridge/bridgeOut';
 import { bridgeStoreFor } from '@/modules/bridge/store';
@@ -105,6 +106,32 @@ describe('runBridgeOut', () => {
     (service.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ returnId: 'r-2', status: 'queued' }));
     const after = await syncReturns(store, () => asset);
     expect(after[0]).toMatchObject({ returnId: 'r-2', status: 'queued' });
+  });
+
+  it('keeps a refusal the service may lift, with its reason, and resubmits it only after the retry delay', async () => {
+    const service = fakeService({
+      submit: vi.fn(async () => { service.submitted += 1; throw new Error('chain not synced'); }),
+      refusal: (e) => ({ message: (e as Error).message, recoverable: true }),
+    });
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+    const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, destination: 'Tdest' });
+    expect(rec).toMatchObject({ status: 'failed', recoverable: true, message: 'chain not synced', failedAt: 1_000_000 });
+    expect(store.activeReturns().map((r) => r.id)).toEqual([NULLIFIER]);
+    expect(service.submitted).toBe(1);
+
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS - 1);
+    await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(1);
+
+    (service.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => { service.submitted += 1; return { returnId: 'r-2', status: 'queued' }; });
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS);
+    const after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(2);
+    expect(after[0]).toMatchObject({ returnId: 'r-2', status: 'queued' });
+    clock.mockRestore();
   });
 
   it('marks a return failed when the service says the blob will never be accepted', async () => {
@@ -233,8 +260,11 @@ describe('recoverBurns', () => {
     const payments = fakePayments({
       pendingBurns: vi.fn(async () => [{ burnId: 'b-x', tokenId: 't-x', reasonBytes: new Uint8Array([7]), burnedToken: new Uint8Array([9]), settled: true }]),
     });
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     const recovered = await recoverBurns(payments, store, [fakeAsset(fakeService())]);
     expect(recovered).toEqual([]);
     expect(payments.acknowledged).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('Bridge', expect.stringContaining('b-x'));
+    warn.mockRestore();
   });
 });

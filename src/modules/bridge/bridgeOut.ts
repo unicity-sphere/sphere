@@ -1,5 +1,6 @@
 import { burnForReturn, recoverPendingBurns, type BridgePayments } from '@unicitylabs/bridge-core';
 import { fromHex, toHex } from '@unicitylabs/bridge-plugin';
+import { logger } from '@unicitylabs/sphere-sdk';
 
 import type { BridgeStore, PendingReturn } from './store';
 import type { BridgeAsset, BridgeOutSide, ReturnServiceRecord } from './types';
@@ -57,8 +58,8 @@ export async function submitReturn(store: BridgeStore, out: BridgeOutSide, recor
     store.updateReturn(record.id, fromService(rec, record));
   } catch (err) {
     const refusal = out.returns.refusal(err);
-    if (refusal && !refusal.recoverable) {
-      store.updateReturn(record.id, { status: 'failed', message: refusal.message, recoverable: false, failedAt: Date.now() });
+    if (refusal) {
+      store.updateReturn(record.id, { status: 'failed', message: refusal.message, recoverable: refusal.recoverable, failedAt: Date.now() });
     }
   }
   return store.getReturn(record.id) ?? record;
@@ -71,7 +72,7 @@ export async function syncReturns(store: BridgeStore, assetById: (id: string) =>
       const out = asset?.out;
       if (!out) return;
       if (!record.returnId) {
-        await submitReturn(store, out, record);
+        if (record.status !== 'failed' || dueForRetry(record)) await submitReturn(store, out, record);
         return;
       }
       try {
@@ -126,7 +127,7 @@ export async function recoverBurns(
   assets: readonly BridgeAsset[],
 ): Promise<PendingReturn[]> {
   const recovered: PendingReturn[] = [];
-  await recoverPendingBurns(payments, async (burnedToken) => {
+  await recoverPendingBurns(payments, async (burnedToken, burnId) => {
     for (const asset of assets) {
       const identity = await asset.out?.identify(burnedToken);
       if (!identity) continue;
@@ -147,6 +148,7 @@ export async function recoverBurns(
       recovered.push(record);
       return;
     }
+    logger.warn('Bridge', `burn ${burnId}: no configured asset recognises the burned token; it stays in the wallet journal`);
     throw new Error('No configured asset recognises this burned token; the wallet keeps it.');
   }).catch(() => {
   });
