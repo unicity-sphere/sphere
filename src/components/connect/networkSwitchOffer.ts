@@ -33,11 +33,18 @@ export type SwitchOffer =
 /**
  * Turn a network mismatch into either a concrete target or a named refusal.
  *
- * Pure: no React, no storage, no host. The order of the checks below is
- * load-bearing and is the order of the refusal list in the spec (section 9): a
- * suppressed origin is refused before anything that would name a network, and
- * `already-current` comes before availability, so an inconsistent state is
- * logged as itself rather than as "coming soon".
+ * Pure: no React, no storage, no host. The checks run in the order below, and
+ * the order is load-bearing:
+ *   1. suppressed, hoisted to the front so a muted origin is refused before
+ *      anything names a network at all;
+ *   2. wallet-network-unknown, hoisted ahead of resolving the peer's id, because
+ *      comparing a dApp's network against a wallet network we do not trust is a
+ *      guess, and every label a prompt could show would inherit that guess;
+ *   3. unknown-network, then already-current, then availability
+ *      (not-served-here or coming-soon). already-current precedes availability
+ *      so an inconsistent state is logged as itself rather than as "coming soon".
+ * Spec section 9 lists these refusals as a set of cases, not an evaluation
+ * order; do not reorder this to match its numbering.
  *
  * The dApp's declared `name` is never read. Only its `id` decides the target: a
  * hostile origin can label id 1 "Testnet" and would otherwise talk a user onto
@@ -53,6 +60,11 @@ export function evaluateSwitchOffer(input: {
   // The wallet's own side of the comparison comes from the SDK's trust base, not
   // from this deployment's config. When the two disagree, or the host passed its
   // "I do not know" sentinel, every sentence a prompt could say would be a guess.
+  //
+  // The first two clauses (non-integer, negative) are deliberate and independent
+  // of the third, even though the third subsumes them today. The third only
+  // holds while `ours` is guaranteed to be a real id; this check exists to
+  // refuse when the wallet does not know itself, so it must not lean on that.
   const ours = NETWORKS[SPHERE_NETWORK].networkId;
   if (
     !Number.isInteger(input.walletNetwork.id) ||
@@ -64,7 +76,9 @@ export function evaluateSwitchOffer(input: {
 
   // resolveSphereNetwork, never a lookup over NETWORKS: testnet and testnet2 both
   // hold networkId 4, so that table cannot be inverted, and the alias it would
-  // hand back is not switchable.
+  // hand back is not switchable. A malformed id (NaN, negative, fractional,
+  // Infinity) matches no entry, so it falls out here as unknown-network with no
+  // separate validation.
   const entry = resolveSphereNetwork(input.clientNetwork.id);
   if (!entry) return { kind: 'refuse', reason: 'unknown-network' };
 

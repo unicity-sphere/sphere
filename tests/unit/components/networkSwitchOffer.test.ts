@@ -90,19 +90,39 @@ describe('evaluateSwitchOffer', () => {
   // The id the peer sent is the ONLY thing that decides the target. The name it
   // sent is display text we never trust: a hostile origin can label id 1
   // "Testnet" and would otherwise talk a user onto real funds.
-  it('ignores the peer-declared name entirely', async () => {
-    const { evaluateSwitchOffer } = await load(MAINNET_LIVE);
-    const r = evaluateSwitchOffer({
-      clientNetwork: { id: 1, name: 'Testnet (totally safe)' },
-      walletNetwork: { id: 4 },
-      suppressed: false,
+  //
+  // The realistic attack is a name that MATCHES a network the wallet knows, not
+  // a made-up string, so each row dresses one network's id in the other's name.
+  // Both forms a peer could send are covered (the display label and the registry
+  // key), and both directions, so a rewrite cannot pass by special-casing one.
+  it.each([
+    {
+      why: 'id 1 named Testnet (display label)',
+      client: { id: 1, name: 'Testnet' },
+      walletOn: undefined,
+      wallet: { id: 4 },
+      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', isMainnet: true },
+    },
+    {
+      why: 'id 1 named testnet2 (registry key)',
+      client: { id: 1, name: 'testnet2' },
+      walletOn: undefined,
+      wallet: { id: 4 },
+      expected: { target: 'mainnet', targetLabel: 'Mainnet', currentLabel: 'Testnet', isMainnet: true },
+    },
+    {
+      why: 'id 4 named Mainnet (the reverse)',
+      client: { id: 4, name: 'Mainnet' },
+      walletOn: 'mainnet' as const,
+      wallet: { id: 1 },
+      expected: { target: 'testnet2', targetLabel: 'Testnet', currentLabel: 'Mainnet', isMainnet: false },
+    },
+  ])('takes target and both labels from the id alone: $why', async ({ client, walletOn, wallet, expected }) => {
+    const { evaluateSwitchOffer } = await load(MAINNET_LIVE, { walletOn });
+    expect(evaluateSwitchOffer({ clientNetwork: client, walletNetwork: wallet, suppressed: false })).toEqual({
+      kind: 'offer',
+      ...expected,
     });
-    expect(r.kind).toBe('offer');
-    if (r.kind === 'offer') {
-      expect(r.target).toBe('mainnet');
-      expect(r.targetLabel).toBe('Mainnet');
-      expect(r.isMainnet).toBe(true);
-    }
   });
 
   it('refuses an id no live network holds', async () => {
@@ -134,6 +154,26 @@ describe('evaluateSwitchOffer', () => {
     expect(
       evaluateSwitchOffer({ clientNetwork: { id: 1 }, walletNetwork: { id: 1 }, suppressed: false }),
     ).toEqual({ kind: 'refuse', reason: 'wallet-network-unknown' });
+  });
+
+  // A malformed id gets no validation of its own: resolveSphereNetwork matches by
+  // strict equality, so none of these can match an entry and each falls out as
+  // an unknown network. Zero is in the table on purpose: it is a legal id, and
+  // it must be refused because no network holds it, never for being falsy. While
+  // no network holds 0 that reason is the same as for the malformed ids, so this
+  // row cannot tell a truthiness check from a registry miss; if a network ever
+  // does hold 0, it needs its own row expecting an offer.
+  it.each([
+    ['NaN', Number.NaN],
+    ['a negative id', -1],
+    ['a fractional id', 1.5],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['zero (a legal id no network holds)', 0],
+  ])('refuses %s as an unknown network', async (_label, id) => {
+    const { evaluateSwitchOffer } = await load(MAINNET_LIVE);
+    expect(
+      evaluateSwitchOffer({ clientNetwork: { id }, walletNetwork: { id: 4 }, suppressed: false }),
+    ).toEqual({ kind: 'refuse', reason: 'unknown-network' });
   });
 
   it('refuses a target this deployment cannot serve', async () => {
@@ -168,6 +208,26 @@ describe('evaluateSwitchOffer', () => {
       expect(
         evaluateSwitchOffer({ clientNetwork: { id: 999 }, walletNetwork: { id: -1 }, suppressed: true }),
       ).toEqual({ kind: 'refuse', reason: 'suppressed' });
+    });
+
+    it('the wallet side is judged before the peer id is resolved', async () => {
+      // Both sides are bad. Resolving the peer first would report the peer's
+      // fault, but comparing anything against a wallet network we do not trust is
+      // a guess, so the wallet's own state is the more truthful reason.
+      const { evaluateSwitchOffer } = await load(MAINNET_LIVE);
+      expect(
+        evaluateSwitchOffer({ clientNetwork: { id: 999 }, walletNetwork: { id: -1 }, suppressed: false }),
+      ).toEqual({ kind: 'refuse', reason: 'wallet-network-unknown' });
+    });
+
+    it('a wallet that disagrees with this deployment is not reported as already-current', async () => {
+      // The host claims id 1 while this deployment runs testnet2 (id 4), and the
+      // dApp declares testnet2. Answering "already on that network" would take
+      // the host's claim at face value; the trust base says the claim is wrong.
+      const { evaluateSwitchOffer } = await load(MAINNET_LIVE);
+      expect(
+        evaluateSwitchOffer({ clientNetwork: { id: 4 }, walletNetwork: { id: 1 }, suppressed: false }),
+      ).toEqual({ kind: 'refuse', reason: 'wallet-network-unknown' });
     });
 
     it('already-current is reported as itself even when that network is not served here', async () => {
