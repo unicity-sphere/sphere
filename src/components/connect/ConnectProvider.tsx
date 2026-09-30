@@ -81,10 +81,11 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   // The deadline timer of each open prompt that came with one, by entry id. Held here
   // rather than on the entry so the public entry type stays what the modal needs.
   const switchDeadlinesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
-  // Origin AND target pairs the user has turned down in THIS page session (spec 2.1, 6.1).
-  // Memory only, deliberately: it dies with the provider, which is to say with the page, and
-  // is never written anywhere. Persistence is the "do not ask again" tick's job, and that
-  // record is a separate thing the user chose on purpose. This is what stops a framed app
+  // Origin AND target pairs the user has turned down, WITHOUT asking to be muted, in THIS
+  // page session (spec 2.1, 6.1). Memory only, deliberately: it dies with the provider, which
+  // is to say with the page, and is never written anywhere. A decline that ticks "do not ask
+  // again" is not in here: the persisted record owns that case, and it is the one Unmute can
+  // clear (see answerNetworkSwitch). This is what stops a framed app
   // from calling connect() in a loop: every failed handshake reaches the hook, and without
   // it each one would put a fresh modal over the wallet the instant the last was closed.
   const declinedSwitchesRef = useRef<Set<string>>(new Set());
@@ -159,14 +160,23 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
    *
    * Every refusal counts, whichever control made it: "Not now", the close button and the
    * backdrop are all a person turning the prompt down, and a modal that returns the instant
-   * it is closed is exactly the loop this exists to end. The tick decides the persistent
-   * mute; this is only the page-session memory.
+   * it is closed is exactly the loop this exists to end.
+   *
+   * EXCEPT one that asks to be muted (`suppressFuturePrompts`). The caller writes the
+   * PERSISTED mute for it, which covers the case completely and is the one record Connected
+   * Sites can list and Unmute. Recording it here as well would make a second source of truth
+   * that nothing can clear: Unmute would drop the persisted row, report success, and the
+   * pair would still be refused, unseen, until a reload. So this set means only "said not
+   * now, without asking to be muted". If the caller's write fails it says so in a toast and
+   * the app may ask again, which is what that toast promises.
    */
   const answerNetworkSwitch = useCallback(
     (id: number, answer: NetworkSwitchAnswer) => {
       const entry = networkSwitchQueueRef.current.find((e) => e.id === id);
       if (!entry) return; // already settled: a late click records nothing and answers nothing
-      if (!answer.accepted) declinedSwitchesRef.current.add(declineKey(entry.origin, entry.offer.target));
+      if (!answer.accepted && !answer.suppressFuturePrompts) {
+        declinedSwitchesRef.current.add(declineKey(entry.origin, entry.offer.target));
+      }
       settleNetworkSwitch(id, answer);
     },
     [settleNetworkSwitch],

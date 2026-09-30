@@ -59,8 +59,8 @@ export interface PendingIntent {
  * `{ accepted: false, suppressFuturePrompts: false }`: a refusal nobody saw must
  * never be recorded as a decision they made. Those paths are the ones refused at
  * the door (locked, another modal up, a prompt already open, an origin that is not
- * usable, an origin and target the user already declined this session, a deadline
- * already past) and the ones that settle a prompt that was open: a lock, a closing
+ * usable, an origin and target the user already declined this session without
+ * muting, a deadline already past) and the ones that settle a prompt that was open: a lock, a closing
  * host, and the deadline timer that takes down a prompt whose host has stopped
  * waiting. None of them is the user's decline, and none may be recorded as one.
  * Note the consequence: a caller cannot tell any of them from a plain "Not now".
@@ -131,9 +131,10 @@ export interface ConnectContextValue {
    *   - while any approval or intent modal is pending, or a network-switch prompt is open;
    *   - for an `origin` that is not a usable one (`isUsableOrigin`): the prompt names it, so
    *     it must name exactly one site;
-   *   - for an origin that already turned down this same target in this page session. That
-   *     memory is in-memory only; the persisted "do not ask again" record is the caller's,
-   *     and separate.
+   *   - for an origin that already turned down this same target in this page session without
+   *     asking to be muted. That memory is in-memory only; a decline that ticked "do not ask
+   *     again" is covered by the persisted record instead (the caller's, and the one Unmute
+   *     clears), and is deliberately not in it.
    * Those checks live here, not in the hosts, so no host can forget one. A refusal the user
    * never saw resolves `{ accepted: false, suppressFuturePrompts: false }`.
    *
@@ -205,8 +206,9 @@ export interface ConnectContextValue {
    * and can never answer a DIFFERENT origin's prompt that has since taken the slot.
    *
    * This is the USER's answer, and the only path that remembers a decline for the rest of the
-   * page session (any `accepted: false`, however it was made): the settles a lock, a closing
-   * host or the deadline timer perform are internal and record nothing.
+   * page session (any `accepted: false` however it was made, except one that ticked "do not
+   * ask again": the persisted mute owns that, and it is what Unmute can clear): the settles a
+   * lock, a closing host or the deadline timer perform are internal and record nothing.
    */
   answerNetworkSwitch: (id: number, answer: NetworkSwitchAnswer) => void;
   /**

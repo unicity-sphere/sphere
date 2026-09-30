@@ -292,6 +292,27 @@ describe('network-switch prompt queue', () => {
       expect(screen.queryByTestId('network-switch-prompt')).toBeNull();
     });
 
+    // A decline that asks to be muted is covered by the PERSISTED record, which is the one
+    // Connected Sites can Unmute. Recording it here too would leave a second refusal that
+    // Unmute cannot clear: the control would report success and change nothing until a reload.
+    // (connectNetworkSwitchUnmute.test.tsx drives this through the real handler and store.)
+    it('does not remember a decline that carried the tick: the persisted mute owns that case', async () => {
+      render(tree());
+      act(() => ctx!.attachHost(hostA, ORIGIN_A));
+
+      const declined = ask(hostA, ORIGIN_A);
+      fireEvent.click(screen.getByLabelText('Do not ask again for this site'));
+      fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+      await flush();
+      expect(declined).toHaveBeenCalledWith({ accepted: false, suppressFuturePrompts: true });
+
+      // Nothing in memory refuses the pair: only the store does, upstream of the provider.
+      const again = ask(hostA, ORIGIN_A);
+      expect(screen.getByTestId('network-switch-prompt')).toBeDefined();
+      await flush();
+      expect(again).not.toHaveBeenCalled();
+    });
+
     it('does not remember an accepted switch', async () => {
       render(tree());
       act(() => ctx!.attachHost(hostA, ORIGIN_A));
