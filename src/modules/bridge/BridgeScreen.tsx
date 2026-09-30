@@ -22,6 +22,7 @@ import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor } from './assets';
+import { lockTxidFor } from './bridgeIn';
 import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
@@ -667,7 +668,7 @@ function returnStatusLabel(status: PendingReturn['status']): string {
   }
 }
 
-function PendingList({
+export function PendingList({
   locks,
   resumingId,
   onResume,
@@ -681,47 +682,96 @@ function PendingList({
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Deposits waiting for their token</div>
-      {locks.map((lock) => {
-        const asset = bridgeAssetByCoin(lock.coinIdHex);
-        const amount = asset ? `${formatUnits(BigInt(lock.amount), asset.decimals)} ${asset.symbol}` : lock.amount;
-        const busy = resumingId === lock.id;
-        return (
-          <div key={lock.id} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
-            <span className="flex-1 min-w-0">
-              <span className="block font-mono text-neutral-900 dark:text-white">
-                {amount}{asset ? ` · ${asset.chain.name}` : ''}
-              </span>
-              <span className={`block ${MUTED}`}>
-                {pendingLockSentence(lock)}
-              </span>
-            </span>
-            {lock.lockTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(lock.lockTxid)} label="tx" />}
-            {lock.lockTxid && asset && (
-              <button
-                type="button"
-                onClick={() => onResume(lock)}
-                disabled={busy}
-                className="p-1.5 rounded-md text-orange-500 hover:bg-orange-500/10 disabled:opacity-50"
-                title="Resume the mint"
-                aria-label="Resume the mint"
-              >
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
-              </button>
-            )}
-            {(!lock.lockTxid || !asset) && (
-              <button
-                type="button"
-                onClick={() => onDiscard(lock)}
-                className="p-1.5 rounded-md text-neutral-400 hover:text-red-500 hover:bg-red-500/10"
-                title="Discard this record"
-                aria-label="Discard this record"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {locks.map((lock) => (
+        <PendingLockRow key={lock.id} lock={lock} busy={resumingId === lock.id} onResume={onResume} onDiscard={onDiscard} />
+      ))}
+    </div>
+  );
+}
+
+function PendingLockRow({
+  lock,
+  busy,
+  onResume,
+  onDiscard,
+}: {
+  lock: PendingLock;
+  busy: boolean;
+  onResume: (lock: PendingLock) => void;
+  onDiscard: (lock: PendingLock) => void;
+}) {
+  const [txidInput, setTxidInput] = useState('');
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const asset = bridgeAssetByCoin(lock.coinIdHex);
+  const amount = asset ? `${formatUnits(BigInt(lock.amount), asset.decimals)} ${asset.symbol}` : lock.amount;
+  const maybeSent = !lock.lockTxid && lock.lockRequested === true && !!asset;
+  const pastedTxid = asset ? lockTxidFor(asset.chain.id, txidInput) : null;
+  const discard = () => {
+    if (lock.lockRequested && !confirmingDiscard) setConfirmingDiscard(true);
+    else onDiscard(lock);
+  };
+  return (
+    <div className="px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 min-w-0">
+          <span className="block font-mono text-neutral-900 dark:text-white">
+            {amount}{asset ? ` · ${asset.chain.name}` : ''}
+          </span>
+          <span className={`block ${MUTED}`}>
+            {pendingLockSentence(lock)}
+          </span>
+        </span>
+        {lock.lockTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(lock.lockTxid)} label="tx" />}
+        {lock.lockTxid && asset && (
+          <button
+            type="button"
+            onClick={() => onResume(lock)}
+            disabled={busy}
+            className="p-1.5 rounded-md text-orange-500 hover:bg-orange-500/10 disabled:opacity-50"
+            title="Resume the mint"
+            aria-label="Resume the mint"
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+          </button>
+        )}
+        {(!lock.lockTxid || !asset) && !confirmingDiscard && (
+          <button
+            type="button"
+            onClick={discard}
+            className="p-1.5 rounded-md text-neutral-400 hover:text-red-500 hover:bg-red-500/10"
+            title="Discard this record"
+            aria-label="Discard this record"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+      {confirmingDiscard && (
+        <div className="flex items-center gap-2">
+          <span className={`flex-1 ${MUTED}`}>If the lock went out, discarding loses the only way to mint its token.</span>
+          <Button variant="secondary" onClick={() => setConfirmingDiscard(false)} className="px-2 py-1 text-xs">Keep</Button>
+          <Button variant="danger" onClick={() => onDiscard(lock)} className="px-2 py-1 text-xs" aria-label="Discard anyway">Discard anyway</Button>
+        </div>
+      )}
+      {maybeSent && (
+        <div className="flex items-center gap-2">
+          <input
+            aria-label="Lock transaction id"
+            placeholder="Lock transaction id from your wallet or an explorer"
+            value={txidInput}
+            onChange={(e) => setTxidInput(e.target.value)}
+            className="flex-1 min-w-0 px-2 py-1 rounded-md bg-white dark:bg-black/20 border border-neutral-200 dark:border-white/10 font-mono"
+          />
+          <Button
+            onClick={() => pastedTxid && onResume({ ...lock, lockTxid: pastedTxid })}
+            disabled={busy || pastedTxid === null}
+            className="px-2 py-1 text-xs"
+            aria-label="Resume from this transaction"
+          >
+            Resume
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

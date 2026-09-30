@@ -10,7 +10,7 @@ import {
 import { LOCK_EVENT_TOPIC0, type SourceTxInfo } from '@unicitylabs/bridge-plugin';
 import type { BridgePayments, ReceiptReader } from '@unicitylabs/bridge-core';
 
-import { runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
+import { lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
 import type { BridgeStore, PendingLock } from '@/modules/bridge/store';
 
 const bridge = loadBridges(NILE_USDT_BRIDGE)[0];
@@ -332,5 +332,30 @@ describe('resumeBridgeMint', () => {
     expect(res).toEqual({ tokenId: 'MINTED', amount: AMOUNT });
     expect(signer.sent).toHaveLength(0);
     expect(store.locks.size).toBe(0);
+  });
+
+  it('keeps a lock transaction id the user supplied once that lock is confirmed, so a failed mint stays resumable', async () => {
+    const store = new FakeStore();
+    const lock = pendingLock();
+    store.locks.set(lock.id, { ...lock, lockTxid: undefined, lockRequested: true });
+    const rpc = fakeRpc({ allowance: 0n });
+    const payments = { mintCustom: vi.fn(async () => ({ success: false, error: 'gateway down' })) } as unknown as BridgePayments;
+
+    await expect(
+      resumeBridgeMint({ payments, adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc), store: asStore(store), lock }),
+    ).rejects.toThrow();
+
+    expect(store.locks.get('lock-1')).toMatchObject({ lockTxid: LOCK_TX, status: 'locked' });
+  });
+});
+
+describe('lockTxidFor', () => {
+  it('takes a 64-hex transaction id in the form its chain family uses, and refuses anything else', () => {
+    const hex = 'AB'.repeat(32);
+    expect(lockTxidFor('eip155:11155111', ` ${hex} `)).toBe(`0x${hex.toLowerCase()}`);
+    expect(lockTxidFor('eip155:11155111', `0x${hex}`)).toBe(`0x${hex.toLowerCase()}`);
+    expect(lockTxidFor('tron:0xcd8690dc', `0x${hex}`)).toBe(hex.toLowerCase());
+    expect(lockTxidFor('eip155:11155111', hex.slice(2))).toBeNull();
+    expect(lockTxidFor('eip155:11155111', 'nonsense')).toBeNull();
   });
 });

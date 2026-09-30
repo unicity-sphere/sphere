@@ -134,6 +134,12 @@ export interface ResumeArgs {
   readonly lock: PendingLock;
 }
 
+export function lockTxidFor(chainRef: string, input: string): string | null {
+  const hex = input.trim().replace(/^0x/i, '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hex)) return null;
+  return chainRef.startsWith('eip155:') ? `0x${hex}` : hex;
+}
+
 export async function resumeBridgeMint({ payments, adapter, receipts, store, lock }: ResumeArgs): Promise<BridgeInResult> {
   if (!lock.lockTxid) throw new Error('This pending deposit has no lock transaction; nothing to resume.');
 
@@ -144,6 +150,13 @@ export async function resumeBridgeMint({ payments, adapter, receipts, store, loc
     if (e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
     throw e;
   }
+  store.updateLock(lock.id, {
+    lockTxid: lock.lockTxid,
+    status: 'locked',
+    nonce: Number(commit.nonce),
+    lockBlock: Number(commit.blockNumber),
+    logIndex: commit.logIndex,
+  });
   const amount = BigInt(lock.amount);
   const tokenId = await mint(payments, adapter, { saltHex: lock.saltHex, amount, commit, commitTxid: lock.lockTxid });
   store.updateLock(lock.id, { status: 'minted' });
