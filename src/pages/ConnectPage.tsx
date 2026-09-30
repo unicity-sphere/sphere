@@ -7,6 +7,12 @@ import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
 import { describeConnectRejection } from '../components/connect/rejectionMessage';
+import type { SwitchRefusal } from '../components/connect/networkSwitchOffer';
+import {
+  claimGraceForSilentHandshake,
+  createSwitchRefusalNote,
+  useNetworkMismatchHandler,
+} from '../components/connect/useNetworkMismatchHandler';
 import { WalletPanel } from '../components/wallet/WalletPanel';
 import {
   getApprovedOrigin,
@@ -15,13 +21,21 @@ import {
   revokeApprovedOrigin,
 } from '../utils/connected-sites';
 
-type RejectionInfo = { dappName: string; code: number; message: string; data: Record<string, unknown> | undefined };
+type RejectionInfo = {
+  dappName: string;
+  code: number;
+  message: string;
+  data: Record<string, unknown> | undefined;
+  /** Why the wallet did not offer a network switch, when the network hook ran and refused. */
+  switchRefusal: SwitchRefusal | undefined;
+};
 
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
   const { sphere, isLoading, isLocked, walletExists } = useSphereContext();
   const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
+  const makeNetworkMismatchHandler = useNetworkMismatchHandler();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
@@ -38,6 +52,8 @@ export function ConnectPage() {
   requestIntentRef.current = requestIntent;
   const noteLockedRequestRef = useRef(noteLockedRequest);
   noteLockedRequestRef.current = noteLockedRequest;
+  const makeNetworkMismatchHandlerRef = useRef(makeNetworkMismatchHandler);
+  makeNetworkMismatchHandlerRef.current = makeNetworkMismatchHandler;
 
   /**
    * Post HOST_READY to the dApp that opened this popup. The ONLY place this page announces.
@@ -153,7 +169,13 @@ export function ConnectPage() {
     });
     transportRef.current = transport;
 
-    const host = new ConnectHost({
+    // One per host: carries the reason the wallet gave for not offering a network switch
+    // from onNetworkMismatch to onConnectionRejected, which the SDK calls right after it.
+    const switchRefusalNote = createSwitchRefusalNote();
+
+    // Annotated: the callbacks below read `host`, which without a declared type is a
+    // circular inference (TS7022).
+    const host: ConnectHost = new ConnectHost({
       sphere: currentSphere,
       initialWalletState: currentSphere ? 'live' : 'locked',
       // The transport-verified origin — never the dApp-claimed dapp.url.
@@ -170,8 +192,12 @@ export function ConnectPage() {
           return { approved: true, grantedPermissions: saved.permissions };
         }
 
-        // Silent mode: reject immediately without showing UI
-        if (silent) {
+        // Silent mode: reject immediately without showing UI, unless the wallet just
+        // switched networks FOR this origin (its on-mount handshake finds no grant on the
+        // new network, because approvals are per network). That claim grants nothing: it
+        // only lets the ordinary approval modal below appear. `origin` is the SAME variable
+        // the switch was recorded under, on purpose: the claim compares it with ===.
+        if (silent && !claimGraceForSilentHandshake(host, origin)) {
           return { approved: false, grantedPermissions: [] };
         }
 
@@ -183,15 +209,24 @@ export function ConnectPage() {
         }
         return result;
       },
+      // A network mismatch the wallet may fix by switching. The shared handler asks the
+      // user; see useNetworkMismatchHandler for the deadline and ordering rules. `origin`
+      // is the same variable onConnectionRequest closes over.
+      onNetworkMismatch: (dapp, ctx) =>
+        makeNetworkMismatchHandlerRef.current(host, origin, switchRefusalNote)(dapp, ctx),
       onConnectionRejected: (dapp, error, silent) => {
         // The compatibility gate refused the connection (protocol/network mismatch).
         // Surface the reason to the user — but stay quiet for background (silent) auto-connect attempts.
+        const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
+        // Taken BEFORE the silent early-return so a note never outlives its handshake.
+        const switchRefusal = switchRefusalNote.take(data);
         if (silent) return;
         setRejection({
           dappName: dapp?.name ?? 'An app',
           code: error.code,
           message: error.message,
-          data: (error.data as Record<string, unknown> | undefined) ?? undefined,
+          data,
+          switchRefusal,
         });
       },
       onDisconnect: () => {
@@ -279,7 +314,7 @@ export function ConnectPage() {
               <h2 className="text-base font-semibold text-gray-900 dark:text-neutral-100">Unable to connect</h2>
             </div>
             <p className="text-sm text-gray-700 dark:text-neutral-300">
-              <span className="font-medium">{rejection.dappName}</span> {describeConnectRejection(rejection.data)}
+              <span className="font-medium">{rejection.dappName}</span> {describeConnectRejection(rejection.data, rejection.switchRefusal)}
             </p>
             <p className="mt-2 text-xs text-gray-400 dark:text-neutral-500">Error code {rejection.code}</p>
             <button

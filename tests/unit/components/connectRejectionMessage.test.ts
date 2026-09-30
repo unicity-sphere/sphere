@@ -100,3 +100,67 @@ describe('describeConnectRejection', () => {
     expect(s.endsWith('.')).toBe(true);
   });
 });
+
+/**
+ * When the network hook refuses to OFFER a switch, the user still deserves to know why.
+ * Each reason has one fixed sentence, appended to the network copy and to nothing else.
+ */
+describe('describeConnectRejection with a switch refusal', () => {
+  const NETWORK = {
+    reason: 'network_incompatible',
+    walletNetwork: { id: 4 },
+    clientNetwork: { id: 1 },
+  };
+  const REASONS = [
+    'suppressed',
+    'unknown-network',
+    'already-current',
+    'wallet-network-unknown',
+    'not-served-here',
+    'coming-soon',
+  ] as const;
+
+  it('keeps the existing sentence and adds one clause per reason, each different', () => {
+    const base = describeConnectRejection(NETWORK);
+    const clauses = REASONS.map((reason) => {
+      const full = describeConnectRejection(NETWORK, reason);
+      expect(full.startsWith(`${base} `)).toBe(true);
+      return full.slice(base.length + 1);
+    });
+
+    for (const clause of clauses) {
+      expect(clause.length).toBeGreaterThan(10);
+      expect(clause.endsWith('.')).toBe(true);
+    }
+    expect(new Set(clauses).size).toBe(REASONS.length);
+  });
+
+  it('says where a muted app can be turned back on', () => {
+    expect(describeConnectRejection(NETWORK, 'suppressed')).toContain('Connected Sites');
+  });
+
+  it('never prints a peer string in a clause: the same words whatever the app declared', () => {
+    const hostile = {
+      ...NETWORK,
+      clientNetwork: { id: 1, name: 'Totally-Safe-Testnet-<b>' },
+      dapp: 'Free Money',
+    };
+    for (const reason of REASONS) {
+      const clean = describeConnectRejection(NETWORK, reason).split(' so it cannot connect here. ')[1];
+      const withPeer = describeConnectRejection(hostile, reason).split(' so it cannot connect here. ')[1];
+      expect(clean).toBeDefined();
+      expect(withPeer).toBe(clean);
+      expect(withPeer).not.toContain('Totally-Safe');
+    }
+  });
+
+  it('appends nothing to a protocol rejection, or to an unrecognised one', () => {
+    const protocol = { reason: 'protocol_incompatible', requiredSdk: '0.12.0-0', actualSdk: '0.11.9' };
+    expect(describeConnectRejection(protocol, 'coming-soon')).toBe(describeConnectRejection(protocol));
+    expect(describeConnectRejection(undefined, 'coming-soon')).toBe('is not compatible with this wallet.');
+  });
+
+  it('adds nothing when there is no refusal to explain', () => {
+    expect(describeConnectRejection(NETWORK, undefined)).toBe(describeConnectRejection(NETWORK));
+  });
+});

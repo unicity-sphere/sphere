@@ -17,6 +17,7 @@
  * The returned phrase is a sentence fragment meant to follow the dApp name, e.g.
  * `${dapp.name} ${describeConnectRejection(data)}`.
  */
+import type { SwitchRefusal } from './networkSwitchOffer';
 
 /** A non-empty string field, or null for anything else (missing, null, wrong type). */
 function text(value: unknown): string | null {
@@ -72,9 +73,47 @@ function describeNetworkRejection(data: Record<string, unknown>): string {
   return 'is built for a different Unicity network than your wallet, so it cannot connect here.';
 }
 
-export function describeConnectRejection(data: Record<string, unknown> | undefined): string {
+/**
+ * Why the wallet declined to OFFER a network switch, one sentence per reason.
+ * Appended after the generic network copy, so the user learns why the wallet
+ * did not simply offer to switch, rather than only that the app cannot connect.
+ *
+ * `Record<SwitchRefusal, string>` makes the table exhaustive at compile time: a
+ * new reason in evaluateSwitchOffer will not build until it has a sentence here.
+ *
+ * NO PEER STRING, EVER. The generic copy above already quotes the app's declared
+ * network name (an existing wart, and not made worse here); every sentence in this
+ * table is fixed wallet text. A refusal carries no label to interpolate, and none
+ * is looked up, so there is nothing a hostile app could word.
+ */
+const SWITCH_REFUSAL_CLAUSES: Record<SwitchRefusal, string> = {
+  suppressed:
+    'You asked not to be offered a network switch for this app. You can turn that back on in Connected Sites.',
+  'unknown-network': 'Sphere does not recognise the network it asks for, so there is nothing to switch to.',
+  'already-current':
+    'This wallet already reports being on that network, so it will not switch. Reload the app and try again.',
+  'wallet-network-unknown':
+    'This wallet could not confirm which network it is on, so it will not offer to switch.',
+  'not-served-here': 'This Sphere deployment does not serve that network, so the wallet cannot switch to it here.',
+  'coming-soon': 'That network is not available in this wallet yet.',
+};
+
+/**
+ * `switchRefusal` is the reason the wallet gave for not offering a switch, when the
+ * network hook ran and refused before this rejection. It only ever extends the
+ * network sentence: a protocol or SDK-floor refusal never went through the hook, so
+ * a clause about switching networks would be a non sequitur there.
+ */
+export function describeConnectRejection(
+  data: Record<string, unknown> | undefined,
+  switchRefusal?: SwitchRefusal,
+): string {
   const reason = data?.reason as string | undefined;
   if (reason === 'protocol_incompatible') return describeProtocolRejection(data ?? {});
-  if (reason === 'network_incompatible') return describeNetworkRejection(data ?? {});
+  if (reason === 'network_incompatible') {
+    const base = describeNetworkRejection(data ?? {});
+    const clause = switchRefusal ? SWITCH_REFUSAL_CLAUSES[switchRefusal] : undefined;
+    return clause ? `${base} ${clause}` : base;
+  }
   return 'is not compatible with this wallet.';
 }
