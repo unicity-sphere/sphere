@@ -8,12 +8,11 @@ import { SPHERE_NETWORK, SUPPORTED_NETWORKS, isSwitchableNetwork } from '../../c
  * Why a network switch cannot be offered. Every value is a state the caller can
  * log and word honestly; none of them is a generic "something went wrong".
  *
- * 'no-network-declared' is part of the vocabulary but is never produced here:
- * this function takes a DECLARED network by construction. A caller that has no
- * `clientNetwork` at all refuses with that reason itself, before it gets this far.
+ * A dApp that declared no network never reaches this function (the SDK does not
+ * call the hook for it), so there is deliberately no such member: that case's
+ * copy belongs to the rejection message (describeConnectRejection).
  */
 export type SwitchRefusal =
-  | 'no-network-declared'
   | 'unknown-network'
   | 'already-current'
   | 'wallet-network-unknown'
