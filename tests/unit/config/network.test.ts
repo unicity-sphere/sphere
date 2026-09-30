@@ -537,7 +537,11 @@ describe('NETWORK_SWITCHED_TO — the offer belongs to the load after a delibera
 describe('connect network-switch grace', () => {
   const ORIGIN = 'https://dapp.example';
   const MARKER = 'sphere_connect_network_switch';
-  /** Pins the documented lifetime: five minutes. Changing it is a decision, not a drift. */
+  /**
+   * Pins the documented write-to-load window: five minutes. Changing it is a
+   * decision, not a drift. It bounds the gap between writing the marker and the
+   * load that reads it, and nothing after that.
+   */
   const TTL_MS = 5 * 60_000;
 
   /**
@@ -574,7 +578,33 @@ describe('connect network-switch grace', () => {
     });
   }
 
+  /**
+   * Make evaluating `window.sessionStorage` ITSELF throw a SecurityError — which
+   * is what a browser with site data blocked, or a sandboxed frame without
+   * allow-same-origin, really does. A throwing getItem is the tamer cousin: it is
+   * the getter that would white-screen a wallet that only guarded the calls.
+   * Returns the restore function; afterEach calls it too, so a failing test
+   * cannot leave the getter broken for the next one (whose own cleanup reads it).
+   */
+  let restoreSessionStorageGetter: (() => void) | null = null;
+  function breakSessionStorageGetter(): () => void {
+    const own = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    restoreSessionStorageGetter = () => {
+      if (own) Object.defineProperty(window, 'sessionStorage', own);
+      else delete (window as { sessionStorage?: Storage }).sessionStorage;
+      restoreSessionStorageGetter = null;
+    };
+    return restoreSessionStorageGetter;
+  }
+
   afterEach(() => {
+    restoreSessionStorageGetter?.();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -612,6 +642,107 @@ describe('connect network-switch grace', () => {
       mod.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: '' });
 
       expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it.each([
+      ['the string "null" that every opaque and sandboxed frame reports', 'null'],
+      ['the wildcard the transport treats as allow-all', '*'],
+    ])('refuses %s as an origin, and the switch still happens', async (_label, forOrigin) => {
+      // Either would arm a grace that ANY such frame could claim, and the whole
+      // point of the marker is that exactly one origin can spend it. Refused in
+      // the writer — the one place every path goes through — so no caller can
+      // forget to. The person who asked for the switch still gets it.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+
+      expect(() => asking.setActiveNetwork('mainnet', { reload, forOrigin })).not.toThrow();
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+      const back = await loadNetworkModule();
+      expect(back.SPHERE_NETWORK).toBe('mainnet');
+      expect(back.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(back.claimNetworkSwitchGrace(forOrigin)).toBe(false);
+    });
+
+    it.each([
+      ['a trailing slash', 'https://dapp.example/'],
+      ['a path', 'https://dapp.example/app'],
+      ['no scheme', 'dapp.example'],
+      ['an upper-case host', 'https://DAPP.example'],
+      ['a default port spelled out', 'https://dapp.example:443'],
+      ['a scheme with no origin of its own', 'data:text/html,x'],
+      ['nothing URL-shaped at all', 'not a url'],
+    ])('refuses an origin with %s — it does not round-trip through URL', async (_label, forOrigin) => {
+      // "Usable" is `new URL(value).origin === value`: the canonical form the
+      // transport compares against, so a value that differs could never match
+      // a real handshake and can only be a mistake or a spoof.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+
+      asking.setActiveNetwork('mainnet', { reload, forOrigin });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+    });
+
+    it.each(['http://localhost:5173', 'https://dapp.example:8443', 'https://sub.dapp.example'])(
+      'accepts %s — the canonical form of a real origin',
+      async (forOrigin) => {
+        setRuntimeConfig(MAINNET_LIVE);
+        const asking = await loadNetworkModule();
+        asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin });
+
+        const back = await loadNetworkModule();
+        expect(back.NETWORK_SWITCHED_FOR).toEqual({ origin: forOrigin, to: 'mainnet' });
+        expect(back.claimNetworkSwitchGrace(forOrigin)).toBe(true);
+      },
+    );
+
+    it('a switch that names no origin clears the marker an unfinished switch left behind', async () => {
+      // A switch for a site whose reload never happened — a crash, or a
+      // beforeunload prompt the user cancelled — leaves its marker in
+      // sessionStorage. A later plain switch from Settings must not leave it
+      // consumable: within the TTL, and if the network matched, it would turn
+      // that site's next silent handshake into a prompt nobody asked for.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN }); // the reload that never happens
+      expect(sessionStorage.getItem(MARKER)).not.toBeNull();
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn() }); // a plain switch, from Settings
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      const back = await loadNetworkModule();
+      expect(back.SPHERE_NETWORK).toBe('mainnet');
+      expect(back.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('a switch naming an unusable origin clears it too', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: '*' });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('a later switch for another origin replaces it — the marker describes only the latest switch', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: 'https://other.example' });
+
+      const back = await loadNetworkModule();
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(back.claimNetworkSwitchGrace('https://other.example')).toBe(true);
     });
 
     it('a refused switch strands no marker — the throw comes first', async () => {
@@ -653,6 +784,22 @@ describe('connect network-switch grace', () => {
       const back = await loadNetworkModule();
       expect(back.SPHERE_NETWORK).toBe('mainnet');
       expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('a sessionStorage that throws when merely touched costs the grace, never the switch', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+      const restore = breakSessionStorageGetter();
+
+      try {
+        expect(() => asking.setActiveNetwork('mainnet', { reload, forOrigin: ORIGIN })).not.toThrow();
+      } finally {
+        restore();
+      }
+
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
     });
   });
 
@@ -754,6 +901,26 @@ describe('connect network-switch grace', () => {
       expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
     });
 
+    it('boots when the sessionStorage GETTER throws a SecurityError, and yields a null record', async () => {
+      // The failure that would white-screen the wallet is not getItem throwing:
+      // with site data blocked, or in a sandboxed frame, merely evaluating
+      // `window.sessionStorage` raises. The module is imported before React
+      // mounts, so an escape from either module-load reader is a blank page.
+      sessionStorage.setItem(MARKER, JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: Date.now() }));
+      const restore = breakSessionStorageGetter();
+
+      try {
+        const mod = await loadNetworkModule();
+
+        expect(mod.SPHERE_NETWORK).toBe('testnet2');
+        expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+        expect(mod.NETWORK_SWITCHED_TO).toBeNull();
+        expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+
     it.each([
       ['not JSON', 'not json'],
       ['JSON but not an object', '"just a string"'],
@@ -761,6 +928,11 @@ describe('connect network-switch grace', () => {
       ['missing the origin', JSON.stringify({ to: 'testnet2', at: Date.now() })],
       ['an empty origin', JSON.stringify({ origin: '', to: 'testnet2', at: Date.now() })],
       ['an origin that is not a string', JSON.stringify({ origin: 7, to: 'testnet2', at: Date.now() })],
+      // The writer refuses these; the reader must too, or a stale or edited value
+      // walks straight past the writer's check.
+      ['the string "null"', JSON.stringify({ origin: 'null', to: 'testnet2', at: Date.now() })],
+      ['the wildcard "*"', JSON.stringify({ origin: '*', to: 'testnet2', at: Date.now() })],
+      ['an origin with a trailing slash', JSON.stringify({ origin: `${ORIGIN}/`, to: 'testnet2', at: Date.now() })],
       ['missing the timestamp', JSON.stringify({ origin: ORIGIN, to: 'testnet2' })],
       ['a timestamp that is not a number', JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: 'now' })],
     ])('ignores a marker that is %s, without throwing', async (_label, raw) => {
