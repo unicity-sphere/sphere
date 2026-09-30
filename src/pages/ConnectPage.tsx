@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { ArrowLeftRight, Lock } from 'lucide-react';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
+import { NETWORK_SWITCHED_FOR } from '../config/network';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
 import { describeConnectRejection } from '../components/connect/rejectionMessage';
@@ -30,6 +34,69 @@ type RejectionInfo = {
   switchRefusal: SwitchRefusal | undefined;
 };
 
+/**
+ * What the popup says after the wallet switched networks FOR the dApp that opened it.
+ *
+ * A framed dApp is brought back by the wallet itself (the grace turns its next silent
+ * handshake into the approval modal). A popup's dApp lives in ANOTHER tab: it was refused
+ * before the switch, nothing retries it, and this page cannot reach across to do so. So the
+ * user has to go back and press Connect, and this says so. It also says they will be asked
+ * to approve again, because approvals are per network: without that, the modal that
+ * follows reads as the wallet forgetting them.
+ *
+ * The network is named from the wallet's own table, keyed by the network this session
+ * really runs on. Nothing the dApp declared on the wire ever reaches this component.
+ *
+ * `locked` is a separate line because it is the case a person actually hits: the idle
+ * window can expire during the switch, and a locked popup refuses every handshake until it
+ * is unlocked. Promising "press Connect" there would send them to a refusal.
+ */
+function NetworkSwitchedNotice({
+  origin,
+  network,
+  locked,
+}: {
+  origin: string;
+  network: NetworkType;
+  locked: boolean;
+}) {
+  const label = NETWORKS[network].name;
+  const Icon = locked ? Lock : ArrowLeftRight;
+  return (
+    <div
+      data-testid="connect-network-switched"
+      role="status"
+      className={`shrink-0 mx-3 mt-3 rounded-2xl border p-3 shadow-sm ${
+        locked
+          ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+          : 'bg-white dark:bg-neutral-800 border-gray-200 dark:border-neutral-700'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <Icon
+          className={`w-4 h-4 mt-0.5 shrink-0 ${
+            locked ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-neutral-400'
+          }`}
+        />
+        <p className="text-sm text-gray-700 dark:text-neutral-300">
+          {locked ? (
+            <>
+              Your wallet is now on <strong>{label}</strong>, and it is locked. Unlock it first, then go back to{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.{' '}
+            </>
+          ) : (
+            <>
+              Your wallet is now on <strong>{label}</strong>. Go back to{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.{' '}
+            </>
+          )}
+          You will be asked to approve the connection on {label}.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
@@ -42,6 +109,19 @@ export function ConnectPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [connectedDapp, setConnectedDapp] = useState<string | null>(null);
   const [rejection, setRejection] = useState<RejectionInfo | null>(null);
+
+  // Did the wallet just change networks for THIS popup's site? Read from the RECORD
+  // (NETWORK_SWITCHED_FOR), never from claimNetworkSwitchGrace: the claim is a one-shot that
+  // the silent handshake spends, so whichever of the two ran first would erase the other's
+  // evidence. In the popup case the grace can be spent before this screen ever paints, and
+  // the screen would simply never appear. The record has every guard already applied (usable
+  // origin, network survived the boot, TTL), so a null here also covers a stale marker.
+  // Strict equality with the popup's own `origin` parameter, like the claim: a switch made
+  // for another site says nothing about this one.
+  const switchedForThisPopup =
+    NETWORK_SWITCHED_FOR !== null && origin !== null && NETWORK_SWITCHED_FOR.origin === origin
+      ? NETWORK_SWITCHED_FOR
+      : null;
 
   // Stable refs so the effect doesn't re-run when these change
   const sphereRef = useRef(sphere);
@@ -291,6 +371,12 @@ export function ConnectPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Only while it is TRUE. Once the dApp is connected there is no Connect left to press, and
+          a wallet that is neither live nor locked (init failed) has no connection to promise. */}
+      {status === 'ready' && switchedForThisPopup && origin && connectedDapp === null && (isLocked || sphere) && (
+        <NetworkSwitchedNotice origin={origin} network={switchedForThisPopup.to} locked={isLocked} />
       )}
 
       {status === 'error' && (

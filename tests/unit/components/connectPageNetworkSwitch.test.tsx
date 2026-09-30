@@ -13,12 +13,13 @@
  * the grace marker is read once at module load.
  *
  * The popup's switch is deliberately a manual re-Connect: after the reload the dApp is in
- * another window and has to press Connect again. That screen is a later task; this file
- * only pins what the host does.
+ * another window and has to press Connect again. The last block pins the screen that says
+ * so, which reads the switch marker's RECORD and never its one-shot claim.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import {
   DAPP,
   MARKER_KEY,
@@ -129,6 +130,7 @@ async function mount() {
     net,
     store,
     view,
+    ConnectPage,
   };
 }
 
@@ -559,5 +561,183 @@ describe('ConnectPage: the switch grace', () => {
 
     expect(await config.onConnectionRequest(DAPP, PERMS, false)).toEqual(APPROVED);
     expect(hostMock.requestApproval).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ConnectPage: the screen after a switch THIS popup asked for', () => {
+  const SCREEN = 'connect-network-switched';
+  const screenText = () => screen.queryByTestId(SCREEN)?.textContent ?? null;
+
+  const LIVE =
+    'Your wallet is now on Mainnet. Go back to https://dapp.example and press Connect. ' +
+    'You will be asked to approve the connection on Mainnet.';
+  const LOCKED =
+    'Your wallet is now on Mainnet, and it is locked. Unlock it first, then go back to ' +
+    'https://dapp.example and press Connect. You will be asked to approve the connection on Mainnet.';
+
+  /** What the popup's page finds after a switch to mainnet: the stored choice, and the marker. */
+  function cameBackOnMainnet(markerOrigin = ORIGIN, to = 'mainnet', at = Date.now()) {
+    localStorage.setItem(ACTIVE_NETWORK_KEY, 'mainnet');
+    seedSwitchMarker(markerOrigin, to, at);
+  }
+
+  it('says where the wallet is, where to go back to, and that the approval is asked again', async () => {
+    cameBackOnMainnet();
+    await mount();
+
+    expect(screenText()).toBe(LIVE);
+  });
+
+  it('is what the round trip really leaves: accept the switch, then load the page that comes back', async () => {
+    hostMock.requestNetworkSwitch.mockResolvedValue(ACCEPT);
+    const first = await mount();
+    // The dApp names the target "Free Testnet Tokens". Only its id may decide anything.
+    await first.config.onNetworkMismatch(
+      DAPP,
+      mismatchCtx({ clientNetwork: { id: 1, name: 'Free Testnet Tokens' } }),
+    );
+    await macrotask();
+    expect(hostMock.reload).toHaveBeenCalledOnce();
+    expect(screenText()).toBeNull(); // nothing on the page that is about to be destroyed
+    first.view.unmount();
+    hostMock.configs.length = 0;
+    hostMock.instances.length = 0;
+
+    // The reload: fresh modules, same storage.
+    await mount();
+
+    expect(screenText()).toBe(LIVE);
+    expect(document.body.textContent).not.toContain('Free Testnet Tokens');
+  });
+
+  it('names the network from the wallet\'s own config, whatever the dApp called it', async () => {
+    cameBackOnMainnet();
+    await mount();
+
+    expect(screenText()).toContain(NETWORKS.mainnet.name);
+    expect(screenText()).not.toContain(DAPP.name);
+  });
+
+  it('does not render for a switch made in Settings, which leaves no origin to name', async () => {
+    freshModules(hostMock.reload);
+    const settings = await import('../../../src/config/network');
+    settings.setActiveNetwork('mainnet'); // the Settings path: no forOrigin
+    expect(hostMock.reload).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem(MARKER_KEY)).toBeNull();
+
+    const { net } = await mount();
+
+    // The switch happened and this load knows it (the plans offer reads that); it has no site to name.
+    expect(localStorage.getItem(ACTIVE_NETWORK_KEY)).toBe('mainnet');
+    expect(net.NETWORK_SWITCHED_TO).toBe('mainnet');
+    expect(net.NETWORK_SWITCHED_FOR).toBeNull();
+    expect(screenText()).toBeNull();
+  });
+
+  it('does not render on a plain load', async () => {
+    await mount();
+    expect(screenText()).toBeNull();
+  });
+
+  it('does not render for a switch that was made for ANOTHER origin', async () => {
+    cameBackOnMainnet('https://some-other-site.example');
+    const { net } = await mount();
+
+    // The marker is intact and valid: it is the origin comparison that withholds the screen.
+    expect(net.NETWORK_SWITCHED_FOR).toEqual({ origin: 'https://some-other-site.example', to: 'mainnet' });
+    expect(screenText()).toBeNull();
+  });
+
+  it('does not render for a stale marker', async () => {
+    cameBackOnMainnet(ORIGIN, 'mainnet', Date.now() - 6 * 60_000);
+    const { net } = await mount();
+
+    expect(net.NETWORK_SWITCHED_FOR).toBeNull(); // the record itself refused it
+    expect(screenText()).toBeNull();
+  });
+
+  it('does not render for a switch that did not survive the boot', async () => {
+    // The marker says mainnet, the wallet came up on testnet2: announcing "now on Mainnet" would be false.
+    seedSwitchMarker(ORIGIN, 'mainnet');
+    const { net } = await mount();
+
+    expect(net.SPHERE_NETWORK).toBe('testnet2');
+    expect(net.NETWORK_SWITCHED_FOR).toBeNull();
+    expect(screenText()).toBeNull();
+  });
+
+  it('says the wallet is LOCKED when the idle window expired during the switch, and promises nothing before the unlock', async () => {
+    cameBackOnMainnet();
+    sphereMock.sphere = null;
+    sphereMock.isLocked = true;
+    await mount();
+
+    expect(screenText()).toBe(LOCKED);
+    expect(screenText()).not.toBe(LIVE);
+  });
+
+  it('changes to the live line by itself once the wallet is unlocked', async () => {
+    cameBackOnMainnet();
+    sphereMock.sphere = null;
+    sphereMock.isLocked = true;
+    const { view, ConnectPage } = await mount();
+    expect(screenText()).toBe(LOCKED);
+
+    sphereMock.sphere = { identity: { chainPubkey: '02ab' } };
+    sphereMock.isLocked = false;
+    view.rerender(
+      <MemoryRouter initialEntries={['/connect?origin=https%3A%2F%2Fdapp.example']}>
+        <ConnectPage />
+      </MemoryRouter>,
+    );
+
+    expect(screenText()).toBe(LIVE);
+  });
+
+  it('goes away when the wallet is lost for good: neither live nor locked, so no connection can come', async () => {
+    cameBackOnMainnet();
+    const { view, ConnectPage } = await mount();
+    expect(screenText()).toBe(LIVE);
+
+    // A generic init failure, not a lock: unlocking cannot cure it.
+    sphereMock.sphere = null;
+    sphereMock.isLocked = false;
+    view.rerender(
+      <MemoryRouter initialEntries={['/connect?origin=https%3A%2F%2Fdapp.example']}>
+        <ConnectPage />
+      </MemoryRouter>,
+    );
+
+    expect(screenText()).toBeNull();
+  });
+
+  it('goes away once the dApp is connected: "press Connect" would no longer be true', async () => {
+    cameBackOnMainnet();
+    hostMock.requestApproval.mockResolvedValue({ approved: true, grantedPermissions: ['identity:read'] });
+    const { config } = await mount();
+    expect(screenText()).toBe(LIVE);
+
+    await act(async () => {
+      await config.onConnectionRequest(DAPP, ['identity:read'], false);
+    });
+
+    expect(screenText()).toBeNull();
+    expect(document.body.textContent).toContain('Connected to Hostile Swap');
+  });
+
+  it('only READS the marker: showing the screen leaves the silent-handshake grace unspent', async () => {
+    cameBackOnMainnet();
+    hostMock.requestApproval.mockResolvedValue({ approved: false, grantedPermissions: [] });
+    const { config, net } = await mount();
+    expect(screenText()).toBe(LIVE);
+    expect(net.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+
+    // The other reader still gets its evidence: the silent handshake is upgraded to the modal...
+    await config.onConnectionRequest(DAPP, ['identity:read'], true);
+    expect(hostMock.requestApproval).toHaveBeenCalledOnce();
+
+    // ...and spending it does not take the screen away.
+    expect(screenText()).toBe(LIVE);
+    expect(net.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
   });
 });
