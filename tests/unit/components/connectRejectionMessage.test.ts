@@ -75,8 +75,52 @@ describe('describeConnectRejection', () => {
       walletNetwork: { id: 4 },
       clientNetwork: { id: 1, name: 'mainnet' },
     });
-    expect(s).toContain('mainnet');
-    expect(s).toContain('4');
+    expect(s).toContain('mainnet (1)');
+    expect(s).toContain('testnet2 (4)');
+  });
+
+  // Both sides are labelled by the WALLET, from its own table, by id. The peer's `name` is
+  // display text a hostile app can set to anything, and this sentence sits inside a paragraph
+  // the wallet vouches for: "is built for Mainnet (4), but your wallet is on network 1" would
+  // let the app out-label the wallet, whose own side carries no name at all.
+  it('names each side from the wallet\'s own table, by id', () => {
+    expect(
+      describeConnectRejection({
+        reason: 'network_incompatible',
+        walletNetwork: { id: 4 },
+        clientNetwork: { id: 1 },
+      }),
+    ).toBe('is built for mainnet (1), but your wallet is on testnet2 (4), so it cannot connect here.');
+  });
+
+  it('never prints the name the peer declared, whatever it claims to be', () => {
+    const s = describeConnectRejection({
+      reason: 'network_incompatible',
+      walletNetwork: { id: 1 },
+      clientNetwork: { id: 4, name: 'Mainnet (4)' },
+    });
+    // Id 4 is testnet2 whatever the app calls it, and the wallet's side is named the same way.
+    expect(s).toBe('is built for testnet2 (4), but your wallet is on mainnet (1), so it cannot connect here.');
+    expect(s).not.toContain('Mainnet');
+  });
+
+  it('names a network the wallet does not know by its id alone, and still not by the peer\'s name', () => {
+    const s = describeConnectRejection({
+      reason: 'network_incompatible',
+      walletNetwork: { id: 4 },
+      clientNetwork: { id: 999, name: 'Totally-Safe-Mainnet-<b>' },
+    });
+    expect(s).toBe('is built for network 999, but your wallet is on testnet2 (4), so it cannot connect here.');
+  });
+
+  it('does not trust a name on the wallet side either: it is labelled from the table too', () => {
+    const s = describeConnectRejection({
+      reason: 'network_incompatible',
+      walletNetwork: { id: 4, name: 'Definitely-Mainnet' },
+      clientNetwork: { id: 1 },
+    });
+    expect(s).toContain('testnet2 (4)');
+    expect(s).not.toContain('Definitely');
   });
 
   it('falls back to the generic network copy when the app sent no network', () => {

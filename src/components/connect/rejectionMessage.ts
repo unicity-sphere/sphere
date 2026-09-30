@@ -8,7 +8,9 @@
  * floor, `clientProtocol`/`requiredProtocol`/`walletProtocol` for the protocol checks,
  * `clientNetwork`/`walletNetwork` for the network check. Quote them: this fragment plus
  * a bare error code is the whole of what a developer sees, and "built for an older
- * version" with no number tells them to upgrade without saying to what.
+ * version" with no number tells them to upgrade without saying to what. A network is
+ * quoted by id and named from the wallet's own table; the name the app declared for it
+ * is display text it chose, and is never printed.
  *
  * Every field is read defensively. `data` arrives over postMessage from a peer that may
  * be on an older (or newer) SDK, so a missing or malformed field degrades to the generic
@@ -17,6 +19,7 @@
  * The returned phrase is a sentence fragment meant to follow the dApp name, e.g.
  * `${dapp.name} ${describeConnectRejection(data)}`.
  */
+import { resolveSphereNetwork } from '@unicitylabs/sphere-sdk/connect';
 import type { SwitchRefusal } from './networkSwitchOffer';
 
 /** A non-empty string field, or null for anything else (missing, null, wrong type). */
@@ -24,13 +27,22 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-/** `testnet2 (4)` / `network 4`, or null when the peer sent no usable descriptor. */
+/**
+ * `testnet2 (4)` for an id the wallet knows, `network 4` for one it does not, or null when
+ * `data` carried no usable descriptor.
+ *
+ * BOTH sides are labelled here, from the wallet's own table, by id alone. The `name` in the
+ * descriptor is never read: it is display text the peer chose, and the SDK sends the wallet's
+ * side as `{ id }` with no name at all, so printing the peer's would have let a hostile app
+ * label ITS side "Mainnet (4)" inside a sentence the wallet vouches for, next to a bare
+ * `network 1` for the wallet's own. Labelling both from one source keeps them comparable.
+ */
 function describeNetwork(value: unknown): string | null {
   if (typeof value !== 'object' || value === null) return null;
-  const { id, name } = value as { id?: unknown; name?: unknown };
+  const { id } = value as { id?: unknown };
   if (typeof id !== 'number') return null;
-  const label = text(name);
-  return label ? `${label} (${id})` : `network ${id}`;
+  const known = resolveSphereNetwork(id);
+  return known ? `${known.name} (${id})` : `network ${id}`;
 }
 
 const OUTDATED = 'was built for an older version of Sphere';
@@ -81,10 +93,10 @@ function describeNetworkRejection(data: Record<string, unknown>): string {
  * `Record<SwitchRefusal, string>` makes the table exhaustive at compile time: a
  * new reason in evaluateSwitchOffer will not build until it has a sentence here.
  *
- * NO PEER STRING, EVER. The generic copy above already quotes the app's declared
- * network name (an existing wart, and not made worse here); every sentence in this
- * table is fixed wallet text. A refusal carries no label to interpolate, and none
- * is looked up, so there is nothing a hostile app could word.
+ * NO PEER STRING, EVER. The generic copy above labels both networks from the wallet's
+ * own table by id (describeNetwork) and never prints the name the app declared; every
+ * sentence in this table is fixed wallet text. A refusal carries no label to
+ * interpolate, and none is looked up, so there is nothing a hostile app could word.
  */
 const SWITCH_REFUSAL_CLAUSES: Record<SwitchRefusal, string> = {
   suppressed:
