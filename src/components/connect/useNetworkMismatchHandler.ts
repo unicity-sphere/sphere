@@ -165,7 +165,13 @@ export function createNetworkMismatchHandler(deps: NetworkMismatchDeps): Mismatc
     // Deadline check 2 of 2: the prompt may have been open past it. The host has already
     // answered the dApp and ignores whatever this returns, so do nothing that has an effect,
     // including the mute: a decision made about a handshake that no longer exists is not one
-    // to act on, and failing to act on it only means the user is asked again.
+    // to act on. What that costs depends on the answer, and it is NOT always "asked again":
+    //  - an accept does not switch;
+    //  - a decline WITH the tick loses its persisted mute, and the provider does not remember
+    //    a muted decline either, so this origin may be asked again;
+    //  - a plain decline was already recorded by the provider, for the rest of the page
+    //    session, before control got back here, so this origin is NOT asked again until a
+    //    reload. The user did say no; only the deadline's discarding of the mute is lost.
     if (pastDeadline(ctx)) return refuse();
 
     if (!answer.accepted) {

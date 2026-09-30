@@ -48,6 +48,8 @@ function describeNetwork(value: unknown): string | null {
 const OUTDATED = 'was built for an older version of Sphere';
 const UPDATE = 'Its developer needs to update it before it can connect.';
 
+// NOTE: `actualSdk` and `clientProtocol` below are peer-supplied and printed verbatim (see the
+// note above SWITCH_REFUSAL_CLAUSES); the `required*` and `walletProtocol` values are the wallet's.
 function describeProtocolRejection(data: Record<string, unknown>): string {
   // The gate runs MAJOR → MINOR → SDK and attaches the protocol pair to all three, so an
   // SDK-floor refusal also carries a perfectly good protocol pair. Report the floor that
@@ -93,10 +95,17 @@ function describeNetworkRejection(data: Record<string, unknown>): string {
  * `Record<SwitchRefusal, string>` makes the table exhaustive at compile time: a
  * new reason in evaluateSwitchOffer will not build until it has a sentence here.
  *
- * NO PEER STRING, EVER. The generic copy above labels both networks from the wallet's
- * own table by id (describeNetwork) and never prints the name the app declared; every
- * sentence in this table is fixed wallet text. A refusal carries no label to
- * interpolate, and none is looked up, so there is nothing a hostile app could word.
+ * NO PEER STRING, EVER, in THIS table or in the network sentence above it: the network
+ * sentence labels both networks from the wallet's own table by id (describeNetwork) and
+ * never prints the name the app declared, and every sentence here is fixed wallet text. A
+ * refusal carries no label to interpolate, and none is looked up, so there is nothing a
+ * hostile app could word.
+ *
+ * That is NOT true of this file as a whole. The protocol copy (describeProtocolRejection)
+ * still prints two peer-supplied strings verbatim: `actualSdk` (the app's own SDK version)
+ * and `clientProtocol` (the protocol version it claims to speak). They are only rendered as
+ * text, but an app can put any string in them, so do not read this file as if nothing the
+ * peer sent gets through.
  */
 const SWITCH_REFUSAL_CLAUSES: Record<SwitchRefusal, string> = {
   suppressed:
