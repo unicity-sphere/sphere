@@ -4,6 +4,7 @@ import { STORAGE_KEYS } from './storageKeys';
 import { SUBSCRIPTION_ENABLED, runtimeFlag, runtimeSetting } from './runtimeConfig';
 import { FALLBACK_NETWORK, hasWalletApiUrl } from './walletApiNetworks';
 import { allowsSharedAggregatorKey } from './networkCapabilities';
+import { isUsableOrigin } from './agentOrigins';
 
 /** Why a network is not offered — drives honest UI copy, never a lie. */
 export type UnavailableReason =
@@ -280,27 +281,6 @@ const CONNECT_SWITCH_MARKER = 'sphere_connect_network_switch';
  * claim stays possible after the load that read the marker.
  */
 const CONNECT_SWITCH_TTL_MS = 5 * 60_000;
-
-/**
- * Is this string an ORIGIN — an identity one site can hold and another cannot?
- * The grace is spendable by exactly one origin, so a value that several frames
- * can present is not an origin at all, and must never be armed.
- *
- * Usable means all of: a non-empty string; not `'null'`, which every opaque or
- * sandboxed frame reports for itself, so any of them could claim it; not `'*'`,
- * which the transport treats as allow-all; and equal to `new URL(value).origin`.
- * That last check is the canonical form the transport compares against, and it
- * rejects a path, a trailing slash, an upper-case host, a default port and a
- * malformed value in one step. If `URL` throws, it is not usable.
- */
-function isUsableOrigin(value: unknown): value is string {
-  if (typeof value !== 'string' || value === '' || value === 'null' || value === '*') return false;
-  try {
-    return new URL(value).origin === value;
-  } catch {
-    return false;
-  }
-}
 
 /** Whom a network switch was made for, and where it went. */
 export interface NetworkSwitchedFor {
