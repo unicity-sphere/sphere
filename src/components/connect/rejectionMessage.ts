@@ -19,6 +19,7 @@
  * The returned phrase is a sentence fragment meant to follow the dApp name, e.g.
  * `${dapp.name} ${describeConnectRejection(data)}`.
  */
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import { resolveSphereNetwork } from '@unicitylabs/sphere-sdk/connect';
 import type { SwitchRefusal } from './networkSwitchOffer';
 
@@ -28,21 +29,29 @@ function text(value: unknown): string | null {
 }
 
 /**
- * `testnet2 (4)` for an id the wallet knows, `network 4` for one it does not, or null when
+ * `testnet2` for an id the wallet knows, `network 424242` for one it does not, or null when
  * `data` carried no usable descriptor.
  *
  * BOTH sides are labelled here, from the wallet's own table, by id alone. The `name` in the
  * descriptor is never read: it is display text the peer chose, and the SDK sends the wallet's
  * side as `{ id }` with no name at all, so printing the peer's would have let a hostile app
- * label ITS side "Mainnet (4)" inside a sentence the wallet vouches for, next to a bare
+ * label ITS side "Mainnet" inside a sentence the wallet vouches for, next to a bare
  * `network 1` for the wallet's own. Labelling both from one source keeps them comparable.
+ *
+ * The id itself is not shown beside a name it would only repeat — it is a number the reader has
+ * no use for, and the sentence it sat in is one a person has to act on. It survives in the one
+ * place it carries the whole meaning: a network this wallet's table cannot name.
  */
 function describeNetwork(value: unknown): string | null {
   if (typeof value !== 'object' || value === null) return null;
   const { id } = value as { id?: unknown };
   if (typeof id !== 'number') return null;
+  // The registry key (`mainnet`, `testnet2`) is not what the rest of the wallet calls a network;
+  // every other surface says Mainnet and Testnet. Two names for one network in one product is
+  // the kind of seam a reader notices and cannot explain. Still sourced entirely from the
+  // wallet's own table, and the fallback for an id it cannot name is untouched.
   const known = resolveSphereNetwork(id);
-  return known ? `${known.name} (${id})` : `network ${id}`;
+  return known ? NETWORKS[known.name].name : `network ${id}`;
 }
 
 const OUTDATED = 'was built for an older version of Sphere';
@@ -137,4 +146,74 @@ export function describeConnectRejection(
     return clause ? `${base} ${clause}` : base;
   }
   return 'is not compatible with this wallet.';
+}
+
+/**
+ * The refusal clause on its own, so a surface with room can set it as its own paragraph instead
+ * of running it onto the end of the sentence above.
+ */
+export function describeSwitchRefusal(reason: SwitchRefusal): string {
+  return SWITCH_REFUSAL_CLAUSES[reason];
+}
+
+/**
+ * The numbers the gate actually compared, for a disclosure.
+ *
+ * None of this belongs in the sentence a person reads: an error code is something only a
+ * developer can act on, and it sat at the same altitude as the explanation. But a dApp developer
+ * looking at a popup has no wallet-side console, so throwing it away is not an option either —
+ * this is where it goes.
+ *
+ * Every field is read defensively: `data` crossed a postMessage boundary and a peer can put
+ * anything in it. The peer-supplied values are rendered as text only, exactly as the sentence
+ * copy already treats them.
+ */
+export function connectRejectionDiagnostics(
+  data: Record<string, unknown> | undefined,
+  code: number,
+): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [{ label: 'Error code', value: String(code) }];
+  const bag = data ?? {};
+
+  const networkId = (value: unknown): string => {
+    if (typeof value !== 'object' || value === null) return 'unknown';
+    const { id } = value as { id?: unknown };
+    return typeof id === 'number' ? String(id) : 'unknown';
+  };
+  if ('clientNetwork' in bag || 'walletNetwork' in bag) {
+    rows.push({
+      label: 'Networks',
+      value:
+        `This site asked for network ${networkId(bag.clientNetwork)}. ` +
+        `Your wallet is on network ${networkId(bag.walletNetwork)}.`,
+    });
+  }
+
+  const text = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value : undefined;
+
+  const clientProtocol = text(bag.clientProtocol);
+  const requiredProtocol = text(bag.requiredProtocol);
+  const walletProtocol = text(bag.walletProtocol);
+  if (clientProtocol && (requiredProtocol || walletProtocol)) {
+    rows.push({
+      label: 'Connect protocol',
+      value: requiredProtocol
+        ? `It speaks ${clientProtocol}; this wallet requires ${requiredProtocol} or newer.`
+        : `It speaks ${clientProtocol}; this wallet speaks ${walletProtocol}.`,
+    });
+  }
+
+  const requiredSdk = text(bag.requiredSdk);
+  if (requiredSdk) {
+    const actualSdk = text(bag.actualSdk);
+    rows.push({
+      label: 'SDK version',
+      value: actualSdk
+        ? `It reports ${actualSdk}; this wallet requires ${requiredSdk} or newer.`
+        : `It did not report a version; this wallet requires ${requiredSdk} or newer.`,
+    });
+  }
+
+  return rows;
 }

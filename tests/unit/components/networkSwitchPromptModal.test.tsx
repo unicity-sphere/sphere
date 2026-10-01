@@ -145,7 +145,10 @@ describe('NetworkSwitchPromptModal', () => {
 
       render(<NetworkSwitchPromptModal />);
 
-      expect(bodyText()).toContain('runs on Testnet. Your wallet is on Mainnet.');
+      expect(bodyText()).toContain('wants to move your wallet to another network.');
+      // The two tiles carry the networks now; both labels still come from the offer.
+      expect(bodyText()).toContain('Testnet');
+      expect(bodyText()).toContain('Mainnet');
       expect(bodyText()).not.toContain('Free-Money-Net');
     });
 
@@ -163,7 +166,9 @@ describe('NetworkSwitchPromptModal', () => {
       state.pending = pend({ offer });
       render(<NetworkSwitchPromptModal />);
 
-      expect(bodyText()).toContain(`runs on ${NETWORKS.mainnet.name}. Your wallet is on ${NETWORKS.testnet2.name}.`);
+      expect(bodyText()).toContain('wants to move your wallet to another network.');
+      expect(bodyText()).toContain(NETWORKS.mainnet.name);
+      expect(bodyText()).toContain(NETWORKS.testnet2.name);
       expect(screen.getByRole('button', { name: `Switch to ${NETWORKS.mainnet.name}` })).toBeDefined();
       // ...and clicking it lands on the real-funds step, not on an answer.
       fireEvent.click(screen.getByRole('button', { name: `Switch to ${NETWORKS.mainnet.name}` }));
@@ -178,10 +183,14 @@ describe('NetworkSwitchPromptModal', () => {
       render(<NetworkSwitchPromptModal />);
 
       expect(screen.getByText('Switch network?')).toBeDefined();
-      expect(bodyText()).toContain('https://app.example runs on Testnet. Your wallet is on Mainnet.');
-      expect(bodyText()).toContain(
-        'Switching reloads Sphere and disconnects apps connected on Mainnet. Your wallet, keys and balances are not affected.',
-      );
+      // The origin is the subject of the question and stands on its own line, so it is read off
+      // its own element rather than out of a sentence.
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe('https://app.example');
+      expect(bodyText()).toContain('wants to move your wallet to another network.');
+      // What switching costs is no longer part of the question: it moved behind the disclosure,
+      // which starts closed, so the sentence is not in the DOM at all.
+      expect(bodyText()).toContain('What happens when you switch');
+      expect(bodyText()).not.toContain('every site connected on Mainnet is disconnected');
       expect(screen.getByLabelText('Do not ask again for this site')).toBeDefined();
       expect(screen.getByRole('button', { name: 'Switch to Testnet' })).toBeDefined();
       expect(screen.getByRole('button', { name: 'Not now' })).toBeDefined();
@@ -231,6 +240,33 @@ describe('NetworkSwitchPromptModal', () => {
 
       expect(state.answer).toHaveBeenCalledTimes(1);
       expect(state.answer).toHaveBeenCalledWith(7, { accepted: true, suppressFuturePrompts: false });
+    });
+
+    // The trust anchor is a rule, not a convention: every consent surface names the origin the
+    // transport verified, and the second step is a consent surface. It is also the step where a
+    // user is one click from real funds, so "which site asked for this" must not have scrolled
+    // out of the story by then.
+    it('keeps the verified origin on screen through the real-money step', () => {
+      state.pending = pend({ offer: MAINNET_OFFER });
+      render(<NetworkSwitchPromptModal />);
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe('https://app.example');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Mainnet' }));
+
+      expect(screen.getByTestId('network-switch-verified-origin').textContent).toBe('https://app.example');
+    });
+
+    // Asserted on the FIRST paint of the step, with no click on Continue involved: the settle
+    // window must be armed by presenting the step, not by whatever the user does next.
+    it('presents Continue already inert', () => {
+      state.pending = pend({ offer: MAINNET_OFFER });
+      render(<NetworkSwitchPromptModal />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Mainnet' }));
+
+      expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(state.answer).not.toHaveBeenCalled();
     });
 
     it('the mainnet confirmation also carries the checkbox state', () => {

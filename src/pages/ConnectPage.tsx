@@ -10,8 +10,7 @@ import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
 import { NETWORK_SWITCHED_FOR } from '../config/network';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
-import { describeConnectRejection } from '../components/connect/rejectionMessage';
-import type { SwitchRefusal } from '../components/connect/networkSwitchOffer';
+import { ConnectRejectionModal, type ConnectRejection } from '../components/connect/ConnectRejectionModal';
 import {
   claimGraceForSilentHandshake,
   createSwitchRefusalNote,
@@ -24,15 +23,6 @@ import {
   updateLastSeen,
   revokeApprovedOrigin,
 } from '../utils/connected-sites';
-
-type RejectionInfo = {
-  dappName: string;
-  code: number;
-  message: string;
-  data: Record<string, unknown> | undefined;
-  /** Why the wallet did not offer a network switch, when the network hook ran and refused. */
-  switchRefusal: SwitchRefusal | undefined;
-};
 
 /**
  * What the popup says after the wallet switched networks FOR the dApp that opened it.
@@ -118,7 +108,7 @@ export function ConnectPage() {
   // disconnect, but the network-switch notice below must not come back with it. Its "now" is
   // stale by then and the person has moved on. Set wherever a connection is recorded.
   const [hasConnected, setHasConnected] = useState(false);
-  const [rejection, setRejection] = useState<RejectionInfo | null>(null);
+  const [rejection, setRejection] = useState<ConnectRejection | null>(null);
 
   // Did the wallet just change networks for THIS popup's site? Read from the RECORD
   // (NETWORK_SWITCHED_FOR), never from claimNetworkSwitchGrace: the claim is a one-shot that
@@ -404,26 +394,11 @@ export function ConnectPage() {
       </div>
 
       {rejection && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 shadow-xl p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
-                <span className="text-amber-600 dark:text-amber-400 text-xl">⚠</span>
-              </div>
-              <h2 className="text-base font-semibold text-gray-900 dark:text-neutral-100">Unable to connect</h2>
-            </div>
-            <p className="text-sm text-gray-700 dark:text-neutral-300">
-              <span className="font-medium">{rejection.dappName}</span> {describeConnectRejection(rejection.data, rejection.switchRefusal)}
-            </p>
-            <p className="mt-2 text-xs text-gray-400 dark:text-neutral-500">Error code {rejection.code}</p>
-            <button
-              onClick={() => setRejection(null)}
-              className="mt-4 w-full rounded-xl bg-gray-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-sm font-medium py-2.5 hover:opacity-90 transition"
-            >
-              Close
-            </button>
-          </div>
-        </div>
+        <ConnectRejectionModal
+          origin={origin}
+          rejection={rejection}
+          onClose={() => setRejection(null)}
+        />
       )}
     </div>
   );

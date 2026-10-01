@@ -412,7 +412,7 @@ describe('ConnectPage: the deadline is checked twice', () => {
 });
 
 describe('ConnectPage: why the wallet did not offer a switch', () => {
-  const GENERIC = 'Hostile Swap is built for mainnet (1), but your wallet is on testnet2 (4), so it cannot connect here.';
+  const GENERIC = 'https://dapp.example is built for Mainnet, but your wallet is on Testnet, so it cannot connect here.';
 
   it('shows the reason inside the existing "Unable to connect" modal when the offer is refused', async () => {
     const { config } = await mount();

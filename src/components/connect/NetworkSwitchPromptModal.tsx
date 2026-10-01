@@ -1,23 +1,37 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, ArrowLeftRight } from 'lucide-react';
-import { BaseModal, ModalHeader, Button } from '../wallet/ui';
+import { ArrowLeftRight, ArrowRight } from 'lucide-react';
+import { NETWORKS, type NetworkType } from '@unicitylabs/sphere-sdk';
+import {
+  AlertMessage, BaseModal, Button, DetailRow, DetailsDisclosure, ModalHeader, NetworkTile, networkMoneyLabel,
+} from '../wallet/ui';
 import { useConnectContext, type NetworkSwitchAnswer, type PendingNetworkSwitch } from './ConnectContext';
+import { VerifiedOrigin } from './VerifiedOrigin';
+import { SPHERE_NETWORK } from '../../config/network';
 import { isTestMoney } from '../../config/networkCapabilities';
+import type { SwitchOffer } from './networkSwitchOffer';
 import { INTENT_SETTLE_MS } from './settleWindow';
 
 /**
  * The third Connect consent surface: "this site runs on another network, switch?".
  *
- * TRUST. Like ConnectionApprovalModal it names the TRANSPORT-VERIFIED origin, and
- * both network labels come from the offer, which evaluateSwitchOffer built from the
- * wallet's own network table. Nothing the peer sent is read here: a hostile origin
- * can declare mainnet's id under the name "Testnet", the offer has already resolved
- * that to what the id really is, and printing a peer string would undo it. The
- * entry does not even carry one.
+ * ONE QUESTION PER SCREEN. The verified origin is the subject of that question and the single
+ * consequence is its predicate; the two network tiles carry the answer the eye needs before any
+ * word is read, because colour here says what kind of money a network holds. Everything the user
+ * is not being asked — the reload, the per-network approvals, the numeric ids — sits behind the
+ * disclosure, which holds exactly the things that are not the question.
  *
- * ANSWERS ONLY. It reports the checkbox in `suppressFuturePrompts` and never writes
- * the "do not ask again" record: the handler that owns the origin and the target
- * owns that write, so two writers can never diverge.
+ * TRUST. Like ConnectionApprovalModal it names the TRANSPORT-VERIFIED origin, and both network
+ * labels come from the offer, which evaluateSwitchOffer built from the wallet's own network
+ * table. Nothing the peer sent is read here: a hostile origin can declare mainnet's id under the
+ * name "Testnet", the offer has already resolved that to what the id really is, and printing a
+ * peer string would undo it. The entry does not even carry one. The COLOURS need the two
+ * NetworkType ids rather than the labels: the target's is `offer.target`, and the current one is
+ * SPHERE_NETWORK — the same value the offer built `currentLabel` from, so colour and label agree
+ * by construction.
+ *
+ * ANSWERS ONLY. It reports the checkbox in `suppressFuturePrompts` and never writes the "do not
+ * ask again" record: the handler that owns the origin and the target owns that write, so two
+ * writers can never diverge.
  */
 export function NetworkSwitchPromptModal() {
   const { pendingNetworkSwitch, answerNetworkSwitch } = useConnectContext();
@@ -73,75 +87,210 @@ function NetworkSwitchPrompt({ pending, onAnswer }: NetworkSwitchPromptProps) {
 
   return (
     <BaseModal isOpen={true} onClose={dismiss}>
-      <ModalHeader title="Switch network?" icon={ArrowLeftRight} onClose={dismiss} closeLabel="Close" />
+      <ModalHeader
+        title="Switch network?"
+        icon={ArrowLeftRight}
+        iconVariant="gradient"
+        onClose={dismiss}
+        closeLabel="Close"
+      />
 
-      <div
-        data-testid="network-switch-prompt"
-        className="relative z-10 px-6 py-5 overflow-y-auto flex-1"
-      >
-        <p className="text-sm text-neutral-700 dark:text-white/80 mb-3">
-          <span
-            data-testid="network-switch-verified-origin"
-            className="font-mono text-neutral-900 dark:text-white break-all"
-          >
-            {origin}
-          </span>{' '}
-          runs on <strong>{targetLabel}</strong>. Your wallet is on <strong>{currentLabel}</strong>.
-        </p>
-
-        <p className="text-xs text-neutral-500 dark:text-white/45 mb-4">
-          Switching reloads Sphere and disconnects apps connected on {currentLabel}. Your wallet,
-          keys and balances are not affected.
-        </p>
-
-        <label className="flex items-center gap-3 p-2.5 -mx-2.5 rounded-lg hover:bg-neutral-50 dark:hover:bg-white/4 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={suppress}
-            onChange={(e) => setSuppress(e.target.checked)}
-            className="w-4 h-4 rounded accent-orange-500"
-          />
-          <span className="text-sm text-neutral-700 dark:text-white/65">Do not ask again for this site</span>
-        </label>
-      </div>
-
-      <div className="relative z-10 px-6 py-4 border-t border-neutral-200/50 dark:border-white/8 shrink-0">
+      {/* The testid encloses BOTH steps: it is the "a prompt is open" probe for the queue and
+          unmute suites, and that must not go false halfway through the prompt. */}
+      <div data-testid="network-switch-prompt" className="relative z-10 flex-1 min-h-0 flex flex-col">
         {confirmingLiveNetwork ? (
-          <LiveNetworkConfirmation
+          <LiveNetworkStep
+            key="live"
+            origin={origin}
+            target={offer.target}
             targetLabel={targetLabel}
+            muting={suppress}
             onContinue={accept}
             onCancel={() => setConfirmingLiveNetwork(false)}
           />
         ) : (
-          <div className="flex gap-3">
-            <Button variant="secondary" fullWidth onClick={decline}>
-              Not now
-            </Button>
-            <Button variant="primary" fullWidth onClick={handleSwitch}>
-              Switch to {targetLabel}
-            </Button>
-          </div>
+          <SwitchOfferStep
+            key="offer"
+            origin={origin}
+            offer={offer}
+            targetLabel={targetLabel}
+            currentLabel={currentLabel}
+            suppress={suppress}
+            onSuppressChange={setSuppress}
+            onDecline={decline}
+            onSwitch={handleSwitch}
+          />
         )}
       </div>
     </BaseModal>
   );
 }
 
-interface LiveNetworkConfirmationProps {
+interface SwitchOfferStepProps {
+  origin: string;
+  offer: Extract<SwitchOffer, { kind: 'offer' }>;
   targetLabel: string;
+  currentLabel: string;
+  suppress: boolean;
+  onSuppressChange: (next: boolean) => void;
+  onDecline: () => void;
+  onSwitch: () => void;
+}
+
+function SwitchOfferStep({
+  origin, offer, targetLabel, currentLabel, suppress, onSuppressChange, onDecline, onSwitch,
+}: SwitchOfferStepProps) {
+  return (
+    <>
+      {/* min-h-full on the CHILD plus justify-center: centred while the content is short, growing
+          and scrolling once it is not. justify-center on the scroll container itself clips the top
+          of overflowing content. Nothing is added to fill the full-height sheet on a phone — it is
+          filled by centring and by letting the network pair take the room it deserves. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="min-h-full flex flex-col justify-center gap-6 px-6 py-6">
+          <div className="text-center space-y-1.5">
+            <VerifiedOrigin origin={origin} testId="network-switch-verified-origin" size="md" />
+            <p className="text-base text-neutral-700 dark:text-white/80">
+              wants to move your wallet to another network.
+            </p>
+          </div>
+
+          <NetworkChange
+            from={SPHERE_NETWORK}
+            fromLabel={currentLabel}
+            to={offer.target}
+            toLabel={targetLabel}
+          />
+
+          <div>
+            <DetailsDisclosure label="What happens when you switch" testId="network-switch-details">
+              <DetailRow label="Connections">
+                Sphere reloads, and every site connected on {currentLabel} is disconnected.
+              </DetailRow>
+              <DetailRow label="Your wallet">
+                Your keys, recovery phrase and balances are untouched. Each network keeps its own
+                assets and history.
+              </DetailRow>
+              <DetailRow label="Approvals">
+                Permissions are per network, so sites you approved on {currentLabel} will ask again
+                on {targetLabel}.
+              </DetailRow>
+              <DetailRow label="Network ids" mono>
+                {describeNetworkId(currentLabel, SPHERE_NETWORK)}{' '}
+                {describeNetworkId(targetLabel, offer.target)}
+              </DetailRow>
+              <DetailRow label="Do not ask again">
+                Applies to this site and to {targetLabel} only. You can undo it in Connected Sites.
+              </DetailRow>
+            </DetailsDisclosure>
+
+            {/* The same bordered stack as the disclosure above it, so the mute reads as the
+                deliberate act it has to be. */}
+            <label className="flex items-center gap-3 py-3 cursor-pointer border-t border-neutral-200/60 dark:border-white/8">
+              <input
+                type="checkbox"
+                checked={suppress}
+                onChange={(e) => onSuppressChange(e.target.checked)}
+                className="w-4 h-4 rounded accent-orange-500"
+              />
+              <span className="text-sm text-neutral-700 dark:text-white/65">
+                Do not ask again for this site
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-6 py-4 border-t border-neutral-200/50 dark:border-white/8 shrink-0 flex gap-3">
+        <Button variant="secondary" fullWidth onClick={onDecline}>
+          Not now
+        </Button>
+        <Button variant="primary" fullWidth onClick={onSwitch}>
+          Switch to {targetLabel}
+        </Button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * One side of the "Network ids" line.
+ *
+ * Indexed defensively on purpose. A target the wallet's table does not list is a REAL case, not a
+ * malformed fixture — it is the case `isTestMoney` fails closed for, and `evaluateSwitchOffer`
+ * can hand one through. JSX evaluates children eagerly, so a bare `NETWORKS[x].networkId` throws
+ * while the disclosure is still closed and takes the whole prompt down with it. A consent screen
+ * must not be able to crash on the network it is warning you about.
+ */
+function describeNetworkId(label: string, network: NetworkType): string {
+  const id = NETWORKS[network]?.networkId;
+  return id === undefined ? `${label} is not in this wallet's network table.` : `${label} is network ${id}.`;
+}
+
+function NetworkChange({ from, fromLabel, to, toLabel }: {
+  from: NetworkType; fromLabel: string; to: NetworkType; toLabel: string;
+}) {
+  return (
+    <div className="flex items-stretch gap-3">
+      <NetworkCell network={from} label={fromLabel} />
+      <ArrowRight className="w-5 h-5 self-center shrink-0 text-neutral-300 dark:text-white/25" />
+      <NetworkCell network={to} label={toLabel} emphasis />
+    </div>
+  );
+}
+
+function NetworkCell({ network, label, emphasis = false }: {
+  network: NetworkType; label: string; emphasis?: boolean;
+}) {
+  return (
+    <div
+      className={`flex-1 min-w-0 flex flex-col items-center gap-2 rounded-2xl px-3 py-4 ${
+        emphasis
+          ? 'bg-neutral-50 dark:bg-white/6 ring-1 ring-neutral-200 dark:ring-white/10'
+          : 'bg-neutral-50/60 dark:bg-white/3'
+      }`}
+    >
+      <NetworkTile network={network} size="md" />
+      <div className="text-center min-w-0">
+        <p className="text-sm font-semibold text-neutral-900 dark:text-white truncate">{label}</p>
+        <p
+          className={`text-[11px] font-medium ${
+            isTestMoney(network)
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-emerald-600 dark:text-emerald-400'
+          }`}
+        >
+          {networkMoneyLabel(network)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+interface LiveNetworkStepProps {
+  origin: string;
+  target: NetworkType;
+  targetLabel: string;
+  muting: boolean;
   onContinue: () => void;
   onCancel: () => void;
 }
 
 /**
- * The second step, REPLACING the buttons until confirmed. A component of its own
- * so the settle window is armed when the step is first PRESENTED: it swaps a fresh
- * Continue in under the cursor that just clicked "Switch to ...", and a double-tap
- * would otherwise walk through both steps as one. Same window and same reasoning as
- * the intent modals and SendModal's confirm step (settleWindow.ts). Cancel is never
- * held back: backing out is always safe.
+ * The second step, replacing the WHOLE body rather than only the buttons: one question on screen
+ * at a time, and the warning arrives with its question instead of after the click that chose it.
+ *
+ * A component of its own so the settle window is armed when the step is first PRESENTED: it swaps
+ * a fresh Continue in under the cursor that just clicked "Switch to ...", and a double-tap would
+ * otherwise walk through both steps as one. Same window and same reasoning as the intent modals
+ * and SendModal's confirm step (settleWindow.ts). Cancel is never held back: backing out is
+ * always safe.
+ *
+ * The tile is emerald because emerald means real money on a network tile; the alert stays amber
+ * because an alert is a different axis, and painting the one gate between a click and real funds
+ * in the wallet's "good" colour would drain the alarm.
  */
-function LiveNetworkConfirmation({ targetLabel, onContinue, onCancel }: LiveNetworkConfirmationProps) {
+function LiveNetworkStep({ origin, target, targetLabel, muting, onContinue, onCancel }: LiveNetworkStepProps) {
   const [live, setLive] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setLive(true), INTENT_SETTLE_MS);
@@ -149,18 +298,43 @@ function LiveNetworkConfirmation({ targetLabel, onContinue, onCancel }: LiveNetw
   }, []);
 
   return (
-    <div>
-      <div
-        data-testid="network-switch-mainnet-confirm"
-        role="alert"
-        className="flex items-start gap-2 mb-3 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300"
-      >
-        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-        <div className="text-xs">
-          <strong>{targetLabel} is the live network.</strong> Transactions there move real funds.
+    <>
+      <div className="flex-1 overflow-y-auto">
+        <div className="min-h-full flex flex-col justify-center gap-5 px-6 py-6">
+          <VerifiedOrigin
+            origin={origin}
+            testId="network-switch-verified-origin"
+            size="md"
+            className="text-center"
+          />
+
+          <div className="flex flex-col items-center gap-2">
+            <NetworkTile network={target} size="lg" />
+            <p className="text-lg font-semibold text-neutral-900 dark:text-white">{targetLabel}</p>
+            <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {networkMoneyLabel(target)}
+            </p>
+          </div>
+
+          {/* AlertMessage forwards no data-testid, so it lives on this wrapper, which also carries
+              role="alert". The sentence inside is byte-identical to the one it replaces: the
+              wording of the one gate between a click and real funds does not get churned. */}
+          <div data-testid="network-switch-mainnet-confirm" role="alert">
+            <AlertMessage variant="warning">
+              <strong>{targetLabel} is the live network.</strong> Transactions there move real funds.
+            </AlertMessage>
+          </div>
+
+          {/* Read-only, and shown because hiding a ticked box and then acting on it would be sneaky. */}
+          {muting && (
+            <p className="text-xs text-center text-neutral-500 dark:text-white/45">
+              You will not be asked again for this site.
+            </p>
+          )}
         </div>
       </div>
-      <div className="flex gap-3">
+
+      <div className="px-6 py-4 border-t border-neutral-200/50 dark:border-white/8 shrink-0 flex gap-3">
         <Button variant="secondary" fullWidth onClick={onCancel}>
           Cancel
         </Button>
@@ -168,6 +342,6 @@ function LiveNetworkConfirmation({ targetLabel, onContinue, onCancel }: LiveNetw
           Continue
         </Button>
       </div>
-    </div>
+    </>
   );
 }

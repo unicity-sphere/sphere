@@ -450,7 +450,7 @@ describe('IframeAgent: the deadline is checked twice', () => {
 });
 
 describe('IframeAgent: why the wallet did not offer a switch', () => {
-  const GENERIC = 'Hostile Swap is built for mainnet (1), but your wallet is on testnet2 (4), so it cannot connect here.';
+  const GENERIC = 'Hostile Swap is built for Mainnet, but your wallet is on Testnet, so it cannot connect here.';
 
   it('appends the reason to the existing rejection toast when the offer is refused', async () => {
     const { config } = await mount();

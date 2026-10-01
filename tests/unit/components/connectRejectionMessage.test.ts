@@ -75,8 +75,8 @@ describe('describeConnectRejection', () => {
       walletNetwork: { id: 4 },
       clientNetwork: { id: 1, name: 'mainnet' },
     });
-    expect(s).toContain('mainnet (1)');
-    expect(s).toContain('testnet2 (4)');
+    expect(s).toContain('Mainnet');
+    expect(s).toContain('Testnet');
   });
 
   // Both sides are labelled by the WALLET, from its own table, by id. The peer's `name` is
@@ -90,7 +90,7 @@ describe('describeConnectRejection', () => {
         walletNetwork: { id: 4 },
         clientNetwork: { id: 1 },
       }),
-    ).toBe('is built for mainnet (1), but your wallet is on testnet2 (4), so it cannot connect here.');
+    ).toBe('is built for Mainnet, but your wallet is on Testnet, so it cannot connect here.');
   });
 
   it('never prints the name the peer declared, whatever it claims to be', () => {
@@ -100,8 +100,13 @@ describe('describeConnectRejection', () => {
       clientNetwork: { id: 4, name: 'Mainnet (4)' },
     });
     // Id 4 is testnet2 whatever the app calls it, and the wallet's side is named the same way.
-    expect(s).toBe('is built for testnet2 (4), but your wallet is on mainnet (1), so it cannot connect here.');
-    expect(s).not.toContain('Mainnet');
+    // The exact-equality assertion is what proves nothing leaked: it pins the whole sentence, so
+    // the peer's string cannot appear anywhere in it.
+    expect(s).toBe('is built for Testnet, but your wallet is on Mainnet, so it cannot connect here.');
+    // Named explicitly because it is the attack: the peer's claim, not merely the word in it.
+    // "Mainnet" alone is no longer a leak signal — the wallet's own side is genuinely Mainnet
+    // here, since networks are now labelled the way the rest of the wallet labels them.
+    expect(s).not.toContain('Mainnet (4)');
   });
 
   it('names a network the wallet does not know by its id alone, and still not by the peer\'s name', () => {
@@ -110,7 +115,7 @@ describe('describeConnectRejection', () => {
       walletNetwork: { id: 4 },
       clientNetwork: { id: 999, name: 'Totally-Safe-Mainnet-<b>' },
     });
-    expect(s).toBe('is built for network 999, but your wallet is on testnet2 (4), so it cannot connect here.');
+    expect(s).toBe('is built for network 999, but your wallet is on Testnet, so it cannot connect here.');
   });
 
   it('does not trust a name on the wallet side either: it is labelled from the table too', () => {
@@ -119,7 +124,7 @@ describe('describeConnectRejection', () => {
       walletNetwork: { id: 4, name: 'Definitely-Mainnet' },
       clientNetwork: { id: 1 },
     });
-    expect(s).toContain('testnet2 (4)');
+    expect(s).toContain('Testnet');
     expect(s).not.toContain('Definitely');
   });
 
