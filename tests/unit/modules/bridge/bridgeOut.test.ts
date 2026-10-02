@@ -95,17 +95,26 @@ describe('runBridgeOut', () => {
     expect(payments.acknowledged).toEqual([]);
   });
 
-  it('leaves the record as burned when the service is down, and syncs it later', async () => {
-    const service = fakeService({ submit: vi.fn(async () => { throw new Error('ECONNREFUSED'); }) });
+  it('keeps a return whose submission failed outright, with the error as its reason, and resubmits it only after the retry delay', async () => {
+    const service = fakeService({ submit: vi.fn(async () => { service.submitted += 1; throw new Error('ECONNREFUSED'); }) });
     const store = bridgeStoreFor('alice');
     const asset = fakeAsset(service);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
     const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, destination: 'Tdest' });
-    expect(rec.status).toBe('burned');
+    expect(rec).toMatchObject({ status: 'failed', recoverable: true, message: 'The return was not submitted: ECONNREFUSED', failedAt: 1_000_000 });
     expect(rec.returnId).toBeUndefined();
 
-    (service.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ returnId: 'r-2', status: 'queued' }));
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS - 1);
+    await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(1);
+
+    (service.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => { service.submitted += 1; return { returnId: 'r-2', status: 'queued' }; });
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS);
     const after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(2);
     expect(after[0]).toMatchObject({ returnId: 'r-2', status: 'queued' });
+    clock.mockRestore();
   });
 
   it('keeps a refusal the service may lift, with its reason, and resubmits it only after the retry delay', async () => {
@@ -169,6 +178,34 @@ describe('syncReturns', () => {
 
     await syncReturns(store, () => asset);
     expect(service.submit).not.toHaveBeenCalled();
+  });
+
+  it('a return the service no longer knows is re-posted once, and a refusal of that post waits out the retry delay', async () => {
+    const service = fakeService({
+      status: vi.fn(async () => null),
+      submit: vi.fn(async () => { service.submitted += 1; throw new Error('chain not synced'); }),
+      refusal: (e) => ({ message: (e as Error).message, recoverable: true }),
+    });
+    const store = bridgeStoreFor('alice');
+    const asset = fakeAsset(service);
+    store.persistReturn({ id: 'n1', coinIdHex: asset.coinIdHex, assetId: asset.id, burnedTokenHex: toHex(BLOB), reasonBytesHex: '07', destination: 'Tdest', amount: '7', createdAt: 1, returnId: 'gone', status: 'queued' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+    let after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(1);
+    expect(after[0]).toMatchObject({ status: 'failed', recoverable: true, message: 'chain not synced', failedAt: 1_000_000 });
+    expect(after[0].returnId).toBeUndefined();
+
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS - 1);
+    after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(1);
+
+    (service.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => { service.submitted += 1; return { returnId: 'r-2', status: 'queued' }; });
+    clock.mockReturnValue(1_000_000 + RETRY_DELAY_MS);
+    after = await syncReturns(store, () => asset);
+    expect(service.submitted).toBe(2);
+    expect(after[0]).toMatchObject({ returnId: 'r-2', status: 'queued' });
+    clock.mockRestore();
   });
 
   it('keeps a return the service failed recoverably, and resubmits it once the retry delay has passed', async () => {
