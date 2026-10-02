@@ -37,7 +37,7 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     chain: { id: 'test:1', name: 'Test', networkName: 'testnet', testnet: true },
     confirmations: 1,
     networks: ['testnet2'],
-    tokenPlugin: { id: 'test', mintJustificationVerifiers: [] },
+    tokenPlugin: { id: 'test', mintJustificationVerifiers: [], tokenIssuancePolicies: [] },
     presentation: { explorerTxUrl: (tx) => `https://x/${tx}`, validateAddress: (a) => a.startsWith('T') },
     wallets: [],
     resumeDeps: () => { throw new Error('unused'); },

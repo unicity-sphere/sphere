@@ -36,11 +36,14 @@ function fakePayments() {
 
 const okReceipt: SourceTxInfo = { blockNumber: 10n, success: true, logs: [] };
 const revertedReceipt: SourceTxInfo = { blockNumber: 10n, success: false, logs: [] };
-const lockMined: SourceTxInfo = {
+const TOKEN_ID = '11'.repeat(32);
+const COMMITMENT = '22'.repeat(32);
+const lockOf = (tokenIdHex: string, commitmentHex: string, amount: bigint): SourceTxInfo => ({
   blockNumber: 12n,
   success: true,
-  logs: [{ address: VAULT_HEX, topics: [LOCK_EVENT_TOPIC0, '0'.repeat(64), '0'.repeat(64)], data: '0'.repeat(192) }],
-};
+  logs: [{ address: VAULT_HEX, topics: [LOCK_EVENT_TOPIC0, '0'.repeat(64), '0'.repeat(64)], data: amount.toString(16).padStart(64, '0') + tokenIdHex + commitmentHex }],
+});
+const lockMined = lockOf(TOKEN_ID, COMMITMENT, AMOUNT);
 const lockReverted: SourceTxInfo = { blockNumber: 12n, success: false, logs: [] };
 
 type FakeRpc = {
@@ -111,6 +114,9 @@ class FakeStore {
   }
   removeLock(id: string): void {
     this.locks.delete(id);
+  }
+  getLock(id: string): PendingLock | undefined {
+    return this.locks.get(id);
   }
   only(): PendingLock {
     return [...this.locks.values()][0];
@@ -270,7 +276,7 @@ describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
           commitIndex: 0,
         };
       },
-      decodeCommit: () => ({ nonce: 1n, blockNumber: 2n, logIndex: 0 }),
+      decodeCommit: () => ({ nonce: 1n, blockNumber: 2n, logIndex: 0, amount: AMOUNT, tokenIdHex: 'ab'.repeat(32), recipientCommitmentHex: 'ef'.repeat(32) }),
       buildMintRequest,
     };
 
@@ -301,8 +307,8 @@ describe('resumeBridgeMint', () => {
     tokenTypeHex: bridge.plugin.tokenTypeHex,
     chainId: CHAIN,
     saltHex: '00'.repeat(32),
-    tokenIdHex: '11'.repeat(32),
-    recipientCommitmentHex: '22'.repeat(32),
+    tokenIdHex: TOKEN_ID,
+    recipientCommitmentHex: COMMITMENT,
     amount: AMOUNT.toString(),
     lockTxid: LOCK_TX,
     createdAt: Date.now(),
@@ -334,7 +340,7 @@ describe('resumeBridgeMint', () => {
     expect(store.locks.size).toBe(0);
   });
 
-  it('keeps a lock transaction id the user supplied once that lock is confirmed, so a failed mint stays resumable', async () => {
+  it('keeps a lock transaction id the user supplied once that lock is confirmed as this deposit, so a failed mint stays resumable', async () => {
     const store = new FakeStore();
     const lock = pendingLock();
     store.locks.set(lock.id, { ...lock, lockTxid: undefined, lockRequested: true });
@@ -343,9 +349,43 @@ describe('resumeBridgeMint', () => {
 
     await expect(
       resumeBridgeMint({ payments, adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc), store: asStore(store), lock }),
-    ).rejects.toThrow();
+    ).rejects.toThrow('gateway down');
 
     expect(store.locks.get('lock-1')).toMatchObject({ lockTxid: LOCK_TX, status: 'locked' });
+  });
+
+  it.each([
+    ['another deposit', lockOf('33'.repeat(32), COMMITMENT, AMOUNT)],
+    ['another recipient', lockOf(TOKEN_ID, '44'.repeat(32), AMOUNT)],
+    ['another amount', lockOf(TOKEN_ID, COMMITMENT, AMOUNT + 1n)],
+  ])('refuses a lock transaction for %s before minting, and the record stays as it was', async (_what, other) => {
+    const store = new FakeStore();
+    const lock = pendingLock();
+    const before = { ...lock, lockTxid: undefined, lockRequested: true };
+    store.locks.set(lock.id, before);
+    const rpc = fakeRpc({ allowance: 0n, lock: other });
+    const mintCustom = vi.fn();
+
+    await expect(
+      resumeBridgeMint({ payments: { mintCustom } as unknown as BridgePayments, adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc), store: asStore(store), lock }),
+    ).rejects.toThrow('locked a different deposit');
+
+    expect(mintCustom).not.toHaveBeenCalled();
+    expect(store.locks.get('lock-1')).toEqual(before);
+  });
+
+  it('a reverted transaction the user supplied is refused without marking the record failed', async () => {
+    const store = new FakeStore();
+    const lock = pendingLock();
+    const before = { ...lock, lockTxid: undefined, lockRequested: true };
+    store.locks.set(lock.id, before);
+    const rpc = fakeRpc({ allowance: 0n, lock: lockReverted });
+
+    await expect(
+      resumeBridgeMint({ payments: fakePayments(), adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc), store: asStore(store), lock }),
+    ).rejects.toBeInstanceOf(TxRevertedError);
+
+    expect(store.locks.get('lock-1')).toEqual(before);
   });
 });
 
