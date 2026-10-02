@@ -8,6 +8,7 @@ import {
 import { PENDING_COMMIT_CODES } from "../../../src/sdk/errors";
 import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from "../../../src/sdk/subscription/keyStatus";
 import * as subscriptionConfig from "../../../src/config/subscription";
+import { refuseHeldSources } from "../../../src/sdk/holdGate";
 
 // ============================================================================
 // Fake sphere: implements exactly the payments.requests surface the hook is
@@ -111,11 +112,15 @@ vi.mock("../../../src/config/subscription", async (orig) => ({
   ...(await orig<typeof import("../../../src/config/subscription")>()),
   SUBSCRIPTION_ENABLED: false,
 }));
+vi.mock("../../../src/sdk/holdGate", () => ({
+  refuseHeldSources: vi.fn(),
+}));
 
 beforeEach(() => {
   fakeSphere = null;
   subscriptionKeyStatus = "ready";
   (subscriptionConfig as { SUBSCRIPTION_ENABLED: boolean }).SUBSCRIPTION_ENABLED = false;
+  vi.mocked(refuseHeldSources).mockReset().mockResolvedValue(undefined);
 });
 
 describe("useIncomingPaymentRequests", () => {
@@ -178,6 +183,18 @@ describe("useIncomingPaymentRequests", () => {
 
     expect(fakeSphere.payments.requests.pay).toHaveBeenCalledWith("a");
     expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PAID);
+  });
+
+  it("refuses to pay a request in a coin with a settling token, and leaves it payable", async () => {
+    fakeSphere = makeFakeSphere([makeRequest("a")]);
+    vi.mocked(refuseHeldSources).mockRejectedValue(new Error("UCT cannot be sent yet: Settling on Ethereum, about 2 min left."));
+    const { result } = renderHook(() => useIncomingPaymentRequests());
+
+    await expect(act(() => result.current.pay(result.current.requests[0]))).rejects.toThrow(/cannot be sent yet/);
+
+    expect(refuseHeldSources).toHaveBeenCalledWith(fakeSphere.payments, { coinId: "coin-1" });
+    expect(fakeSphere.payments.requests.pay).not.toHaveBeenCalled();
+    expect(result.current.requests[0].status).toBe(PaymentRequestStatus.PENDING);
   });
 
   it("rejects through payments.requests.decline (server-confirmed)", async () => {

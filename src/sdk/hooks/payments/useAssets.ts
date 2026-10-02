@@ -7,6 +7,7 @@ import { SPHERE_KEYS } from '../../queryKeys';
 import { diag } from '../../diag';
 import { TokenRegistry, toHumanReadable } from '@unicitylabs/sphere-sdk';
 import type { Asset } from '../..';
+import { moduleAssetView } from '../../../modules/registry';
 
 /**
  * Hardcoded fallback prices (USD) for tokens not yet listed on CoinGecko.
@@ -63,41 +64,7 @@ export function useAssets(): UseAssetsReturn {
   // Enrich assets with registry data — SDK bakes symbol at token creation
   // time before the registry has loaded, so we override here.
   // Also applies fallback prices for tokens not yet listed on CoinGecko.
-  const assets = useMemo(() => {
-    const rawAssets = query.data ?? [];
-    if (!registryReady) return rawAssets;
-    const registry = TokenRegistry.getInstance();
-    return rawAssets.map((a) => {
-      const def = registry.getDefinition(a.coinId);
-      const enriched = def
-        ? {
-            ...a,
-            symbol: def.symbol || a.symbol,
-            name: def.name
-              ? def.name.charAt(0).toUpperCase() + def.name.slice(1)
-              : a.name,
-            decimals: def.decimals ?? a.decimals,
-            iconUrl: registry.getIconUrl(a.coinId) || a.iconUrl,
-          }
-        : a;
-
-      // Apply fallback prices for tokens missing CoinGecko data
-      const tokenName = (def?.name ?? enriched.name ?? '').toLowerCase();
-      const fallback = FALLBACK_PRICES[tokenName];
-      if (fallback && !enriched.priceUsd) {
-        const decimals = enriched.decimals ?? 0;
-        const amount = Number(toHumanReadable(enriched.totalAmount, decimals));
-        return {
-          ...enriched,
-          priceUsd: fallback.priceUsd,
-          priceEur: fallback.priceEur,
-          fiatValueUsd: amount * fallback.priceUsd,
-          fiatValueEur: amount * fallback.priceEur,
-        };
-      }
-      return enriched;
-    });
-  }, [query.data, registryReady]);
+  const assets = useMemo(() => presentAssets(query.data ?? [], registryReady), [query.data, registryReady]);
 
   return {
     assets,
@@ -105,4 +72,57 @@ export function useAssets(): UseAssetsReturn {
     error: query.error,
     assetCount: assets.length,
   };
+}
+
+export function presentAssets(rawAssets: Asset[], registryReady: boolean): Asset[] {
+
+  if (!registryReady) return rawAssets.map(moduleAssetView);
+  const registry = TokenRegistry.getInstance();
+  return rawAssets.map((a) => {
+    const def = registry.getDefinition(a.coinId);
+    if (!def) return moduleAssetView(a);
+    const enriched = def
+      ? {
+          ...a,
+          symbol: def.symbol || a.symbol,
+          name: def.name
+            ? def.name.charAt(0).toUpperCase() + def.name.slice(1)
+            : a.name,
+          decimals: def.decimals ?? a.decimals,
+          iconUrl: registry.getIconUrl(a.coinId) || a.iconUrl,
+        }
+      : a;
+
+    // Apply fallback prices for tokens missing CoinGecko data
+    const tokenName = (def?.name ?? enriched.name ?? '').toLowerCase();
+    const fallback = FALLBACK_PRICES[tokenName];
+    if (fallback && !enriched.priceUsd && !a.unverified) {
+      const decimals = enriched.decimals ?? 0;
+      const amount = Number(toHumanReadable(enriched.totalAmount, decimals));
+      return {
+        ...enriched,
+        priceUsd: fallback.priceUsd,
+        priceEur: fallback.priceEur,
+        fiatValueUsd: amount * fallback.priceUsd,
+        fiatValueEur: amount * fallback.priceEur,
+      };
+    }
+    return enriched;
+  });
+}
+
+export function useUnverifiedAssets(): Pick<UseAssetsReturn, 'assets' | 'isLoading'> {
+  const { sphere } = useSphereContext();
+  const registryReady = useRegistryReady();
+  const query = useQuery({
+    queryKey: SPHERE_KEYS.payments.assets.unverified,
+    queryFn: async (): Promise<Asset[]> => {
+      const payments = getPayments(sphere);
+      return payments ? payments.unverifiedAssets() : [];
+    },
+    enabled: !!sphere,
+    staleTime: 30_000,
+  });
+  const assets = useMemo(() => presentAssets(query.data ?? [], registryReady), [query.data, registryReady]);
+  return { assets, isLoading: query.isLoading };
 }

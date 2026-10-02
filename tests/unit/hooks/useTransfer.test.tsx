@@ -53,6 +53,9 @@ vi.mock('../../../src/config/subscriptionKeyCache', async (orig) => ({
 vi.mock('../../../src/components/ui/toast-utils', () => ({
   showToast: vi.fn(),
 }));
+vi.mock('../../../src/sdk/holdGate', () => ({
+  refuseHeldSources: vi.fn(),
+}));
 
 import { checkSendQuota, QuotaBlockedError } from '../../../src/sdk/quotaGate';
 import * as subscriptionConfig from '../../../src/config/subscription';
@@ -60,6 +63,7 @@ import { useUpgrade } from '../../../src/components/upgrade';
 import { getUtilization } from '../../../src/services/subscriptionApi';
 import { getStoredSubscriptionKey } from '../../../src/config/subscriptionKeyCache';
 import { showToast } from '../../../src/components/ui/toast-utils';
+import { refuseHeldSources } from '../../../src/sdk/holdGate';
 
 // Fabricate the duck-typed transport error shape that JsonRpcNetworkError
 // (state-transition-sdk, never exported from sphere-sdk) satisfies today —
@@ -110,6 +114,34 @@ beforeEach(() => {
   vi.mocked(getUtilization).mockReset();
   vi.mocked(getStoredSubscriptionKey).mockReset().mockReturnValue('sk_test');
   vi.mocked(showToast).mockReset();
+  vi.mocked(refuseHeldSources).mockReset().mockResolvedValue(undefined);
+});
+
+describe('useTransfer — settling holds', () => {
+  it('refuses a send of a coin with a held token before anything is submitted', async () => {
+    const send = vi.fn();
+    fakeSphere = { payments: { send } };
+    vi.mocked(refuseHeldSources).mockRejectedValue(new Error('USDC cannot be sent yet: Settling on Ethereum, about 2 min left.'));
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await expect(result.current.transfer(PARAMS)).rejects.toThrow(/cannot be sent yet/);
+    });
+    expect(refuseHeldSources).toHaveBeenCalledWith(fakeSphere.payments, { coinId: 'c' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('checks the named token of a whole-token send', async () => {
+    const sendWholeToken = vi.fn().mockResolvedValue({ id: 't', status: 'completed', tokens: [], tokenTransfers: [] });
+    fakeSphere = { payments: { send: vi.fn(), sendWholeToken } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await result.current.transfer({ kind: 'whole', tokenId: 'tok', recipient: '@bob' });
+    });
+    expect(refuseHeldSources).toHaveBeenCalledWith(fakeSphere.payments, { tokenId: 'tok' });
+    expect(sendWholeToken).toHaveBeenCalled();
+  });
 });
 
 describe('useTransfer — #631/#633 possibly-certified send', () => {

@@ -47,7 +47,7 @@ function sendTargetPubkey(
 }
 
 export function SendModal({ isOpen, onClose }: SendModalProps) {
-  const { assets: sdkAssets } = useAssets();
+  const { assets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
   const { tokens: inventoryTokens } = useTokens();
   const { sphere, subscriptionKeyStatus } = useSphereContext();
@@ -58,7 +58,6 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // now would go out keyless (→ 401). Disable Send until it's ready.
   const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
-  const assets = sdkAssets;
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const handleCopy = useCallback(async (text: string, key: string) => {
@@ -506,7 +505,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                 {/* Asset header */}
                 <div className="flex flex-col items-center mb-8">
                   <img src={selectedAsset.iconUrl || ''} className="w-14 h-14 rounded-full mb-2" alt="" />
-                  <span className="text-neutral-900 dark:text-white font-semibold font-mono">{selectedAsset.name || selectedAsset.symbol}</span>
+                  <span className="text-neutral-900 dark:text-white font-semibold font-mono text-center break-all px-4">{selectedAsset.name || selectedAsset.symbol}</span>
                 </div>
 
                 {/* Recipient */}
