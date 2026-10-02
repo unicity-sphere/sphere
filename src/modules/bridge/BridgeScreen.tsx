@@ -28,6 +28,7 @@ import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
+import { returnCandidates } from './returnable';
 import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
@@ -262,7 +263,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   title={`${a.symbol} ${a.chain.name}`}
                   detail={a.chain.networkName}
                   tag={a.chain.testnet ? 'testnet' : undefined}
-                  count={direction === 'in' ? a.wallets.length : tokens.filter((t) => t.coinId.toLowerCase() === a.coinIdHex).length}
+                  count={direction === 'in' ? a.wallets.length : returnCandidates(a, tokens).length}
                   countNoun={direction === 'in' ? 'wallet' : 'token'}
                   disabled={a.disabledReason}
                   onClick={() => pickAsset(a)}

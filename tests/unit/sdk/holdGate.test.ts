@@ -27,6 +27,12 @@ describe('refuseHeldSources', () => {
     );
   });
 
+  it('lets a coin send through when the held token is not yet verified, since the wallet never picks it', async () => {
+    held.set('b', 'Settling on Ethereum, about 2 min left');
+    const pending = { ...token('b', 'usdc'), unverified: 'pending' } as Token;
+    await expect(refuseHeldSources(payments([token('a', 'usdc'), pending]), { coinId: 'usdc' })).resolves.toBeUndefined();
+  });
+
   it('lets a coin send through when the held token is of another coin', async () => {
     held.set('b', 'Settling on Ethereum, about 2 min left');
     await expect(refuseHeldSources(payments([token('a', 'uct'), token('b', 'usdc')]), { coinId: 'uct' })).resolves.toBeUndefined();

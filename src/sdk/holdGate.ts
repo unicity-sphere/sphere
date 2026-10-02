@@ -16,5 +16,5 @@ export async function refuseHeldSources(payments: PaymentsV2, source: SpendSourc
 
 function candidates(payments: PaymentsV2, source: SpendSource): Token[] {
   if ('tokenId' in source) return payments.tokens().filter((t) => t.id === source.tokenId);
-  return payments.tokens({ coinId: source.coinId });
+  return payments.tokens({ coinId: source.coinId }).filter((t) => !t.unverified);
 }

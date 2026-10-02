@@ -3,10 +3,11 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import { AssetRow } from '../../shared/components';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIdentity, useAssets, useTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
+import { useIdentity, useAssets, useUnverifiedAssets, useTokens, useUnverifiedTokens, useTokenHolds, useCoinlessTokens, useNfts } from '../../../../sdk';
 import type { CoinlessToken, Token } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { describeCoin } from '../../../../modules/registry';
+import { assetKey } from '../../../../sdk/assetKey';
 import { useIncomingProgress, type IncomingProgress } from '../../../../sdk/hooks/payments/useIncomingProgress';
 import { CreateWalletFlow } from '../../onboarding/CreateWalletFlow';
 import { TokenRow, CoinlessTokenRow } from '../../shared/components';
@@ -162,8 +163,10 @@ export function L3WalletView({
   // SDK hooks
   const { identity, isLoading: isLoadingIdentity } = useIdentity();
   const { assets: sdkAssets, isLoading: isLoadingAssets } = useAssets();
+  const { assets: unverifiedAssets } = useUnverifiedAssets();
   const incomingProgress = useIncomingProgress();
   const { tokens: sdkTokens, pendingTokens } = useTokens();
+  const { tokens: unverifiedTokens } = useUnverifiedTokens();
   const { coinless } = useCoinlessTokens();
   const [activeTab, setActiveTab] = useState<Tab>('assets');
   // NFT readings for the coinless rows (#785), read only while the Tokens tab shows them:
@@ -173,10 +176,10 @@ export function L3WalletView({
   const { views: nftViews } = useNfts(activeTab === 'tokens' ? coinless.map((t) => t.tokenId) : []);
   const { sphere, deleteWallet } = useSphereContext();
 
-  const assets = sdkAssets;
+  const assets = useMemo(() => [...sdkAssets, ...unverifiedAssets], [sdkAssets, unverifiedAssets]);
 
-  const tokens = sdkTokens;
-  const sendableTokens = tokens;
+  const tokens = useMemo(() => [...sdkTokens, ...unverifiedTokens], [sdkTokens, unverifiedTokens]);
+  const sendableTokens = sdkTokens;
   const holds = useTokenHolds(tokens);
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
@@ -251,8 +254,8 @@ export function L3WalletView({
 
     const newIds = new Set<string>();
     assets.forEach(asset => {
-      if (!prevAssetCoinIdsRef.current.has(asset.coinId)) {
-        newIds.add(asset.coinId);
+      if (!prevAssetCoinIdsRef.current.has(assetKey(asset))) {
+        newIds.add(assetKey(asset));
       }
     });
     return newIds;
@@ -266,7 +269,7 @@ export function L3WalletView({
   }, [tokens]);
 
   useEffect(() => {
-    const currentIds = new Set(assets.map(a => a.coinId));
+    const currentIds = new Set(assets.map(assetKey));
     prevAssetCoinIdsRef.current = currentIds;
   }, [assets]);
 
@@ -444,13 +447,13 @@ export function L3WalletView({
                       // badge (where a bridged asset came from) is a row concern.
                       return (
                         <AssetRow
-                          key={asset.coinId}
+                          key={assetKey(asset)}
                           asset={asset}
                           badge={describeCoin(asset.coinId)?.badge}
                           showBalances={showBalances}
-                          delay={newAssetCoinIds.has(asset.coinId) ? (index + 1) * 0.05 : 0}
+                          delay={newAssetCoinIds.has(assetKey(asset)) ? (index + 1) * 0.05 : 0}
                           layer="L3"
-                          isNew={newAssetCoinIds.has(asset.coinId)}
+                          isNew={newAssetCoinIds.has(assetKey(asset))}
                         />
                       );
                     })

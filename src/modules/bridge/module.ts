@@ -40,7 +40,7 @@ const finalTokens = new Set<string>();
 
 async function holdWhileSettling(token: Token, ctx: TokenHoldContext): Promise<TokenHold | undefined> {
   const asset = bridgeAssetByCoin(token.coinId);
-  if (!asset?.settling || finalTokens.has(token.id)) return undefined;
+  if (token.unverified === 'refused' || !asset?.settling || finalTokens.has(token.id)) return undefined;
   let state: { final: boolean; secondsLeft: number } | null;
   try {
     state = await asset.settling(await ctx.justification(token.id));

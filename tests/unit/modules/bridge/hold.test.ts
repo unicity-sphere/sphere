@@ -51,6 +51,19 @@ describe('bridge module token hold', () => {
     settling.mockReset();
   });
 
+  it('has no hold on a refused token, which the wallet never spends, and does not ask the source chain', async () => {
+    const calls = settling.mock.calls.length;
+    const counterfeit = { ...token('bb'.repeat(32)), unverified: 'refused' } as Token;
+    expect(await bridgeModule.tokenHold!(counterfeit, ctx)).toBeUndefined();
+    expect(settling.mock.calls.length).toBe(calls);
+  });
+
+  it('says how long a pending bridged token still settles, so its row can show the wait', async () => {
+    settling.mockResolvedValueOnce({ final: false, secondsLeft: 84 });
+    const own = { ...token('bb'.repeat(32)), unverified: 'pending' } as Token;
+    expect(await bridgeModule.tokenHold!(own, ctx)).toEqual({ reason: 'Settling on Ethereum, about 2 min left' });
+  });
+
   it('has no hold on a token of a coin the bridge does not know', async () => {
     const calls = settling.mock.calls.length;
     expect(await bridgeModule.tokenHold!(token('cc'.repeat(32)), ctx)).toBeUndefined();

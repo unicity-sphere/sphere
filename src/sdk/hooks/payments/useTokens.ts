@@ -37,24 +37,7 @@ export function useTokens(): UseTokensReturn {
 
   // Enrich tokens with registry data — SDK bakes symbol at creation time
   // before the registry has loaded, so we override here.
-  const tokens = useMemo(() => {
-    const rawTokens = query.data ?? [];
-    if (!registryReady) return rawTokens.map(moduleTokenView);
-    const registry = TokenRegistry.getInstance();
-    return rawTokens.map((t) => {
-      const def = registry.getDefinition(t.coinId);
-      if (!def) return moduleTokenView(t);
-      return {
-        ...t,
-        symbol: def.symbol || t.symbol,
-        name: def.name
-          ? def.name.charAt(0).toUpperCase() + def.name.slice(1)
-          : t.name,
-        decimals: def.decimals ?? t.decimals,
-        iconUrl: registry.getIconUrl(t.coinId) || t.iconUrl,
-      };
-    });
-  }, [query.data, registryReady]);
+  const tokens = useMemo(() => presentTokens(query.data ?? [], registryReady), [query.data, registryReady]);
 
   return {
     tokens,
@@ -68,4 +51,40 @@ export function useTokens(): UseTokensReturn {
       (t) => t.status === 'pending' || t.status === 'submitted',
     ),
   };
+}
+
+export function presentTokens(rawTokens: Token[], registryReady: boolean): Token[] {
+
+  if (!registryReady) return rawTokens.map(moduleTokenView);
+  const registry = TokenRegistry.getInstance();
+  return rawTokens.map((t) => {
+    const def = registry.getDefinition(t.coinId);
+    if (!def) return moduleTokenView(t);
+    return {
+      ...t,
+      symbol: def.symbol || t.symbol,
+      name: def.name
+        ? def.name.charAt(0).toUpperCase() + def.name.slice(1)
+        : t.name,
+      decimals: def.decimals ?? t.decimals,
+      iconUrl: registry.getIconUrl(t.coinId) || t.iconUrl,
+    };
+  });
+}
+
+export function useUnverifiedTokens(): Pick<UseTokensReturn, 'tokens' | 'isLoading'> {
+  const { sphere } = useSphereContext();
+  const registryReady = useRegistryReady();
+  const query = useQuery({
+    queryKey: SPHERE_KEYS.payments.tokens.unverified,
+    queryFn: () => {
+      const payments = getPayments(sphere);
+      return payments ? payments.unverifiedTokens() : [];
+    },
+    enabled: !!sphere,
+    staleTime: 30_000,
+    structuralSharing: false,
+  });
+  const tokens = useMemo(() => presentTokens(query.data ?? [], registryReady), [query.data, registryReady]);
+  return { tokens, isLoading: query.isLoading };
 }

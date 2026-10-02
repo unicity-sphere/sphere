@@ -47,7 +47,7 @@ function sendTargetPubkey(
 }
 
 export function SendModal({ isOpen, onClose }: SendModalProps) {
-  const { assets: sdkAssets } = useAssets();
+  const { assets } = useAssets();
   const { transfer, isLoading: isTransferring } = useTransfer();
   const { tokens: inventoryTokens } = useTokens();
   const { sphere, subscriptionKeyStatus } = useSphereContext();
@@ -58,7 +58,6 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   // now would go out keyless (→ 401). Disable Send until it's ready.
   const subsNotReady = SUBSCRIPTION_ENABLED && !isSubscriptionKeyReady(subscriptionKeyStatus);
 
-  const assets = sdkAssets;
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const handleCopy = useCallback(async (text: string, key: string) => {
