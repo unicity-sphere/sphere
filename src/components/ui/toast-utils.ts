@@ -52,6 +52,7 @@ export interface ShowToastOptions {
   /** The original error, when the call site has it — captured with its stack
    * instead of just the toast text. */
   cause?: unknown;
+  groupId?: string;
 }
 
 // Helper function to show a toast from anywhere
@@ -73,7 +74,7 @@ export function showToast(
   }
   window.dispatchEvent(
     new CustomEvent<ShowToastDetail>('show-toast', {
-      detail: { message, type, duration },
+      detail: { message, type, duration, ...(options?.groupId !== undefined ? { groupId: options.groupId } : {}) },
     })
   );
 }

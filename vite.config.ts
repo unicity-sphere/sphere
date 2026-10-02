@@ -156,7 +156,7 @@ export default defineConfig(({ mode }) => {
       },
       // Dedupe peer deps so file:-linked sphere-ui doesn't pull a second copy of React etc.
       // through its devDependencies, which would break hooks across the module boundary.
-      dedupe: ['react', 'react-dom', 'framer-motion', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
+      dedupe: ['react', 'react-dom', 'framer-motion', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities', '@unicitylabs/state-transition-sdk'],
     },
     build: {
       rollupOptions: {

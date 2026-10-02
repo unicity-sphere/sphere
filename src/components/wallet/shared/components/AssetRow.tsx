@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { type Asset, TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { Box, Loader2 } from 'lucide-react';
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 interface AssetRowProps {
   asset: Asset;
@@ -11,6 +11,8 @@ interface AssetRowProps {
   layer?: 'L3';
   /** If true, animate entrance. If false, render without animation (asset was already shown) */
   isNew?: boolean;
+  /** Short tag beside the symbol, e.g. the chain a bridged asset came from. */
+  badge?: string;
 }
 
 // Custom comparison: allow re-render when amount or price changes (for number animation)
@@ -25,9 +27,11 @@ function areAssetPropsEqual(prev: AssetRowProps, next: AssetRowProps): boolean {
     prev.asset.priceUsd === next.asset.priceUsd &&
     prev.asset.change24h === next.asset.change24h &&
     prev.asset.iconUrl === next.asset.iconUrl &&
+    prev.asset.unverified === next.asset.unverified &&
     prev.showBalances === next.showBalances &&
     prev.layer === next.layer &&
     prev.isNew === next.isNew &&
+    prev.badge === next.badge &&
     prev.delay === next.delay
   );
 }
@@ -85,7 +89,10 @@ function AnimatedAmount({ value, symbol, decimals, showBalances }: {
   return <motion.span>{displayed}</motion.span>;
 }
 
-export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true }: AssetRowProps) {
+export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true, badge }: AssetRowProps) {
+  // A long name (a bridged asset's, say) is cut off by default; a click or tap
+  // shows it whole. Stops propagation so the row's own onClick is not triggered.
+  const [nameExpanded, setNameExpanded] = useState(false);
   const change24h = asset.change24h ?? 0;
   const changeColor = change24h >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
   const changeSign = change24h >= 0 ? '+' : '';
@@ -118,7 +125,28 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
                 {layer}
               </span>
             )}
-            <div className="text-xs text-neutral-500 truncate max-w-25">
+            {asset.unverified === 'refused' ? (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400" title="Not verified as the asset it names. It is not counted and cannot be sent.">
+                Unverified
+              </span>
+            ) : asset.unverified === 'pending' ? (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400" title="Its proof is still being verified, for example a deposit waiting for confirmations. It is not counted and cannot be sent yet.">
+                Pending
+              </span>
+            ) : badge && (
+              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400" title={`Bridged from ${badge}`}>
+                {badge}
+              </span>
+            )}
+            <div
+              className={`text-xs text-neutral-500 cursor-pointer ${nameExpanded ? 'whitespace-normal break-words' : 'truncate max-w-25'}`}
+              title={asset.name}
+              role="button"
+              tabIndex={0}
+              aria-expanded={nameExpanded}
+              onClick={(e) => { e.stopPropagation(); setNameExpanded((v) => !v); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setNameExpanded((v) => !v); } }}
+            >
               {asset.name}
             </div>
             {asset.transferringTokenCount > 0 && (

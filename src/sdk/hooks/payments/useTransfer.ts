@@ -4,6 +4,7 @@ import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
 import { getErrorCode, getKeepOpenTransferId, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
+import { refuseHeldSources } from '../../holdGate';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import { useUpgrade, type UpgradeReason } from '../../../components/upgrade';
@@ -97,6 +98,7 @@ export function useTransfer(): UseTransferReturn {
     mutationFn: async (params: TransferParams): Promise<TransferResult> => {
       const payments = getPayments(sphere);
       if (!payments) throw new Error('Wallet not initialized');
+      await refuseHeldSources(payments, params.kind === 'whole' ? { tokenId: params.tokenId } : { coinId: params.coinId });
 
       // Subscription-key readiness gate: refuse the send until the live oracle
       // holds the per-wallet key, else it hits the aggregator unauthenticated

@@ -106,6 +106,9 @@ src/
 │   ├── theme/               # ThemeInitializer, ThemeToggle
 │   ├── tutorial/            # TutorialOverlay
 │   └── ui/                  # ComingSoonModal, Toast, toast-utils
+├── modules/                 # Wallet modules, discovered by folder (docs/WALLET-MODULES.md)
+│   ├── types.ts, registry.ts  # the contract + import.meta.glob('./*/module.ts')
+│   └── bridge/              # bridging external assets in; assets/<name>/ per bridgeable asset
 ├── pages/                   # 10 page components (see Routes)
 ├── contexts/                # ServicesContext, ServicesProvider, useServices
 ├── services/                # marketplaceApi, userApi

@@ -3,6 +3,7 @@ import { getPayments } from '../../../../sdk/payments';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { useSubscriptionKeyGuard } from '../../../../sdk/hooks/subscription';
 import { isPendingCommitCode } from '../../../../sdk/errors';
+import { refuseHeldSources } from '../../../../sdk/holdGate';
 import type { PaymentRequestView as SDKPaymentRequest } from '@unicitylabs/sphere-sdk/payments-v2';
 
 export const PaymentRequestStatus = {
@@ -145,6 +146,7 @@ export const useIncomingPaymentRequests = () => {
         // keyless-send window as a normal send, so it uses the shared readiness
         // guard. handleAction in PaymentRequestModal surfaces the thrown message.
         requireSubscriptionKey();
+        await refuseHeldSources(payments, { coinId: request.coinId });
         try {
             await payments.requests.pay(request.id);
         } catch (err) {

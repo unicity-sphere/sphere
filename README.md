@@ -87,6 +87,10 @@ npm run test         # Vitest watch mode
 npm run test:run     # Vitest single run
 ```
 
+## Wallet modules
+
+Optional features live in `src/modules/<name>/` and are discovered by folder; delete a folder to remove the feature. The bridge (external assets in) is one. See [docs/WALLET-MODULES.md](docs/WALLET-MODULES.md).
+
 ## Environment Variables
 
 Copy `.env.example` to `.env`. Key variables:

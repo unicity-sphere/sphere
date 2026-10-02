@@ -52,6 +52,9 @@ import {
   createWalletApiProviders,
 } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 import { SphereContext, type SphereAppProviders } from './SphereContext';
+// Token plugins contributed by wallet modules (src/modules): mint-reason
+// verifiers for token types the wallet should accept beyond the SDK's own.
+import { moduleTokenPlugins } from '../modules/registry';
 import {
   getEngineOverride,
   getWalletApiBaseUrl,
@@ -592,6 +595,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         try {
           ({ sphere: instance } = await Sphere.init({
             ...browserProviders,
+            plugins: moduleTokenPlugins(),
             network, // ensure the SDK configures TokenRegistry for THIS network (not the testnet default)
             ...(passwordRef.current ? { password: passwordRef.current } : {}),
             discoverAddresses: false, // Run separately below for UX
@@ -719,6 +723,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         setInitProgress({ step: 'initializing', message: 'Creating wallet...' });
         const { sphere: instance, generatedMnemonic } = await Sphere.init({
           ...providers,
+          plugins: moduleTokenPlugins(),
           network,
           autoGenerate: true,
           nametag: options?.nametag,
@@ -804,6 +809,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
       setInitProgress({ step: 'initializing', message: 'Importing wallet...' });
       const instance = await Sphere.import({
         ...providers,
+        plugins: moduleTokenPlugins(),
         network,
         mnemonic,
         nametag: options?.nametag,
@@ -833,6 +839,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
         setInitProgress({ step: 'initializing', message: 'Importing file...' });
         const result = await Sphere.importFromLegacyFile({
           ...providers,
+          plugins: moduleTokenPlugins(),
           network,
           fileContent: options.fileContent,
           fileName: options.fileName,
@@ -979,6 +986,7 @@ export function SphereProvider({ children, network }: SphereProviderProps) {
     const oracleApiKey = getActiveOracleApiKey();
     const { sphere: instance } = await Sphere.init({
       ...providers,
+      plugins: moduleTokenPlugins(),
       network,
       password,
       discoverAddresses: false,
