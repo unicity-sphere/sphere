@@ -3,7 +3,7 @@ import { fromHex, toHex } from '@unicitylabs/bridge-plugin';
 import { logger } from '@unicitylabs/sphere-sdk';
 
 import type { BridgeStore, PendingReturn } from './store';
-import type { BridgeAsset, BridgeOutSide, ReturnServiceRecord } from './types';
+import type { BridgeAsset, BridgeOutSide, ReturnRefusal, ReturnServiceRecord } from './types';
 
 export const RETRY_DELAY_MS = 60_000;
 
@@ -57,12 +57,14 @@ export async function submitReturn(store: BridgeStore, out: BridgeOutSide, recor
     const rec = await out.returns.submit(burnedToken, await reasonOf(out, record, burnedToken));
     store.updateReturn(record.id, fromService(rec, record));
   } catch (err) {
-    const refusal = out.returns.refusal(err);
-    if (refusal) {
-      store.updateReturn(record.id, { status: 'failed', message: refusal.message, recoverable: refusal.recoverable, failedAt: Date.now() });
-    }
+    const refusal = out.returns.refusal(err) ?? notSubmitted(err);
+    store.updateReturn(record.id, { status: 'failed', message: refusal.message, recoverable: refusal.recoverable, failedAt: Date.now() });
   }
   return store.getReturn(record.id) ?? record;
+}
+
+function notSubmitted(err: unknown): ReturnRefusal {
+  return { message: `The return was not submitted: ${err instanceof Error ? err.message : String(err)}`, recoverable: true };
 }
 
 export async function syncReturns(store: BridgeStore, assetById: (id: string) => BridgeAsset | undefined): Promise<PendingReturn[]> {
@@ -78,7 +80,8 @@ export async function syncReturns(store: BridgeStore, assetById: (id: string) =>
       try {
         const rec = await out.returns.status(record.returnId);
         if (rec === null) {
-          await submitReturn(store, out, { ...record, returnId: undefined });
+          store.updateReturn(record.id, { returnId: undefined });
+          if (record.status !== 'failed' || dueForRetry(record)) await submitReturn(store, out, { ...record, returnId: undefined });
           return;
         }
         store.updateReturn(record.id, fromService(rec, record));

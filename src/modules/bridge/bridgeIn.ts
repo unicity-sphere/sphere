@@ -142,13 +142,17 @@ export function lockTxidFor(chainRef: string, input: string): string | null {
 
 export async function resumeBridgeMint({ payments, adapter, receipts, store, lock }: ResumeArgs): Promise<BridgeInResult> {
   if (!lock.lockTxid) throw new Error('This pending deposit has no lock transaction; nothing to resume.');
+  const remembered = store.getLock(lock.id)?.lockTxid === lock.lockTxid;
 
   let commit: CommitInfo;
   try {
     commit = await waitForCommit(receipts, lock.lockTxid, adapter);
   } catch (e) {
-    if (e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
+    if (remembered && e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
     throw e;
+  }
+  if (!locksThisDeposit(commit, lock)) {
+    throw new Error('That transaction locked a different deposit; this record is unchanged.');
   }
   store.updateLock(lock.id, {
     lockTxid: lock.lockTxid,
@@ -162,6 +166,14 @@ export async function resumeBridgeMint({ payments, adapter, receipts, store, loc
   store.updateLock(lock.id, { status: 'minted' });
   store.removeLock(lock.id);
   return { tokenId, amount };
+}
+
+function locksThisDeposit(commit: CommitInfo, lock: PendingLock): boolean {
+  return (
+    commit.tokenIdHex === lock.tokenIdHex.toLowerCase() &&
+    commit.recipientCommitmentHex === lock.recipientCommitmentHex.toLowerCase() &&
+    commit.amount === BigInt(lock.amount)
+  );
 }
 
 function assertOnChain(network: number, expected: number, chainLabel: string): void {
