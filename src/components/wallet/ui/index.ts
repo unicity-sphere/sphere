@@ -10,7 +10,7 @@ export { EmptyState } from './EmptyState';
 export { DetailsDisclosure, DetailRow } from './DetailsDisclosure';
 
 // Network presentation — colour says what kind of money, never what is selected
-export { NetworkTile, networkMoneyLabel } from './NetworkTile';
+export { NetworkTile } from './NetworkTile';
 
 // Button components
 export { Button, PrimaryButton, SecondaryButton, DangerButton, SuccessButton } from './Button';

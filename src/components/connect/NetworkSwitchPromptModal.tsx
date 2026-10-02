@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { ArrowLeftRight, ArrowRight } from 'lucide-react';
 import { NETWORKS, type NetworkType } from '@unicitylabs/sphere-sdk';
 import {
-  AlertMessage, BaseModal, Button, DetailRow, DetailsDisclosure, ModalHeader, NetworkTile, networkMoneyLabel,
+  AlertMessage, BaseModal, Button, DetailRow, DetailsDisclosure, ModalHeader, NetworkTile,
 } from '../wallet/ui';
 import { useConnectContext, type NetworkSwitchAnswer, type PendingNetworkSwitch } from './ConnectContext';
 import { VerifiedOrigin } from './VerifiedOrigin';
 import { SPHERE_NETWORK } from '../../config/network';
-import { isTestMoney } from '../../config/networkCapabilities';
+import { isTestMoney, networkMoneyLabel } from '../../config/networkCapabilities';
 import type { SwitchOffer } from './networkSwitchOffer';
 import { INTENT_SETTLE_MS } from './settleWindow';
 

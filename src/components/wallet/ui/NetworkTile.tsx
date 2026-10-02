@@ -13,11 +13,6 @@ import { isTestMoney } from '../../../config/networkCapabilities';
  * it on purpose.
  */
 
-/** Two words for what the money here is. */
-export function networkMoneyLabel(network: NetworkType): string {
-  return isTestMoney(network) ? 'Test money' : 'Real money';
-}
-
 interface NetworkTileProps {
   network: NetworkType;
   size?: 'sm' | 'md' | 'lg';
