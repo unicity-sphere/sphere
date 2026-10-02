@@ -24,7 +24,7 @@
     "@types/katex": "^0.16.7",
     "@unicitylabs/bridge-core": "0.2.0-rc.1",
     "@unicitylabs/bridge-plugin": "0.2.0-rc.1",
-    "@unicitylabs/sphere-sdk": "0.18.0-dev.4",
+    "@unicitylabs/sphere-sdk": "0.18.0",
     "@unicitylabs/sphere-ui": "^0.1.44",
     "framer-motion": "^12.23.24",
     "katex": "^0.16.27",
