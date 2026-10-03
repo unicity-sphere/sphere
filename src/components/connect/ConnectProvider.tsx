@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import type {
   ConnectHost,
   DAppMetadata,
@@ -10,13 +10,17 @@ import {
   ConnectContext,
   type AutoIntentHandler,
   type IntentAnswer,
+  type NetworkSwitchAnswer,
   type PendingApproval,
   type PendingIntent,
+  type PendingNetworkSwitch,
   type ConnectContextValue,
 } from './ConnectContext';
 import { ConnectionApprovalModal } from './ConnectionApprovalModal';
 import { ConnectIntentHandler } from './ConnectIntentHandler';
+import { NetworkSwitchPromptModal } from './NetworkSwitchPromptModal';
 import { registerConnectHost, unregisterConnectHost } from '../../sdk/connectHostRegistry';
+import { isUsableOrigin } from '../../config/agentOrigins';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { LockedRequestBadge, type LockedRequestCounts } from './LockedRequestBadge';
 import { INTENT_SETTLE_MS } from './settleWindow';
@@ -36,6 +40,31 @@ const WALLET_LOCKED_MESSAGE = 'Wallet is locked';
  */
 const ALWAYS_ASK_INTENTS: ReadonlySet<string> = new Set<string>([INTENT_ACTIONS.MINT_NFT]);
 
+/**
+ * The answer for every network-switch request that ends WITHOUT the user having
+ * decided anything: refused at the door, settled by a lock, orphaned by a host
+ * that went away, or taken down by its deadline timer once the host stopped
+ * waiting. `suppressFuturePrompts` is false on purpose — a refusal nobody
+ * saw must never be recorded as a decision they made. A fresh object per call, so
+ * one consumer can never see another's mutation.
+ */
+const unseenRefusal = (): NetworkSwitchAnswer => ({ accepted: false, suppressFuturePrompts: false });
+
+/**
+ * The key of one origin and target pair in the session's declined set. JSON of a tuple, not
+ * a joined string, so no origin can be spelled to collide with another pair.
+ */
+const declineKey = (origin: string, target: string): string => JSON.stringify([origin, target]);
+
+/**
+ * The largest delay setTimeout honours. A longer one is read as 1 ms, which would
+ * dismiss a prompt the instant it opened, so a far-future deadline is clamped to this.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** The three consent modals Connect owns, named so admission can say which one is asking. */
+type ConsentSurface = 'approval' | 'intent' | 'networkSwitch';
+
 interface ConnectProviderProps {
   children: ReactNode;
 }
@@ -46,8 +75,23 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   // setState updater, which React StrictMode double-invokes.
   const approvalQueueRef = useRef<PendingApproval[]>([]);
   const intentQueueRef = useRef<PendingIntent[]>([]);
+  // The third surface. Admission (requestNetworkSwitch) keeps it at zero or one
+  // entry, but it is a queue of the same shape so it settles through the same paths.
+  const networkSwitchQueueRef = useRef<PendingNetworkSwitch[]>([]);
+  // The deadline timer of each open prompt that came with one, by entry id. Held here
+  // rather than on the entry so the public entry type stays what the modal needs.
+  const switchDeadlinesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  // Origin AND target pairs the user has turned down, WITHOUT asking to be muted, in THIS
+  // page session (spec 2.1, 6.1). Memory only, deliberately: it dies with the provider, which
+  // is to say with the page, and is never written anywhere. A decline that ticks "do not ask
+  // again" is not in here: the persisted record owns that case, and it is the one Unmute can
+  // clear (see answerNetworkSwitch). This is what stops a framed app
+  // from calling connect() in a loop: every failed handshake reaches the hook, and without
+  // it each one would put a fresh modal over the wallet the instant the last was closed.
+  const declinedSwitchesRef = useRef<Set<string>>(new Set());
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [pendingIntent, setPendingIntent] = useState<PendingIntent | null>(null);
+  const [pendingNetworkSwitch, setPendingNetworkSwitch] = useState<PendingNetworkSwitch | null>(null);
   const nextIdRef = useRef(0);
 
   // Auto-approve handlers, scoped to the host that granted them. Keyed by host
@@ -58,6 +102,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   const syncHeads = useCallback(() => {
     setPendingApproval(approvalQueueRef.current[0] ?? null);
     setPendingIntent(intentQueueRef.current[0] ?? null);
+    setPendingNetworkSwitch(networkSwitchQueueRef.current[0] ?? null);
   }, []);
 
   const attachHost = useCallback((host: ConnectHost, origin: string) => {
@@ -86,6 +131,57 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [syncHeads],
   );
 
+  /** Stop an entry's deadline timer. Every way out of the queue goes through this. */
+  const clearSwitchDeadline = useCallback((id: number) => {
+    const timer = switchDeadlinesRef.current.get(id);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    switchDeadlinesRef.current.delete(id);
+  }, []);
+
+  const settleNetworkSwitch = useCallback(
+    (id: number, answer: NetworkSwitchAnswer) => {
+      const index = networkSwitchQueueRef.current.findIndex((entry) => entry.id === id);
+      if (index === -1) return; // already settled — never resolve the same prompt twice
+      const [entry] = networkSwitchQueueRef.current.splice(index, 1);
+      clearSwitchDeadline(id);
+      entry!.resolve(answer);
+      syncHeads();
+    },
+    [clearSwitchDeadline, syncHeads],
+  );
+
+  /**
+   * The USER answered a network-switch prompt. The only way an answer reaches a prompt from a
+   * person, and so the only place a decline may be remembered: the deadline timer, the lock
+   * effect and releaseHost all settle entries too, but through settleNetworkSwitch(es) and
+   * with an unseen refusal, because nobody decided anything. Recording from those would turn
+   * "the wallet locked while you were away" into "you said no to this site".
+   *
+   * Every refusal counts, whichever control made it: "Not now", the close button and the
+   * backdrop are all a person turning the prompt down, and a modal that returns the instant
+   * it is closed is exactly the loop this exists to end.
+   *
+   * EXCEPT one that asks to be muted (`suppressFuturePrompts`). The caller writes the
+   * PERSISTED mute for it, which covers the case completely and is the one record Connected
+   * Sites can list and Unmute. Recording it here as well would make a second source of truth
+   * that nothing can clear: Unmute would drop the persisted row, report success, and the
+   * pair would still be refused, unseen, until a reload. So this set means only "said not
+   * now, without asking to be muted". If the caller's write fails it says so in a toast and
+   * the app may ask again, which is what that toast promises.
+   */
+  const answerNetworkSwitch = useCallback(
+    (id: number, answer: NetworkSwitchAnswer) => {
+      const entry = networkSwitchQueueRef.current.find((e) => e.id === id);
+      if (!entry) return; // already settled: a late click records nothing and answers nothing
+      if (!answer.accepted && !answer.suppressFuturePrompts) {
+        declinedSwitchesRef.current.add(declineKey(entry.origin, entry.offer.target));
+      }
+      settleNetworkSwitch(id, answer);
+    },
+    [settleNetworkSwitch],
+  );
+
   /** Settle every queued intent matching `match` (all of them when it returns true). */
   const settleIntentsWhere = useCallback(
     (match: (entry: PendingIntent) => boolean, error: { code: number; message: string }) => {
@@ -98,14 +194,51 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
     [syncHeads],
   );
 
+  /**
+   * Settle every network-switch prompt matching `match` as UNSEEN: no decision was
+   * made, so none is recorded. Shared by the lock effect and releaseHost.
+   */
+  const settleNetworkSwitchesWhere = useCallback(
+    (match: (entry: PendingNetworkSwitch) => boolean) => {
+      const doomed = networkSwitchQueueRef.current.filter(match);
+      if (doomed.length === 0) return;
+      networkSwitchQueueRef.current = networkSwitchQueueRef.current.filter((entry) => !match(entry));
+      for (const entry of doomed) {
+        clearSwitchDeadline(entry.id);
+        entry.resolve(unseenRefusal());
+      }
+      syncHeads();
+    },
+    [clearSwitchDeadline, syncHeads],
+  );
+
+  // An unmounting provider must not leave a timer behind to settle into a dead tree.
+  useEffect(() => {
+    const deadlines = switchDeadlinesRef.current;
+    return () => {
+      for (const timer of deadlines.values()) clearTimeout(timer);
+      deadlines.clear();
+    };
+  }, []);
+
   const { isLocked } = useSphereContext();
+
+  // requestNetworkSwitch reads the lock through a ref so it can stay a stable
+  // callback while never acting on a stale value: a host may hold on to it, and a
+  // stale `false` would open a consent prompt over a wallet that is locked. A layout
+  // effect (not a render-time write) so an abandoned concurrent render cannot set it.
+  const isLockedRef = useRef(isLocked);
+  useLayoutEffect(() => {
+    isLockedRef.current = isLocked;
+  }, [isLocked]);
 
   // A lock landed. Settle everything Connect is holding with the SAME code the
   // host answers new requests with, and unmount the intent modal: its approve
   // button would operate on a Sphere the provider has already destroyed, and its
   // `resolve` would sit unsettled behind the lock screen until the host's own
   // deadline fired. A pending connection approval is denied — a locked wallet
-  // cannot consent to anything (graceful lock §8.4).
+  // cannot consent to anything (graceful lock §8.4). Likewise a pending network-switch
+  // prompt: it settles as refused-and-unseen, so nothing is muted on the user's behalf.
   useEffect(() => {
     if (!isLocked) return;
     settleIntentsWhere(() => true, {
@@ -118,7 +251,8 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       for (const entry of doomed) entry.resolve({ approved: false, grantedPermissions: [] });
       syncHeads();
     }
-  }, [isLocked, settleIntentsWhere, syncHeads]);
+    settleNetworkSwitchesWhere(() => true);
+  }, [isLocked, settleIntentsWhere, settleNetworkSwitchesWhere, syncHeads]);
 
   // Locked-request tally, per verified origin, in first-seen order. There is no
   // cap, no coalescing and no cooldown BY DESIGN: the host's own checkRateLimit()
@@ -198,18 +332,103 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         }
         syncHeads();
       }
+      // A prompt this host was awaiting: `await` inside a host that is going away
+      // would otherwise never return. Unseen, so nothing is muted.
+      settleNetworkSwitchesWhere((entry) => entry.host === host);
     },
-    [settleIntentsWhere, syncHeads],
+    [settleIntentsWhere, settleNetworkSwitchesWhere, syncHeads],
   );
+
+  /**
+   * May the caller NOT open its consent UI right now, because another surface is up?
+   * The one place that answers it for all three entry points, so the rule cannot drift.
+   *
+   * The network-switch prompt is exclusive in both directions. It does not open over an
+   * approval or an intent, and neither of those opens under it. That second half is the
+   * one that matters for clickjacking: all three modals paint at one z-index and the
+   * prompt paints last, so a modal that opened beneath it would be uncovered, live, at
+   * the very spot "Switch to X" was the instant the user clicked it. That is a swap under
+   * a stationary cursor, the hazard the intent settle shield exists for.
+   *
+   * Approvals and intents are otherwise left as they were: an approval queues behind
+   * another approval, an intent behind another intent, and one of each may be up together,
+   * so `asking` only matters for the prompt, which additionally refuses to open over
+   * either of them. Read from the refs, not from state: a settle lands there synchronously,
+   * before any re-render.
+   */
+  const anotherConsentSurfaceIsUp = useCallback((asking: ConsentSurface): boolean => {
+    if (networkSwitchQueueRef.current.length > 0) return true;
+    if (asking !== 'networkSwitch') return false;
+    return approvalQueueRef.current.length > 0 || intentQueueRef.current.length > 0;
+  }, []);
 
   const requestApproval = useCallback(
     (host: ConnectHost, dapp: DAppMetadata, permissions: PermissionScope[], origin: string) =>
       new Promise<{ approved: boolean; grantedPermissions: PermissionScope[] }>((resolve) => {
+        // Never queued behind an open network-switch prompt (see anotherConsentSurfaceIsUp): a
+        // queued approval would be revealed under the cursor when the prompt is answered. The
+        // user never saw this request, so it is denied like an approval a lock takes down.
+        if (anotherConsentSurfaceIsUp('approval')) {
+          resolve({ approved: false, grantedPermissions: [] });
+          return;
+        }
         const id = ++nextIdRef.current;
         approvalQueueRef.current.push({ id, host, dapp, permissions, origin, resolve });
         syncHeads();
       }),
-    [syncHeads],
+    [anotherConsentSurfaceIsUp, syncHeads],
+  );
+
+  const requestNetworkSwitch = useCallback(
+    (host: ConnectHost, origin: string, offer: PendingNetworkSwitch['offer'], expiresAt?: number) =>
+      new Promise<NetworkSwitchAnswer>((resolve) => {
+        // Time left before the host stops waiting; unbounded when no deadline came.
+        // Written so a deadline that is not a number at all reads as already passed.
+        const remaining = expiresAt === undefined ? Infinity : expiresAt - Date.now();
+        // Admission lives here, not in the two hosts, so neither can forget a rule.
+        // A refusal resolves on the spot and never queues: the user never sees it,
+        // so it is answered as unseen (and so never a mute, even when it is refused
+        // BECAUSE the user declined this pair: the earlier decline is already remembered,
+        // and this one is not a new choice). The queues are read from the refs, not from
+        // state — a settle lands there synchronously, before any re-render. A deadline
+        // that has already passed is refused like an aborted intent is: the host has
+        // answered the dApp itself, so nobody is asked.
+        if (
+          isLockedRef.current ||
+          anotherConsentSurfaceIsUp('networkSwitch') ||
+          // The prompt's whole trust story is the origin it displays, and the popup hands
+          // over its raw ?origin= parameter. Something that is not the canonical form of ONE
+          // origin ('null', '*', a path, an upper-case host) names nobody, so nobody is
+          // asked in its name, and the session memory below could not key it either.
+          !isUsableOrigin(origin) ||
+          // The user already turned this origin down for this target in this session.
+          declinedSwitchesRef.current.has(declineKey(origin, offer.target)) ||
+          !(remaining > 0)
+        ) {
+          resolve(unseenRefusal());
+          return;
+        }
+        const id = ++nextIdRef.current;
+        networkSwitchQueueRef.current.push({ id, host, origin, offer, resolve });
+        // Why this timer exists, and what it is NOT. The SDK host answers its own
+        // refusal at `expiresAt` and has no way to tell the wallet (NetworkMismatchContext
+        // carries no AbortSignal, deliberately), so without this an abandoned prompt would
+        // sit for the life of the page and refuse every OTHER origin as unseen. It frees
+        // the slot and takes down a prompt nobody is listening to any more, settling the
+        // entry through the same one path as everything else (so exactly once).
+        //
+        // It is NOT what stops a late accept from reloading the wallet: a user can answer
+        // in the last instant before this fires. The handler re-checks the deadline after
+        // the answer comes back, and that check, not this timer, is what guards the switch.
+        if (expiresAt !== undefined) {
+          switchDeadlinesRef.current.set(
+            id,
+            setTimeout(() => settleNetworkSwitch(id, unseenRefusal()), Math.min(remaining, MAX_TIMER_MS)),
+          );
+        }
+        syncHeads();
+      }),
+    [anotherConsentSurfaceIsUp, settleNetworkSwitch, syncHeads],
   );
 
   const registerAutoIntent = useCallback(
@@ -263,6 +482,19 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         error: { code: ERROR_CODES.INTENT_OUTCOME_UNKNOWN, message: 'The Connect host stopped waiting for this intent' },
       };
       if (signal?.aborted) return stopped;
+      // Nor may it open a modal under an open network-switch prompt (see
+      // anotherConsentSurfaceIsUp). Refused as cancelled: the wallet has not started anything,
+      // so the dApp may ask again. Not WALLET_LOCKED, which promises an unlock that is not
+      // coming, and not INTENT_OUTCOME_UNKNOWN, which says the wallet may have acted. An
+      // auto-approved intent never gets here: it opens no modal, so it has nothing to hide.
+      if (anotherConsentSurfaceIsUp('intent')) {
+        return {
+          error: {
+            code: ERROR_CODES.INTENT_CANCELLED,
+            message: 'The wallet is busy with another request. Try again in a moment.',
+          },
+        };
+      }
       return new Promise((resolve) => {
         const id = ++nextIdRef.current;
         intentQueueRef.current.push({ id, host, origin, action, params, resolve, ...(signal ? { signal } : {}) });
@@ -270,7 +502,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
         syncHeads();
       });
     },
-    [settleIntent, syncHeads],
+    [anotherConsentSurfaceIsUp, settleIntent, syncHeads],
   );
 
   const approveConnection = useCallback(
@@ -309,13 +541,16 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
   const value: ConnectContextValue = {
     requestApproval,
     requestIntent,
+    requestNetworkSwitch,
     noteLockedRequest,
     pendingApproval,
     pendingIntent,
+    pendingNetworkSwitch,
     intentInteractive,
     armIntentShield,
     approveConnection,
     denyConnection,
+    answerNetworkSwitch,
     resolveIntent,
     rejectIntent,
     isIntentPending,
@@ -329,6 +564,7 @@ export function ConnectProvider({ children }: ConnectProviderProps) {
       {children}
       <ConnectionApprovalModal />
       <ConnectIntentHandler />
+      <NetworkSwitchPromptModal />
       {pendingIntent && !intentInteractive && (
         <div
           data-testid="intent-settle-shield"

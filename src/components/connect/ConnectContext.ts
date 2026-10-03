@@ -5,6 +5,7 @@ import type {
   LockedRequestContext,
   PermissionScope,
 } from '@unicitylabs/sphere-sdk/connect';
+import type { SwitchOffer } from './networkSwitchOffer';
 
 export interface PendingApproval {
   /** Monotonic id — approvals queue, so entries need identity. */
@@ -49,13 +50,52 @@ export interface PendingIntent {
   signal?: AbortSignal;
 }
 
+/**
+ * Two independent facts, so they cannot be conflated: whether to switch now, and
+ * whether this origin may ask again. A user can decline once without muting, and
+ * can mute while still accepting this one switch.
+ *
+ * Every path that ends WITHOUT the user having answered resolves
+ * `{ accepted: false, suppressFuturePrompts: false }`: a refusal nobody saw must
+ * never be recorded as a decision they made. Those paths are the ones refused at
+ * the door (locked, another modal up, a prompt already open, an origin that is not
+ * usable, an origin and target the user already declined this session without
+ * muting, a deadline already past) and the ones that settle a prompt that was open: a lock, a closing
+ * host, and the deadline timer that takes down a prompt whose host has stopped
+ * waiting. None of them is the user's decline, and none may be recorded as one.
+ * Note the consequence: a caller cannot tell any of them from a plain "Not now".
+ */
+export interface NetworkSwitchAnswer {
+  accepted: boolean;
+  suppressFuturePrompts: boolean;
+}
+
+export interface PendingNetworkSwitch {
+  id: number;
+  host: ConnectHost;
+  /** The transport-verified origin. NEVER dapp.url — this is what the prompt names. */
+  origin: string;
+  /**
+   * What the prompt says, resolved by evaluateSwitchOffer from the wallet's own
+   * network table. Both labels come from there, never from the peer's declared
+   * network name.
+   */
+  offer: Extract<SwitchOffer, { kind: 'offer' }>;
+  resolve: (answer: NetworkSwitchAnswer) => void;
+}
+
 export type AutoIntentHandler = (
   action: string,
   params: Record<string, unknown>,
 ) => Promise<IntentAnswer | null>;
 
 export interface ConnectContextValue {
-  /** Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection. */
+  /**
+   * Called by a ConnectHost (IframeAgent / ConnectPage) when a dApp requests connection.
+   * Queued FIFO, except that it is denied on the spot (`approved: false`, never shown) while
+   * a network-switch prompt is open: an approval queued behind it would be uncovered under
+   * the cursor when the prompt is answered.
+   */
   requestApproval: (
     host: ConnectHost,
     dapp: DAppMetadata,
@@ -67,6 +107,11 @@ export interface ConnectContextValue {
    * Called by a ConnectHost when a dApp sends an intent. Queued FIFO per wallet. Pass the
    * host's `IntentContext.signal`: the SDK requires the wallet to dismiss an intent's
    * modal once it aborts.
+   *
+   * An intent that needs a modal is refused on the spot, as `INTENT_CANCELLED` (nothing was
+   * started, so the dApp may ask again), while a network-switch prompt is open: it would
+   * otherwise be uncovered under the cursor when the prompt is answered. An auto-approved
+   * intent opens no modal and is unaffected.
    */
   requestIntent: (
     host: ConnectHost,
@@ -75,6 +120,39 @@ export interface ConnectContextValue {
     params: Record<string, unknown>,
     signal?: AbortSignal,
   ) => Promise<IntentAnswer>;
+
+  /**
+   * Called by a ConnectHost when a dApp's declared network differs from the wallet's and the
+   * wallet could switch. Resolves with the user's answer; the caller acts on it.
+   *
+   * One prompt at a time, and never over another consent surface, so it is REFUSED
+   * IMMEDIATELY (resolved, never queued):
+   *   - while the wallet is locked;
+   *   - while any approval or intent modal is pending, or a network-switch prompt is open;
+   *   - for an `origin` that is not a usable one (`isUsableOrigin`): the prompt names it, so
+   *     it must name exactly one site;
+   *   - for an origin that already turned down this same target in this page session without
+   *     asking to be muted. That memory is in-memory only; a decline that ticked "do not ask
+   *     again" is covered by the persisted record instead (the caller's, and the one Unmute
+   *     clears), and is deliberately not in it.
+   * Those checks live here, not in the hosts, so no host can forget one. A refusal the user
+   * never saw resolves `{ accepted: false, suppressFuturePrompts: false }`.
+   *
+   * This provider never writes the "do not ask again" record: `suppressFuturePrompts` rides
+   * back in the answer and the caller, which also owns the origin and the target, writes it.
+   *
+   * `expiresAt` (epoch ms, the `NetworkMismatchContext` deadline) is when the SDK host stops
+   * waiting and answers its own refusal. It exists so an abandoned prompt frees its slot: the
+   * entry settles as unseen when it passes, and a request whose deadline is already past is
+   * refused on the spot. It is NOT the guard against a late accept (a user can answer in the
+   * last instant before it fires): the caller re-checks the deadline after the answer.
+   */
+  requestNetworkSwitch: (
+    host: ConnectHost,
+    origin: string,
+    offer: PendingNetworkSwitch['offer'],
+    expiresAt?: number,
+  ) => Promise<NetworkSwitchAnswer>;
 
   /**
    * NOTIFY-ONLY: a host has just answered WALLET_LOCKED (4009). The host has
@@ -93,6 +171,8 @@ export interface ConnectContextValue {
   pendingApproval: PendingApproval | null;
   /** Head of the intent queue (for modal rendering). */
   pendingIntent: PendingIntent | null;
+  /** The open network-switch prompt (for modal rendering). At most one is ever open. */
+  pendingNetworkSwitch: PendingNetworkSwitch | null;
   /**
    * False for a short settle window after the intent modal's contents change.
    * All intent modals share button geometry, so a swap under a stationary cursor
@@ -120,6 +200,17 @@ export interface ConnectContextValue {
 
   approveConnection: (grantedPermissions: PermissionScope[]) => void;
   denyConnection: () => void;
+  /**
+   * Answer a specific network-switch prompt. BY ID, like resolveIntent: a late click on a
+   * prompt that was already settled (a lock, a closing host) finds no entry and does nothing,
+   * and can never answer a DIFFERENT origin's prompt that has since taken the slot.
+   *
+   * This is the USER's answer, and the only path that remembers a decline for the rest of the
+   * page session (any `accepted: false` however it was made, except one that ticked "do not
+   * ask again": the persisted mute owns that, and it is what Unmute can clear): the settles a
+   * lock, a closing host or the deadline timer perform are internal and record nothing.
+   */
+  answerNetworkSwitch: (id: number, answer: NetworkSwitchAnswer) => void;
   /**
    * Settle a specific queued intent. The ID IS REQUIRED — settling "the head" was correct only
    * while there was one slot. With a FIFO queue the head advances while a modal's async work is

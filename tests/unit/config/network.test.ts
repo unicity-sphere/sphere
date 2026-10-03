@@ -533,3 +533,549 @@ describe('NETWORK_SWITCHED_TO — the offer belongs to the load after a delibera
     expect(sessionStorage.getItem('sphere_network_switched_to')).toBeNull();
   });
 });
+
+describe('connect network-switch grace', () => {
+  const ORIGIN = 'https://dapp.example';
+  const MARKER = 'sphere_connect_network_switch';
+  /**
+   * Pins the documented write-to-load window: five minutes. Changing it is a
+   * decision, not a drift. It bounds the gap between writing the marker and the
+   * load that reads it, and nothing after that.
+   */
+  const TTL_MS = 5 * 60_000;
+
+  /**
+   * A deliberate switch followed by the reload it causes. jsdom cannot reload,
+   * but a reload is exactly "storage survives, every module re-evaluates" — and
+   * that is what this reproduces: the page that asks is one module instance, the
+   * page that comes back is a fresh one reading the same storage. Two instances
+   * are the whole point; the bug this feature exists for is invisible to any
+   * test that stays inside one.
+   */
+  async function switchThenReload(forOrigin: string | null = ORIGIN) {
+    setRuntimeConfig(MAINNET_LIVE);
+    const asking = await loadNetworkModule();
+    expect(asking.SPHERE_NETWORK).toBe('testnet2');
+    asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: forOrigin ?? undefined });
+    return loadNetworkModule();
+  }
+
+  /** Make every read of sessionStorage — and only sessionStorage — throw. */
+  function blockSessionStorageReads() {
+    const realGetItem = Storage.prototype.getItem;
+    return vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === sessionStorage) throw new Error('storage blocked');
+      return realGetItem.call(this, key);
+    });
+  }
+
+  /** Make every write to sessionStorage — and only sessionStorage — throw. */
+  function blockSessionStorageWrites() {
+    const realSetItem = Storage.prototype.setItem;
+    return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === sessionStorage) throw new Error('storage blocked');
+      realSetItem.call(this, key, value);
+    });
+  }
+
+  /**
+   * Make evaluating `window.sessionStorage` ITSELF throw a SecurityError — which
+   * is what a browser with site data blocked, or a sandboxed frame without
+   * allow-same-origin, really does. A throwing getItem is the tamer cousin: it is
+   * the getter that would white-screen a wallet that only guarded the calls.
+   * Returns the restore function; afterEach calls it too, so a failing test
+   * cannot leave the getter broken for the next one (whose own cleanup reads it).
+   */
+  let restoreSessionStorageGetter: (() => void) | null = null;
+  function breakSessionStorageGetter(): () => void {
+    const own = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    restoreSessionStorageGetter = () => {
+      if (own) Object.defineProperty(window, 'sessionStorage', own);
+      else delete (window as { sessionStorage?: Storage }).sessionStorage;
+      restoreSessionStorageGetter = null;
+    };
+    return restoreSessionStorageGetter;
+  }
+
+  afterEach(() => {
+    restoreSessionStorageGetter?.();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  describe('writing the marker', () => {
+    it('a switch that names an origin writes the marker, to sessionStorage only', async () => {
+      // sessionStorage and not localStorage: networkSync reloads every OTHER tab
+      // on the same broadcast, and a localStorage marker would be read by all of
+      // them — a consent modal in a window the user never touched. It must also
+      // die with the tab rather than wait for some unrelated load days later.
+      setRuntimeConfig(MAINNET_LIVE);
+      const mod = await loadNetworkModule();
+      mod.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+
+      expect(JSON.parse(sessionStorage.getItem(MARKER) ?? 'null')).toEqual({
+        origin: ORIGIN,
+        to: 'mainnet',
+        at: expect.any(Number),
+      });
+      expect(Object.keys(localStorage)).toEqual(['sphere_active_network']);
+    });
+
+    it('a switch that names no origin writes nothing', async () => {
+      // NetworkModal and the mainnet invitation call it exactly like this.
+      setRuntimeConfig(MAINNET_LIVE);
+      const mod = await loadNetworkModule();
+      mod.setActiveNetwork('mainnet', { reload: vi.fn() });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('an empty origin is not an origin', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const mod = await loadNetworkModule();
+      mod.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: '' });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it.each([
+      ['the string "null" that every opaque and sandboxed frame reports', 'null'],
+      ['the wildcard the transport treats as allow-all', '*'],
+    ])('refuses %s as an origin, and the switch still happens', async (_label, forOrigin) => {
+      // Either would arm a grace that ANY such frame could claim, and the whole
+      // point of the marker is that exactly one origin can spend it. Refused in
+      // the writer — the one place every path goes through — so no caller can
+      // forget to. The person who asked for the switch still gets it.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+
+      expect(() => asking.setActiveNetwork('mainnet', { reload, forOrigin })).not.toThrow();
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+      const back = await loadNetworkModule();
+      expect(back.SPHERE_NETWORK).toBe('mainnet');
+      expect(back.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(back.claimNetworkSwitchGrace(forOrigin)).toBe(false);
+    });
+
+    it.each([
+      ['a trailing slash', 'https://dapp.example/'],
+      ['a path', 'https://dapp.example/app'],
+      ['no scheme', 'dapp.example'],
+      ['an upper-case host', 'https://DAPP.example'],
+      ['a default port spelled out', 'https://dapp.example:443'],
+      ['a scheme with no origin of its own', 'data:text/html,x'],
+      ['nothing URL-shaped at all', 'not a url'],
+    ])('refuses an origin with %s — it does not round-trip through URL', async (_label, forOrigin) => {
+      // "Usable" is `new URL(value).origin === value`: the canonical form the
+      // transport compares against, so a value that differs could never match
+      // a real handshake and can only be a mistake or a spoof.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+
+      asking.setActiveNetwork('mainnet', { reload, forOrigin });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+    });
+
+    it.each(['http://localhost:5173', 'https://dapp.example:8443', 'https://sub.dapp.example'])(
+      'accepts %s — the canonical form of a real origin',
+      async (forOrigin) => {
+        setRuntimeConfig(MAINNET_LIVE);
+        const asking = await loadNetworkModule();
+        asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin });
+
+        const back = await loadNetworkModule();
+        expect(back.NETWORK_SWITCHED_FOR).toEqual({ origin: forOrigin, to: 'mainnet' });
+        expect(back.claimNetworkSwitchGrace(forOrigin)).toBe(true);
+      },
+    );
+
+    it('a switch that names no origin clears the marker an unfinished switch left behind', async () => {
+      // A switch for a site whose reload never happened — a crash, or a
+      // beforeunload prompt the user cancelled — leaves its marker in
+      // sessionStorage. A later plain switch from Settings must not leave it
+      // consumable: within the TTL, and if the network matched, it would turn
+      // that site's next silent handshake into a prompt nobody asked for.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN }); // the reload that never happens
+      expect(sessionStorage.getItem(MARKER)).not.toBeNull();
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn() }); // a plain switch, from Settings
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      const back = await loadNetworkModule();
+      expect(back.SPHERE_NETWORK).toBe('mainnet');
+      expect(back.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('a switch naming an unusable origin clears it too', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: '*' });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('a later switch for another origin replaces it — the marker describes only the latest switch', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: 'https://other.example' });
+
+      const back = await loadNetworkModule();
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(back.claimNetworkSwitchGrace('https://other.example')).toBe(true);
+    });
+
+    it('a refused switch strands no marker — the throw comes first', async () => {
+      // Mainnet is not served here, so this throws. A marker written ahead of
+      // the check would wait for a reload that never comes, then arm a prompt
+      // for whatever origin next asks within the TTL.
+      const mod = await loadNetworkModule();
+      const reload = vi.fn();
+
+      expect(() => mod.setActiveNetwork('mainnet', { reload, forOrigin: ORIGIN })).toThrow(/not available/);
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('a no-op switch strands no marker — the early return comes first', async () => {
+      // Already on the target network: nothing reloads, so nothing may be armed.
+      setRuntimeConfig(MAINNET_LIVE);
+      const mod = await loadNetworkModule();
+      const reload = vi.fn();
+
+      mod.setActiveNetwork(mod.SPHERE_NETWORK, { reload, forOrigin: ORIGIN });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('blocked storage costs the grace, never the switch', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+      const blocked = blockSessionStorageWrites();
+
+      expect(() => asking.setActiveNetwork('mainnet', { reload, forOrigin: ORIGIN })).not.toThrow();
+      blocked.mockRestore();
+
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+      const back = await loadNetworkModule();
+      expect(back.SPHERE_NETWORK).toBe('mainnet');
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('a sessionStorage that throws when merely touched costs the grace, never the switch', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      const reload = vi.fn();
+      const restore = breakSessionStorageGetter();
+
+      try {
+        expect(() => asking.setActiveNetwork('mainnet', { reload, forOrigin: ORIGIN })).not.toThrow();
+      } finally {
+        restore();
+      }
+
+      expect(localStorage.getItem('sphere_active_network')).toBe('mainnet');
+      expect(reload).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('claimNetworkSwitchGrace — may I upgrade this one silent handshake?', () => {
+    it('is true once, for the origin that was switched for, and false on every later call', async () => {
+      const mod = await switchThenReload();
+      expect(mod.SPHERE_NETWORK).toBe('mainnet');
+
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('is false on a plain load', async () => {
+      const mod = await loadNetworkModule();
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('is false for a different origin', async () => {
+      const mod = await switchThenReload();
+      expect(mod.claimNetworkSwitchGrace('https://other.example')).toBe(false);
+    });
+
+    it('does not spend the grace on the wrong origin', async () => {
+      // Two framed sites can handshake in the same load. If a stranger's silent
+      // attempt burned the one-shot, the site the user actually switched for
+      // would be the one left staring at a Connect button — and any origin could
+      // do it on purpose. Only a TRUE answer consumes.
+      const mod = await switchThenReload();
+
+      expect(mod.claimNetworkSwitchGrace('https://other.example')).toBe(false);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('matches the origin exactly, not by prefix or case', async () => {
+      const mod = await switchThenReload();
+
+      expect(mod.claimNetworkSwitchGrace('https://dapp.example.evil.test')).toBe(false);
+      expect(mod.claimNetworkSwitchGrace('https://dapp.example/')).toBe(false);
+      expect(mod.claimNetworkSwitchGrace('HTTPS://DAPP.EXAMPLE')).toBe(false);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+    });
+
+    it('is false when the session came up on a different network than the marker names', async () => {
+      // The user accepted a switch to mainnet, then the deployment stopped
+      // serving it before the boot: this session fell back to testnet2. Upgrading
+      // a handshake here would open a consent modal about a network the wallet is
+      // not on.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+      setRuntimeConfig({}); // mainnet is no longer served
+
+      const back = await loadNetworkModule();
+
+      expect(back.SPHERE_NETWORK).toBe('testnet2');
+      expect(back.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      // Still consumed — a dead marker must not linger for a later load.
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('is false when the marker is older than its TTL, and true right up to it', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-30T12:00:00.000Z'));
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+      const written = sessionStorage.getItem(MARKER) as string;
+
+      // Exactly at the limit: still fresh.
+      vi.setSystemTime(Date.now() + TTL_MS);
+      expect((await loadNetworkModule()).claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+
+      // The previous load consumed it; put the same marker back and age it by
+      // one more millisecond.
+      sessionStorage.setItem(MARKER, written);
+      vi.setSystemTime(Date.now() + 1);
+      expect((await loadNetworkModule()).claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('is false for a marker stamped in the future — a clock that ran backwards is not trusted', async () => {
+      sessionStorage.setItem(MARKER, JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: Date.now() + 60_000 }));
+      const mod = await loadNetworkModule();
+
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('degrades to false when sessionStorage is blocked, and the module still loads', async () => {
+      // The wallet is imported before React mounts: an escaping error here is a
+      // white screen, which is a far worse outcome than a missing modal.
+      sessionStorage.setItem(MARKER, JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: Date.now() }));
+      blockSessionStorageReads();
+
+      const mod = await loadNetworkModule();
+
+      expect(mod.SPHERE_NETWORK).toBe('testnet2');
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+    });
+
+    it('boots when the sessionStorage GETTER throws a SecurityError, and yields a null record', async () => {
+      // The failure that would white-screen the wallet is not getItem throwing:
+      // with site data blocked, or in a sandboxed frame, merely evaluating
+      // `window.sessionStorage` raises. The module is imported before React
+      // mounts, so an escape from either module-load reader is a blank page.
+      sessionStorage.setItem(MARKER, JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: Date.now() }));
+      const restore = breakSessionStorageGetter();
+
+      try {
+        const mod = await loadNetworkModule();
+
+        expect(mod.SPHERE_NETWORK).toBe('testnet2');
+        expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+        expect(mod.NETWORK_SWITCHED_TO).toBeNull();
+        expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+
+    it.each([
+      ['not JSON', 'not json'],
+      ['JSON but not an object', '"just a string"'],
+      ['null', 'null'],
+      ['missing the origin', JSON.stringify({ to: 'testnet2', at: Date.now() })],
+      ['an empty origin', JSON.stringify({ origin: '', to: 'testnet2', at: Date.now() })],
+      ['an origin that is not a string', JSON.stringify({ origin: 7, to: 'testnet2', at: Date.now() })],
+      // The writer refuses these; the reader must too, or a stale or edited value
+      // walks straight past the writer's check.
+      ['the string "null"', JSON.stringify({ origin: 'null', to: 'testnet2', at: Date.now() })],
+      ['the wildcard "*"', JSON.stringify({ origin: '*', to: 'testnet2', at: Date.now() })],
+      ['an origin with a trailing slash', JSON.stringify({ origin: `${ORIGIN}/`, to: 'testnet2', at: Date.now() })],
+      ['missing the timestamp', JSON.stringify({ origin: ORIGIN, to: 'testnet2' })],
+      ['a timestamp that is not a number', JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: 'now' })],
+    ])('ignores a marker that is %s, without throwing', async (_label, raw) => {
+      // sessionStorage is same-origin script territory, but a stale or hand-edited
+      // value must never turn into a prompt — and must never crash the boot.
+      sessionStorage.setItem(MARKER, raw);
+      const mod = await loadNetworkModule();
+
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('is consumed by the load that reads it — a second plain reload gets nothing', async () => {
+      const first = await switchThenReload();
+      expect(first.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+
+      const second = await loadNetworkModule();
+
+      expect(second.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+      expect(second.NETWORK_SWITCHED_FOR).toBeNull();
+    });
+
+    it('is consumed at module load, not at first claim — an unclaimed marker cannot outlive its load', async () => {
+      // A handshake that never comes (the dApp was closed, the popup was never
+      // opened) must not leave the marker waiting for the NEXT load.
+      await switchThenReload();
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+
+      const next = await loadNetworkModule();
+      expect(next.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+  });
+
+  describe('NETWORK_SWITCHED_FOR — did this load come from a switch, and for whom', () => {
+    // Two readers need the same evidence for different reasons: the silent
+    // handshake asks "may I upgrade this one?" (consumable), and the Connect
+    // popup asks "was I just switched, and for which site?" so it can say so.
+    // If the claim were the only way to read the marker, whichever ran first
+    // would erase the other's evidence — and the popup's screen would simply
+    // never appear, a bug jsdom cannot show because it cannot reload.
+
+    it('names the origin and the network, and nothing else', async () => {
+      const mod = await switchThenReload();
+      expect(mod.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+    });
+
+    it('is null on a plain load', async () => {
+      const mod = await loadNetworkModule();
+      expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+    });
+
+    it('survives a claim — claiming spends the one-shot, not the record', async () => {
+      const mod = await switchThenReload();
+
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+
+      expect(mod.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+    });
+
+    it('can be read any number of times without spending the one-shot', async () => {
+      // The popup renders first and the silent handshake claims afterwards, or
+      // the other way round; neither order may cost the other its answer.
+      const mod = await switchThenReload();
+
+      expect(mod.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+      expect(mod.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+    });
+
+    it('is read-only — a reader cannot rewrite whom the switch was for', async () => {
+      const mod = await switchThenReload();
+
+      expect(() => {
+        (mod.NETWORK_SWITCHED_FOR as { origin: string }).origin = 'https://evil.example';
+      }).toThrow(TypeError);
+      expect(mod.claimNetworkSwitchGrace('https://evil.example')).toBe(false);
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(true);
+    });
+
+    it('still reports the switch when the claim is for a different origin', async () => {
+      // "For whom" is a fact about the load; whether a given handshake may use it
+      // is the claim's business.
+      const mod = await switchThenReload();
+
+      expect(mod.claimNetworkSwitchGrace('https://other.example')).toBe(false);
+      expect(mod.NETWORK_SWITCHED_FOR).toEqual({ origin: ORIGIN, to: 'mainnet' });
+    });
+
+    it('is null when the switch did not survive the boot, or has expired', async () => {
+      // The same guards as the claim, applied to the record itself: a popup that
+      // announced "switched to mainnet" while the wallet sits on testnet2 would
+      // be lying.
+      setRuntimeConfig(MAINNET_LIVE);
+      const asking = await loadNetworkModule();
+      asking.setActiveNetwork('mainnet', { reload: vi.fn(), forOrigin: ORIGIN });
+      setRuntimeConfig({});
+      const notSurvived = await loadNetworkModule();
+      expect(notSurvived.NETWORK_SWITCHED_FOR).toBeNull();
+
+      sessionStorage.setItem(
+        MARKER,
+        JSON.stringify({ origin: ORIGIN, to: 'testnet2', at: Date.now() - TTL_MS - 1 }),
+      );
+      const expired = await loadNetworkModule();
+      expect(expired.NETWORK_SWITCHED_FOR).toBeNull();
+    });
+  });
+
+  describe('negative controls — an involuntary reload never arms a prompt', () => {
+    it('resetActiveNetwork writes no origin marker', async () => {
+      // The recovery path takes no origin at all, so structurally it cannot.
+      localStorage.setItem('sphere_active_network', 'mainnet');
+      const mod = await loadNetworkModule();
+
+      mod.resetActiveNetwork({ reload: vi.fn() });
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+      expect((await loadNetworkModule()).claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+
+    it('applyClearedNetworkChoice writes no origin marker', async () => {
+      setRuntimeConfig(MAINNET_LIVE);
+      localStorage.setItem('sphere_active_network', 'mainnet');
+      const mod = await loadNetworkModule();
+      localStorage.clear(); // the sweep clearAllSphereData() performs
+
+      expect(mod.applyClearedNetworkChoice({ reload: vi.fn() })).toBe(true);
+
+      expect(sessionStorage.getItem(MARKER)).toBeNull();
+    });
+
+    it('the mainnet invitation — a deliberate switch with no origin — arms nothing', async () => {
+      // MainnetAnnouncementModal calls setActiveNetwork('mainnet') with no
+      // options at all. It IS a deliberate switch (the network-switch offer for
+      // its plans is armed by it), but no framed site asked for it, so no
+      // handshake may inherit it.
+      const mod = await switchThenReload(null);
+
+      expect(mod.NETWORK_SWITCHED_TO).toBe('mainnet');
+      expect(mod.NETWORK_SWITCHED_FOR).toBeNull();
+      expect(mod.claimNetworkSwitchGrace(ORIGIN)).toBe(false);
+    });
+  });
+});

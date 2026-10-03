@@ -4,6 +4,7 @@ import { STORAGE_KEYS } from './storageKeys';
 import { SUBSCRIPTION_ENABLED, runtimeFlag, runtimeSetting } from './runtimeConfig';
 import { FALLBACK_NETWORK, hasWalletApiUrl } from './walletApiNetworks';
 import { allowsSharedAggregatorKey } from './networkCapabilities';
+import { isUsableOrigin } from './agentOrigins';
 
 /** Why a network is not offered — drives honest UI copy, never a lie. */
 export type UnavailableReason =
@@ -249,6 +250,109 @@ export const NETWORK_SWITCHED_TO: NetworkType | null = (() => {
   }
 })();
 
+/**
+ * Marks a deliberate switch that a FRAMED dApp asked for, so the load after the
+ * reload can turn that one site's first silent handshake into a prompt.
+ *
+ * Why it exists: switching network is a localStorage write plus a full page
+ * reload, and Connect approvals are stored PER NETWORK. The dApp comes back from
+ * the reload, fires its silent on-mount handshake, finds no grant on the new
+ * network and is refused with no UI at all — so the person who just accepted the
+ * switch is left looking at a Connect button. The marker never grants anything:
+ * it only lets that handshake open the ordinary approval modal, which still asks
+ * for consent, on the new network.
+ *
+ * sessionStorage for the same reason as NETWORK_SWITCH_MARKER, and it matters
+ * more here: the grace must die with the tab and must never reach the OTHER tabs
+ * networkSync reloads on the same broadcast, or a user would get a consent modal
+ * in a window they never touched.
+ */
+const CONNECT_SWITCH_MARKER = 'sphere_connect_network_switch';
+
+/**
+ * The longest a marker may sit between being WRITTEN and being READ. A switch
+ * and its reload are a moment apart; a marker older than this is one whose
+ * reload never came, or a tab restored from a crash, and must not arm a prompt
+ * for whatever site asks next.
+ *
+ * That gap is all it bounds. It is checked once, at module load, when
+ * NETWORK_SWITCHED_FOR is built; the in-memory one-shot then lives for the whole
+ * page life and is not checked again. So this says nothing about how long a
+ * claim stays possible after the load that read the marker.
+ */
+const CONNECT_SWITCH_TTL_MS = 5 * 60_000;
+
+/** Whom a network switch was made for, and where it went. */
+export interface NetworkSwitchedFor {
+  readonly origin: string;
+  readonly to: NetworkType;
+}
+
+/**
+ * Did THIS load come from a switch a framed dApp asked for, and for whom — or
+ * null on any other load. Read once at module load, consumed from storage on
+ * read, and never changed afterwards.
+ *
+ * This is the RECORD, and it is deliberately not consumable: any number of
+ * readers may look at it in any order. It exists because two readers need the
+ * same evidence for different reasons. The silent handshake asks "may I upgrade
+ * this one?" (claimNetworkSwitchGrace, below); the Connect popup asks "was I just
+ * switched, and for which site?" so it can tell the user so. Were the claim the
+ * only way to read the marker, whichever ran first would erase the other's
+ * evidence, and the popup's screen would never appear — a bug jsdom cannot show,
+ * because jsdom cannot reload.
+ *
+ * Every guard lives here rather than in the claim, so both readers get them:
+ * the marker is discarded when it is malformed, older than its TTL (or stamped
+ * in the future, which a clock that ran backwards would do), or names a network
+ * this session did not end up on. That last check is the one that stops a popup
+ * announcing "switched to mainnet" while the wallet sits on testnet2.
+ */
+export const NETWORK_SWITCHED_FOR: NetworkSwitchedFor | null = (() => {
+  try {
+    const raw = sessionStorage.getItem(CONNECT_SWITCH_MARKER);
+    sessionStorage.removeItem(CONNECT_SWITCH_MARKER);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { origin, to, at } = parsed as Record<string, unknown>;
+    if (!isUsableOrigin(origin)) return null; // the writer refuses these too; a stale or edited value must not slip past it
+    if (to !== SPHERE_NETWORK) return null; // the switch did not survive the boot
+    if (typeof at !== 'number') return null;
+    const age = Date.now() - at;
+    if (!(age >= 0 && age <= CONNECT_SWITCH_TTL_MS)) return null; // also rejects NaN
+    return Object.freeze({ origin, to: SPHERE_NETWORK });
+  } catch {
+    return null; // storage blocked or unreadable — no prompt, which is the quiet default
+  }
+})();
+
+/**
+ * The unspent half of NETWORK_SWITCHED_FOR. Only claimNetworkSwitchGrace() ever
+ * touches it, and only to clear it.
+ */
+let unclaimedNetworkSwitchGrace: NetworkSwitchedFor | null = NETWORK_SWITCHED_FOR;
+
+/**
+ * May this ONE silent handshake be upgraded to a prompt? True at most once per
+ * page load, and only for the origin the switch was made for.
+ *
+ * NETWORK_SWITCHED_FOR answers "did this load come from a switch, and for whom";
+ * this answers "may I use it", and only this is consumable. It clears the
+ * in-memory one-shot and leaves the constant alone, so a reader of the record is
+ * never robbed by a claim, nor a claim by a reader.
+ *
+ * A wrong origin returns false WITHOUT spending anything. Two framed sites can
+ * handshake in the same load; if a stranger's silent attempt burned the one-shot,
+ * the site the user actually switched for would be left staring at a Connect
+ * button — and any origin could do it on purpose. Only a true answer consumes.
+ */
+export function claimNetworkSwitchGrace(origin: string): boolean {
+  if (unclaimedNetworkSwitchGrace === null || unclaimedNetworkSwitchGrace.origin !== origin) return false;
+  unclaimedNetworkSwitchGrace = null;
+  return true;
+}
+
 /** BroadcastChannel name used to tell other tabs the active network changed. */
 export const NETWORK_BROADCAST_CHANNEL = 'sphere-network';
 
@@ -258,13 +362,6 @@ export interface NetworkChangedMessage {
   network: NetworkType;
 }
 
-/**
- * Switch the active network: persist the choice, tell other tabs, reload.
- * Throws on a non-switchable id (a network this deployment cannot serve, or
- * mainnet before the rollout switch) so a caller bug can never persist a
- * network the app cannot boot. `opts.reload` is a test seam — jsdom cannot
- * mock window.location.reload; production callers omit it.
- */
 /**
  * Whether to invite this wallet onto mainnet.
  *
@@ -375,7 +472,27 @@ export function applyClearedNetworkChoice(opts: { reload?: () => void } = {}): b
   return true;
 }
 
-export function setActiveNetwork(id: NetworkType, opts: { reload?: () => void } = {}): void {
+/**
+ * Switch the active network: persist the choice, tell other tabs, reload.
+ * Throws on a non-switchable id (a network this deployment cannot serve, or
+ * mainnet before the rollout switch) so a caller bug can never persist a
+ * network the app cannot boot.
+ *
+ * `opts.forOrigin` names the framed dApp that asked for this switch. Only a
+ * caller that passes it arms the connect grace (see CONNECT_SWITCH_MARKER): the
+ * network modal and the mainnet invitation do not, so a switch nobody framed
+ * asked for can never turn a site's silent handshake into a prompt. A value
+ * that is not a usable origin (see isUsableOrigin) is treated as no origin at
+ * all: the switch proceeds and nothing is armed. That check lives here, in the
+ * one function every path goes through, not in the callers.
+ *
+ * `opts.reload` is a test seam — jsdom cannot mock window.location.reload;
+ * production callers omit it.
+ */
+export function setActiveNetwork(
+  id: NetworkType,
+  opts: { reload?: () => void; forOrigin?: string } = {},
+): void {
   if (!isSwitchableNetwork(id)) {
     throw new Error(`Network "${id}" is not available for switching`);
   }
@@ -386,11 +503,28 @@ export function setActiveNetwork(id: NetworkType, opts: { reload?: () => void } 
   // caller (the network modal, the mainnet invitation) and structurally excludes
   // the involuntary reloads: resetActiveNetwork() and applyClearedNetworkChoice()
   // do not pass through this function, and the no-op and throw above both return
-  // before it.
+  // before it — so neither can strand a marker that no reload will ever consume.
+  //
+  // The connect marker rides in the same block and only when the caller named a
+  // usable origin: a deliberate switch is not the same as a switch a framed site
+  // asked for, and only the second may arm a prompt for that site.
   try {
     sessionStorage.setItem(NETWORK_SWITCH_MARKER, id);
+    if (isUsableOrigin(opts.forOrigin)) {
+      sessionStorage.setItem(
+        CONNECT_SWITCH_MARKER,
+        JSON.stringify({ origin: opts.forOrigin, to: id, at: Date.now() }),
+      );
+    } else {
+      // No (usable) origin: this switch is not for a framed site. Clear whatever
+      // an earlier switch left behind — a reload that never happened (a crash, a
+      // cancelled beforeunload prompt) — so the marker always describes only the
+      // most recent switch and can never be consumed by a later, unrelated one.
+      sessionStorage.removeItem(CONNECT_SWITCH_MARKER);
+    }
   } catch {
-    // Storage blocked — the switch still happens, only the offer is lost.
+    // Storage blocked — the switch still happens, only the offer and the grace
+    // are lost.
   }
   broadcastNetworkChange(id);
   (opts.reload ?? (() => window.location.reload()))();

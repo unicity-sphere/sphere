@@ -29,6 +29,11 @@ export const STORAGE_KEYS = {
   // Connected Sites (approved dApp origins)
   CONNECTED_SITES: 'sphere_connected_sites',
 
+  /** "Do not ask again" for the Connect network-switch prompt. Per network, like
+   *  CONNECTED_SITES, but deliberately its own key: a refusal to be asked must
+   *  never be readable as a grant. */
+  NETWORK_SWITCH_SUPPRESSED: 'sphere_network_switch_suppressed',
+
   // Dev Settings
   DEV_AGGREGATOR_URL: 'sphere_dev_aggregator_url',
   DEV_SKIP_TRUST_BASE: 'sphere_dev_skip_trust_base',

@@ -30,8 +30,9 @@ export function BaseModal({
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
+          {/* Backdrop. The test id is the stable handle for "dismissed by a stray tap outside". */}
           <motion.div
+            data-testid="modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

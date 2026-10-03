@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { ArrowLeftRight, Lock } from 'lucide-react';
 import { ConnectHost, HOST_READY_TYPE } from '@unicitylabs/sphere-sdk/connect';
 import type { DAppMetadata, PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 import { PostMessageTransport } from '@unicitylabs/sphere-sdk/connect/browser';
+import { NETWORKS } from '@unicitylabs/sphere-sdk';
+import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { CONNECT_MIN_SDK_VERSION } from '../config/connect';
+import { NETWORK_SWITCHED_FOR } from '../config/network';
 import { useSphereContext } from '../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../components/connect/ConnectContext';
-import { describeConnectRejection } from '../components/connect/rejectionMessage';
+import { ConnectRejectionModal, type ConnectRejection } from '../components/connect/ConnectRejectionModal';
+import {
+  claimGraceForSilentHandshake,
+  createSwitchRefusalNote,
+  useNetworkMismatchHandler,
+} from '../components/connect/useNetworkMismatchHandler';
 import { WalletPanel } from '../components/wallet/WalletPanel';
 import {
   getApprovedOrigin,
@@ -15,19 +24,104 @@ import {
   revokeApprovedOrigin,
 } from '../utils/connected-sites';
 
-type RejectionInfo = { dappName: string; code: number; message: string; data: Record<string, unknown> | undefined };
+/**
+ * What the popup says after the wallet switched networks FOR the dApp that opened it.
+ *
+ * A framed dApp is brought back by the wallet itself (the grace turns its next silent
+ * handshake into the approval modal). A popup's dApp lives in ANOTHER tab: it was refused
+ * before the switch, nothing retries it, and this page cannot reach across to do so. So the
+ * user has to go back and press Connect, and this says so. It also says they will be asked
+ * to approve again, because approvals are per network: without that, the modal that
+ * follows reads as the wallet forgetting them. That last sentence is dropped when the origin
+ * already holds an approval on this network, since it is then connected with no modal.
+ *
+ * The network is named from the wallet's own table, keyed by the network this session
+ * really runs on. Nothing the dApp declared on the wire ever reaches this component.
+ *
+ * `locked` is a separate line because it is the case a person actually hits: the idle
+ * window can expire during the switch, and a locked popup refuses every handshake until it
+ * is unlocked. Promising "press Connect" there would send them to a refusal.
+ */
+function NetworkSwitchedNotice({
+  origin,
+  network,
+  locked,
+}: {
+  origin: string;
+  network: NetworkType;
+  locked: boolean;
+}) {
+  const label = NETWORKS[network].name;
+  // Read at render, synchronously: the approval store is scoped to the ACTIVE network, which after
+  // the reload is the target one. An origin that already holds an approval there is auto-approved
+  // by onConnectionRequest with no modal, so "you will be asked" would promise a checkpoint that
+  // does not happen (and its old permissions are reused).
+  const alreadyApproved = getApprovedOrigin(origin) !== null;
+  const Icon = locked ? Lock : ArrowLeftRight;
+  return (
+    <div
+      data-testid="connect-network-switched"
+      role="status"
+      className={`shrink-0 mx-3 mt-3 rounded-2xl border p-3 shadow-sm ${
+        locked
+          ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+          : 'bg-white dark:bg-neutral-800 border-gray-200 dark:border-neutral-700'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <Icon
+          className={`w-4 h-4 mt-0.5 shrink-0 ${
+            locked ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-neutral-400'
+          }`}
+        />
+        <p className="text-sm text-gray-700 dark:text-neutral-300">
+          {locked ? (
+            <>
+              Your wallet is now on <strong>{label}</strong>, and it is locked. Unlock it first, then go back to{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.
+            </>
+          ) : (
+            <>
+              Your wallet is now on <strong>{label}</strong>. Go back to{' '}
+              <span className="font-mono break-all">{origin}</span> and press Connect.
+            </>
+          )}
+          {!alreadyApproved && <> You will be asked to approve the connection on {label}.</>}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function ConnectPage() {
   const [searchParams] = useSearchParams();
   const origin = searchParams.get('origin');
   const { sphere, isLoading, isLocked, walletExists } = useSphereContext();
   const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
+  const makeNetworkMismatchHandler = useNetworkMismatchHandler();
   const hostRef = useRef<ConnectHost | null>(null);
   const transportRef = useRef<PostMessageTransport | null>(null);
   const [status, setStatus] = useState<'waiting' | 'ready' | 'error'>('waiting');
   const [errorMsg, setErrorMsg] = useState('');
   const [connectedDapp, setConnectedDapp] = useState<string | null>(null);
-  const [rejection, setRejection] = useState<RejectionInfo | null>(null);
+  // Latched: has this page life EVER held a connection? `connectedDapp` goes back to null on a
+  // disconnect, but the network-switch notice below must not come back with it. Its "now" is
+  // stale by then and the person has moved on. Set wherever a connection is recorded.
+  const [hasConnected, setHasConnected] = useState(false);
+  const [rejection, setRejection] = useState<ConnectRejection | null>(null);
+
+  // Did the wallet just change networks for THIS popup's site? Read from the RECORD
+  // (NETWORK_SWITCHED_FOR), never from claimNetworkSwitchGrace: the claim is a one-shot that
+  // the silent handshake spends, so whichever of the two ran first would erase the other's
+  // evidence. In the popup case the grace can be spent before this screen ever paints, and
+  // the screen would simply never appear. The record has every guard already applied (usable
+  // origin, network survived the boot, TTL), so a null here also covers a stale marker.
+  // Strict equality with the popup's own `origin` parameter, like the claim: a switch made
+  // for another site says nothing about this one.
+  const switchedForThisPopup =
+    NETWORK_SWITCHED_FOR !== null && origin !== null && NETWORK_SWITCHED_FOR.origin === origin
+      ? NETWORK_SWITCHED_FOR
+      : null;
 
   // Stable refs so the effect doesn't re-run when these change
   const sphereRef = useRef(sphere);
@@ -38,6 +132,8 @@ export function ConnectPage() {
   requestIntentRef.current = requestIntent;
   const noteLockedRequestRef = useRef(noteLockedRequest);
   noteLockedRequestRef.current = noteLockedRequest;
+  const makeNetworkMismatchHandlerRef = useRef(makeNetworkMismatchHandler);
+  makeNetworkMismatchHandlerRef.current = makeNetworkMismatchHandler;
 
   /**
    * Post HOST_READY to the dApp that opened this popup. The ONLY place this page announces.
@@ -153,7 +249,13 @@ export function ConnectPage() {
     });
     transportRef.current = transport;
 
-    const host = new ConnectHost({
+    // One per host: carries the reason the wallet gave for not offering a network switch
+    // from onNetworkMismatch to onConnectionRejected, which the SDK calls right after it.
+    const switchRefusalNote = createSwitchRefusalNote();
+
+    // Annotated: the callbacks below read `host`, which without a declared type is a
+    // circular inference (TS7022).
+    const host: ConnectHost = new ConnectHost({
       sphere: currentSphere,
       initialWalletState: currentSphere ? 'live' : 'locked',
       // The transport-verified origin — never the dApp-claimed dapp.url.
@@ -167,11 +269,16 @@ export function ConnectPage() {
         if (saved) {
           updateLastSeen(origin);
           setConnectedDapp(saved.dapp.name);
+          setHasConnected(true);
           return { approved: true, grantedPermissions: saved.permissions };
         }
 
-        // Silent mode: reject immediately without showing UI
-        if (silent) {
+        // Silent mode: reject immediately without showing UI, unless the wallet just
+        // switched networks FOR this origin (its on-mount handshake finds no grant on the
+        // new network, because approvals are per network). That claim grants nothing: it
+        // only lets the ordinary approval modal below appear. `origin` is the SAME variable
+        // the switch was recorded under, on purpose: the claim compares it with ===.
+        if (silent && !claimGraceForSilentHandshake(host, origin)) {
           return { approved: false, grantedPermissions: [] };
         }
 
@@ -179,19 +286,29 @@ export function ConnectPage() {
         const result = await requestApprovalRef.current(hostRef.current!, dapp, perms, origin);
         if (result.approved) {
           setConnectedDapp(dapp.name);
+          setHasConnected(true);
           saveApprovedOrigin(origin, dapp, result.grantedPermissions);
         }
         return result;
       },
+      // A network mismatch the wallet may fix by switching. The shared handler asks the
+      // user; see useNetworkMismatchHandler for the deadline and ordering rules. `origin`
+      // is the same variable onConnectionRequest closes over.
+      onNetworkMismatch: (dapp, ctx) =>
+        makeNetworkMismatchHandlerRef.current(host, origin, switchRefusalNote)(dapp, ctx),
       onConnectionRejected: (dapp, error, silent) => {
         // The compatibility gate refused the connection (protocol/network mismatch).
         // Surface the reason to the user — but stay quiet for background (silent) auto-connect attempts.
+        const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
+        // Taken BEFORE the silent early-return so a note never outlives its handshake.
+        const switchRefusal = switchRefusalNote.take(data);
         if (silent) return;
         setRejection({
           dappName: dapp?.name ?? 'An app',
           code: error.code,
           message: error.message,
-          data: (error.data as Record<string, unknown> | undefined) ?? undefined,
+          data,
+          switchRefusal,
         });
       },
       onDisconnect: () => {
@@ -258,6 +375,13 @@ export function ConnectPage() {
         </div>
       )}
 
+      {/* Only while it is TRUE. Once this page has held a connection there is no Connect left to
+          press (and after a disconnect its "now" is stale), and a wallet that is neither live
+          nor locked (init failed) has no connection to promise. */}
+      {status === 'ready' && switchedForThisPopup && origin && !hasConnected && (isLocked || sphere) && (
+        <NetworkSwitchedNotice origin={origin} network={switchedForThisPopup.to} locked={isLocked} />
+      )}
+
       {status === 'error' && (
         <div className="shrink-0 mx-3 mt-3 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-200 dark:border-red-800 p-4 text-center text-red-600 dark:text-red-400 text-sm">
           {errorMsg}
@@ -270,26 +394,11 @@ export function ConnectPage() {
       </div>
 
       {rejection && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 shadow-xl p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
-                <span className="text-amber-600 dark:text-amber-400 text-xl">⚠</span>
-              </div>
-              <h2 className="text-base font-semibold text-gray-900 dark:text-neutral-100">Unable to connect</h2>
-            </div>
-            <p className="text-sm text-gray-700 dark:text-neutral-300">
-              <span className="font-medium">{rejection.dappName}</span> {describeConnectRejection(rejection.data)}
-            </p>
-            <p className="mt-2 text-xs text-gray-400 dark:text-neutral-500">Error code {rejection.code}</p>
-            <button
-              onClick={() => setRejection(null)}
-              className="mt-4 w-full rounded-xl bg-gray-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-sm font-medium py-2.5 hover:opacity-90 transition"
-            >
-              Close
-            </button>
-          </div>
-        </div>
+        <ConnectRejectionModal
+          origin={origin}
+          rejection={rejection}
+          onClose={() => setRejection(null)}
+        />
       )}
     </div>
   );

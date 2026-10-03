@@ -113,3 +113,17 @@ export function testMoneyMatchesSelfMint(network: string): boolean {
 export function allowsSharedAggregatorKey(network: string): boolean {
   return TEST_NETWORKS.has(network);
 }
+
+/**
+ * Two words for what the money on a network is, for any surface that names one.
+ *
+ * Lives beside `isTestMoney` rather than next to the tile that renders it: the answer is a
+ * property of the network, not of a component, and a component file that also exports a helper
+ * breaks fast refresh (`react-refresh/only-export-components`).
+ *
+ * Fail-closed by construction, because `isTestMoney` is: a network nobody has listed as play
+ * money reads as real money until someone lists it on purpose.
+ */
+export function networkMoneyLabel(network: string): string {
+  return isTestMoney(network) ? 'Test money' : 'Real money';
+}

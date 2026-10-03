@@ -13,6 +13,11 @@ import {
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { useConnectContext } from '../connect/ConnectContext';
 import { describeConnectRejection } from '../connect/rejectionMessage';
+import {
+  claimGraceForSilentHandshake,
+  createSwitchRefusalNote,
+  useNetworkMismatchHandler,
+} from '../connect/useNetworkMismatchHandler';
 import { showToast } from '../ui/toast-utils';
 import {
   getApprovedOrigin,
@@ -36,6 +41,7 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   // Aliased: `isLoading` is already this component's iframe-spinner state (:29).
   const { sphere, isLoading: walletLoading, isLocked, walletExists } = useSphereContext();
   const { requestApproval, requestIntent, noteLockedRequest, attachHost, releaseHost } = useConnectContext();
+  const makeNetworkMismatchHandler = useNetworkMismatchHandler();
 
   const hasUrlOptions = agent.iframeUrls && agent.iframeUrls.length > 1;
 
@@ -61,6 +67,8 @@ export function IframeAgent({ agent }: IframeAgentProps) {
   requestIntentRef.current = requestIntent;
   const noteLockedRequestRef = useRef(noteLockedRequest);
   noteLockedRequestRef.current = noteLockedRequest;
+  const makeNetworkMismatchHandlerRef = useRef(makeNetworkMismatchHandler);
+  makeNetworkMismatchHandlerRef.current = makeNetworkMismatchHandler;
 
   /**
    * Whether a host may exist at all. A LOCKED wallet still gets one: the host is
@@ -171,7 +179,13 @@ export function IframeAgent({ agent }: IframeAgentProps) {
     });
     transportRef.current = transport;
 
-    const host = new ConnectHost({
+    // One per host: carries the reason the wallet gave for not offering a network switch
+    // from onNetworkMismatch to onConnectionRejected, which the SDK calls right after it.
+    const switchRefusalNote = createSwitchRefusalNote();
+
+    // Annotated: the callbacks below read `host`, which without a declared type is a
+    // circular inference (TS7022).
+    const host: ConnectHost = new ConnectHost({
       sphere: sphereRef.current,
       // A host built while the wallet is locked must SAY so: starting 'live' with
       // a null Sphere dereferences null on the first request.
@@ -191,8 +205,13 @@ export function IframeAgent({ agent }: IframeAgentProps) {
           return { approved: true, grantedPermissions: saved.permissions };
         }
 
-        // Silent mode: reject immediately
-        if (silent) {
+        // Silent mode: reject immediately, unless this is the one site the wallet just
+        // switched networks FOR. Its on-mount handshake finds no grant on the new network
+        // (approvals are per network), so refusing it would leave the person who just
+        // accepted the switch looking at a Connect button. It grants nothing: it only lets
+        // the ordinary approval modal below appear. `origin` is the SAME variable the
+        // switch was recorded under, on purpose: the claim compares it with ===.
+        if (silent && !claimGraceForSilentHandshake(host, origin)) {
           return { approved: false, grantedPermissions: [] };
         }
 
@@ -204,12 +223,19 @@ export function IframeAgent({ agent }: IframeAgentProps) {
         }
         return result;
       },
+      // A network mismatch the wallet may fix by switching. The shared handler asks the
+      // user; see useNetworkMismatchHandler for the deadline and ordering rules. `origin`
+      // is the same variable onConnectionRequest closes over.
+      onNetworkMismatch: (dapp, ctx) =>
+        makeNetworkMismatchHandlerRef.current(host, origin, switchRefusalNote)(dapp, ctx),
       onConnectionRejected: (dapp, error, silent) => {
         // The compatibility gate refused the connection (e.g. an app built against
         // sphere-sdk < 0.12). Surface why — but stay quiet for background auto-connect.
-        if (silent) return;
         const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
-        showToast(`${dapp?.name ?? 'This app'} ${describeConnectRejection(data)}`, 'warning');
+        // Taken BEFORE the silent early-return so a note never outlives its handshake.
+        const switchRefusal = switchRefusalNote.take(data);
+        if (silent) return;
+        showToast(`${dapp?.name ?? 'This app'} ${describeConnectRejection(data, switchRefusal)}`, 'warning');
       },
       onDisconnect: () => {
         revokeApprovedOrigin(origin);

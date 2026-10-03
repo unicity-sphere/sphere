@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { PERMISSION_SCOPES } from '@unicitylabs/sphere-sdk/connect';
 import type { PermissionScope } from '@unicitylabs/sphere-sdk/connect';
 
 const state = vi.hoisted(() => ({
@@ -84,8 +85,30 @@ describe('ConnectionApprovalModal — verified origin as trust anchor', () => {
 
     render(<ConnectionApprovalModal />);
 
-    expect(screen.getByText('Mint NFTs to your wallet')).toBeDefined();
-    expect(screen.getByText('Send NFTs')).toBeDefined();
+    expect(screen.getByText('Mint an NFT, signed as you')).toBeDefined();
+    expect(screen.getByText('Send an NFT from your wallet')).toBeDefined();
+    // The raw scope id never reaches the user. It used to be one missing label away from doing
+    // so: the old map fell back to printing the scope itself. There is no fallback now — a scope
+    // the SDK adds fails the build instead — and the developer list behind the disclosure joins
+    // every name into one value, so no node's text is a bare scope id either.
     expect(screen.queryByText('nft:mint')).toBeNull();
+  });
+
+  // dm:manage is in the SDK and was absent from the label map, so this screen printed the string
+  // "dm:manage" at the user. The exhaustive record is what makes that unrepresentable.
+  it('describes every scope the SDK defines, including the one the old label map forgot', () => {
+    state.pending = {
+      dapp: { name: 'Chat', url: 'https://chat.example' },
+      permissions: Object.values(PERMISSION_SCOPES) as PermissionScope[],
+      origin: 'https://chat.example',
+      resolve: () => {},
+    };
+
+    render(<ConnectionApprovalModal />);
+
+    for (const scope of Object.values(PERMISSION_SCOPES)) {
+      expect(screen.queryByText(scope as string)).toBeNull();
+    }
+    expect(screen.getByText('Mark your messages as read')).toBeDefined();
   });
 });
