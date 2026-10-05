@@ -20,6 +20,9 @@ import { readRuntimeConfig } from '../../../../config/runtimeConfig';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { bridgeOut } from '../out';
 
+// 5 USDC. A return service that asks more of one token is refused before anything is burned.
+const RETURN_FEE_CAP = 5_000_000n;
+
 const provider: BridgeAssetProvider = {
   id: 'evm-usdc',
   load: () => {
@@ -73,15 +76,19 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: hasReturnService
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
-          owed: (destination) => owedTo(bridge, rpc, destination),
-          collect: async (destination) => {
-            const signer = injected.create(m.chainId);
-            await signer.connect();
-            const from = await signer.getAddress();
-            if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-              throw new Error(`Switch MetaMask to ${destination} to collect.`);
-            }
-            return signer.sendCall(withdrawCall(bridge));
+          feeCap: RETURN_FEE_CAP,
+          feeRecipient: returnFeeRecipient(),
+          payout: {
+            owed: (destination) => owedTo(bridge, rpc, destination),
+            collect: async (destination) => {
+              const signer = injected.create(m.chainId);
+              await signer.connect();
+              const from = await signer.getAddress();
+              if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
+                throw new Error(`Switch MetaMask to ${destination} to collect.`);
+              }
+              return signer.sendCall(withdrawCall(bridge));
+            },
           },
         })
       : undefined,
@@ -98,6 +105,13 @@ function returnServiceUrl(): string | undefined {
   const runtime = readRuntimeConfig()?.BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC;
   const url = runtime ?? (import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC as string | undefined);
   return url?.trim() || undefined;
+}
+
+// The account this build pays return fees to, when it names one. A service asking for a fee
+// to any other account is refused before the burn. Unset, the service's own account is paid.
+function returnFeeRecipient(): Uint8Array | undefined {
+  const address = (import.meta.env.VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC as string | undefined)?.trim();
+  return address ? fromHex(toEvmAddressHex(address)) : undefined;
 }
 
 function evmChain(chainId: number, chainRef: string): BridgeChain {

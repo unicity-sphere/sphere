@@ -18,6 +18,9 @@ import type { ReceiptReader } from '@unicitylabs/bridge-core';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { bridgeOut } from '../out';
 
+// The Nile deployment is paused and its service charges nothing, so any fee it quotes is refused.
+const RETURN_FEE_CAP = 0n;
+
 const provider: BridgeAssetProvider = {
   id: 'tron-usdt',
   load: () => {
@@ -69,7 +72,7 @@ function tronAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset
     presentation: bridgePresentation(bridge),
     wallets,
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
-    out: hasReturnService ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))) : undefined,
+    out: hasReturnService ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), { feeCap: RETURN_FEE_CAP }) : undefined,
     disabledReason: m.disabledReason,
     settling: (justification) => lockFinality(bridge, justification),
   };

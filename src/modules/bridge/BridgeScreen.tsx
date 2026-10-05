@@ -29,7 +29,8 @@ import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLoc
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
-import { useBridgeOut, useReturnableTokens } from './useBridgeOut';
+import { summarizeReturnFee, type ReturnFeeSummary } from './returnFee';
+import { useBridgeOut, useReturnableTokens, useReturnFee } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
 type Step = 'direction' | 'asset' | 'form' | 'processing' | 'success';
@@ -73,6 +74,13 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const { eligible: returnable, ineligible: superseded } = useReturnableTokens(asset, tokens);
   const selectedTokens = useMemo(() => returnable.filter((t) => selectedIds.has(t.id)), [returnable, selectedIds]);
   const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
+
+  // What the return service takes from each token, asked while the assets-out form is open.
+  const returnFee = useReturnFee(direction === 'out' && step === 'form' ? asset : undefined);
+  const feeSummary = useMemo(
+    () => (returnFee.fee === undefined ? null : summarizeReturnFee(returnFee.fee, selectedTokens.map((t) => BigInt(t.amount || '0')))),
+    [returnFee.fee, selectedTokens],
+  );
 
   // Re-read the recovery records each time the screen opens.
   useEffect(() => {
@@ -162,6 +170,18 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
       setError(`Enter a valid ${asset.chain.name} destination address.`);
       return;
     }
+    const fee = returnFee.fee;
+    if (fee === undefined || !feeSummary) {
+      setError('The return service has not said what it charges yet. Nothing was burned; try again in a moment.');
+      return;
+    }
+    if (feeSummary.consumed.length > 0) {
+      setError(
+        `The fee of ${formatUnits(fee, asset.decimals)} ${asset.symbol} per token would take all of a ` +
+          `${formatUnits(feeSummary.consumed[0], asset.decimals)} ${asset.symbol} token. Deselect it.`,
+      );
+      return;
+    }
     setStep('processing');
     setBurnProgress({ done: 0, total: selectedTokens.length });
     try {
@@ -169,7 +189,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
       const records: PendingReturn[] = [];
       for (let i = 0; i < selectedTokens.length; i++) {
         const t = selectedTokens[i];
-        records.push(...(await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination })));
+        records.push(...(await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination, maxFee: fee })));
         setBurnProgress({ done: i + 1, total: selectedTokens.length });
       }
       setBurned(records);
@@ -365,9 +385,11 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   the release lands, and anyone holding it can resubmit it.
                 </p>
 
+                <ReturnFeeNote asset={asset} fee={returnFee.fee} summary={feeSummary} tokens={selectedTokens.length} failure={returnFee.error} />
+
                 {error && <ErrorLine text={error} />}
 
-                <Button onClick={startOut} className="w-full" disabled={selectedTokens.length === 0}>
+                <Button onClick={startOut} className="w-full" disabled={selectedTokens.length === 0 || returnFee.fee === undefined}>
                   {selectedTokens.length > 1 ? `Bridge out ${selectedTokens.length} tokens` : 'Bridge out'}
                 </Button>
               </>
@@ -513,15 +535,47 @@ function SelectionSummary({ chain, asset, prefix, onChange }: { chain: BridgeCha
   );
 }
 
+/** What the return service charges, shown before the burn; the button stays off until it is known. */
+interface ReturnFeeNoteProps {
+  asset: BridgeAsset;
+  fee: bigint | undefined;
+  summary: ReturnFeeSummary | null;
+  tokens: number;
+  failure: Error | null;
+}
+
+export function ReturnFeeNote({ asset, fee, summary, tokens, failure }: ReturnFeeNoteProps) {
+  if (fee === undefined || !summary) {
+    return failure ? (
+      <ErrorLine text={`Nothing can be sent out now: the return service did not say what it charges. ${getErrorMessage(failure)}`} />
+    ) : (
+      <p className={`text-xs ${MUTED}`}>Asking the return service what it charges…</p>
+    );
+  }
+  if (fee === 0n) return null;
+  return (
+    <p className={`text-xs ${MUTED}`}>
+      The return service keeps {formatUnits(fee, asset.decimals)} {asset.symbol} of each token as its fee
+      {tokens > 0 &&
+        `: ${formatUnits(summary.total, asset.decimals)} ${asset.symbol} in all, leaving ${formatUnits(summary.received, asset.decimals)} ${asset.symbol} to be released`}
+      .
+    </p>
+  );
+}
+
 function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingReturn[] }) {
   const total = burned.reduce((sum, r) => sum + BigInt(r.amount), 0n);
+  const fees = burned.reduce((sum, r) => sum + BigInt(r.fee ?? '0'), 0n);
   const destination = burned[0]?.destination ?? '';
   return (
     <>
       <div className="font-medium text-neutral-900 dark:text-white">Burned on Unicity</div>
       <div className={`text-xs ${MUTED}`}>
-        {formatUnits(total, asset.decimals)} {asset.symbol} left this wallet. The same amount is released as {asset.symbol} on{' '}
-        {asset.chain.name} to <span className="font-mono break-all">{destination}</span> once the return service has proved the burn.
+        {formatUnits(total, asset.decimals)} {asset.symbol} left this wallet.{' '}
+        {fees > 0n
+          ? `${formatUnits(total - fees, asset.decimals)} ${asset.symbol} is released on ${asset.chain.name}, after the return service's fee of ${formatUnits(fees, asset.decimals)} ${asset.symbol},`
+          : `The same amount is released as ${asset.symbol} on ${asset.chain.name}`}{' '}
+        to <span className="font-mono break-all">{destination}</span> once the return service has proved the burn.
       </div>
       {burned.map((r) => (
         <div key={r.id} className={`text-xs ${MUTED}`}>

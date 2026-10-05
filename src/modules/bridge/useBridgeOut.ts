@@ -16,10 +16,13 @@ export interface BridgeOutRequest {
   readonly asset: BridgeAsset;
   readonly tokens: readonly { id: string; amount: bigint }[];
   readonly destination: string;
+  /** The per-token fee the user was shown and accepted. */
+  readonly maxFee: bigint;
 }
 
 const RETURNS_KEY = (identity: string | undefined) => ['bridge', 'returns', identity] as const;
 const POLL_MS = 8000;
+const FEE_REFRESH_MS = 60_000;
 
 export function useBridgeOut() {
   const { sphere } = useSphereContext();
@@ -62,7 +65,7 @@ export function useBridgeOut() {
       const { payments, store } = walletSide(sphere);
       const records: PendingReturn[] = [];
       for (const token of req.tokens) {
-        records.push(await runBridgeOut({ payments, store, asset: req.asset, tokenId: token.id, amount: token.amount, destination: req.destination }));
+        records.push(await runBridgeOut({ payments, store, asset: req.asset, tokenId: token.id, amount: token.amount, maxFee: req.maxFee, destination: req.destination }));
         queryClient.setQueryData(returnsKey, store.listReturns());
       }
       return records;
@@ -103,6 +106,19 @@ export function useBridgeOut() {
     dismiss,
     retry,
   };
+}
+
+/** What the asset's return service takes from each burned token; `undefined` until it has answered. */
+export function useReturnFee(asset: BridgeAsset | undefined): { fee: bigint | undefined; error: Error | null } {
+  const out = asset?.out;
+  const query = useQuery({
+    queryKey: ['bridge', 'returnFee', asset?.id],
+    enabled: !!out,
+    queryFn: () => (out ? out.fee() : Promise.reject(new Error('This asset cannot be bridged out.'))),
+    refetchInterval: FEE_REFRESH_MS,
+    retry: false,
+  });
+  return { fee: query.data, error: query.error };
 }
 
 export function useReturnableTokens(asset: BridgeAsset | undefined, tokens: readonly Token[]): ReturnableSplit & { isLoading: boolean } {

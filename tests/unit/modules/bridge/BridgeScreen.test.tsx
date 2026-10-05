@@ -20,7 +20,9 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
 
 import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
-import { BridgeScreen, PendingList, ReturnsList } from '@/modules/bridge/BridgeScreen';
+import { bridgeAssetsFor } from '@/modules/bridge/assets';
+import { BridgeScreen, PendingList, ReturnFeeNote, ReturnsList } from '@/modules/bridge/BridgeScreen';
+import { summarizeReturnFee } from '@/modules/bridge/returnFee';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
@@ -136,6 +138,33 @@ describe('ReturnsList', () => {
     render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
+  });
+});
+
+describe('ReturnFeeNote', () => {
+  const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
+
+  it('shows the fee per token, the fee in all and what is left to release', () => {
+    const summary = summarizeReturnFee(50_000n, [1_000_000n, 2_000_000n]);
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={50_000n} summary={summary} tokens={2} failure={null} />);
+    expect(container.textContent).toContain('keeps 0.05 USDC of each token');
+    expect(container.textContent).toContain('0.1 USDC in all');
+    expect(container.textContent).toContain('leaving 2.9 USDC to be released');
+  });
+
+  it('says it is asking while the service has not answered', () => {
+    render(<ReturnFeeNote asset={usdc()} fee={undefined} summary={null} tokens={0} failure={null} />);
+    expect(screen.getByText(/Asking the return service what it charges/)).toBeDefined();
+  });
+
+  it('says nothing can be sent out when the service did not answer', () => {
+    render(<ReturnFeeNote asset={usdc()} fee={undefined} summary={null} tokens={1} failure={new Error('HTTP 503')} />);
+    expect(screen.getByText(/Nothing can be sent out now: the return service did not say what it charges/)).toBeDefined();
+  });
+
+  it('adds nothing when the service charges nothing', () => {
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={0n} summary={summarizeReturnFee(0n, [7n])} tokens={1} failure={null} />);
+    expect(container.textContent).toBe('');
   });
 });
 

@@ -42,8 +42,9 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     wallets: [],
     resumeDeps: () => { throw new Error('unused'); },
     out: {
-      reasonFor: ({ amount }) => new Uint8Array([Number(amount & 0xffn)]),
-      identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n, reasonBytes: new Uint8Array([7]) } : null),
+      fee: async () => 2n,
+      reasonFor: async ({ amount }) => new Uint8Array([Number(amount & 0xffn)]),
+      identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n, fee: 2n, reasonBytes: new Uint8Array([7]) } : null),
       backs: () => true,
       returns: service,
     },
@@ -70,17 +71,41 @@ describe('runBridgeOut', () => {
     const service = fakeService();
     const store = bridgeStoreFor('alice');
     const payments = fakePayments();
-    const rec = await runBridgeOut({ payments, store, asset: fakeAsset(service), tokenId: 't-1', amount: 7n, destination: 'Tdest' });
+    const rec = await runBridgeOut({ payments, store, asset: fakeAsset(service), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
 
     expect(payments.acknowledged).toEqual(['b-1']);
     expect(rec).toMatchObject({ id: NULLIFIER, returnId: 'r-1', status: 'queued', burnedTokenHex: toHex(BLOB), destination: 'Tdest', amount: '7' });
     expect(store.getReturn(NULLIFIER)?.status).toBe('queued');
   });
 
+  it('builds the reason within the fee the user approved and records the fee the burn pays', async () => {
+    const asset = fakeAsset(fakeService());
+    const reasonFor = vi.spyOn(asset.out!, 'reasonFor');
+    const rec = await runBridgeOut({ payments: fakePayments(), store: bridgeStoreFor('alice'), asset, tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
+
+    expect(reasonFor).toHaveBeenCalledWith({ amount: 7n, destination: 'Tdest', maxFee: 3n });
+    expect(rec.fee).toBe('2');
+  });
+
+  it('burns nothing when the fee terms are refused', async () => {
+    const store = bridgeStoreFor('alice');
+    const payments = fakePayments();
+    const asset = fakeAsset(fakeService());
+    asset.out!.reasonFor = async () => {
+      throw new Error('The return service asks a fee above the one approved.');
+    };
+
+    await expect(
+      runBridgeOut({ payments, store, asset, tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' }),
+    ).rejects.toThrow(/above the one approved/);
+    expect(payments.burn).not.toHaveBeenCalled();
+    expect(store.listReturns()).toEqual([]);
+  });
+
   it('refuses an invalid destination before burning anything', async () => {
     const payments = fakePayments();
     await expect(
-      runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, destination: 'nope' }),
+      runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'nope' }),
     ).rejects.toThrow(/valid Test destination/);
     expect(payments.burn).not.toHaveBeenCalled();
   });
@@ -90,7 +115,7 @@ describe('runBridgeOut', () => {
     vi.spyOn(store, 'persistReturn').mockReturnValue(false);
     const payments = fakePayments();
     await expect(
-      runBridgeOut({ payments, store, asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, destination: 'Tdest' }),
+      runBridgeOut({ payments, store, asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' }),
     ).rejects.toThrow(/keeps it/);
     expect(payments.acknowledged).toEqual([]);
   });
@@ -101,7 +126,7 @@ describe('runBridgeOut', () => {
     const asset = fakeAsset(service);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
 
-    const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, destination: 'Tdest' });
+    const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
     expect(rec).toMatchObject({ status: 'failed', recoverable: true, message: 'The return was not submitted: ECONNREFUSED', failedAt: 1_000_000 });
     expect(rec.returnId).toBeUndefined();
 
@@ -126,7 +151,7 @@ describe('runBridgeOut', () => {
     const asset = fakeAsset(service);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
 
-    const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, destination: 'Tdest' });
+    const rec = await runBridgeOut({ payments: fakePayments(), store, asset, tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
     expect(rec).toMatchObject({ status: 'failed', recoverable: true, message: 'chain not synced', failedAt: 1_000_000 });
     expect(store.activeReturns().map((r) => r.id)).toEqual([NULLIFIER]);
     expect(service.submitted).toBe(1);
@@ -149,7 +174,7 @@ describe('runBridgeOut', () => {
       refusal: (e) => ({ message: (e as Error).message, recoverable: false }),
     });
     const store = bridgeStoreFor('alice');
-    const rec = await runBridgeOut({ payments: fakePayments(), store, asset: fakeAsset(service), tokenId: 't-1', amount: 7n, destination: 'Tdest' });
+    const rec = await runBridgeOut({ payments: fakePayments(), store, asset: fakeAsset(service), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
     expect(rec).toMatchObject({ status: 'failed', message: 'config hash mismatch' });
     expect(store.getReturn(NULLIFIER)?.burnedTokenHex).toBe(toHex(BLOB));
   });
@@ -278,7 +303,7 @@ describe('recoverBurns', () => {
     });
     const recovered = await recoverBurns(payments, store, [fakeAsset(fakeService())]);
     expect(recovered.map((r) => r.id)).toEqual([NULLIFIER]);
-    expect(recovered[0]).toMatchObject({ destination: 'Tdest', amount: '7', status: 'burned', reasonBytesHex: '07' });
+    expect(recovered[0]).toMatchObject({ destination: 'Tdest', amount: '7', fee: '2', status: 'burned', reasonBytesHex: '07' });
     expect(payments.acknowledged).toEqual(['b-9']);
   });
 

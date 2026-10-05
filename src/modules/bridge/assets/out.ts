@@ -1,32 +1,45 @@
-import { burnIdentifiers, burnTransitionId, bytesEqual, decodeBridgeBackReason, nullifier, toHex, type BridgeBackReason } from '@unicitylabs/bridge-plugin';
+import { burnIdentifiers, burnTransitionId, bytesEqual, decodeBridgeBackReason, nullifier, toHex } from '@unicitylabs/bridge-plugin';
 import {
   buildBridgeBackBurnReason,
+  feeTerms,
   mintedAgainst,
+  parseFeeQuote,
   ReturnServiceClient,
   ReturnServiceError,
+  type FeeTerms,
   type LoadedBridge,
   type ReturnRecord,
 } from '@unicitylabs/bridge-plugin/wallet';
 
 import type { BridgeOutSide, BridgePayout, ReturnServiceRecord } from '../types';
 
-const ZERO_ADDRESS = new Uint8Array(20);
-const RETURN_DEADLINE_SECONDS = 3600;
+export interface BridgeOutOptions {
+  /** The most this wallet lets a return service take from one burned token, in the asset's smallest unit. */
+  readonly feeCap: bigint;
+  /** When set, the only account a fee may go to; a service that names another is refused. */
+  readonly feeRecipient?: Uint8Array;
+  readonly payout?: BridgePayout;
+}
 
-export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: string) => Uint8Array, payout?: BridgePayout): BridgeOutSide {
+export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: string) => Uint8Array, options: BridgeOutOptions): BridgeOutSide {
   const cfg = bridge.bridgeConfig;
   const client = new ReturnServiceClient(bridge.manifest.returnServiceUrl);
+  const { feeCap, feeRecipient, payout } = options;
+  const payable = (terms: FeeTerms): FeeTerms => {
+    if (terms.feeAmount > feeCap) {
+      throw new Error(`The return service asks a fee above what this wallet allows for ${bridge.manifest.symbol}.`);
+    }
+    if (terms.feeAmount > 0n && feeRecipient && !bytesEqual(terms.feeRecipient, feeRecipient)) {
+      throw new Error('The return service names a fee recipient other than the account this wallet pays.');
+    }
+    return terms;
+  };
   return {
-    reasonFor: ({ amount, destination }) => {
-      const reason: BridgeBackReason = {
-        version: 1n,
-        recipient: recipientOf(destination),
-        amount,
-        feeRecipient: ZERO_ADDRESS,
-        feeAmount: 0n,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + RETURN_DEADLINE_SECONDS),
-      };
-      return buildBridgeBackBurnReason(cfg, reason).reasonBytes;
+    fee: async () => payable(parseFeeQuote(await client.getFees(), Date.now())).feeAmount,
+    reasonFor: async ({ amount, destination, maxFee }) => {
+      const recipient = recipientOf(destination);
+      const terms = payable(feeTerms(await client.getFees(), { amount, maxFee, nowMs: Date.now() }));
+      return buildBridgeBackBurnReason(cfg, { version: 1n, recipient, amount, ...terms }).reasonBytes;
     },
     identify: async (burnedToken) => {
       const ids = await burnIdentifiers(burnedToken);
@@ -41,6 +54,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
         nullifierHex: toHex(nullifier(bridge.configHash, burnTransitionId(ids.burnStateId, ids.burnTxHash))),
         destination: `0x${toHex(reason.recipient)}`,
         amount: reason.amount,
+        fee: reason.feeAmount,
         reasonBytes: ids.reasonBytes,
       };
     },
