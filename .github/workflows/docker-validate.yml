@@ -85,6 +85,7 @@ jobs:
             -e DEV_PORTAL_URL=https://developers.example.test/ \
             -e SUBSCRIPTION_ENABLED=true \
             -e PAID_PLANS_ENABLED=false \
+            -e BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC=https://bridge-return.example.test \
             sphere-validate:${{ matrix.dockerfile }})
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
@@ -149,6 +150,15 @@ jobs:
             || { echo "ERROR: bundle does not read REQUIRE_WALLET_API — it folded away at build time, so the custody flag is frozen into the image"; exit 1; }
           docker exec "$cid" sh -c "grep -rq 'DEFAULT_NETWORK' /usr/share/nginx/html/assets" \
             || { echo "ERROR: bundle does not read DEFAULT_NETWORK — it folded away at build time, so the start network is frozen into the image"; exit 1; }
+          # The bridge return-service URL decides whether bridge-out is offered,
+          # so it rides the same global for the same reason, and its origin must
+          # reach the CSP connect-src.
+          docker exec "$cid" sh -c "grep -q '\"BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC\": \"https://bridge-return.example.test\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC not written to runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC — the lookup folded away at build time, so bridge-out availability is frozen into the image"; exit 1; }
+          docker exec "$cid" sh -c "grep -q 'https://bridge-return.example.test' /etc/nginx/sphere-security-headers.conf" \
+            || { echo "ERROR: the bridge return service origin is missing from the CSP connect-src"; exit 1; }
           # The retired placeholder must not come back: it cannot work.
           if docker exec "$cid" sh -c "grep -rl '__RUNTIME_REQUIRE_WALLET_API__' /usr/share/nginx/html"; then
             echo "ERROR: REQUIRE_WALLET_API is back on the sed mechanism — it const-folds; use the runtime global"; exit 1

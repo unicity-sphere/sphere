@@ -41,6 +41,13 @@
 #                          ship the in-app invitation instead.
 #   REQUIRE_WALLET_API     #351 fail-closed custody flag ('' / false / 0 = off)
 #   DEV_PORTAL_URL         developer-portal link target
+#   BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC
+#                          bridge return service for the Sepolia USDC deployment.
+#                          It checks burns against the testnet2 trust base, and the
+#                          asset is offered on test networks only, so a mainnet
+#                          session never reaches it. EMPTY/UNSET = the asset is
+#                          offered for bridging in only. Its origin joins the CSP
+#                          connect-src below.
 #   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2) —
 #                          REQUIRED only when SUBSCRIPTION_ENABLED != 'true';
 #                          IGNORED when subscriptions are on (per-wallet keys)
@@ -64,11 +71,12 @@
 # (VITE_SUBSCRIPTION_MOCK is intentionally NOT part of this contract either —
 # mock mode is dev-only and stays a build-time constant.)
 #
-# The per-network wallet-api URLs, DEFAULT_NETWORK, MAINNET_ROLLOUT_ENABLED and
-# REQUIRE_WALLET_API ride the window.__SPHERE_RUNTIME_CONFIG__ global, NOT the
-# sed placeholders, and have no Dockerfile ARG on purpose: they decide whether a
-# network is OFFERED, and a branch condition folds against a baked placeholder
-# at build time. That fold goes the dangerous way — `Boolean('__RUNTIME_…__')`
+# The per-network wallet-api URLs, DEFAULT_NETWORK, MAINNET_ROLLOUT_ENABLED,
+# REQUIRE_WALLET_API and the bridge return-service URL ride the
+# window.__SPHERE_RUNTIME_CONFIG__ global, NOT the sed placeholders, and have no
+# Dockerfile ARG on purpose: they decide whether a network (or bridge-out) is
+# OFFERED, and a branch condition folds against a baked placeholder at build
+# time. That fold goes the dangerous way — `Boolean('__RUNTIME_…__')`
 # is TRUE — and it erases the placeholder that the docker-validate guard greps
 # for, so nothing catches it. REQUIRE_WALLET_API was exactly that bug: as a
 # placeholder it folded to a hardcoded `true`, so the flag was inert and this
@@ -129,8 +137,9 @@ fi
 # Whitespace is a MISSING value, not a configured one. `-z` accepts ' ', which
 # then reaches `new URL(' ', origin)` in the browser and resolves to the wallet's
 # own origin — a network launched with its custody backend pointing at the app.
-# Squeeze every wallet-api URL before any check reads it.
-for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET; do
+# Squeeze every wallet-api URL, and the bridge return-service URL for the same
+# reason, before any check reads it.
+for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC; do
   eval "_v=\${$_k-}"
   # shellcheck disable=SC2086
   _v=$(printf '%s' "$_v" | tr -d '[:space:]')
@@ -230,7 +239,7 @@ nl='
 cr=$(printf '\r')
 for v in SUBSCRIPTION_ENABLED PAID_PLANS_ENABLED PAID_PLANS_ENABLED_TESTNET PAID_PLANS_ENABLED_MAINNET MAINNET_ROLLOUT_ENABLED \
          WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET \
-         REQUIRE_WALLET_API DEFAULT_NETWORK; do
+         REQUIRE_WALLET_API DEFAULT_NETWORK BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC; do
   eval "val=\${$v-}"
   case "$val" in
     *"$nl"* | *"$cr"*)
@@ -251,7 +260,8 @@ window.__SPHERE_RUNTIME_CONFIG__ = {
   "WALLET_API_URL_TESTNET2": "$(json_escape "${WALLET_API_URL_TESTNET2-}")",
   "WALLET_API_URL_MAINNET": "$(json_escape "${WALLET_API_URL_MAINNET-}")",
   "REQUIRE_WALLET_API": "$(json_escape "${REQUIRE_WALLET_API-}")",
-  "DEFAULT_NETWORK": "$(json_escape "${DEFAULT_NETWORK-}")"
+  "DEFAULT_NETWORK": "$(json_escape "${DEFAULT_NETWORK-}")",
+  "BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}")"
 };
 EOF
 log "wrote $WEBROOT/runtime-config.js"
@@ -279,6 +289,11 @@ if [ -n "${WALLET_API_URL_MAINNET-}" ]; then
 fi
 [ -z "$offered" ] && offered=" (none — this container cannot run a wallet on any network)"
 log "wallet-api networks offered:$offered"
+if [ -n "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}" ]; then
+  log "bridge return service (Sepolia USDC): $BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC"
+else
+  log "NOTE: BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC is unset — Sepolia USDC is offered for bridging in only."
+fi
 
 # Visibility: warn (don't fail) when a public var is unset — it substitutes to
 # an empty string, which is almost always an operator mistake worth seeing.
@@ -316,7 +331,8 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
 
   CONNECT="'self'"
   for u in "${SPHERE_API_URL-}" "${WALLET_API_URL-}" "${AGGREGATOR_URL-}" \
-           "${SUBSCRIPTION_API_URL-}" "${TRUSTBASE_URL-}"; do
+           "${SUBSCRIPTION_API_URL-}" "${TRUSTBASE_URL-}" \
+           "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}"; do
     o=$(origin_of "$u")
     [ -n "$o" ] && CONNECT="$CONNECT $o"
   done
@@ -340,6 +356,9 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
   # chose, only when the user asks; no list can name those hosts, so an enforced policy
   # blocks them.
   CONNECT="$CONNECT https://ipfs.io https://arweave.net https://*.arweave.net"
+  # Bridge (src/modules/bridge/assets): the Sepolia RPC in the USDC manifest. The return
+  # service's origin comes from BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC in the loop above.
+  CONNECT="$CONNECT https://sepolia.gateway.tenderly.co"
 
   # Report-Only until staging reports are clean. Flip the header NAME to enforce —
   # nothing else about the policy changes.

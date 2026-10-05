@@ -207,6 +207,11 @@ jobs:
           # (DEFAULT_MAINNET_ROLLOUT=true there). Without it network.ts reports
           # 'not-rolled-out' and mainnet cannot be selected at all.
           VITE_MAINNET_ROLLOUT_ENABLED: 'true'
+          # Bridge-out for Sepolia USDC, as on staging and prod (sphere-infra
+          # deploy-sphere-site.sh). The service checks burns against the testnet2
+          # trust base, and the asset is offered on test networks only. Without it
+          # the asset is offered for bridging in only.
+          VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC: https://bridge-usdce.testnet.unicity.network
           # Sentry stays OFF in branch previews: an empty DSN skips init
           # (src/config/sentry.ts). Previews are PROD builds, so without this
           # every branch push would report errors/replays against the shared

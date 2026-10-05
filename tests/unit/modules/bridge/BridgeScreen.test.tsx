@@ -23,6 +23,10 @@ import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 import { BridgeScreen, PendingList, ReturnsList } from '@/modules/bridge/BridgeScreen';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
+// An asset offers bridge-out only with a return service configured for its deployment.
+vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', 'https://sepolia-return.example.test');
+vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT', 'https://nile-return.example.test');
+
 function renderScreen() {
   const onClose = vi.fn();
   render(

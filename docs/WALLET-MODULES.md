@@ -96,5 +96,20 @@ revert to published versions before merge; `tests/unit/dependency-hygiene.test.t
 carries the tripwire. `vite.config.ts` dedupes `@unicitylabs/state-transition-sdk`
 so the linked packages and the SDK share one runtime copy.
 
-`VITE_BRIDGE_RETURN_SERVICE_URL` points the return path at a service other
-than the manifest's default, the local container on port 8787.
+Each deployment has a return service of its own, which refuses any other
+deployment's burns (`config_hash_mismatch`). The wallet learns it from the
+deployment's config, never from code: an asset without one is offered for
+bridging in only, so no token is burned with nowhere to send it.
+- Sepolia USDC reads `BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC` from the
+  container's runtime config (`deploy/runtime-config.sh`, set by sphere-infra on
+  staging and prod), else `VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC` from the
+  build (the Pages preview, local builds). A container that leaves it empty offers
+  bridging in only, whatever the build baked. The deployed service,
+  `https://bridge-usdce.testnet.unicity.network`, checks burns against the
+  testnet2 trust base; the asset is offered on test networks only, so a mainnet
+  session never posts there.
+- Tron Nile USDT has no deployed service; a local build can name one with
+  `VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT`.
+
+`vite.config.ts` refuses the single `VITE_BRIDGE_RETURN_SERVICE_URL` these
+replace, which would otherwise be ignored silently.
