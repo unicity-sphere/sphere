@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { type Asset, TokenRegistry } from '@unicitylabs/sphere-sdk';
 import { Box, Loader2 } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect } from 'react';
 
 interface AssetRowProps {
   asset: Asset;
@@ -90,9 +90,6 @@ function AnimatedAmount({ value, symbol, decimals, showBalances }: {
 }
 
 export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onClick, layer, isNew = true, badge }: AssetRowProps) {
-  // A long name (a bridged asset's, say) is cut off by default; a click or tap
-  // shows it whole. Stops propagation so the row's own onClick is not triggered.
-  const [nameExpanded, setNameExpanded] = useState(false);
   const change24h = asset.change24h ?? 0;
   const changeColor = change24h >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
   const changeSign = change24h >= 0 ? '+' : '';
@@ -103,9 +100,9 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
   const className = `p-3 rounded-xl transition-all group hover:bg-neutral-50 dark:hover:bg-[rgba(255,255,255,0.03)] ${onClick ? 'cursor-pointer hover:translate-x-1' : ''}`;
 
   const content = (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <div className="relative w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden">
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="relative w-10 h-10 shrink-0 rounded-xl flex items-center justify-center overflow-hidden">
           {(asset.iconUrl || TokenRegistry.getInstance().getIconUrl(asset.coinId)) ? (
             <img
               src={asset.iconUrl || TokenRegistry.getInstance().getIconUrl(asset.coinId)!}
@@ -117,8 +114,8 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
           )}
         </div>
 
-        <div>
-          <div className="flex items-center gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="text-neutral-900 dark:text-[#fefefe] font-medium text-sm" style={{ fontFamily: "'Geist Mono', 'SF Mono', 'Fira Code', monospace" }}>{asset.symbol}</div>
             {layer && (
               <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-orange-500/20 text-orange-600 dark:text-brand-orange">
@@ -138,17 +135,8 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
                 {badge}
               </span>
             )}
-            <div
-              className={`text-xs text-neutral-500 cursor-pointer ${nameExpanded ? 'whitespace-normal break-words' : 'truncate max-w-25'}`}
-              title={asset.name}
-              role="button"
-              tabIndex={0}
-              aria-expanded={nameExpanded}
-              onClick={(e) => { e.stopPropagation(); setNameExpanded((v) => !v); }}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setNameExpanded((v) => !v); } }}
-            >
-              {asset.name}
-            </div>
+            {/* The whole name, wrapping as it needs: a name held on one line pushed the price out of the row. */}
+            <div className="text-xs text-neutral-500 min-w-0 break-words">{asset.name}</div>
             {asset.transferringTokenCount > 0 && (
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center gap-0.5">
                 <Loader2 className="w-2.5 h-2.5 animate-spin" />
@@ -173,7 +161,7 @@ export const AssetRow = memo(function AssetRow({ asset, showBalances, delay, onC
         </div>
       </div>
 
-      <div className="text-right">
+      <div className="text-right shrink-0">
         <div className="text-neutral-900 dark:text-[#fefefe] font-medium text-sm" style={{ fontFamily: "'Geist Mono', 'SF Mono', 'Fira Code', monospace" }}>
           <AnimatedFiatValue value={fiatValue} showBalances={showBalances} />
         </div>
