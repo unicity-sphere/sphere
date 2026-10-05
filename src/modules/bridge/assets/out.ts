@@ -34,11 +34,15 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
     }
     return terms;
   };
+  const quoted = () =>
+    client.getFees().catch((err: unknown) => {
+      throw new Error(`The bridge service did not say what it charges: ${err instanceof Error ? err.message : String(err)}`);
+    });
   return {
-    fee: async () => payable(parseFeeQuote(await client.getFees(), Date.now())).feeAmount,
+    fee: async () => payable(parseFeeQuote(await quoted(), Date.now())).feeAmount,
     reasonFor: async ({ amount, destination, maxFee }) => {
       const recipient = recipientOf(destination);
-      const terms = payable(feeTerms(await client.getFees(), { amount, maxFee, nowMs: Date.now() }));
+      const terms = payable(feeTerms(await quoted(), { amount, maxFee, nowMs: Date.now() }));
       return buildBridgeBackBurnReason(cfg, { version: 1n, recipient, amount, ...terms }).reasonBytes;
     },
     identify: async (burnedToken) => {

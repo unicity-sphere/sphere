@@ -191,9 +191,16 @@ describe('ReturnFeeNote', () => {
     expect(screen.getByText(/Asking the bridge service what it charges/)).toBeDefined();
   });
 
-  it('says nothing can be sent out when the service did not answer', () => {
-    render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new Error('HTTP 503')} />);
-    expect(screen.getByText(/Nothing can be sent out now: the bridge service did not say what it charges/)).toBeDefined();
+  it('says nothing can be sent out and gives the reason as the failure states it', () => {
+    for (const reason of [
+      'The bridge service did not say what it charges: Failed to fetch',
+      'The return service asks a fee above what this wallet allows for USDC.',
+      'The return service names a fee recipient other than the account this wallet pays.',
+    ]) {
+      const { container, unmount } = render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new Error(reason)} />);
+      expect(container.textContent?.trim()).toBe(`Nothing can be sent out now. ${reason}`);
+      unmount();
+    }
   });
 
   it('adds nothing when the service charges nothing', () => {

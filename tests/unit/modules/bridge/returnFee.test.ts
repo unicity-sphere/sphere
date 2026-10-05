@@ -101,6 +101,13 @@ describe('return fee', () => {
     await expect(sepoliaOut().reasonFor({ amount: 1_000_000n, destination: DESTINATION, maxFee: 50_000n })).rejects.toThrow(/fees/);
   });
 
+  it('says the service did not say what it charges when its quote cannot be fetched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
+    await expect(sepoliaOut().fee()).rejects.toThrow(/did not say what it charges.*fees/);
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
+    await expect(sepoliaOut().fee()).rejects.toThrow('The bridge service did not say what it charges: Failed to fetch');
+  });
+
   it('pays the account this wallet is set to pay', async () => {
     quoting(quote('50000'));
     const out = sepoliaOut('0x2B00d708fc777F174A248B9bE01c8E8379d69Caf');

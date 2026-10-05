@@ -552,7 +552,7 @@ interface ReturnFeeNoteProps {
 export function ReturnFeeNote({ asset, fee, failure }: ReturnFeeNoteProps) {
   if (fee === undefined) {
     return failure ? (
-      <ErrorLine text={`Nothing can be sent out now: the bridge service did not say what it charges. ${getErrorMessage(failure)}`} />
+      <ErrorLine text={`Nothing can be sent out now. ${getErrorMessage(failure)}`} />
     ) : (
       <p className={`text-xs ${MUTED}`}>Asking the bridge service what it charges…</p>
     );
