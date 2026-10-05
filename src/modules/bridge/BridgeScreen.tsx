@@ -564,19 +564,13 @@ export function ReturnFeeNote({ asset, fee, failure }: ReturnFeeNoteProps) {
   );
 }
 
-function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingReturn[] }) {
+export function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingReturn[] }) {
   const total = burned.reduce((sum, r) => sum + BigInt(r.amount), 0n);
-  const fees = burned.reduce((sum, r) => sum + BigInt(r.fee ?? '0'), 0n);
-  const destination = burned[0]?.destination ?? '';
   return (
     <>
       <div className="font-medium text-neutral-900 dark:text-white">Burned on Unicity</div>
       <div className={`text-xs ${MUTED}`}>
-        {formatUnits(total, asset.decimals)} {asset.symbol} left this wallet.{' '}
-        {fees > 0n
-          ? `${formatUnits(total - fees, asset.decimals)} ${asset.symbol} is released on ${asset.chain.name}, after the return service's fee of ${formatUnits(fees, asset.decimals)} ${asset.symbol},`
-          : `The same amount is released as ${asset.symbol} on ${asset.chain.name}`}{' '}
-        to <span className="font-mono break-all">{destination}</span> once the return service has proved the burn.
+        {formatUnits(total, asset.decimals)} {asset.symbol} was burned.
       </div>
       {burned.map((r) => (
         <div key={r.id} className={`text-xs ${MUTED}`}>
@@ -584,7 +578,9 @@ function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingR
           {returnStatusSentence(r, asset.chain.name)}
         </div>
       ))}
-      <div className={`text-xs ${MUTED}`}>Open Bridge again to follow it under Returns.</div>
+      <div className={`text-xs ${MUTED}`}>
+        {burned.length > 1 ? 'The pending burns are' : 'The pending burn is'} listed under Returns in Bridge view.
+      </div>
     </>
   );
 }

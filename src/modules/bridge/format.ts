@@ -13,16 +13,16 @@ export function formatUnits(amount: bigint, decimals: number): string {
 
 export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message' | 'recoverable'>, chainName: string): string {
   switch (r.status) {
-    case 'burned': return 'The return service has not accepted the burn yet. This wallet keeps the burned token and retries by itself.';
-    case 'queued': return 'The return service accepted the burn and queued it for proving.';
-    case 'proving': return 'The return service is proving the burn.';
+    case 'burned': return 'The bridge service has not accepted the burn yet. This wallet keeps the burned token and retries by itself.';
+    case 'queued': return 'The bridge service accepted the burn and queued it for proving.';
+    case 'proving': return 'The bridge service is generating proof of burn.';
     case 'proven': return `The burn is proven. The release is being sent to ${chainName}.`;
     case 'submitted': return `The release is waiting for confirmation on ${chainName}.`;
     case 'settled': return `Released on ${chainName}.`;
     case 'failed':
       return r.recoverable
-        ? `The return service could not accept the burn yet${r.message ? `: ${r.message}` : ''}. This wallet keeps the burned token and retries by itself.`
-        : `The return service refused the burn${r.message ? `: ${r.message}` : '.'}`;
+        ? `The bridge service could not accept the burn yet${r.message ? `: ${r.message}` : ''}. This wallet keeps the burned token and retries by itself.`
+        : `The bridge service refused the burn${r.message ? `: ${r.message}` : '.'}`;
   }
 }
 

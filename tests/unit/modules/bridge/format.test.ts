@@ -15,6 +15,11 @@ describe('return status sentence', () => {
     expect(returnStatusSentence({ status: 'burned' }, 'Tron')).toMatch(/has not accepted the burn yet.*keeps the burned token/);
   });
 
+  it('says in plain words that the proof is being made', () => {
+    expect(returnStatusSentence({ status: 'proving' }, 'Tron')).toBe('The bridge service is generating proof of burn.');
+    expect(returnStatusSentence({ status: 'queued' }, 'Tron')).toBe('The bridge service accepted the burn and queued it for proving.');
+  });
+
   it('names the chain for the release steps', () => {
     expect(returnStatusSentence({ status: 'proven' }, 'Tron')).toBe('The burn is proven. The release is being sent to Tron.');
     expect(returnStatusSentence({ status: 'submitted' }, 'Tron')).toBe('The release is waiting for confirmation on Tron.');
@@ -22,10 +27,10 @@ describe('return status sentence', () => {
   });
 
   it('quotes the service on a refusal', () => {
-    expect(returnStatusSentence({ status: 'failed', message: 'stale config' }, 'Tron')).toBe('The return service refused the burn: stale config');
-    expect(returnStatusSentence({ status: 'failed' }, 'Tron')).toBe('The return service refused the burn.');
+    expect(returnStatusSentence({ status: 'failed', message: 'stale config' }, 'Tron')).toBe('The bridge service refused the burn: stale config');
+    expect(returnStatusSentence({ status: 'failed' }, 'Tron')).toBe('The bridge service refused the burn.');
     expect(returnStatusSentence({ status: 'failed', message: 'chain not synced', recoverable: true }, 'Tron')).toBe(
-      'The return service could not accept the burn yet: chain not synced. This wallet keeps the burned token and retries by itself.',
+      'The bridge service could not accept the burn yet: chain not synced. This wallet keeps the burned token and retries by itself.',
     );
   });
 });

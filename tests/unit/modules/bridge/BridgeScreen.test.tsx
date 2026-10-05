@@ -22,7 +22,7 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
 import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 import { bridgeAssetsFor } from '@/modules/bridge/assets';
-import { BridgeScreen, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
+import { BridgeScreen, BurnedSummary, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
@@ -149,6 +149,32 @@ describe('ReturnsList', () => {
     render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
+  });
+});
+
+describe('BurnedSummary', () => {
+  const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
+  const burn = (id: string, amount: string): PendingReturn => ({
+    id, coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, assetId: usdc().id, burnedTokenHex: '01', reasonBytesHex: '07',
+    destination: '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf', amount, fee: '50000', createdAt: 1, status: 'proving',
+  });
+
+  it('says what was burned, what the service is doing and where to follow it, and nothing else', () => {
+    const { container } = render(<BurnedSummary asset={usdc()} burned={[burn('n1', '4950000')]} />);
+    expect(container.textContent).toBe(
+      'Burned on Unicity' +
+        '4.95 USDC was burned.' +
+        'The bridge service is generating proof of burn.' +
+        'The pending burn is listed under Returns in Bridge view.',
+    );
+  });
+
+  it('gives the total and one status line per token when several were burned', () => {
+    const { container } = render(<BurnedSummary asset={usdc()} burned={[burn('n1', '4950000'), burn('n2', '1000000')]} />);
+    expect(container.textContent).toContain('5.95 USDC was burned.');
+    expect(container.textContent).toContain('4.95 USDC: The bridge service is generating proof of burn.');
+    expect(container.textContent).toContain('1 USDC: The bridge service is generating proof of burn.');
+    expect(container.textContent).toContain('The pending burns are listed under Returns in Bridge view.');
   });
 });
 
