@@ -107,10 +107,13 @@ function returnServiceUrl(): string | undefined {
   return url?.trim() || undefined;
 }
 
-// The account this build pays return fees to, when it names one. A service asking for a fee
-// to any other account is refused before the burn. Unset, the service's own account is paid.
+// The account this deployment pays return fees to, when it names one, read from the same
+// place as the service URL: a container's key wins even when empty, the build env is used
+// only when no container wrote the config. A service asking for a fee to any other account
+// is refused before the burn. Unset, the service's own account is paid.
 function returnFeeRecipient(): Uint8Array | undefined {
-  const address = (import.meta.env.VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC as string | undefined)?.trim();
+  const runtime = readRuntimeConfig()?.BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC;
+  const address = (runtime ?? (import.meta.env.VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC as string | undefined))?.trim();
   return address ? fromHex(toEvmAddressHex(address)) : undefined;
 }
 

@@ -15,9 +15,14 @@ import type { BridgeOutSide } from '@/modules/bridge/types';
 
 const SERVICE = 'https://return.example.test';
 const COLLECTOR = '0x2b00d708fc777f174a248b9be01c8e8379d69caf';
+const OTHER_ACCOUNT = `0x${'99'.repeat(20)}`;
 const DESTINATION = `0x${'11'.repeat(20)}`;
 const DEADLINE = Math.floor(Date.now() / 1000) + 8 * 24 * 3600;
 const WALLET_CAP = 5_000_000n;
+
+function setRuntimeConfig(config: Record<string, string>): void {
+  (window as unknown as { __SPHERE_RUNTIME_CONFIG__?: unknown }).__SPHERE_RUNTIME_CONFIG__ = config;
+}
 
 function quoting(quote: unknown): ReturnType<typeof vi.fn> {
   const fetch = vi.fn(async () => new Response(JSON.stringify(quote)));
@@ -40,6 +45,7 @@ function sepoliaOut(payOnly = ''): BridgeOutSide {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  delete (window as unknown as { __SPHERE_RUNTIME_CONFIG__?: unknown }).__SPHERE_RUNTIME_CONFIG__;
   resetBridgeAssets();
 });
 
@@ -118,6 +124,34 @@ describe('return fee', () => {
   it('offers no asset when the account to pay is not an address', () => {
     vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', SERVICE);
     vi.stubEnv('VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC', 'not-an-address');
+    expect(() => evmUsdc.load()).toThrow();
+  });
+
+  it('pays only the account the container names, whichever one the build names', async () => {
+    // runtime-config.sh writes every key, so staging and prod name the account without a rebuild.
+    quoting(quote('50000'));
+    setRuntimeConfig({ BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC: OTHER_ACCOUNT });
+    await expect(sepoliaOut(COLLECTOR).fee()).rejects.toThrow(/other than the account this wallet pays/);
+    setRuntimeConfig({ BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC: COLLECTOR });
+    expect(await sepoliaOut(OTHER_ACCOUNT).fee()).toBe(50_000n);
+  });
+
+  it('lets a container that names no account drop the one baked at build time', async () => {
+    quoting(quote('50000'));
+    setRuntimeConfig({ BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC: '' });
+    expect(await sepoliaOut(OTHER_ACCOUNT).fee()).toBe(50_000n);
+  });
+
+  it('pays the account the build names when no container wrote the runtime config', async () => {
+    // public/runtime-config.js, which dev and Pages builds ship, is an empty object.
+    quoting(quote('50000'));
+    setRuntimeConfig({});
+    await expect(sepoliaOut(OTHER_ACCOUNT).fee()).rejects.toThrow(/other than the account this wallet pays/);
+  });
+
+  it('offers no asset when the account the container names is not an address', () => {
+    vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', SERVICE);
+    setRuntimeConfig({ BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC: 'not-an-address' });
     expect(() => evmUsdc.load()).toThrow();
   });
 

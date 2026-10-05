@@ -120,10 +120,13 @@ bridging in only, so no token is burned with nowhere to send it.
   session never posts there.
 - Tron Nile USDT has no deployed service; a local build can name one with
   `VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT`.
-- `VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC` names the one account a
-  Sepolia USDC return fee may be paid to; it must match the service's
-  `BRIDGE_RETURN_FEE_RECIPIENT`. Unset, the account the service names is paid.
-  It is a build setting only; the container's runtime config does not carry it.
+- `BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC` names the one account a Sepolia
+  USDC return fee may be paid to; it must match the service's
+  `BRIDGE_RETURN_FEE_RECIPIENT`. It is read from the same places as the service
+  URL: the container's runtime config, else
+  `VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC` from the build. A container
+  that leaves it empty names no account, whatever the build baked. Unset, the
+  account the service names is paid.
 
 `vite.config.ts` refuses the single `VITE_BRIDGE_RETURN_SERVICE_URL` these
 replace, which would otherwise be ignored silently.

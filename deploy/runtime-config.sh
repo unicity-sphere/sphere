@@ -48,6 +48,13 @@
 #                          session never reaches it. EMPTY/UNSET = the asset is
 #                          offered for bridging in only. Its origin joins the CSP
 #                          connect-src below.
+#   BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC
+#                          the one Ethereum account a Sepolia USDC return fee may
+#                          be paid to; it must match that service's
+#                          BRIDGE_RETURN_FEE_RECIPIENT. The wallet refuses, before
+#                          burning, a service that asks for a fee to any other
+#                          account. EMPTY/UNSET = the account the service names
+#                          is paid.
 #   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2) —
 #                          REQUIRED only when SUBSCRIPTION_ENABLED != 'true';
 #                          IGNORED when subscriptions are on (per-wallet keys)
@@ -81,7 +88,8 @@
 # for, so nothing catches it. REQUIRE_WALLET_API was exactly that bug: as a
 # placeholder it folded to a hardcoded `true`, so the flag was inert and this
 # script's fail-closed check and the bundle disagreed about it. See
-# src/config/runtimeConfig.ts.
+# src/config/runtimeConfig.ts. The bridge fee recipient rides the same global:
+# it decides whether a burn is refused.
 #
 # Runs as a stock-nginx `/docker-entrypoint.d/` hook (POSIX sh, BusyBox-safe)
 # and is also invoked from deploy/entrypoint.sh in the SSL image.
@@ -138,8 +146,10 @@ fi
 # then reaches `new URL(' ', origin)` in the browser and resolves to the wallet's
 # own origin — a network launched with its custody backend pointing at the app.
 # Squeeze every wallet-api URL, and the bridge return-service URL for the same
-# reason, before any check reads it.
-for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC; do
+# reason, before any check reads it. The bridge fee recipient is squeezed too, so
+# a blank one is announced below as unset, which is how the wallet reads it.
+for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC \
+          BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC; do
   eval "_v=\${$_k-}"
   # shellcheck disable=SC2086
   _v=$(printf '%s' "$_v" | tr -d '[:space:]')
@@ -239,7 +249,8 @@ nl='
 cr=$(printf '\r')
 for v in SUBSCRIPTION_ENABLED PAID_PLANS_ENABLED PAID_PLANS_ENABLED_TESTNET PAID_PLANS_ENABLED_MAINNET MAINNET_ROLLOUT_ENABLED \
          WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET \
-         REQUIRE_WALLET_API DEFAULT_NETWORK BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC; do
+         REQUIRE_WALLET_API DEFAULT_NETWORK BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC \
+         BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC; do
   eval "val=\${$v-}"
   case "$val" in
     *"$nl"* | *"$cr"*)
@@ -261,7 +272,8 @@ window.__SPHERE_RUNTIME_CONFIG__ = {
   "WALLET_API_URL_MAINNET": "$(json_escape "${WALLET_API_URL_MAINNET-}")",
   "REQUIRE_WALLET_API": "$(json_escape "${REQUIRE_WALLET_API-}")",
   "DEFAULT_NETWORK": "$(json_escape "${DEFAULT_NETWORK-}")",
-  "BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}")"
+  "BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}")",
+  "BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC-}")"
 };
 EOF
 log "wrote $WEBROOT/runtime-config.js"
@@ -291,6 +303,11 @@ fi
 log "wallet-api networks offered:$offered"
 if [ -n "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}" ]; then
   log "bridge return service (Sepolia USDC): $BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC"
+  if [ -n "${BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC-}" ]; then
+    log "bridge return fee recipient (Sepolia USDC): $BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC"
+  else
+    log "NOTE: BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC is unset — a Sepolia USDC return fee is paid to the account the service names."
+  fi
 else
   log "NOTE: BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC is unset — Sepolia USDC is offered for bridging in only."
 fi

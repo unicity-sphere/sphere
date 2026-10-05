@@ -86,6 +86,14 @@ export interface SphereRuntimeConfig {
    * (the bridge module's Sepolia USDC asset). Absent (no container) = the build's value.
    */
   BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC?: string;
+  /**
+   * The one Ethereum account a Sepolia USDC return fee may be paid to. Here rather
+   * than on a sed placeholder because it decides whether a burn is refused. Read like
+   * the service URL above: a container's key wins even when empty (no account is
+   * pinned, the one the service names is paid), and the build's VITE_ value is used
+   * only when no container wrote the config.
+   */
+  BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC?: string;
 }
 
 /** The container-supplied config, or undefined (SSR / not yet written). */
