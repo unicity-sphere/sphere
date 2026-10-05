@@ -63,3 +63,8 @@ export function pendingLockSentence(lock: Pick<PendingLock, 'status' | 'lockTxid
   if (lock.lockRequested) return "the lock may have been sent; check your wallet's activity before discarding";
   return 'not signed, nothing is locked';
 }
+
+/** What became of the tokens a bridge-out did not reach after one of its burns failed. */
+export function unburnedSentence(left: number, reason: string): string {
+  return `${left} ${left === 1 ? 'token was not burned and stays' : 'tokens were not burned and stay'} in this wallet. ${reason}`;
+}

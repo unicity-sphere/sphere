@@ -23,7 +23,7 @@ import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor } from './assets';
 import { lockTxidFor } from './bridgeIn';
-import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
+import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, unburnedSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
@@ -176,21 +176,21 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     }
     setStep('processing');
     setBurnProgress({ done: 0, total: selectedTokens.length });
+    // One burn per token, in order; each record lands in the returns list as it is made.
+    const records: PendingReturn[] = [];
     try {
-      // One burn per token, in order; each record lands in the returns list as it is made.
-      const records: PendingReturn[] = [];
       for (let i = 0; i < selectedTokens.length; i++) {
         const t = selectedTokens[i];
         records.push(...(await bridgeOut({ asset, tokens: [{ id: t.id, amount: BigInt(t.amount || '0') }], destination, maxFee: fee })));
         setBurnProgress({ done: i + 1, total: selectedTokens.length });
       }
-      setBurned(records);
       setSelectedIds(new Set());
-      setStep('success');
     } catch (e) {
       setError(getErrorMessage(e));
-      setStep('form');
     }
+    // A burn is final: tokens burned before a failure are reported together with it.
+    setBurned(records);
+    setStep(records.length > 0 ? 'success' : 'form');
   };
 
   const onResume = async (lock: PendingLock) => {
@@ -414,7 +414,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
         {step === 'success' && chain && asset && (
           <div className="py-8 flex flex-col items-center gap-3 text-center">
-            <CheckCircle className="w-10 h-10 text-emerald-500" />
+            {error ? <AlertTriangle className="w-10 h-10 text-amber-500" /> : <CheckCircle className="w-10 h-10 text-emerald-500" />}
             {direction === 'in' ? (
               <>
                 <div className="font-medium text-neutral-900 dark:text-white">Bridged in</div>
@@ -428,6 +428,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             ) : (
               <BurnedSummary asset={asset} burned={burned.map((b) => returns.find((r) => r.id === b.id) ?? b)} />
             )}
+            {error && burnProgress && <ErrorLine text={unburnedSentence(burnProgress.total - burned.length, error)} />}
             <Button onClick={close} className="w-full mt-2">Done</Button>
           </div>
         )}

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
+import { formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, unburnedSentence } from '@/modules/bridge/format';
+
+describe('unburned sentence', () => {
+  it('says how many tokens stayed in the wallet and why', () => {
+    expect(unburnedSentence(1, 'The fee rose.')).toBe('1 token was not burned and stays in this wallet. The fee rose.');
+    expect(unburnedSentence(3, 'The fee rose.')).toBe('3 tokens were not burned and stay in this wallet. The fee rose.');
+  });
+});
 
 describe('bridge amount formatting', () => {
   it('formats smallest units back, trimming trailing zeros', () => {
