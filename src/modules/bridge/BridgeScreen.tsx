@@ -29,7 +29,7 @@ import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLoc
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
-import { summarizeReturnFee, type ReturnFeeSummary } from './returnFee';
+import { summarizeReturnFee, tokensCoveringFee, type ReturnFeeSummary } from './returnFee';
 import { useBridgeOut, useReturnableTokens, useReturnFee } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
@@ -72,11 +72,14 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   // Tokens of the chosen asset this bridge can release, and those of the same coin it cannot.
   const { eligible: returnable, ineligible: superseded } = useReturnableTokens(asset, tokens);
-  const selectedTokens = useMemo(() => returnable.filter((t) => selectedIds.has(t.id)), [returnable, selectedIds]);
-  const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
-
   // What the return service takes from each token, asked while the assets-out form is open.
+  // A token no larger than that fee would release nothing, so it is listed but cannot be picked.
   const returnFee = useReturnFee(direction === 'out' && step === 'form' ? asset : undefined);
+  const sendable = useMemo(() => tokensCoveringFee(returnable, returnFee.fee), [returnable, returnFee.fee]);
+  const sendableIds = useMemo(() => new Set(sendable.map((t) => t.id)), [sendable]);
+  const selectedTokens = useMemo(() => sendable.filter((t) => selectedIds.has(t.id)), [sendable, selectedIds]);
+  const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
+  const allSelected = sendable.length > 0 && selectedTokens.length === sendable.length;
   const feeSummary = useMemo(
     () => (returnFee.fee === undefined ? null : summarizeReturnFee(returnFee.fee, selectedTokens.map((t) => BigInt(t.amount || '0')))),
     [returnFee.fee, selectedTokens],
@@ -173,13 +176,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     const fee = returnFee.fee;
     if (fee === undefined || !feeSummary) {
       setError('The return service has not said what it charges yet. Nothing was burned; try again in a moment.');
-      return;
-    }
-    if (feeSummary.consumed.length > 0) {
-      setError(
-        `The fee of ${formatUnits(fee, asset.decimals)} ${asset.symbol} per token would take all of a ` +
-          `${formatUnits(feeSummary.consumed[0], asset.decimals)} ${asset.symbol} token. Deselect it.`,
-      );
       return;
     }
     setStep('processing');
@@ -351,15 +347,22 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                     <label className={`text-xs ${MUTED}`}>Tokens to send out</label>
                     <button
                       type="button"
-                      onClick={() => setSelectedIds(selectedIds.size === returnable.length ? new Set() : new Set(returnable.map((t) => t.id)))}
+                      onClick={() => setSelectedIds(allSelected ? new Set() : new Set(sendable.map((t) => t.id)))}
                       className="text-xs text-orange-500 hover:text-orange-600"
                     >
-                      {selectedIds.size === returnable.length ? 'Clear' : 'All'}
+                      {allSelected ? 'Clear' : 'All'}
                     </button>
                   </div>
                   <div className="max-h-44 overflow-y-auto rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] divide-y divide-neutral-200 dark:divide-white/10">
                     {returnable.map((t) => (
-                      <TokenChoice key={t.id} token={t} asset={asset} checked={selectedIds.has(t.id)} onToggle={() => toggleToken(t.id)} />
+                      <TokenChoice
+                        key={t.id}
+                        token={t}
+                        asset={asset}
+                        checked={sendableIds.has(t.id) && selectedIds.has(t.id)}
+                        tooSmall={!sendableIds.has(t.id)}
+                        onToggle={() => toggleToken(t.id)}
+                      />
                     ))}
                   </div>
                   <div className={`text-xs ${MUTED}`}>
@@ -494,15 +497,28 @@ function ChoiceRow({
   );
 }
 
-function TokenChoice({ token, asset, checked, onToggle }: { token: Token; asset: BridgeAsset; checked: boolean; onToggle: () => void }) {
+/** One token of the list. A token the return fee would take whole is shown but cannot be picked. */
+interface TokenChoiceProps {
+  token: Token;
+  asset: BridgeAsset;
+  checked: boolean;
+  tooSmall: boolean;
+  onToggle: () => void;
+}
+
+export function TokenChoice({ token, asset, checked, tooSmall, onToggle }: TokenChoiceProps) {
   return (
-    <label className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-neutral-200/60 dark:hover:bg-white/5">
-      <input type="checkbox" checked={checked} onChange={onToggle} className="h-4 w-4 accent-orange-500" />
+    <label className={`flex items-center gap-3 px-3 py-2 ${tooSmall ? 'opacity-60' : 'cursor-pointer hover:bg-neutral-200/60 dark:hover:bg-white/5'}`}>
+      <input type="checkbox" checked={checked} disabled={tooSmall} onChange={onToggle} className="h-4 w-4 accent-orange-500" />
       <span className="flex-1 min-w-0">
         <span className="block text-sm text-neutral-900 dark:text-white">
           {formatUnits(BigInt(token.amount || '0'), asset.decimals)} {asset.symbol}
         </span>
-        <span className={`block truncate text-[11px] font-mono ${MUTED}`}>{token.id}</span>
+        {tooSmall ? (
+          <span className={`block text-[11px] ${MUTED}`}>Smaller than the return fee, so it cannot be sent out on its own.</span>
+        ) : (
+          <span className={`block truncate text-[11px] font-mono ${MUTED}`}>{token.id}</span>
+        )}
       </span>
     </label>
   );
@@ -612,6 +628,8 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
   const [detailsOpen, setDetailsOpen] = useState(false);
   const asset = bridgeAssetByCoin(r.coinIdHex);
   const amount = asset ? `${formatUnits(BigInt(r.amount), asset.decimals)} ${asset.symbol}` : r.amount;
+  const fee = BigInt(r.fee ?? '0');
+  const feeNote = asset && fee > 0n ? ` · ${formatUnits(fee, asset.decimals)} ${asset.symbol} fee` : '';
   const color = r.status === 'settled' ? 'text-emerald-500' : r.status === 'failed' ? 'text-red-500' : 'text-amber-500';
   const inFlight = !isTerminalReturn(r);
   const detail = [returnStatusSentence(r, asset?.chain.name ?? 'the source chain'), returnTimingSentence(r, timing, Date.now())]
@@ -624,7 +642,7 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
     <div className="flex items-center gap-2">
       <span className="flex-1 min-w-0">
         <span className="block font-mono text-neutral-900 dark:text-white">
-          {amount}{asset ? ` → ${asset.chain.name}` : ''}
+          {amount}{asset ? ` → ${asset.chain.name}` : ''}{feeNote}
         </span>
         <span
           className={`block font-mono cursor-pointer ${MUTED} ${addressExpanded ? 'break-all' : 'truncate'}`}

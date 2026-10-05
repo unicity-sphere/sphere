@@ -10,7 +10,7 @@ import { decodeBridgeBackReason, toHex } from '@unicitylabs/bridge-plugin';
 
 import evmUsdc from '@/modules/bridge/assets/evm-usdc';
 import { resetBridgeAssets } from '@/modules/bridge/assets';
-import { summarizeReturnFee } from '@/modules/bridge/returnFee';
+import { coversReturnFee, summarizeReturnFee, tokensCoveringFee } from '@/modules/bridge/returnFee';
 import type { BridgeOutSide } from '@/modules/bridge/types';
 
 const SERVICE = 'https://return.example.test';
@@ -129,16 +129,44 @@ describe('return fee', () => {
   });
 });
 
-describe('summarizeReturnFee', () => {
-  it('charges each token and leaves the rest to be released', () => {
-    expect(summarizeReturnFee(50_000n, [1_000_000n, 2_000_000n])).toEqual({ total: 100_000n, received: 2_900_000n, consumed: [] });
+describe('coversReturnFee', () => {
+  it('needs something of the token to be left after the fee', () => {
+    expect(coversReturnFee(50_001n, 50_000n)).toBe(true);
+    expect(coversReturnFee(50_000n, 50_000n)).toBe(false);
+    expect(coversReturnFee(10_000n, 50_000n)).toBe(false);
+    expect(coversReturnFee(1n, 0n)).toBe(true);
+  });
+});
+
+describe('tokensCoveringFee', () => {
+  const tokens = [{ id: 'small', amount: '10000' }, { id: 'exact', amount: '50000' }, { id: 'large', amount: '1000000' }, { id: 'empty', amount: '' }];
+
+  it('keeps only the tokens larger than the fee', () => {
+    expect(tokensCoveringFee(tokens, 50_000n).map((t) => t.id)).toEqual(['large']);
   });
 
-  it('names the tokens the fee would take whole', () => {
-    expect(summarizeReturnFee(50_000n, [50_000n, 40_000n, 1_000_000n]).consumed).toEqual([50_000n, 40_000n]);
+  it('keeps every token with a value when the service charges nothing', () => {
+    expect(tokensCoveringFee(tokens, 0n).map((t) => t.id)).toEqual(['small', 'exact', 'large']);
+  });
+
+  it('keeps them all while the fee is not known', () => {
+    expect(tokensCoveringFee(tokens, undefined)).toHaveLength(4);
+  });
+});
+
+describe('summarizeReturnFee', () => {
+  it('charges each token and leaves the rest to be released', () => {
+    expect(summarizeReturnFee(50_000n, [1_000_000n, 2_000_000n])).toEqual({ total: 100_000n, received: 2_900_000n });
+  });
+
+  it('never goes negative: a token the fee would take whole is not sent, so it pays and releases nothing', () => {
+    expect(summarizeReturnFee(50_000n, [10_000n])).toEqual({ total: 0n, received: 0n });
+    expect(summarizeReturnFee(50_000n, [50_000n])).toEqual({ total: 0n, received: 0n });
+    expect(summarizeReturnFee(50_000n, [50_000n, 10_000n, 1_000_000n])).toEqual({ total: 50_000n, received: 950_000n });
+    expect(summarizeReturnFee(50_000n, [50_001n])).toEqual({ total: 50_000n, received: 1n });
   });
 
   it('takes nothing when the service charges nothing', () => {
-    expect(summarizeReturnFee(0n, [7n])).toEqual({ total: 0n, received: 7n, consumed: [] });
+    expect(summarizeReturnFee(0n, [7n])).toEqual({ total: 0n, received: 7n });
   });
 });
