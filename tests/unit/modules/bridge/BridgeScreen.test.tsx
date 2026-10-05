@@ -23,7 +23,6 @@ import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 import { bridgeAssetsFor } from '@/modules/bridge/assets';
 import { BridgeScreen, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
-import { summarizeReturnFee } from '@/modules/bridge/returnFee';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
@@ -156,33 +155,23 @@ describe('ReturnsList', () => {
 describe('ReturnFeeNote', () => {
   const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
 
-  it('shows the fee per token, the fee in all and what is left to release', () => {
-    const summary = summarizeReturnFee(50_000n, [1_000_000n, 2_000_000n]);
-    const { container } = render(<ReturnFeeNote asset={usdc()} fee={50_000n} summary={summary} tokens={2} failure={null} />);
-    expect(container.textContent).toContain('keeps 0.05 USDC of each token');
-    expect(container.textContent).toContain('0.1 USDC in all');
-    expect(container.textContent).toContain('leaving 2.9 USDC to be released');
-  });
-
-  it('shows no amount to release, and never a negative one, when nothing selected can pay the fee', () => {
-    const summary = summarizeReturnFee(50_000n, [10_000n]);
-    const { container } = render(<ReturnFeeNote asset={usdc()} fee={50_000n} summary={summary} tokens={0} failure={null} />);
-    expect(container.textContent).toBe('The return service keeps 0.05 USDC of each token as its fee.');
-    expect(container.textContent).not.toContain('-');
+  it('says what the bridge service charges per token, and nothing more', () => {
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={50_000n} failure={null} />);
+    expect(container.textContent).toBe('The bridge service charges 0.05 USDC of each token as its fee.');
   });
 
   it('says it is asking while the service has not answered', () => {
-    render(<ReturnFeeNote asset={usdc()} fee={undefined} summary={null} tokens={0} failure={null} />);
-    expect(screen.getByText(/Asking the return service what it charges/)).toBeDefined();
+    render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={null} />);
+    expect(screen.getByText(/Asking the bridge service what it charges/)).toBeDefined();
   });
 
   it('says nothing can be sent out when the service did not answer', () => {
-    render(<ReturnFeeNote asset={usdc()} fee={undefined} summary={null} tokens={1} failure={new Error('HTTP 503')} />);
-    expect(screen.getByText(/Nothing can be sent out now: the return service did not say what it charges/)).toBeDefined();
+    render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new Error('HTTP 503')} />);
+    expect(screen.getByText(/Nothing can be sent out now: the bridge service did not say what it charges/)).toBeDefined();
   });
 
   it('adds nothing when the service charges nothing', () => {
-    const { container } = render(<ReturnFeeNote asset={usdc()} fee={0n} summary={summarizeReturnFee(0n, [7n])} tokens={1} failure={null} />);
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={0n} failure={null} />);
     expect(container.textContent).toBe('');
   });
 });
@@ -191,13 +180,13 @@ describe('TokenChoice', () => {
   const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
   const token = (amount: string) => ({ id: 't-1', amount }) as unknown as Token;
 
-  it('cannot be picked when the token is no larger than the return fee, and says why', () => {
+  it('cannot be picked when the token is no larger than the fee, and says why', () => {
     const onToggle = vi.fn();
     render(<TokenChoice token={token('10000')} asset={usdc()} checked={false} tooSmall onToggle={onToggle} />);
     const box = screen.getByRole('checkbox');
     expect(box).toHaveProperty('disabled', true);
     expect(box).toHaveProperty('checked', false);
-    expect(screen.getByText(/Smaller than the return fee/)).toBeDefined();
+    expect(screen.getByText(/Token is smaller than the charged fee\./)).toBeDefined();
   });
 
   it('can be picked when it covers the fee', () => {
@@ -205,7 +194,7 @@ describe('TokenChoice', () => {
     render(<TokenChoice token={token('1000000')} asset={usdc()} checked={false} tooSmall={false} onToggle={onToggle} />);
     fireEvent.click(screen.getByRole('checkbox'));
     expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/Smaller than the return fee/)).toBeNull();
+    expect(screen.queryByText(/Token is smaller than the charged fee\./)).toBeNull();
   });
 });
 

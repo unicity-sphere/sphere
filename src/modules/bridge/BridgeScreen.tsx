@@ -29,7 +29,7 @@ import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLoc
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
-import { summarizeReturnFee, tokensCoveringFee, type ReturnFeeSummary } from './returnFee';
+import { tokensCoveringFee } from './returnFee';
 import { useBridgeOut, useReturnableTokens, useReturnFee } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
@@ -80,10 +80,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const selectedTokens = useMemo(() => sendable.filter((t) => selectedIds.has(t.id)), [sendable, selectedIds]);
   const selectedAmount = useMemo(() => selectedTokens.reduce((sum, t) => sum + BigInt(t.amount || '0'), 0n), [selectedTokens]);
   const allSelected = sendable.length > 0 && selectedTokens.length === sendable.length;
-  const feeSummary = useMemo(
-    () => (returnFee.fee === undefined ? null : summarizeReturnFee(returnFee.fee, selectedTokens.map((t) => BigInt(t.amount || '0')))),
-    [returnFee.fee, selectedTokens],
-  );
 
   // Re-read the recovery records each time the screen opens.
   useEffect(() => {
@@ -174,8 +170,8 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
       return;
     }
     const fee = returnFee.fee;
-    if (fee === undefined || !feeSummary) {
-      setError('The return service has not said what it charges yet. Nothing was burned; try again in a moment.');
+    if (fee === undefined) {
+      setError('The bridge service has not said what it charges yet. Try again in a moment.');
       return;
     }
     setStep('processing');
@@ -382,13 +378,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   />
                 </div>
 
-                <p className={`text-xs ${MUTED}`}>
-                  You sign only the burn here. The return service proves it and releases the funds to that address;
-                  you pay nothing on {asset.chain.name} to receive. The burned token is kept in this wallet's records until
-                  the release lands, and anyone holding it can resubmit it.
-                </p>
-
-                <ReturnFeeNote asset={asset} fee={returnFee.fee} summary={feeSummary} tokens={selectedTokens.length} failure={returnFee.error} />
+                <ReturnFeeNote asset={asset} fee={returnFee.fee} failure={returnFee.error} />
 
                 {error && <ErrorLine text={error} />}
 
@@ -497,7 +487,7 @@ function ChoiceRow({
   );
 }
 
-/** One token of the list. A token the return fee would take whole is shown but cannot be picked. */
+/** One token of the list. A token the fee would take whole is shown but cannot be picked. */
 interface TokenChoiceProps {
   token: Token;
   asset: BridgeAsset;
@@ -515,7 +505,7 @@ export function TokenChoice({ token, asset, checked, tooSmall, onToggle }: Token
           {formatUnits(BigInt(token.amount || '0'), asset.decimals)} {asset.symbol}
         </span>
         {tooSmall ? (
-          <span className={`block text-[11px] ${MUTED}`}>Smaller than the return fee, so it cannot be sent out on its own.</span>
+          <span className={`block text-[11px] ${MUTED}`}>Token is smaller than the charged fee.</span>
         ) : (
           <span className={`block truncate text-[11px] font-mono ${MUTED}`}>{token.id}</span>
         )}
@@ -551,30 +541,25 @@ function SelectionSummary({ chain, asset, prefix, onChange }: { chain: BridgeCha
   );
 }
 
-/** What the return service charges, shown before the burn; the button stays off until it is known. */
+/** What the bridge service charges, shown before the burn; the button stays off until it is known. */
 interface ReturnFeeNoteProps {
   asset: BridgeAsset;
   fee: bigint | undefined;
-  summary: ReturnFeeSummary | null;
-  tokens: number;
   failure: Error | null;
 }
 
-export function ReturnFeeNote({ asset, fee, summary, tokens, failure }: ReturnFeeNoteProps) {
-  if (fee === undefined || !summary) {
+export function ReturnFeeNote({ asset, fee, failure }: ReturnFeeNoteProps) {
+  if (fee === undefined) {
     return failure ? (
-      <ErrorLine text={`Nothing can be sent out now: the return service did not say what it charges. ${getErrorMessage(failure)}`} />
+      <ErrorLine text={`Nothing can be sent out now: the bridge service did not say what it charges. ${getErrorMessage(failure)}`} />
     ) : (
-      <p className={`text-xs ${MUTED}`}>Asking the return service what it charges…</p>
+      <p className={`text-xs ${MUTED}`}>Asking the bridge service what it charges…</p>
     );
   }
   if (fee === 0n) return null;
   return (
     <p className={`text-xs ${MUTED}`}>
-      The return service keeps {formatUnits(fee, asset.decimals)} {asset.symbol} of each token as its fee
-      {tokens > 0 &&
-        `: ${formatUnits(summary.total, asset.decimals)} ${asset.symbol} in all, leaving ${formatUnits(summary.received, asset.decimals)} ${asset.symbol} to be released`}
-      .
+      The bridge service charges {formatUnits(fee, asset.decimals)} {asset.symbol} of each token as its fee.
     </p>
   );
 }

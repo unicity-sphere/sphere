@@ -10,7 +10,7 @@ import { decodeBridgeBackReason, toHex } from '@unicitylabs/bridge-plugin';
 
 import evmUsdc from '@/modules/bridge/assets/evm-usdc';
 import { resetBridgeAssets } from '@/modules/bridge/assets';
-import { coversReturnFee, summarizeReturnFee, tokensCoveringFee } from '@/modules/bridge/returnFee';
+import { coversReturnFee, tokensCoveringFee } from '@/modules/bridge/returnFee';
 import type { BridgeOutSide } from '@/modules/bridge/types';
 
 const SERVICE = 'https://return.example.test';
@@ -151,22 +151,5 @@ describe('tokensCoveringFee', () => {
 
   it('keeps them all while the fee is not known', () => {
     expect(tokensCoveringFee(tokens, undefined)).toHaveLength(4);
-  });
-});
-
-describe('summarizeReturnFee', () => {
-  it('charges each token and leaves the rest to be released', () => {
-    expect(summarizeReturnFee(50_000n, [1_000_000n, 2_000_000n])).toEqual({ total: 100_000n, received: 2_900_000n });
-  });
-
-  it('never goes negative: a token the fee would take whole is not sent, so it pays and releases nothing', () => {
-    expect(summarizeReturnFee(50_000n, [10_000n])).toEqual({ total: 0n, received: 0n });
-    expect(summarizeReturnFee(50_000n, [50_000n])).toEqual({ total: 0n, received: 0n });
-    expect(summarizeReturnFee(50_000n, [50_000n, 10_000n, 1_000_000n])).toEqual({ total: 50_000n, received: 950_000n });
-    expect(summarizeReturnFee(50_000n, [50_001n])).toEqual({ total: 50_000n, received: 1n });
-  });
-
-  it('takes nothing when the service charges nothing', () => {
-    expect(summarizeReturnFee(0n, [7n])).toEqual({ total: 0n, received: 7n });
   });
 });
