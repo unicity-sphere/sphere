@@ -16,6 +16,9 @@ vi.mock('../../../../src/sdk', () => ({ useTokens: () => ({ tokens: [] }) }));
 import { BridgeScreen } from '@/modules/bridge/BridgeScreen';
 import { bridgeAssetByCoin, bridgeAssetsFor } from '@/modules/bridge/assets';
 
+// Sepolia USDC offers bridge-out only with a return service configured.
+vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', 'https://return.example.test');
+
 function renderScreen() {
   render(
     <QueryClientProvider client={new QueryClient()}>

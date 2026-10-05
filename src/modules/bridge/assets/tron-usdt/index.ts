@@ -20,12 +20,16 @@ import { bridgeOut } from '../out';
 
 const provider: BridgeAssetProvider = {
   id: 'tron-usdt',
-  load: () => loadBridges([withServiceUrl(NILE_USDT_BRIDGE)]).map(tronAsset),
+  load: () => {
+    const serviceUrl = returnServiceUrl();
+    const manifest = serviceUrl ? withReturnServiceUrl(NILE_USDT_BRIDGE, serviceUrl) : NILE_USDT_BRIDGE;
+    return loadBridges([manifest]).map((bridge) => tronAsset(bridge, serviceUrl !== undefined));
+  },
 };
 
 export default provider;
 
-function tronAsset(bridge: LoadedBridge): BridgeAsset {
+function tronAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset {
   const m = bridge.manifest;
   if (m.family !== 'tron') throw new Error(`${m.label}: not a Tron manifest`);
   const rpc = new TronHttpRpcClient({ baseUrl: m.rpcUrl, apiKey: m.apiKey });
@@ -65,15 +69,16 @@ function tronAsset(bridge: LoadedBridge): BridgeAsset {
     presentation: bridgePresentation(bridge),
     wallets,
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
-    out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))),
+    out: hasReturnService ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination))) : undefined,
     disabledReason: m.disabledReason,
     settling: (justification) => lockFinality(bridge, justification),
   };
 }
 
-function withServiceUrl(m: typeof NILE_USDT_BRIDGE): typeof NILE_USDT_BRIDGE {
-  const url = import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL as string | undefined;
-  return url ? withReturnServiceUrl(m, url) : m;
+// No return service is deployed for this deployment; a local build can name one. Without one
+// the asset is offered for bridging in only, as for Sepolia USDC.
+function returnServiceUrl(): string | undefined {
+  return (import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT as string | undefined)?.trim() || undefined;
 }
 
 function tronChain(chainId: number, chainRef: string): BridgeChain {

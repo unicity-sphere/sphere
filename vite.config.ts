@@ -10,6 +10,16 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` (development, production, etc.)
   const env = loadEnv(mode, process.cwd(), '');
 
+  // The bridge's single return-service override sent every asset's burns to one service,
+  // and a service accepts one deployment's only. It is per deployment now; refuse the old
+  // name rather than ignore it, which would leave bridge-out hidden with no reason given.
+  if (env.VITE_BRIDGE_RETURN_SERVICE_URL) {
+    throw new Error(
+      'VITE_BRIDGE_RETURN_SERVICE_URL is replaced by VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC ' +
+        'and VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT: set the one for the deployment your service serves.',
+    );
+  }
+
   // SSL certificate path from .env (optional - leave empty to disable HTTPS)
   const sslCertPath = env.SSL_CERT_PATH || '';
 

@@ -54,3 +54,11 @@ describe('the Pages preview build can actually reach mainnet', () => {
     expect(envValue('VITE_WALLET_API_URL_TESTNET2')).toMatch(/^https:\/\/\S+$/);
   });
 });
+
+describe('the Pages preview offers bridge-out, as staging does', () => {
+  it('names the Sepolia USDC return service (gate: bridging in only without one)', () => {
+    // No container writes runtime-config.js here, so the build env is the only
+    // source; without it the asset is offered for bridging in only.
+    expect(envValue('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC')).toMatch(/^https:\/\/\S+$/);
+  });
+});

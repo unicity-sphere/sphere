@@ -11,23 +11,27 @@ import {
   SEPOLIA_USDC_BRIDGE,
   withReturnServiceUrl,
   type DepositWallet,
-  type EvmBridgeManifest,
   type LoadedBridge,
   type SourceSigner,
 } from '@unicitylabs/bridge-plugin/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
+import { readRuntimeConfig } from '../../../../config/runtimeConfig';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { bridgeOut } from '../out';
 
 const provider: BridgeAssetProvider = {
   id: 'evm-usdc',
-  load: () => loadBridges([withServiceUrl(SEPOLIA_USDC_BRIDGE)]).map(evmAsset),
+  load: () => {
+    const serviceUrl = returnServiceUrl();
+    const manifest = serviceUrl ? withReturnServiceUrl(SEPOLIA_USDC_BRIDGE, serviceUrl) : SEPOLIA_USDC_BRIDGE;
+    return loadBridges([manifest]).map((bridge) => evmAsset(bridge, serviceUrl !== undefined));
+  },
 };
 
 export default provider;
 
-function evmAsset(bridge: LoadedBridge): BridgeAsset {
+function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset {
   const m = bridge.manifest;
   if (m.family !== 'eip155') throw new Error(`${m.label}: not an Ethereum manifest`);
   const rpc = new EvmJsonRpcClient({ rpcUrl: m.rpcUrl });
@@ -67,26 +71,33 @@ function evmAsset(bridge: LoadedBridge): BridgeAsset {
     presentation: bridgePresentation(bridge),
     wallets,
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
-    out: bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
-      owed: (destination) => owedTo(bridge, rpc, destination),
-      collect: async (destination) => {
-        const signer = injected.create(m.chainId);
-        await signer.connect();
-        const from = await signer.getAddress();
-        if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-          throw new Error(`Switch MetaMask to ${destination} to collect.`);
-        }
-        return signer.sendCall(withdrawCall(bridge));
-      },
-    }),
+    out: hasReturnService
+      ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
+          owed: (destination) => owedTo(bridge, rpc, destination),
+          collect: async (destination) => {
+            const signer = injected.create(m.chainId);
+            await signer.connect();
+            const from = await signer.getAddress();
+            if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
+              throw new Error(`Switch MetaMask to ${destination} to collect.`);
+            }
+            return signer.sendCall(withdrawCall(bridge));
+          },
+        })
+      : undefined,
     disabledReason: m.disabledReason,
     settling: (justification) => lockFinality(bridge, justification),
   };
 }
 
-function withServiceUrl(m: EvmBridgeManifest): EvmBridgeManifest {
-  const url = import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL as string | undefined;
-  return url ? withReturnServiceUrl(m, url) : m;
+// The deployment's return service, from its runtime config or the build env. Without one the
+// asset is offered for bridging in only: a burned token no service can take stays in this
+// browser alone. A container writes every key, so its empty value means "none here" and,
+// unlike runtimeSetting(), does not fall back to a URL baked at build time.
+function returnServiceUrl(): string | undefined {
+  const runtime = readRuntimeConfig()?.BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC;
+  const url = runtime ?? (import.meta.env.VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC as string | undefined);
+  return url?.trim() || undefined;
 }
 
 function evmChain(chainId: number, chainRef: string): BridgeChain {

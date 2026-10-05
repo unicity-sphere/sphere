@@ -77,6 +77,15 @@ export interface SphereRuntimeConfig {
    * (shouldAnnounceMainnet) instead and leave this alone.
    */
   DEFAULT_NETWORK?: string;
+  /**
+   * The bridge return service for the Sepolia USDC deployment, which checks burns
+   * against the testnet2 trust base. Here rather than on a sed placeholder because
+   * it decides whether bridge-out is offered for that asset at all, and a baked
+   * placeholder folds that decision open. Empty = bridging in only, even when the
+   * build baked a VITE_ value: unlike runtimeSetting(), a container's empty key wins
+   * (the bridge module's Sepolia USDC asset). Absent (no container) = the build's value.
+   */
+  BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC?: string;
 }
 
 /** The container-supplied config, or undefined (SSR / not yet written). */
