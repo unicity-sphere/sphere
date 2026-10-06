@@ -91,7 +91,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   // than read once at render.
   useEffect(() => {
     if (!isOpen || step !== 'form' || direction !== 'in' || !asset) return;
-    const check = () => setAvailability(Object.fromEntries(asset.wallets.map((w) => [w.id, w.isAvailable()])));
+    const check = () => setAvailability(Object.fromEntries(asset.wallets().map((w) => [w.id, w.isAvailable()])));
     check();
     const id = setInterval(check, 1000);
     return () => clearInterval(id);
@@ -275,7 +275,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
                   title={`${a.symbol} ${a.chain.name}`}
                   detail={a.chain.networkName}
                   tag={a.chain.testnet ? 'testnet' : undefined}
-                  count={direction === 'in' ? a.wallets.length : returnCandidates(a, tokens).length}
+                  count={direction === 'in' ? a.wallets().length : returnCandidates(a, tokens).length}
                   countNoun={direction === 'in' ? 'wallet' : 'token'}
                   disabled={a.disabledReason}
                   onClick={() => pickAsset(a)}
@@ -312,11 +312,12 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             {error && <ErrorLine text={error} />}
 
             <div className="space-y-2">
-              {asset.wallets.map((w) => {
+              {asset.wallets().map((w) => {
                 const available = availability[w.id] ?? w.isAvailable();
                 return (
                   <div key={w.id} className="space-y-1">
                     <Button onClick={() => startIn(w)} disabled={!available} className="w-full">
+                      {w.icon && <img src={w.icon} alt="" className="w-5 h-5" />}
                       Continue with {w.name}
                     </Button>
                     {!available && w.unavailableHint && <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>}
@@ -685,7 +686,9 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
 /**
  * A pull-payment vault credits the destination; this collects the credit. The
  * amount is what the vault owes now, so several returns to one destination
- * collect together, and a credit already taken shows nothing.
+ * collect together, and a credit already taken shows nothing. One button per
+ * wallet on the page, named when there are several, since the wallet that
+ * holds the destination has to send the transaction.
  */
 function CollectButton({ payout, destination, asset }: { payout: BridgePayout; destination: string; asset: BridgeAsset }) {
   const owed = useQuery({
@@ -693,19 +696,24 @@ function CollectButton({ payout, destination, asset }: { payout: BridgePayout; d
     queryFn: () => payout.owed(destination),
     refetchInterval: 30_000,
   });
-  const collect = useMutation({ mutationFn: () => payout.collect(destination), onSuccess: () => owed.refetch() });
+  const collect = useMutation({ mutationFn: (wallet: BridgeWalletOption) => payout.collect(destination, wallet), onSuccess: () => owed.refetch() });
   if (collect.data) return <TxLink href={asset.presentation.explorerTxUrl(collect.data)} label="collected" />;
   if (!owed.data) return null;
+  const wallets = asset.wallets().filter((w) => w.isAvailable());
+  const amount = `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}`;
   return (
     <span className="shrink-0 flex flex-col items-end gap-0.5">
-      <button
-        type="button"
-        onClick={() => collect.mutate()}
-        disabled={collect.isPending}
-        className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
-      >
-        {collect.isPending ? 'Collecting…' : `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}`}
-      </button>
+      {wallets.map((w) => (
+        <button
+          key={w.id}
+          type="button"
+          onClick={() => collect.mutate(w)}
+          disabled={collect.isPending}
+          className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
+        >
+          {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : wallets.length > 1 ? `${amount} with ${w.name}` : amount}
+        </button>
+      ))}
       {collect.error && <span className="text-red-500 max-w-[12rem] text-right">{getErrorMessage(collect.error)}</span>}
     </span>
   );

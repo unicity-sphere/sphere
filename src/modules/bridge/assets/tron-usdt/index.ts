@@ -70,7 +70,7 @@ function tronAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset
     networks: ['testnet', 'testnet2'],
     tokenPlugin: bridgeTokenPlugin(bridge),
     presentation: bridgePresentation(bridge),
-    wallets,
+    wallets: () => wallets,
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: hasReturnService ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), { feeCap: RETURN_FEE_CAP }) : undefined,
     disabledReason: m.disabledReason,

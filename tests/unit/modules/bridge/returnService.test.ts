@@ -43,7 +43,7 @@ describe('bridge return service', () => {
     vi.stubEnv(SEPOLIA_ENV, '');
     const [asset] = evmUsdc.load();
     expect(asset.out).toBeUndefined();
-    expect(asset.wallets.length).toBeGreaterThan(0);
+    expect(asset.wallets().length).toBeGreaterThan(0);
   });
 
   it('treats a blank setting as none', () => {

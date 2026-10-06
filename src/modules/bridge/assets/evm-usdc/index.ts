@@ -3,7 +3,7 @@ import {
   bridgePresentation,
   bridgeTokenPlugin,
   createSourceAdapter,
-  injectedEvmProvider,
+  evmWallets,
   loadBridges,
   lockFinality,
   owedTo,
@@ -13,6 +13,7 @@ import {
   type DepositWallet,
   type LoadedBridge,
   type SourceSigner,
+  type SourceWalletProvider,
 } from '@unicitylabs/bridge-plugin/wallet';
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
@@ -48,16 +49,20 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     chainLabel: m.label,
   });
 
-  const injected = injectedEvmProvider();
-  const wallets: BridgeWalletOption[] = [
-    {
-      id: injected.id,
-      name: injected.name,
-      unavailableHint: 'Install the MetaMask browser extension to sign on Ethereum.',
-      isAvailable: () => injected.isAvailable(),
-      open: () => depsFor(injected.create(m.chainId)),
-    },
-  ];
+  const discovered = evmWallets();
+  const optionFor = (wallet: SourceWalletProvider): BridgeWalletOption => ({
+    id: wallet.id,
+    name: wallet.name,
+    icon: wallet.icon,
+    unavailableHint: 'Install an Ethereum browser wallet such as MetaMask to sign on Ethereum.',
+    isAvailable: () => wallet.isAvailable(),
+    open: () => depsFor(wallet.create(m.chainId)),
+  });
+  const signerFor = (wallet: BridgeWalletOption): SourceSigner => {
+    const found = discovered.list().find((w) => w.id === wallet.id);
+    if (!found) throw new Error(`${wallet.name} is no longer available.`);
+    return found.create(m.chainId);
+  };
 
   return {
     id: `${m.chainRef}:${m.symbol.toLowerCase()}`,
@@ -72,7 +77,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     networks: ['testnet', 'testnet2'],
     tokenPlugin: bridgeTokenPlugin(bridge),
     presentation: bridgePresentation(bridge),
-    wallets,
+    wallets: () => discovered.list().map(optionFor),
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     out: hasReturnService
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
@@ -80,12 +85,12 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
           feeRecipient: returnFeeRecipient(),
           payout: {
             owed: (destination) => owedTo(bridge, rpc, destination),
-            collect: async (destination) => {
-              const signer = injected.create(m.chainId);
+            collect: async (destination, wallet) => {
+              const signer = signerFor(wallet);
               await signer.connect();
               const from = await signer.getAddress();
               if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-                throw new Error(`Switch MetaMask to ${destination} to collect.`);
+                throw new Error(`Switch ${wallet.name} to ${destination} to collect.`);
               }
               return signer.sendCall(withdrawCall(bridge));
             },

@@ -34,6 +34,11 @@ The bridge module is itself pluggable. A bridgeable asset lives in
 deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
 
 - **the token plugin**: the strict mint-reason verifier the wallet registers;
+- **the wallet options** (`wallets()`): the ways to sign on the source chain,
+  read on each render because an Ethereum wallet announces itself through
+  EIP-6963 and may arrive after the asset loaded. The Ethereum asset lists every
+  announced wallet by name and icon and offers the legacy `window.ethereum` as
+  "Browser wallet" when no announced wallet owns it;
 - **the deposit wiring** per wallet option (`open()`): a `ChainWallet` that
   signs, a `ReceiptReader` for the node, and the chain's `BridgeSourceAdapter`
   from `@unicitylabs/bridge-core`, which turns "deposit X for this recipient"
@@ -46,8 +51,9 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   reason for an amount and a destination with that fee written in, `identify`
   reads a burned blob back (its nullifier, destination, amount and fee, or
   `null` when the blob is not this asset's), and `returns` is the return
-  service that proves the burn and releases the funds. An asset without `out`
-  is offered for bridging in only.
+  service that proves the burn and releases the funds. `payout`, when the vault
+  credits payouts, collects a settled return from the wallet option the user
+  picks. An asset without `out` is offered for bridging in only.
 - **`networks`**: which Unicity networks the asset may be bridged into (a
   testnet vault serves test networks only).
 

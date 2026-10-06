@@ -67,13 +67,13 @@ describe('BridgeScreen picker', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('walks to the Ethereum USDC form and names MetaMask as the signer', () => {
+  it('walks to the Ethereum USDC form and offers the browser wallet, with an install hint when none is there', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
     fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
-    expect(screen.getByRole('button', { name: /Continue with MetaMask/ })).toBeDefined();
-    expect(screen.getByText(/Install the MetaMask browser extension/)).toBeDefined();
+    expect(screen.getByRole('button', { name: /Continue with Browser wallet/ })).toBeDefined();
+    expect(screen.getByText(/Install an Ethereum browser wallet such as MetaMask/)).toBeDefined();
   });
 
   it('refuses a malformed amount or one finer than the asset divides before any wallet prompt', () => {
@@ -85,7 +85,7 @@ describe('BridgeScreen picker', () => {
       fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
       for (const typed of ['1.2.3', '1.1234567']) {
         fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: typed } });
-        fireEvent.click(screen.getByRole('button', { name: /Continue with MetaMask/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Continue with Browser wallet/ }));
         expect(screen.getByText('Enter an amount greater than zero, with at most 6 decimals.')).toBeDefined();
       }
       expect(request).not.toHaveBeenCalled();
