@@ -303,12 +303,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
               </div>
             </div>
 
-            <p className={`text-xs ${MUTED}`}>
-              You sign in your {chain.name} wallet: an approval for exactly this amount, then the lock. The
-              bridged token appears as soon as the lock is in a block; other wallets accept it after{' '}
-              {asset.confirmations} confirmations.
-            </p>
-
             {error && <ErrorLine text={error} />}
 
             <div className="space-y-2">
