@@ -223,7 +223,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
 
   const verb = direction === 'in' ? 'Bridge in' : 'Bridge out';
   const subtitle =
-    step === 'direction' ? 'Which way'
+    step === 'direction' ? 'Choose bridge direction'
     : step === 'asset' ? `${verb} · Step 1 of 2 · Which asset and network`
     : `${verb} · ${asset?.symbol} · ${chain?.name} · ${chain?.networkName}`;
 
