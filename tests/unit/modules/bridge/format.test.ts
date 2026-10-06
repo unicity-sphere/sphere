@@ -1,10 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, unburnedSentence } from '@/modules/bridge/format';
+import { burnStoppedSentence, formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
 
-describe('unburned sentence', () => {
-  it('says how many tokens stayed in the wallet and why', () => {
-    expect(unburnedSentence(1, 'The fee rose.')).toBe('1 token was not burned and stays in this wallet. The fee rose.');
-    expect(unburnedSentence(3, 'The fee rose.')).toBe('3 tokens were not burned and stay in this wallet. The fee rose.');
+describe('burn stopped sentence', () => {
+  it('names the token that failed with its own reason and counts only the tokens after it as kept', () => {
+    expect(burnStoppedSentence({ done: 1, total: 4 }, 'The fee rose.')).toBe(
+      'Burning stopped at token 2 of 4: The fee rose. The last 2 tokens were not burned and stay in this wallet.',
+    );
+    expect(burnStoppedSentence({ done: 1, total: 3 }, 'The fee rose.')).toBe(
+      'Burning stopped at token 2 of 3: The fee rose. The last token was not burned and stays in this wallet.',
+    );
+  });
+
+  it('says nothing about kept tokens when the failing token was the last', () => {
+    expect(burnStoppedSentence({ done: 1, total: 2 }, 'The fee rose.')).toBe('Burning stopped at token 2 of 2: The fee rose.');
   });
 });
 

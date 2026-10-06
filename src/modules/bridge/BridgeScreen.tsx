@@ -23,7 +23,7 @@ import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor } from './assets';
 import { lockTxidFor } from './bridgeIn';
-import { formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, unburnedSentence } from './format';
+import { burnStoppedSentence, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
@@ -428,7 +428,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             ) : (
               <BurnedSummary asset={asset} burned={burned.map((b) => returns.find((r) => r.id === b.id) ?? b)} />
             )}
-            {error && burnProgress && <ErrorLine text={unburnedSentence(burnProgress.total - burned.length, error)} />}
+            {error && burnProgress && <ErrorLine text={burnStoppedSentence(burnProgress, error)} />}
             <Button onClick={close} className="w-full mt-2">Done</Button>
           </div>
         )}

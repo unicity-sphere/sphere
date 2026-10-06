@@ -64,7 +64,13 @@ export function pendingLockSentence(lock: Pick<PendingLock, 'status' | 'lockTxid
   return 'not signed, nothing is locked';
 }
 
-/** What became of the tokens a bridge-out did not reach after one of its burns failed. */
-export function unburnedSentence(left: number, reason: string): string {
-  return `${left} ${left === 1 ? 'token was not burned and stays' : 'tokens were not burned and stay'} in this wallet. ${reason}`;
+/**
+ * Where a bridge-out stopped and why. The failing token is left to its own reason: its burn
+ * may have gone out before the failure, in which case the wallet's journal finishes it and it
+ * turns up under Returns. Only the tokens after it are certainly still in the wallet.
+ */
+export function burnStoppedSentence(progress: { done: number; total: number }, reason: string): string {
+  const left = progress.total - progress.done - 1;
+  const kept = left === 0 ? '' : ` The last ${left === 1 ? 'token was' : `${left} tokens were`} not burned and ${left === 1 ? 'stays' : 'stay'} in this wallet.`;
+  return `Burning stopped at token ${progress.done + 1} of ${progress.total}: ${reason}${kept}`;
 }
