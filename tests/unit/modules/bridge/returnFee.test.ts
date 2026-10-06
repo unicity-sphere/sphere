@@ -10,7 +10,7 @@ import { decodeBridgeBackReason, toHex } from '@unicitylabs/bridge-plugin';
 
 import evmUsdc from '@/modules/bridge/assets/evm-usdc';
 import { resetBridgeAssets } from '@/modules/bridge/assets';
-import { coversReturnFee, tokensCoveringFee } from '@/modules/bridge/returnFee';
+import { coversReturnFee, ReturnServiceUnreachable, tokensCoveringFee } from '@/modules/bridge/returnFee';
 import type { BridgeOutSide } from '@/modules/bridge/types';
 
 const SERVICE = 'https://return.example.test';
@@ -101,11 +101,17 @@ describe('return fee', () => {
     await expect(sepoliaOut().reasonFor({ amount: 1_000_000n, destination: DESTINATION, maxFee: 50_000n })).rejects.toThrow(/fees/);
   });
 
-  it('says the service did not say what it charges when its quote cannot be fetched', async () => {
+  it('reports a service that does not respond as unreachable, with the cause', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
-    await expect(sepoliaOut().fee()).rejects.toThrow(/did not say what it charges.*fees/);
+    await expect(sepoliaOut().fee()).rejects.toThrow(ReturnServiceUnreachable);
+    await expect(sepoliaOut().fee()).rejects.toThrow(/did not respond.*fees/);
     vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
-    await expect(sepoliaOut().fee()).rejects.toThrow('The bridge service did not say what it charges: Failed to fetch');
+    await expect(sepoliaOut().fee()).rejects.toThrow('The bridge service did not respond: Failed to fetch');
+  });
+
+  it('does not call a refused quote unreachable', async () => {
+    quoting(quote((WALLET_CAP + 1n).toString()));
+    await expect(sepoliaOut().fee()).rejects.not.toThrow(ReturnServiceUnreachable);
   });
 
   it('pays the account this wallet is set to pay', async () => {

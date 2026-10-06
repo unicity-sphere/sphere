@@ -29,7 +29,7 @@ import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLoc
 import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
-import { tokensCoveringFee } from './returnFee';
+import { ReturnServiceUnreachable, tokensCoveringFee } from './returnFee';
 import { useBridgeOut, useReturnableTokens, useReturnFee } from './useBridgeOut';
 
 type Direction = 'in' | 'out';
@@ -547,7 +547,7 @@ interface ReturnFeeNoteProps {
 export function ReturnFeeNote({ asset, fee, failure }: ReturnFeeNoteProps) {
   if (fee === undefined) {
     return failure ? (
-      <ErrorLine text={`Nothing can be sent out now. ${getErrorMessage(failure)}`} />
+      <ErrorLine text={feeFailureSentence(failure)} />
     ) : (
       <p className={`text-xs ${MUTED}`}>Asking the bridge service what it charges…</p>
     );
@@ -558,6 +558,11 @@ export function ReturnFeeNote({ asset, fee, failure }: ReturnFeeNoteProps) {
       The bridge service charges {formatUnits(fee, asset.decimals)} {asset.symbol} of each token as its fee.
     </p>
   );
+}
+
+function feeFailureSentence(failure: Error): string {
+  if (failure instanceof ReturnServiceUnreachable) return 'The bridge service did not respond. Bridging out is currently disabled.';
+  return `Nothing can be sent out now. ${getErrorMessage(failure)}`;
 }
 
 export function BurnedSummary({ asset, burned }: { asset: BridgeAsset; burned: PendingReturn[] }) {

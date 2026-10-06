@@ -7,3 +7,11 @@ export function coversReturnFee(amount: bigint, fee: bigint): boolean {
 export function tokensCoveringFee<T extends { readonly amount: string }>(tokens: readonly T[], fee: bigint | undefined): T[] {
   return tokens.filter((t) => fee === undefined || coversReturnFee(BigInt(t.amount || '0'), fee));
 }
+
+/** The return service could not be asked what it charges, so no burn can be made. */
+export class ReturnServiceUnreachable extends Error {
+  constructor(cause: string) {
+    super(`The bridge service did not respond: ${cause}`);
+    this.name = 'ReturnServiceUnreachable';
+  }
+}

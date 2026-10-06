@@ -11,6 +11,7 @@ import {
   type ReturnRecord,
 } from '@unicitylabs/bridge-plugin/wallet';
 
+import { ReturnServiceUnreachable } from '../returnFee';
 import type { BridgeOutSide, BridgePayout, ReturnServiceRecord } from '../types';
 
 export interface BridgeOutOptions {
@@ -36,7 +37,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
   };
   const quoted = () =>
     client.getFees().catch((err: unknown) => {
-      throw new Error(`The bridge service did not say what it charges: ${err instanceof Error ? err.message : String(err)}`);
+      throw new ReturnServiceUnreachable(err instanceof Error ? err.message : String(err));
     });
   return {
     fee: async () => payable(parseFeeQuote(await quoted(), Date.now())).feeAmount,
