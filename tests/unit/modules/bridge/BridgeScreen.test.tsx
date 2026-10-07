@@ -193,7 +193,7 @@ describe('ReturnFeeNote', () => {
   });
 
   it('says the service did not respond and bridging out is disabled when it could not be reached', () => {
-    const { container } = render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new ReturnServiceUnreachable('Failed to fetch')} />);
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new ReturnServiceUnreachable(new TypeError('Failed to fetch'))} />);
     expect(container.textContent?.trim()).toBe('The bridge service did not respond. Bridging out is currently disabled.');
   });
 
