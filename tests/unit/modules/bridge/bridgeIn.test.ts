@@ -141,7 +141,6 @@ function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; payment
     expectedNetwork: CHAIN,
     chainLabel: bridge.manifest.label,
     symbol: bridge.manifest.symbol,
-    decimals: bridge.plugin.decimals,
     amount: AMOUNT,
   });
 }
@@ -186,7 +185,7 @@ describe('runBridgeIn', () => {
   it('refuses a deposit above what the account holds, before any signing', async () => {
     const signer = new FakeSigner();
     const store = new FakeStore();
-    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n, held: 500_000n }) })).rejects.toThrow('Your wallet holds 0.5 USDT; enter at most that.');
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n, held: 500_000n }) })).rejects.toThrow('Not enough USDT in the wallet.');
     expect(signer.sent).toHaveLength(0);
     expect(store.locks.size).toBe(0);
   });
@@ -331,7 +330,6 @@ describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
       expectedNetwork: CHAIN,
       chainLabel: bridge.manifest.label,
       symbol: bridge.manifest.symbol,
-      decimals: bridge.plugin.decimals,
       amount: AMOUNT,
     });
 

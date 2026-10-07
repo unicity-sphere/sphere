@@ -79,7 +79,7 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
 - Account and network are pinned at connect and re-checked before every
   signature; a wrong network blocks before any signing.
 - What the account holds of the asset on the source chain is read right after
-  connect; an amount above it stops with the balance in the message, before
+  connect; an amount above it stops with "Not enough USDC in the wallet." before
   anything is signed or recorded, so no approval is paid for a lock that cannot
   follow.
 - A reverted lock marks the record failed; a mint that fails after a confirmed
