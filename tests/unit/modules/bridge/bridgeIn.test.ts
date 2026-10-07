@@ -450,10 +450,11 @@ describe('locateLock', () => {
 
   it('writes the lock transaction it finds into the record and returns it', async () => {
     const store = new FakeStore();
-    store.persistPendingLock(unsure());
+    const lock = unsure();
+    store.persistPendingLock(lock);
     const findLock = vi.fn(async () => LOCK_TX);
-    expect(await locateLock(asStore(store), { findLock }, unsure())).toBe(LOCK_TX);
-    expect(findLock).toHaveBeenCalledWith({ from: OWNER, recipientCommitmentHex: COMMITMENT, createdAt: unsure().createdAt });
+    expect(await locateLock(asStore(store), { findLock }, lock)).toBe(LOCK_TX);
+    expect(findLock).toHaveBeenCalledWith({ from: OWNER, recipientCommitmentHex: COMMITMENT, createdAt: lock.createdAt });
     expect(store.only()).toMatchObject({ lockTxid: LOCK_TX, lockRequested: true, status: 'locking' });
   });
 
