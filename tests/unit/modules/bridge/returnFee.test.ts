@@ -101,15 +101,22 @@ describe('return fee', () => {
     await expect(sepoliaOut().reasonFor({ amount: 1_000_000n, destination: DESTINATION, maxFee: 50_000n })).rejects.toThrow(/fees/);
   });
 
-  it('reports a service that does not respond as unreachable, with the cause', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
-    await expect(sepoliaOut().fee()).rejects.toThrow(ReturnServiceUnreachable);
-    await expect(sepoliaOut().fee()).rejects.toThrow(/did not respond.*fees/);
-    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
-    await expect(sepoliaOut().fee()).rejects.toThrow('The bridge service did not respond: Failed to fetch');
+  it('reports a service that gives no response as unreachable, keeping the cause', async () => {
+    const failure = new TypeError('Failed to fetch');
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(failure)));
+    const err = await sepoliaOut().fee().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReturnServiceUnreachable);
+    expect((err as Error).message).toBe('The bridge service did not respond: Failed to fetch');
+    expect((err as Error).cause).toBe(failure);
   });
 
-  it('does not call a refused quote unreachable', async () => {
+  it('passes on what a service that did respond said, instead of calling it unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
+    await expect(sepoliaOut().fee()).rejects.not.toThrow(ReturnServiceUnreachable);
+    await expect(sepoliaOut().fee()).rejects.toThrow(/fees.*404/);
+    const paused = { error: { code: 'paused', message: 'Returns paused for maintenance', recoverable: true } };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(paused), { status: 503 })));
+    await expect(sepoliaOut().fee()).rejects.toThrow('Returns paused for maintenance');
     quoting(quote((WALLET_CAP + 1n).toString()));
     await expect(sepoliaOut().fee()).rejects.not.toThrow(ReturnServiceUnreachable);
   });

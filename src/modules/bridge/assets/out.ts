@@ -37,7 +37,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
   };
   const quoted = () =>
     client.getFees().catch((err: unknown) => {
-      throw new ReturnServiceUnreachable(err instanceof Error ? err.message : String(err));
+      throw err instanceof TypeError ? new ReturnServiceUnreachable(err) : err;
     });
   return {
     fee: async () => payable(parseFeeQuote(await quoted(), Date.now())).feeAmount,

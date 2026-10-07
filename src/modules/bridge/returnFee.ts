@@ -10,8 +10,8 @@ export function tokensCoveringFee<T extends { readonly amount: string }>(tokens:
 
 /** The return service could not be asked what it charges, so no burn can be made. */
 export class ReturnServiceUnreachable extends Error {
-  constructor(cause: string) {
-    super(`The bridge service did not respond: ${cause}`);
+  constructor(cause: Error) {
+    super(`The bridge service did not respond: ${cause.message}`, { cause });
     this.name = 'ReturnServiceUnreachable';
   }
 }
