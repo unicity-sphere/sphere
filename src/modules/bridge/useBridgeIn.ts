@@ -18,6 +18,12 @@ export interface BridgeInRequest {
   readonly amount: bigint;
 }
 
+const SEARCH_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
+}
+
 export function useBridgeIn() {
   const { sphere } = useSphereContext();
   const queryClient = useQueryClient();
@@ -59,7 +65,7 @@ export function useBridgeIn() {
       const key = sphere?.identity?.chainPubkey;
       const asset = bridgeAssetByCoin(lock.coinIdHex);
       if (!key || !asset) return Promise.resolve(undefined);
-      return locateLock(bridgeStoreFor(key), asset, lock);
+      return withTimeout(locateLock(bridgeStoreFor(key), asset, lock), SEARCH_TIMEOUT_MS, 'The search for the lock timed out.');
     },
     [sphere],
   );

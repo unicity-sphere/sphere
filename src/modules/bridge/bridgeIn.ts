@@ -47,7 +47,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
   const owner = await wallet.connect();
   const network = await wallet.getNetwork();
   assertOnChain(network, expectedNetwork, chainLabel);
-  assertHeld(await held(owner), amount, symbol);
+  assertHeld(await held(owner).catch(() => undefined), amount, symbol);
 
   const deposit = await adapter.prepareDeposit({
     amount,
@@ -122,17 +122,16 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
 
 function recordUnconfirmedDeposit(store: BridgeStore, lock: PendingLock, e: unknown): void {
   if (lock.lockTxid && e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
-  else if (!lock.lockTxid && (!lock.lockRequested || answeredByWallet(e))) store.removeLock(lock.id);
+  else if (!lock.lockTxid && (!lock.lockRequested || refusedByWallet(e))) store.removeLock(lock.id);
 }
 
 /**
- * The wallet answered the request with an error, so it broadcast nothing: a refusal, missing
- * funds for gas, a failed estimate. The exception is a node saying the transaction is already
- * known or its nonce used, which means one went out. No answer at all never reaches here.
+ * A refusal in the extension comes before any signature, so nothing went out. Every other
+ * error is kept: a node error can arrive after the broadcast, and a deleted record loses the
+ * salt the mint needs, while a kept one is settled by the chain search in the screen.
  */
-function answeredByWallet(e: unknown): boolean {
-  const { code, message } = (e ?? {}) as { code?: unknown; message?: unknown };
-  return typeof code === 'number' && !/already known|nonce too low|replacement transaction/i.test(String(message ?? ''));
+function refusedByWallet(e: unknown): boolean {
+  return (e as { code?: unknown } | null)?.code === 4001;
 }
 
 /**
@@ -197,8 +196,9 @@ function locksThisDeposit(commit: CommitInfo, lock: PendingLock): boolean {
   );
 }
 
-function assertHeld(held: bigint, amount: bigint, symbol: string): void {
-  if (held < amount) throw new Error(`Not enough ${symbol} in the wallet.`);
+/** An advisory check: a balance that could not be read does not block the deposit. */
+function assertHeld(held: bigint | undefined, amount: bigint, symbol: string): void {
+  if (held !== undefined && held < amount) throw new Error(`Not enough ${symbol} in the wallet.`);
 }
 
 export function assertOnChain(network: number, expected: number, chainLabel: string): void {

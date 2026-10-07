@@ -756,18 +756,20 @@ function PendingLockRow({ lock, busy, onResume, onDiscard, onLocate }: { lock: P
   const asset = bridgeAssetByCoin(lock.coinIdHex);
   const amount = asset ? `${formatUnits(BigInt(lock.amount), asset.decimals)} ${asset.symbol}` : lock.amount;
   const maybeSent = !lock.lockTxid && lock.lockRequested === true && !!asset;
+  // The search is a read of mined blocks, so a miss proves nothing: it runs again while the row
+  // is open and each time the screen opens, and never softens the discard confirmation.
   const search = useQuery({
     queryKey: ['bridge', 'lock-search', lock.id],
-    enabled: maybeSent && !!lock.from && !!onLocate,
+    enabled: maybeSent && !!lock.from && !!onLocate && !!asset?.findLock,
     queryFn: () => onLocate!(lock),
     retry: false,
-    staleTime: Infinity,
+    staleTime: 0,
+    refetchInterval: 60_000,
   });
   const searching = search.isEnabled && search.isPending;
-  const nothingFound = search.data === null;
   const pastedTxid = asset ? lockTxidFor(asset.chain.id, txidInput) : null;
   const discard = () => {
-    if (lock.lockRequested && !confirmingDiscard && !nothingFound) setConfirmingDiscard(true);
+    if (lock.lockRequested && !confirmingDiscard) setConfirmingDiscard(true);
     else onDiscard(lock);
   };
   return (
@@ -819,11 +821,11 @@ function PendingLockRow({ lock, busy, onResume, onDiscard, onLocate }: { lock: P
       )}
       {maybeSent && asset && searching && <div className={MUTED}>Looking for the lock on {asset.chain.name}…</div>}
       {maybeSent && asset && typeof search.data === 'string' && <div className={MUTED}>The lock was found on {asset.chain.name}.</div>}
-      {maybeSent && asset && nothingFound && (
-        <div className={MUTED}>No lock was found on {asset.chain.name} for this deposit since it started. Discarding is safe.</div>
+      {maybeSent && asset && search.data === null && (
+        <div className={MUTED}>No lock found on {asset.chain.name} yet for this deposit. The search runs again while this is open.</div>
       )}
       {maybeSent && search.error && <ErrorLine text={getErrorMessage(search.error)} />}
-      {maybeSent && !searching && typeof search.data !== 'string' && (
+      {maybeSent && typeof search.data !== 'string' && (
         <div className="flex items-center gap-2">
           <input
             aria-label="Lock transaction id"

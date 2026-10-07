@@ -190,6 +190,18 @@ describe('runBridgeIn', () => {
     expect(store.locks.size).toBe(0);
   });
 
+  it('goes ahead when the balance cannot be read, since the check is advisory', async () => {
+    const signer = new FakeSigner();
+    const store = new FakeStore();
+    const rpc = fakeRpc({ allowance: 2_000_000n });
+    const unreadable = { ...rpc, async constantCall(input: { functionSignature: string }) {
+      if (input.functionSignature === 'balanceOf(address)') throw new Error('Ethereum RPC eth_call failed: HTTP 429');
+      return rpc.constantCall(input);
+    } };
+    await run({ signer, store, rpc: unreadable });
+    expect(signer.sigs()).toEqual(['lock']);
+  });
+
   it('blocks before any signing when the wallet is on the wrong network', async () => {
     const signer = new FakeSigner();
     signer.network = CHAIN + 1;
@@ -250,22 +262,18 @@ describe('runBridgeIn', () => {
     expect(store.locks.size).toBe(0);
   });
 
-  it('forgets the deposit when the wallet answers the lock with any error, since an answered error was not broadcast', async () => {
-    const signer = new FakeSigner();
-    signer.lockFailure = Object.assign(new Error('insufficient funds for gas * price + value'), { code: -32603 });
-    const store = new FakeStore();
-    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/insufficient funds/);
-
-    expect(store.locks.size).toBe(0);
-  });
-
-  it('keeps the salt when the wallet says the lock is already known, since it may be in the mempool', async () => {
-    const signer = new FakeSigner();
-    signer.lockFailure = Object.assign(new Error('already known'), { code: -32000 });
-    const store = new FakeStore();
-    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/already known/);
-
-    expect(store.only()).toMatchObject({ status: 'locking', lockRequested: true });
+  it('keeps the salt on any other wallet error, since an error after the broadcast looks the same', async () => {
+    for (const failure of [
+      Object.assign(new Error('Internal JSON-RPC error.'), { code: -32603, data: { code: -32000, message: 'nonce too low' } }),
+      Object.assign(new Error('insufficient funds for gas * price + value'), { code: -32603 }),
+      Object.assign(new Error('Provider disconnected.'), { code: 4900 }),
+    ]) {
+      const signer = new FakeSigner();
+      signer.lockFailure = failure;
+      const store = new FakeStore();
+      await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(failure.message);
+      expect(store.only()).toMatchObject({ status: 'locking', lockRequested: true });
+    }
   });
 
   it('records which account signed the deposit', async () => {

@@ -19,7 +19,7 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
   return { ...mod, NILE_USDT_BRIDGE: { ...mod.NILE_USDT_BRIDGE, disabledReason: undefined } };
 });
 
-import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
+import { NILE_USDT_BRIDGE, SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 import { bridgeAssetsFor } from '@/modules/bridge/assets';
 import { BridgeScreen, BurnedSummary, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
@@ -261,16 +261,27 @@ describe('PendingList', () => {
     expect(link.getAttribute('href')).toBe(`https://sepolia.etherscan.io/address/${from}`);
   });
 
-  it('looks for the lock on the chain for a deposit that may have been sent, and says when none was found', async () => {
+  it('looks for the lock on the chain for a deposit that may have been sent, says when none was found yet, and still asks before discarding', async () => {
     const onLocate = vi.fn(async () => null);
     const { onDiscard } = renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
     expect(screen.getByText(/Looking for the lock on Ethereum/)).toBeDefined();
-    expect(screen.queryByLabelText('Lock transaction id')).toBeNull();
-    expect(await screen.findByText(/No lock was found on Ethereum for this deposit since it started. Discarding is safe./)).toBeDefined();
+    expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
+    expect(await screen.findByText(/No lock found on Ethereum yet for this deposit. The search runs again while this is open./)).toBeDefined();
     expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
     expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
-    expect(onDiscard).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
+    expect(onDiscard).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Discard anyway' })).toBeDefined();
+  });
+
+  it('does not search for a deposit on a chain the asset cannot search', async () => {
+    const onLocate = vi.fn(async () => undefined);
+    const tronLock: PendingLock = { ...lock, coinIdHex: NILE_USDT_BRIDGE.coinIdHex!, tokenTypeHex: NILE_USDT_BRIDGE.tokenTypeHex!, chainId: NILE_USDT_BRIDGE.chainId, from: 'TMckEpYxv8QA7oL36FvFRR7Gg1bL5DHsbt', lockRequested: true };
+    const { container } = renderList(tronLock, onLocate);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(onLocate).not.toHaveBeenCalled();
+    expect(container.textContent).not.toMatch(/Looking for the lock|data is undefined/);
+    expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
   });
 
   it('hands a found lock to the caller, who re-reads the record with its transaction', async () => {
