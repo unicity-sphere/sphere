@@ -134,17 +134,25 @@ function refusedByWallet(e: unknown): boolean {
   return (e as { code?: unknown } | null)?.code === 4001;
 }
 
+const FOUND_LOCK_RECEIPT_TIMEOUT_MS = 20_000;
+
 /**
- * Look for the lock of a deposit the wallet lost track of. The found transaction is written
- * into the record, which then resumes like any other. `null` means the signer locked nothing
- * with this deposit's commitment since it started; `undefined` means there was no way to look.
+ * Look for the lock of a deposit the wallet lost track of. A found transaction is read back
+ * from the chain and written into the record only when it locked this very deposit, the check
+ * Resume applies to a pasted id; the record then resumes like any other. `null` means no mined
+ * lock of this deposit was found yet; `undefined` means there was no way to look.
  */
-export async function locateLock(store: BridgeStore, asset: Pick<BridgeAsset, 'findLock'>, lock: PendingLock): Promise<string | null | undefined> {
+export async function locateLock(store: BridgeStore, asset: Pick<BridgeAsset, 'findLock' | 'resumeDeps'>, lock: PendingLock): Promise<string | null | undefined> {
   if (!asset.findLock || !lock.from) return undefined;
-  const lockTxid = await asset.findLock({ from: lock.from, recipientCommitmentHex: lock.recipientCommitmentHex, createdAt: lock.createdAt });
-  if (lockTxid) store.updateLock(lock.id, { lockTxid });
+  const lockTxid = await asset.findLock({ from: lock.from, tokenIdHex: lock.tokenIdHex, createdAt: lock.createdAt });
+  if (!lockTxid) return null;
+  const { adapter, receipts } = asset.resumeDeps();
+  const commit = await waitForCommit(receipts, lockTxid, adapter, FOUND_LOCK_RECEIPT_TIMEOUT_MS);
+  if (!locksThisDeposit(commit, lock)) return null;
+  store.updateLock(lock.id, { lockTxid });
   return lockTxid;
 }
+
 
 export interface ResumeArgs {
   readonly payments: BridgePayments;

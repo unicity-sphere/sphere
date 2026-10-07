@@ -156,10 +156,10 @@ export interface BridgeAsset {
   resumeDeps(): Pick<BridgeInDeps, 'adapter' | 'receipts'>;
   /**
    * The transaction that locked a deposit, found on the source chain from the signer's locks
-   * since it started; `null` when none carries its commitment. A read of the chain, nothing is
-   * sent. Absent when the chain offers no way to search.
+   * since it started; `null` when no mined block in that range carries its token id. A read of
+   * the chain, nothing is sent. Absent when the chain offers no way to search.
    */
-  findLock?(lock: { from: string; recipientCommitmentHex: string; createdAt: number }): Promise<string | null>;
+  findLock?(lock: { from: string; tokenIdHex: string; createdAt: number }): Promise<string | null>;
   /** Present when the asset can be bridged out again. */
   readonly out?: BridgeOutSide;
   /** When set, the asset is listed but neither direction can start; the text says why. */

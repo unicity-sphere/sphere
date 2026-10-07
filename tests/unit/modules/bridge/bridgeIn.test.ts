@@ -454,27 +454,41 @@ describe('locateLock', () => {
     status: 'locking',
   });
 
-  it('writes the lock transaction it finds into the record and returns it', async () => {
+  const searching = (found: string | null, lockReceipt: SourceTxInfo = lockMined) => {
+    const rpc = fakeRpc({ allowance: 0n, lock: lockReceipt });
+    const findLock = vi.fn(async () => found);
+    return { findLock, resumeDeps: () => ({ adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc) }) };
+  };
+
+  it('writes the lock transaction it finds into the record, once the chain confirms it locked this deposit, and returns it', async () => {
     const store = new FakeStore();
     const lock = unsure();
     store.persistPendingLock(lock);
-    const findLock = vi.fn(async () => LOCK_TX);
-    expect(await locateLock(asStore(store), { findLock }, lock)).toBe(LOCK_TX);
-    expect(findLock).toHaveBeenCalledWith({ from: OWNER, recipientCommitmentHex: COMMITMENT, createdAt: lock.createdAt });
+    const asset = searching(LOCK_TX);
+    expect(await locateLock(asStore(store), asset, lock)).toBe(LOCK_TX);
+    expect(asset.findLock).toHaveBeenCalledWith({ from: OWNER, tokenIdHex: TOKEN_ID, createdAt: lock.createdAt });
     expect(store.only()).toMatchObject({ lockTxid: LOCK_TX, lockRequested: true, status: 'locking' });
+  });
+
+  it('treats a transaction that locked another deposit as not found, leaving the record alone', async () => {
+    const store = new FakeStore();
+    store.persistPendingLock(unsure());
+    expect(await locateLock(asStore(store), searching(LOCK_TX, lockOf('99'.repeat(32), COMMITMENT, AMOUNT)), unsure())).toBeNull();
+    expect(store.only().lockTxid).toBeUndefined();
   });
 
   it('answers null and leaves the record alone when no lock is found', async () => {
     const store = new FakeStore();
     store.persistPendingLock(unsure());
-    expect(await locateLock(asStore(store), { findLock: async () => null }, unsure())).toBeNull();
+    expect(await locateLock(asStore(store), searching(null), unsure())).toBeNull();
     expect(store.only().lockTxid).toBeUndefined();
   });
 
   it('answers undefined for an asset that cannot search its chain, and for a record without a signer', async () => {
     const store = new FakeStore();
-    expect(await locateLock(asStore(store), {}, unsure())).toBeUndefined();
-    expect(await locateLock(asStore(store), { findLock: async () => LOCK_TX }, { ...unsure(), from: undefined })).toBeUndefined();
+    const { resumeDeps } = searching(LOCK_TX);
+    expect(await locateLock(asStore(store), { resumeDeps }, unsure())).toBeUndefined();
+    expect(await locateLock(asStore(store), searching(LOCK_TX), { ...unsure(), from: undefined })).toBeUndefined();
   });
 });
 
