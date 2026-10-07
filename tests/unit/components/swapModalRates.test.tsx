@@ -58,6 +58,11 @@ const fakeRegistry = {
     return defs.find((d) => d.id === coinId) ?? null;
   },
   getIconUrl: () => null,
+  getIssuingTokenType: (coinId: string) => {
+    if (registryLookupThrows) throw new Error('registry exploded');
+    const found = defs.find((d) => d.id === coinId) as { issuance?: { tokenType: string } } | undefined;
+    return found?.issuance?.tokenType ?? null;
+  },
 };
 
 vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {

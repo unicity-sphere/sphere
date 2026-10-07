@@ -46,8 +46,7 @@ const FALLBACK_PRICES: Record<string, { priceUsd: number; priceEur: number }> = 
 function hasFixedIssuer(coinId: string): boolean {
   if (describeCoin(coinId)) return true;
   try {
-    const def = TokenRegistry.getInstance().getDefinition(coinId) as { issuance?: unknown } | null | undefined;
-    return def?.issuance != null;
+    return TokenRegistry.getInstance().getIssuingTokenType(coinId) !== null;
   } catch {
     // A registry that cannot be read cannot clear the coin.
     return true;
