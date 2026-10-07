@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { TransactionHistoryEntry } from '@unicitylabs/sphere-sdk';
+import type { CoinPresentation } from '../../../src/modules/types';
 
 // ============================================================================
 // Transaction history — direction of a row (issue #488).
@@ -34,6 +35,20 @@ let history: TransactionHistoryEntry[] = [];
 
 vi.mock('../../../src/sdk', () => ({
   useTransactionHistory: () => ({ history, isLoading: false, error: null, refetch: vi.fn() }),
+}));
+
+// The modal asks the module registry how to present a coin. Here the registry
+// knows two coins: one a bridge module marks as bridged in from Ethereum, and
+// one a module only badges (a short tag, not a claim about where it came from).
+const BRIDGED_COIN = 'b'.repeat(64);
+const BADGED_COIN = 'd'.repeat(64);
+const presentations: Record<string, CoinPresentation> = {
+  [BRIDGED_COIN]: { symbol: 'USDC', name: 'USD Coin', decimals: 0, badge: 'Ethereum', sourceChain: 'Ethereum' },
+  [BADGED_COIN]: { symbol: 'XYZ', name: 'Tagged coin', decimals: 0, badge: 'Beta' },
+};
+
+vi.mock('../../../src/modules/registry', () => ({
+  describeCoin: (coinId: string) => presentations[coinId],
 }));
 
 import { TransactionHistoryModal } from '../../../src/components/wallet/L3/modals/TransactionHistoryModal';
@@ -108,5 +123,81 @@ describe('TransactionHistoryModal — row direction', () => {
     expect(screen.getByText(/to @bob/)).toBeTruthy();
     expect(amountCell(/-500 UCT/).className).not.toMatch(/text-emerald/);
     expect(screen.queryByText(/\+500 UCT/)).toBeNull();
+  });
+});
+
+// ============================================================================
+// A bridge-in is a MINT too: the bridge module mints the bridged coin into the
+// user's own wallet. Labelled "Received", it read as if someone had sent it.
+// A MINT of a coin a module marks with a source chain is shown as "Bridged in",
+// with the chain in its details; every other MINT (Top Up, a Swap's receive
+// leg) keeps "Received".
+// ============================================================================
+
+describe('TransactionHistoryModal — bridge-in rows', () => {
+  it('renders a mint of a bridged coin as "Bridged in", a credit with the bridge icon', () => {
+    history = [entry({ id: 'bridge-1', type: 'MINT', coinId: BRIDGED_COIN, symbol: 'USDC' })];
+
+    const { container } = open();
+
+    expect(screen.getByText('Bridged in')).toBeTruthy();
+    expect(screen.queryByText('Received')).toBeNull();
+    expect(screen.queryByText('Sent')).toBeNull();
+    expect(amountCell(/\+500 USDC/).className).toMatch(/text-emerald/);
+    expect(badge(container)).toEqual({ credit: true, arrow: 'lucide-arrow-left-right' });
+  });
+
+  it('names the source chain in the details and no sender', () => {
+    history = [entry({ id: 'bridge-1', type: 'MINT', coinId: BRIDGED_COIN, symbol: 'USDC' })];
+
+    open();
+    fireEvent.click(screen.getByText('Bridged in'));
+
+    const from = screen.getByText('From');
+    expect(from.parentElement!.textContent).toBe('FromEthereum');
+    expect(screen.queryByText('Sender')).toBeNull();
+    expect(screen.queryByText(/^from /)).toBeNull();
+  });
+
+  it('keeps "Received" for a mint of a coin no module marks as bridged (Top Up)', () => {
+    history = [entry({ id: 'topup-1', type: 'MINT', coinId: COIN })];
+
+    const { container } = open();
+    fireEvent.click(screen.getByText('Received'));
+
+    expect(screen.queryByText('Bridged in')).toBeNull();
+    expect(screen.queryByText('From')).toBeNull();
+    expect(badge(container)).toEqual({ credit: true, arrow: 'lucide-arrow-down-left' });
+  });
+
+  it('keeps "Received" for a mint of a coin a module only badges', () => {
+    history = [entry({ id: 'badged-1', type: 'MINT', coinId: BADGED_COIN, symbol: 'XYZ' })];
+
+    open();
+
+    expect(screen.getByText('Received')).toBeTruthy();
+    expect(screen.queryByText('Bridged in')).toBeNull();
+  });
+
+  it('keeps "Received" for a transfer of a bridged coin someone sent', () => {
+    history = [entry({ id: 'recv-b', type: 'RECEIVED', coinId: BRIDGED_COIN, symbol: 'USDC', senderNametag: 'bob' })];
+
+    const { container } = open();
+
+    expect(screen.getByText('Received')).toBeTruthy();
+    expect(screen.getByText(/from @bob/)).toBeTruthy();
+    expect(screen.queryByText('Bridged in')).toBeNull();
+    expect(badge(container)).toEqual({ credit: true, arrow: 'lucide-arrow-down-left' });
+  });
+
+  it('keeps "Sent" for a transfer of a bridged coin the user sent', () => {
+    history = [entry({ id: 'sent-b', type: 'SENT', coinId: BRIDGED_COIN, symbol: 'USDC', recipientNametag: 'bob' })];
+
+    const { container } = open();
+
+    expect(screen.getByText('Sent')).toBeTruthy();
+    expect(screen.queryByText('Bridged in')).toBeNull();
+    expect(amountCell(/-500 USDC/).className).not.toMatch(/text-emerald/);
+    expect(badge(container)).toEqual({ credit: false, arrow: 'lucide-arrow-up-right' });
   });
 });

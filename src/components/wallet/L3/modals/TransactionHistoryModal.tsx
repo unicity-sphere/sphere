@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowUpRight, ArrowDownLeft, Loader2, Clock, ChevronDown, Copy, Check } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, ArrowLeftRight, Loader2, Clock, ChevronDown, Copy, Check } from 'lucide-react';
 import { useTransactionHistory } from '../../../../sdk';
 import { TokenRegistry, type TransactionHistoryEntry } from '@unicitylabs/sphere-sdk';
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
@@ -7,6 +7,7 @@ import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader, EmptyState } from '../../ui';
 import { truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 import { copyToClipboard } from '../../../../utils/copyToClipboard';
+import { describeCoin } from '../../../../modules/registry';
 
 const registry = TokenRegistry.getInstance();
 
@@ -43,6 +44,18 @@ function useCopyToClipboard() {
  */
 function isIncoming(type: TransactionHistoryEntry['type']): boolean {
   return type === 'RECEIVED' || type === 'MINT';
+}
+
+/**
+ * The chain a MINT row was bridged in from, or undefined for any other row. A
+ * bridge-in is a self-mint too (the bridge module mints the bridged coin into
+ * the user's own wallet), so the record type alone cannot tell it from a Top Up.
+ * The coin can: a wallet module that bridges it names its source chain. Swap
+ * never mints such a coin (SwapModal refuses coins a module handles), so a MINT
+ * of one is a bridge-in.
+ */
+function bridgedFrom(entry: TransactionHistoryEntry): string | undefined {
+  return entry.type === 'MINT' ? describeCoin(entry.coinId)?.sourceChain : undefined;
 }
 
 /** Truncate middle of string: "abcdef...uvwxyz" */
@@ -134,6 +147,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
       return {
         ...entry,
         incoming: isIncoming(entry.type),
+        sourceChain: bridgedFrom(entry),
         formattedAmount: formatRawAmount(entry.amount, decimals),
         formattedTokenIds: entry.tokenIds?.map(t => ({
           ...t,
@@ -212,7 +226,9 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                           ? 'bg-emerald-500'
                           : 'bg-orange-500'
                       }`}>
-                        {entry.incoming ? (
+                        {entry.sourceChain ? (
+                          <ArrowLeftRight className="w-3 h-3 text-white" />
+                        ) : entry.incoming ? (
                           <ArrowDownLeft className="w-3 h-3 text-white" />
                         ) : (
                           <ArrowUpRight className="w-3 h-3 text-white" />
@@ -223,7 +239,7 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                     {/* Title & Subtitle */}
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-neutral-900 dark:text-white">
-                        {entry.incoming ? 'Received' : 'Sent'}
+                        {entry.sourceChain ? 'Bridged in' : entry.incoming ? 'Received' : 'Sent'}
                         {peerLabel && (
                           <span className="text-neutral-500 dark:text-white/45 font-normal ml-1">
                             {entry.type === 'RECEIVED' ? 'from' : 'to'} {peerLabel}
@@ -265,7 +281,13 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
                       >
                         <div className="px-4 pb-3 pt-0 border-t border-neutral-200/50 dark:border-white/6">
                           <div className="pt-2 space-y-0.5">
-                            {/* Peer info */}
+                            {/* Peer info: a bridge-in has no sender, only the chain it came from */}
+                            {entry.sourceChain && (
+                              <div className="flex items-center justify-between gap-2 py-1">
+                                <span className="text-[11px] text-neutral-500 dark:text-white/45 shrink-0">From</span>
+                                <span className="text-[11px] text-neutral-700 dark:text-white/65 truncate">{entry.sourceChain}</span>
+                              </div>
+                            )}
                             {entry.type === 'RECEIVED' && (
                               <>
                                 {entry.senderNametag && (

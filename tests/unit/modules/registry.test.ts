@@ -18,10 +18,15 @@ describe('wallet module registry', () => {
 
   it('describes a bridged coin the token registry does not list', () => {
     const coinId = NILE_USDT_BRIDGE.coinIdHex!;
-    expect(describeCoin(coinId)).toEqual({ symbol: 'USDT', name: NILE_USDT_BRIDGE.label, decimals: 6, badge: 'Tron', priceUsd: 1 });
+    expect(describeCoin(coinId)).toEqual({ symbol: 'USDT', name: NILE_USDT_BRIDGE.label, decimals: 6, badge: 'Tron', sourceChain: 'Tron', priceUsd: 1 });
     expect(describeCoin(coinId.toUpperCase())).toBeDefined();
-    expect(describeCoin(SEPOLIA_USDC_BRIDGE.coinIdHex!)).toEqual({ symbol: 'USDC', name: SEPOLIA_USDC_BRIDGE.label, decimals: 6, badge: 'Ethereum', priceUsd: 1 });
+    expect(describeCoin(SEPOLIA_USDC_BRIDGE.coinIdHex!)).toEqual({ symbol: 'USDC', name: SEPOLIA_USDC_BRIDGE.label, decimals: 6, badge: 'Ethereum', sourceChain: 'Ethereum', priceUsd: 1 });
     expect(describeCoin('00'.repeat(32))).toBeUndefined();
+  });
+
+  it('marks a bridged coin with the chain it is bridged in from, so history can call its mint a bridge-in', () => {
+    expect(describeCoin(NILE_USDT_BRIDGE.coinIdHex!)?.sourceChain).toBe('Tron');
+    expect(describeCoin(SEPOLIA_USDC_BRIDGE.coinIdHex!)?.sourceChain).toBe('Ethereum');
   });
 
   it('offers the bridge action on test networks only (the vault is a testnet vault)', () => {
