@@ -3,6 +3,7 @@ import {
   createSourceAdapter,
   loadBridges,
   NILE_USDT_BRIDGE,
+  queryBalance,
   type BridgeSourceAdapter,
   type ContractCall,
   type SourceSigner,
@@ -47,16 +48,17 @@ const lockMined = lockOf(TOKEN_ID, COMMITMENT, AMOUNT);
 const lockReverted: SourceTxInfo = { blockNumber: 12n, success: false, logs: [] };
 
 type FakeRpc = {
-  constantCall(): Promise<string>;
+  constantCall(input: { functionSignature: string }): Promise<string>;
   getTransactionInfo(txid: string): Promise<SourceTxInfo | null>;
 };
 function fakeRpc(
-  opts: { allowance: bigint; approve?: SourceTxInfo | null; lock?: SourceTxInfo | null },
+  opts: { allowance: bigint; held?: bigint; approve?: SourceTxInfo | null; lock?: SourceTxInfo | null },
   timeline: string[] = [],
 ): FakeRpc {
   return {
-    async constantCall() {
-      return opts.allowance.toString(16).padStart(64, '0');
+    async constantCall(input: { functionSignature: string }) {
+      const word = input.functionSignature === 'balanceOf(address)' ? (opts.held ?? 10n * AMOUNT) : opts.allowance;
+      return word.toString(16).padStart(64, '0');
     },
     async getTransactionInfo(txid: string): Promise<SourceTxInfo | null> {
       timeline.push('receipt:' + txid);
@@ -135,8 +137,11 @@ function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; payment
     wallet: over.signer,
     receipts: receiptsOf(over.rpc),
     adapter: tronAdapterOf(over.signer, over.rpc),
+    held: (owner) => queryBalance(over.rpc, { assetAddress: bridge.plugin.resolvedConfig.assetContractHex, owner }),
     expectedNetwork: CHAIN,
     chainLabel: bridge.manifest.label,
+    symbol: bridge.manifest.symbol,
+    decimals: bridge.plugin.decimals,
     amount: AMOUNT,
   });
 }
@@ -175,6 +180,14 @@ describe('runBridgeIn', () => {
     await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n, approve: revertedReceipt }) })).rejects.toBeInstanceOf(TxRevertedError);
 
     expect(signer.sigs()).toEqual(['approve']);
+    expect(store.locks.size).toBe(0);
+  });
+
+  it('refuses a deposit above what the account holds, before any signing', async () => {
+    const signer = new FakeSigner();
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n, held: 500_000n }) })).rejects.toThrow('Your wallet holds 0.5 USDT; enter at most that.');
+    expect(signer.sent).toHaveLength(0);
     expect(store.locks.size).toBe(0);
   });
 
@@ -314,8 +327,11 @@ describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
       wallet: signer,
       receipts: receiptsOf(fakeRpc({ allowance: 0n, lock: { blockNumber: 2n, success: true, logs: [] } })),
       adapter,
+      held: async () => AMOUNT,
       expectedNetwork: CHAIN,
       chainLabel: bridge.manifest.label,
+      symbol: bridge.manifest.symbol,
+      decimals: bridge.plugin.decimals,
       amount: AMOUNT,
     });
 

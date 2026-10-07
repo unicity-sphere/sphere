@@ -7,6 +7,7 @@ import {
   type ReceiptReader,
 } from '@unicitylabs/bridge-core';
 
+import { formatUnits } from './format';
 import type { BridgeStore, PendingLock } from './store';
 import type { BridgeAsset, BridgeInDeps } from './types';
 
@@ -26,6 +27,8 @@ export interface WalletSide {
 }
 
 export interface BridgeInArgs extends BridgeInDeps, WalletSide {
+  readonly symbol: string;
+  readonly decimals: number;
   readonly amount: bigint;
   readonly onProgress?: (p: BridgeInProgress) => void;
 }
@@ -38,7 +41,7 @@ export interface BridgeInResult {
 export class TxRevertedError extends Error {}
 
 export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
-  const { wallet, receipts, adapter, expectedNetwork, chainLabel, payments, store, amount, networkId } = args;
+  const { wallet, receipts, adapter, held, expectedNetwork, chainLabel, symbol, decimals, payments, store, amount, networkId } = args;
   const progress = args.onProgress ?? (() => {});
 
   progress({ phase: 'deriving' });
@@ -46,6 +49,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
   const owner = await wallet.connect();
   const network = await wallet.getNetwork();
   assertOnChain(network, expectedNetwork, chainLabel);
+  assertHeld(await held(owner), amount, symbol, decimals);
 
   const deposit = await adapter.prepareDeposit({
     amount,
@@ -193,6 +197,12 @@ function locksThisDeposit(commit: CommitInfo, lock: PendingLock): boolean {
     commit.recipientCommitmentHex === lock.recipientCommitmentHex.toLowerCase() &&
     commit.amount === BigInt(lock.amount)
   );
+}
+
+function assertHeld(held: bigint, amount: bigint, symbol: string, decimals: number): void {
+  if (held < amount) {
+    throw new Error(`Your wallet holds ${formatUnits(held, decimals)} ${symbol}; enter at most that.`);
+  }
 }
 
 export function assertOnChain(network: number, expected: number, chainLabel: string): void {

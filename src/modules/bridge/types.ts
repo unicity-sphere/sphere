@@ -11,6 +11,8 @@ export interface BridgeInDeps {
   readonly wallet: ChainWallet;
   readonly receipts: ReceiptReader;
   readonly adapter: BridgeSourceAdapter;
+  /** What `owner` holds of the asset on the source chain, in the asset's smallest unit. */
+  held(owner: string): Promise<bigint>;
   /** Source-chain network id the deposit targets; pinned and re-checked before every signature. */
   readonly expectedNetwork: number;
   /** Human label for the wrong-network message, e.g. the asset's label. */

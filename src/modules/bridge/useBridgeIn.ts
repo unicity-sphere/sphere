@@ -29,6 +29,8 @@ export function useBridgeIn() {
       return runBridgeIn({
         ...req.wallet.open(),
         ...side,
+        symbol: req.asset.symbol,
+        decimals: req.asset.decimals,
         amount: req.amount,
         onProgress: setProgress,
       });

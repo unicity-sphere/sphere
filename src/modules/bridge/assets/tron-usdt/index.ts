@@ -4,6 +4,7 @@ import {
   bridgeTokenPlugin,
   createSourceAdapter,
   loadBridges,
+  queryBalance,
   lockFinality,
   NILE_USDT_BRIDGE,
   toEvmAddressHex,
@@ -42,6 +43,7 @@ function tronAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset
     wallet: signer,
     receipts,
     adapter: createSourceAdapter(bridge, signer, rpc),
+    held: (owner) => queryBalance(rpc, { assetAddress: bridge.plugin.resolvedConfig.assetContractHex, owner }),
     expectedNetwork: m.chainId,
     chainLabel: m.label,
   });

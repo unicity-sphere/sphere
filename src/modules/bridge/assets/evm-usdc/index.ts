@@ -6,6 +6,7 @@ import {
   evmWallets,
   findLockTxid,
   loadBridges,
+  queryBalance,
   lockFinality,
   owedTo,
   withdrawCall,
@@ -47,6 +48,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     wallet: signer,
     receipts,
     adapter: createSourceAdapter(bridge, signer, rpc),
+    held: (owner) => queryBalance(rpc, { assetAddress: bridge.plugin.resolvedConfig.assetContractHex, owner }),
     expectedNetwork: m.chainId,
     chainLabel: m.label,
   });
