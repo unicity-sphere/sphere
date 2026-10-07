@@ -28,6 +28,12 @@ export interface BridgeWalletOption {
   isAvailable(): boolean;
   /** A not-yet-connected wiring; the flow calls `wallet.connect()` first. */
   open(): BridgeInDeps;
+  /**
+   * Send the transaction collecting what the vault credited `destination`, which this wallet
+   * must hold, on the chain the asset lives on; resolves to its id. Present when the vault
+   * credits payouts.
+   */
+  collect?(destination: string): Promise<string>;
 }
 
 /** The source chain an asset is bridged from, as the picker shows it. */
@@ -97,10 +103,8 @@ export interface BurnIdentity {
 }
 
 export interface BridgePayout {
-  /** What the vault owes `destination`, in the asset's smallest unit. */
+  /** What the vault owes `destination`, in the asset's smallest unit; each wallet option collects it. */
   owed(destination: string): Promise<bigint>;
-  /** Send the collecting transaction from `wallet`, which must hold `destination`; resolves to its id. */
-  collect(destination: string, wallet: BridgeWalletOption): Promise<string>;
 }
 
 /** The assets-out side of an asset: burn on Unicity, release on the source chain. */

@@ -14,7 +14,7 @@ import type { BridgeAsset } from '@/modules/bridge/types';
 const ACCOUNT = '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf';
 const OTHER = `0x${'99'.repeat(20)}`;
 
-function fakeProvider(account = ACCOUNT) {
+function fakeProvider(account = ACCOUNT, chainIdHex = '0xaa36a7') {
   const requests: { method: string; params?: unknown[] }[] = [];
   const provider: Eip1193Provider = {
     async request(args) {
@@ -24,7 +24,9 @@ function fakeProvider(account = ACCOUNT) {
         case 'eth_accounts':
           return [account];
         case 'eth_chainId':
-          return '0xaa36a7';
+          return chainIdHex;
+        case 'wallet_switchEthereumChain':
+          throw new Error('User rejected the request.');
         case 'eth_sendTransaction':
           return `0x${'ee'.repeat(32)}`;
         default:
@@ -90,20 +92,21 @@ describe('Ethereum wallets', () => {
     const rabby = fakeProvider(OTHER);
     const metamask = fakeProvider(ACCOUNT);
     uninstall.push(install(info('io.rabby', 'Rabby'), rabby.provider), install(info('io.metamask', 'MetaMask'), metamask.provider));
-    const asset = sepoliaUsdc();
-    const [viaRabby, viaMetaMask] = asset.wallets();
+    const [viaRabby, viaMetaMask] = sepoliaUsdc().wallets();
 
-    await expect(asset.out!.payout!.collect(ACCOUNT, viaRabby)).rejects.toThrow(`Switch Rabby to ${ACCOUNT} to collect.`);
+    await expect(viaRabby.collect!(ACCOUNT)).rejects.toThrow(`Switch Rabby to ${ACCOUNT} to collect.`);
     expect(metamask.requests).toHaveLength(0);
 
-    expect(await asset.out!.payout!.collect(ACCOUNT, viaMetaMask)).toBe(`0x${'ee'.repeat(32)}`);
+    expect(await viaMetaMask.collect!(ACCOUNT)).toBe(`0x${'ee'.repeat(32)}`);
     const sent = metamask.requests.at(-1)!.params![0] as { to: string };
     expect(sent.to.toLowerCase()).toBe(SEPOLIA_USDC_BRIDGE.vault.toLowerCase());
   });
 
-  it('refuses to collect through a wallet that is no longer offered', async () => {
-    const asset = sepoliaUsdc();
-    const gone = { id: 'io.gone', name: 'Gone', isAvailable: () => true, open: () => { throw new Error('unused'); } };
-    await expect(asset.out!.payout!.collect(ACCOUNT, gone)).rejects.toThrow('Gone is no longer available.');
+  it('does not collect through a wallet left on another chain, so no transaction is sent there', async () => {
+    const mainnet = fakeProvider(ACCOUNT, '0x1');
+    uninstall.push(install(info('io.metamask', 'MetaMask'), mainnet.provider));
+    const [viaMetaMask] = sepoliaUsdc().wallets();
+    await expect(viaMetaMask.collect!(ACCOUNT)).rejects.toThrow(/Wrong network.*needs chain 11155111/);
+    expect(mainnet.requests.map((r) => r.method)).not.toContain('eth_sendTransaction');
   });
 });

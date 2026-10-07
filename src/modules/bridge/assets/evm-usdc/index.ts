@@ -19,6 +19,7 @@ import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
 import { readRuntimeConfig } from '../../../../config/runtimeConfig';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
+import { assertOnChain } from '../../bridgeIn';
 import { bridgeOut } from '../out';
 
 // 5 USDC. A return service that asks more of one token is refused before anything is burned.
@@ -50,6 +51,16 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
   });
 
   const discovered = evmWallets();
+  const collectWith = async (wallet: SourceWalletProvider, destination: string): Promise<string> => {
+    const signer = wallet.create(m.chainId);
+    await signer.connect();
+    assertOnChain(await signer.getNetwork(), m.chainId, m.label);
+    const from = await signer.getAddress();
+    if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
+      throw new Error(`Switch ${wallet.name} to ${destination} to collect.`);
+    }
+    return signer.sendCall(withdrawCall(bridge));
+  };
   const optionFor = (wallet: SourceWalletProvider): BridgeWalletOption => ({
     id: wallet.id,
     name: wallet.name,
@@ -57,12 +68,8 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     unavailableHint: 'Install an Ethereum browser wallet such as MetaMask to sign on Ethereum.',
     isAvailable: () => wallet.isAvailable(),
     open: () => depsFor(wallet.create(m.chainId)),
+    collect: (destination) => collectWith(wallet, destination),
   });
-  const signerFor = (wallet: BridgeWalletOption): SourceSigner => {
-    const found = discovered.list().find((w) => w.id === wallet.id);
-    if (!found) throw new Error(`${wallet.name} is no longer available.`);
-    return found.create(m.chainId);
-  };
 
   return {
     id: `${m.chainRef}:${m.symbol.toLowerCase()}`,
@@ -83,18 +90,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
           feeCap: RETURN_FEE_CAP,
           feeRecipient: returnFeeRecipient(),
-          payout: {
-            owed: (destination) => owedTo(bridge, rpc, destination),
-            collect: async (destination, wallet) => {
-              const signer = signerFor(wallet);
-              await signer.connect();
-              const from = await signer.getAddress();
-              if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-                throw new Error(`Switch ${wallet.name} to ${destination} to collect.`);
-              }
-              return signer.sendCall(withdrawCall(bridge));
-            },
-          },
+          payout: { owed: (destination) => owedTo(bridge, rpc, destination) },
         })
       : undefined,
     disabledReason: m.disabledReason,

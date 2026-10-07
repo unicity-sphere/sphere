@@ -31,6 +31,7 @@ import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
 import { ReturnServiceUnreachable, tokensCoveringFee } from './returnFee';
 import { useBridgeOut, useReturnableTokens, useReturnFee } from './useBridgeOut';
+import { useWalletOptions } from './useWalletOptions';
 
 type Direction = 'in' | 'out';
 type Step = 'direction' | 'asset' | 'form' | 'processing' | 'success';
@@ -51,7 +52,6 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [amountInput, setAmountInput] = useState('');
   const [pending, setPending] = useState<PendingLock[]>([]);
   const [resumingId, setResumingId] = useState<string | null>(null);
-  const [availability, setAvailability] = useState<Record<string, boolean>>({});
   const { bridgeIn, progress, result, reset: resetIn, pendingMints, resume, discard } = useBridgeIn();
 
   // Assets out.
@@ -86,16 +86,9 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     if (isOpen) setPending(pendingMints());
   }, [isOpen, pendingMints]);
 
-  // A wallet extension can inject itself after the page (or this screen) has
-  // rendered, so availability is re-checked while the form is open rather
-  // than read once at render.
-  useEffect(() => {
-    if (!isOpen || step !== 'form' || direction !== 'in' || !asset) return;
-    const check = () => setAvailability(Object.fromEntries(asset.wallets().map((w) => [w.id, w.isAvailable()])));
-    check();
-    const id = setInterval(check, 1000);
-    return () => clearInterval(id);
-  }, [isOpen, step, direction, asset]);
+  // The wallets to sign the deposit with, re-read while the form is open: an extension can
+  // inject or announce itself after the screen has rendered.
+  const walletChoices = useWalletOptions(isOpen && step === 'form' && direction === 'in' ? asset : undefined);
 
   // Selection follows the live inventory.
   useEffect(() => {
@@ -306,18 +299,15 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             {error && <ErrorLine text={error} />}
 
             <div className="space-y-2">
-              {asset.wallets().map((w) => {
-                const available = availability[w.id] ?? w.isAvailable();
-                return (
-                  <div key={w.id} className="space-y-1">
-                    <Button onClick={() => startIn(w)} disabled={!available} className="w-full">
-                      {w.icon && <img src={w.icon} alt="" className="w-5 h-5" />}
-                      Continue with {w.name}
-                    </Button>
-                    {!available && w.unavailableHint && <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>}
-                  </div>
-                );
-              })}
+              {walletChoices.map(({ wallet: w, available }) => (
+                <div key={w.id} className="space-y-1">
+                  <Button onClick={() => startIn(w)} disabled={!available} className="w-full">
+                    {w.icon && <img src={w.icon} alt="" className="w-5 h-5" />}
+                    Continue with {w.name}
+                  </Button>
+                  {!available && w.unavailableHint && <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>}
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -687,7 +677,8 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
  * amount is what the vault owes now, so several returns to one destination
  * collect together, and a credit already taken shows nothing. One button per
  * wallet on the page, named when there are several, since the wallet that
- * holds the destination has to send the transaction.
+ * holds the destination has to send the transaction; with no wallet on the
+ * page the amount stays in view with the install hint.
  */
 function CollectButton({ payout, destination, asset }: { payout: BridgePayout; destination: string; asset: BridgeAsset }) {
   const owed = useQuery({
@@ -695,24 +686,26 @@ function CollectButton({ payout, destination, asset }: { payout: BridgePayout; d
     queryFn: () => payout.owed(destination),
     refetchInterval: 30_000,
   });
-  const collect = useMutation({ mutationFn: (wallet: BridgeWalletOption) => payout.collect(destination, wallet), onSuccess: () => owed.refetch() });
+  const choices = useWalletOptions(asset).filter(({ wallet }) => wallet.collect);
+  const collect = useMutation({ mutationFn: (wallet: BridgeWalletOption) => wallet.collect!(destination), onSuccess: () => owed.refetch() });
   if (collect.data) return <TxLink href={asset.presentation.explorerTxUrl(collect.data)} label="collected" />;
   if (!owed.data) return null;
-  const wallets = asset.wallets().filter((w) => w.isAvailable());
   const amount = `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}`;
+  const missing = choices.find(({ available }) => !available)?.wallet.unavailableHint;
   return (
     <span className="shrink-0 flex flex-col items-end gap-0.5">
-      {wallets.map((w) => (
+      {choices.map(({ wallet: w, available }) => (
         <button
           key={w.id}
           type="button"
           onClick={() => collect.mutate(w)}
-          disabled={collect.isPending}
+          disabled={!available || collect.isPending}
           className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
         >
-          {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : wallets.length > 1 ? `${amount} with ${w.name}` : amount}
+          {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : choices.length > 1 ? `${amount} with ${w.name}` : amount}
         </button>
       ))}
+      {missing && <span className={`max-w-[12rem] text-right ${MUTED}`}>{missing}</span>}
       {collect.error && <span className="text-red-500 max-w-[12rem] text-right">{getErrorMessage(collect.error)}</span>}
     </span>
   );
