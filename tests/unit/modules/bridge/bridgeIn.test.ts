@@ -10,7 +10,7 @@ import {
 import { LOCK_EVENT_TOPIC0, type SourceTxInfo } from '@unicitylabs/bridge-plugin';
 import type { BridgePayments, ReceiptReader } from '@unicitylabs/bridge-core';
 
-import { lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
+import { locateLock, lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
 import type { BridgeStore, PendingLock } from '@/modules/bridge/store';
 
 const bridge = loadBridges(NILE_USDT_BRIDGE)[0];
@@ -238,6 +238,33 @@ describe('runBridgeIn', () => {
     expect(store.locks.size).toBe(0);
   });
 
+  it('forgets the deposit when the wallet answers the lock with any error, since an answered error was not broadcast', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = Object.assign(new Error('insufficient funds for gas * price + value'), { code: -32603 });
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/insufficient funds/);
+
+    expect(store.locks.size).toBe(0);
+  });
+
+  it('keeps the salt when the wallet says the lock is already known, since it may be in the mempool', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = Object.assign(new Error('already known'), { code: -32000 });
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/already known/);
+
+    expect(store.only()).toMatchObject({ status: 'locking', lockRequested: true });
+  });
+
+  it('records which account signed the deposit', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = new Error('Timed out broadcasting lock to Tron.');
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/Timed out/);
+
+    expect(store.only().from).toBe(OWNER);
+  });
+
   it('keeps the record when the mint fails after a confirmed lock (the resumable case)', async () => {
     const signer = new FakeSigner();
     const store = new FakeStore();
@@ -386,6 +413,45 @@ describe('resumeBridgeMint', () => {
     ).rejects.toBeInstanceOf(TxRevertedError);
 
     expect(store.locks.get('lock-1')).toEqual(before);
+  });
+});
+
+describe('locateLock', () => {
+  const unsure = (): PendingLock => ({
+    id: 'lock-2',
+    coinIdHex: bridge.plugin.coinIdHex,
+    tokenTypeHex: bridge.plugin.tokenTypeHex,
+    chainId: CHAIN,
+    saltHex: '00'.repeat(32),
+    tokenIdHex: TOKEN_ID,
+    recipientCommitmentHex: COMMITMENT,
+    amount: AMOUNT.toString(),
+    from: OWNER,
+    lockRequested: true,
+    createdAt: Date.now() - 60_000,
+    status: 'locking',
+  });
+
+  it('writes the lock transaction it finds into the record and returns it', async () => {
+    const store = new FakeStore();
+    store.persistPendingLock(unsure());
+    const findLock = vi.fn(async () => LOCK_TX);
+    expect(await locateLock(asStore(store), { findLock }, unsure())).toBe(LOCK_TX);
+    expect(findLock).toHaveBeenCalledWith({ from: OWNER, recipientCommitmentHex: COMMITMENT, createdAt: unsure().createdAt });
+    expect(store.only()).toMatchObject({ lockTxid: LOCK_TX, lockRequested: true, status: 'locking' });
+  });
+
+  it('answers null and leaves the record alone when no lock is found', async () => {
+    const store = new FakeStore();
+    store.persistPendingLock(unsure());
+    expect(await locateLock(asStore(store), { findLock: async () => null }, unsure())).toBeNull();
+    expect(store.only().lockTxid).toBeUndefined();
+  });
+
+  it('answers undefined for an asset that cannot search its chain, and for a record without a signer', async () => {
+    const store = new FakeStore();
+    expect(await locateLock(asStore(store), {}, unsure())).toBeUndefined();
+    expect(await locateLock(asStore(store), { findLock: async () => LOCK_TX }, { ...unsure(), from: undefined })).toBeUndefined();
   });
 });
 

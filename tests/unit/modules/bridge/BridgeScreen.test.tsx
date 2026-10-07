@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Token } from '@unicitylabs/sphere-sdk';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('../../../../src/sdk/hooks/core/useSphere', () => ({
@@ -242,12 +242,53 @@ describe('PendingList', () => {
     id: 'l1', coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, tokenTypeHex: SEPOLIA_USDC_BRIDGE.tokenTypeHex!, chainId: SEPOLIA_USDC_BRIDGE.chainId,
     saltHex: '11'.repeat(32), tokenIdHex: '22'.repeat(32), recipientCommitmentHex: '33'.repeat(32), amount: '1000000', createdAt: 1, status: 'locking',
   };
-  const renderList = (l: PendingLock) => {
+  const renderList = (l: PendingLock, onLocate?: (lock: PendingLock) => Promise<string | null | undefined>) => {
     const onDiscard = vi.fn();
     const onResume = vi.fn();
-    render(<PendingList locks={[l]} resumingId={null} onResume={onResume} onDiscard={onDiscard} />);
-    return { onDiscard, onResume };
+    const rendered = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PendingList locks={[l]} resumingId={null} onResume={onResume} onDiscard={onDiscard} onLocate={onLocate} />
+      </QueryClientProvider>,
+    );
+    return { onDiscard, onResume, container: rendered.container };
   };
+
+  it('says when the deposit was started and links the signing account on the explorer', () => {
+    const from = '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf';
+    const { container } = renderList({ ...lock, createdAt: new Date(2026, 9, 6, 14, 2).getTime(), from, lockRequested: true });
+    expect(container.textContent).toContain('started Oct 6, 2026, 02:02 PM');
+    const link = screen.getByRole('link', { name: /0x2B00…9Caf/ });
+    expect(link.getAttribute('href')).toBe(`https://sepolia.etherscan.io/address/${from}`);
+  });
+
+  it('looks for the lock on the chain for a deposit that may have been sent, and says when none was found', async () => {
+    const onLocate = vi.fn(async () => null);
+    const { onDiscard } = renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
+    expect(screen.getByText(/Looking for the lock on Ethereum/)).toBeDefined();
+    expect(screen.queryByLabelText('Lock transaction id')).toBeNull();
+    expect(await screen.findByText(/No lock was found on Ethereum for this deposit since it started. Discarding is safe./)).toBeDefined();
+    expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
+    expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
+    expect(onDiscard).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
+  });
+
+  it('hands a found lock to the caller, who re-reads the record with its transaction', async () => {
+    const onLocate = vi.fn(async () => `0x${TXID}`);
+    renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
+    await waitFor(() => expect(onLocate).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/The lock was found/)).toBeDefined();
+  });
+
+  it('keeps the paste field and the discard confirmation when the search itself fails', async () => {
+    const onLocate = vi.fn(async () => { throw new Error('Ethereum RPC eth_getLogs failed: HTTP 429'); });
+    const { onDiscard } = renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
+    expect(await screen.findByText(/eth_getLogs failed/)).toBeDefined();
+    expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
+    expect(onDiscard).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Discard anyway' })).toBeDefined();
+  });
 
   it('discards a deposit that was never signed in one click', () => {
     const { onDiscard } = renderList(lock);

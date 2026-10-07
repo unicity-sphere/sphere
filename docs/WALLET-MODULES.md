@@ -81,6 +81,16 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
 - A reverted lock marks the record failed; a mint that fails after a confirmed
   lock keeps the record, and the screen offers **Resume**, which decodes the
   landed lock and mints without signing anything.
+- A lock the wallet asked for but never saw a transaction id for is kept only
+  when the extension gave no answer (the page closed at the prompt, a lost
+  connection). An error answered by the extension, a refusal or missing gas,
+  means nothing was broadcast, and the record is discarded. The exception is a
+  node saying the transaction is already known.
+- Such a record shows when it was started and from which account, with an
+  explorer link, and the wallet searches the vault's `Lock` events for that
+  account since the start (`findLock`, a read of the chain). A found lock is
+  written into the record and resumed like any other; otherwise the row says no
+  lock was found and discarding is safe, and still takes a pasted transaction id.
 - The depositor's own mint runs at zero confirmations (it witnessed its lock);
   every other wallet re-verifies under the asset's `confirmations`.
 - Bridging out burns first and records second, in that order on purpose: the

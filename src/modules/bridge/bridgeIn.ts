@@ -8,7 +8,7 @@ import {
 } from '@unicitylabs/bridge-core';
 
 import type { BridgeStore, PendingLock } from './store';
-import type { BridgeInDeps } from './types';
+import type { BridgeAsset, BridgeInDeps } from './types';
 
 export type BridgeInPhase = 'deriving' | 'approving' | 'locking' | 'waiting-lock' | 'minting' | 'done';
 
@@ -62,6 +62,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     tokenIdHex: deposit.recovery.tokenIdHex,
     recipientCommitmentHex: deposit.recovery.recipientCommitmentHex,
     amount: amount.toString(),
+    from: owner,
     createdAt: Date.now(),
     status: 'locking',
   };
@@ -119,11 +120,29 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
 
 function recordUnconfirmedDeposit(store: BridgeStore, lock: PendingLock, e: unknown): void {
   if (lock.lockTxid && e instanceof TxRevertedError) store.updateLock(lock.id, { status: 'failed' });
-  else if (!lock.lockTxid && (!lock.lockRequested || refusedByWallet(e))) store.removeLock(lock.id);
+  else if (!lock.lockTxid && (!lock.lockRequested || answeredByWallet(e))) store.removeLock(lock.id);
 }
 
-function refusedByWallet(e: unknown): boolean {
-  return (e as { code?: unknown } | null)?.code === 4001;
+/**
+ * The wallet answered the request with an error, so it broadcast nothing: a refusal, missing
+ * funds for gas, a failed estimate. The exception is a node saying the transaction is already
+ * known or its nonce used, which means one went out. No answer at all never reaches here.
+ */
+function answeredByWallet(e: unknown): boolean {
+  const { code, message } = (e ?? {}) as { code?: unknown; message?: unknown };
+  return typeof code === 'number' && !/already known|nonce too low|replacement transaction/i.test(String(message ?? ''));
+}
+
+/**
+ * Look for the lock of a deposit the wallet lost track of. The found transaction is written
+ * into the record, which then resumes like any other. `null` means the signer locked nothing
+ * with this deposit's commitment since it started; `undefined` means there was no way to look.
+ */
+export async function locateLock(store: BridgeStore, asset: Pick<BridgeAsset, 'findLock'>, lock: PendingLock): Promise<string | null | undefined> {
+  if (!asset.findLock || !lock.from) return undefined;
+  const lockTxid = await asset.findLock({ from: lock.from, recipientCommitmentHex: lock.recipientCommitmentHex, createdAt: lock.createdAt });
+  if (lockTxid) store.updateLock(lock.id, { lockTxid });
+  return lockTxid;
 }
 
 export interface ResumeArgs {

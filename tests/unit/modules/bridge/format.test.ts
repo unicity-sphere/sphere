@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { burnStoppedSentence, formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from '@/modules/bridge/format';
+import { burnStoppedSentence, formatDuration, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, startedAtSentence } from '@/modules/bridge/format';
+
+describe('started-at sentence', () => {
+  it('says when the deposit was started, as the transaction history dates things', () => {
+    const at = new Date(2026, 9, 6, 14, 2).getTime();
+    expect(startedAtSentence(at)).toBe('started Oct 6, 2026, 02:02 PM');
+  });
+});
 
 describe('burn stopped sentence', () => {
   it('names the token that failed with its own reason and counts only the tokens after it as kept', () => {

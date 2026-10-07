@@ -8,7 +8,7 @@ import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssetByCoin } from './assets';
-import { runBridgeIn, resumeBridgeMint, type BridgeInProgress, type BridgeInResult, type WalletSide } from './bridgeIn';
+import { runBridgeIn, locateLock, resumeBridgeMint, type BridgeInProgress, type BridgeInResult, type WalletSide } from './bridgeIn';
 import { bridgeStoreFor, type PendingLock } from './store';
 import type { BridgeAsset, BridgeWalletOption } from './types';
 
@@ -53,6 +53,16 @@ export function useBridgeIn() {
     [sphere, queryClient],
   );
 
+  const locate = useCallback(
+    (lock: PendingLock): Promise<string | null | undefined> => {
+      const key = sphere?.identity?.chainPubkey;
+      const asset = bridgeAssetByCoin(lock.coinIdHex);
+      if (!key || !asset) return Promise.resolve(undefined);
+      return locateLock(bridgeStoreFor(key), asset, lock);
+    },
+    [sphere],
+  );
+
   const discard = useCallback(
     (lockId: string) => {
       const key = sphere?.identity?.chainPubkey;
@@ -76,6 +86,7 @@ export function useBridgeIn() {
     pendingMints,
     resume,
     discard,
+    locate,
   };
 }
 
