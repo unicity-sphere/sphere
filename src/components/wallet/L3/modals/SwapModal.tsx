@@ -12,6 +12,7 @@ import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { canSelfMint } from '../../../../config/networkCapabilities';
 import { SPHERE_KEYS } from '../../../../sdk/queryKeys';
 import { getErrorMessage } from '../../../../sdk/errors';
+import { describeCoin } from '../../../../modules/registry';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader } from '../../ui';
 
@@ -36,6 +37,23 @@ const FALLBACK_PRICES: Record<string, { priceUsd: number; priceEur: number }> = 
   'unicity-usd': { priceUsd: 1.0, priceEur: 0.92 },
 };
 
+/**
+ * A coin with a fixed issuer: a wallet module handles it (a bridged asset), or the registry
+ * names the token type that issues it (`issuance`). The swap's "to" leg self-mints, which
+ * would make an unbacked copy of such a coin, and its "from" leg sends the coin to a stub,
+ * which would throw away a token only its issuer redeems. So neither side offers one.
+ */
+function hasFixedIssuer(coinId: string): boolean {
+  if (describeCoin(coinId)) return true;
+  try {
+    const def = TokenRegistry.getInstance().getDefinition(coinId) as { issuance?: unknown } | null | undefined;
+    return def?.issuance != null;
+  } catch {
+    // A registry that cannot be read cannot clear the coin.
+    return true;
+  }
+}
+
 interface Quote {
   priceUsd: number;
   priceEur: number;
@@ -55,10 +73,16 @@ interface SwapModalProps {
 }
 
 export function SwapModal({ isOpen, onClose }: SwapModalProps) {
-  const { assets } = useAssets();
+  const { assets: heldAssets } = useAssets();
   const { transfer } = useTransfer();
   const { sphere, providers, network } = useSphereContext();
   const registryReady = useRegistryReady();
+  // The held coins this screen may swap from. None until the registry has loaded: before
+  // that, a coin the registry ties to an issuing token type cannot be recognised.
+  const assets = useMemo(
+    () => (registryReady ? heldAssets.filter((a) => !hasFixedIssuer(a.coinId)) : []),
+    [heldAssets, registryReady],
+  );
   const queryClient = useQueryClient();
 
   // The swap's "to" leg is a self-mint, so this whole screen is unavailable
@@ -75,10 +99,16 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [allSwappableAssets, setAllSwappableAssets] = useState<Asset[]>([]);
   const [isSwapHovered, setIsSwapHovered] = useState(false);
+
   /** coinId → quote. The modal's single source of price truth for BOTH sides. */
   const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map());
   const [rateStatus, setRateStatus] = useState<RateStatus>('loading');
   const [rateAttempt, setRateAttempt] = useState(0);
+
+  // A coin picked before the registry loaded can turn out to have a fixed issuer.
+  useEffect(() => {
+    setFromAsset((prev) => (prev && !assets.some((a) => a.coinId === prev.coinId) ? null : prev));
+  }, [assets]);
 
   // Prices are keyed by the registry's RAW (lowercase) token name — that IS the
   // CoinGecko id ("bitcoin", "unicity"). Never by a display name: `Asset.name` /
@@ -102,7 +132,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       const registry = TokenRegistry.getInstance();
       const definitions = registry.getAllDefinitions();
       const fungibleDefs = definitions.filter(def =>
-        def.assetKind === 'fungible' && SUPPORTED_SWAP_COINS.includes(def.name.toLowerCase())
+        def.assetKind === 'fungible' && SUPPORTED_SWAP_COINS.includes(def.name.toLowerCase()) && !hasFixedIssuer(def.id)
       );
 
       const priceIdByCoinId = new Map<string, string>();
@@ -234,6 +264,10 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const handleSwap = async () => {
     const payments = getPayments(sphere);
     if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !payments) return;
+    if (hasFixedIssuer(fromAsset.coinId) || hasFixedIssuer(toAsset.coinId)) {
+      setError('Bridged coins cannot be swapped here.');
+      return;
+    }
     setStep('processing'); setError(null);
     try {
       // 1. Send the "from" asset to the swap stub recipient (unchanged).
@@ -262,10 +296,13 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const handleFlipAssets = () => {
     if (!fromAsset || !toAsset) return;
     const newFromAsset = assets.find(a => a.coinId === toAsset.coinId);
+    // Only a coin this screen offers to receive can become the "to" side: anything else
+    // would be self-minted by the swap.
     const newToAsset = allSwappableAssets.find(a => a.coinId === fromAsset.coinId);
     if (!newFromAsset) { setError(`You don't have any ${toAsset.symbol} to swap from`); return; }
+    if (!newToAsset) { setError(`${fromAsset.symbol} cannot be received in a swap`); return; }
     setFromAsset(newFromAsset);
-    setToAsset(newToAsset || fromAsset);
+    setToAsset(newToAsset);
     setError(null);
     if (exchangeInfo && exchangeInfo.toAmount > 0) {
       setFromAmount(parseFloat(exchangeInfo.toAmount.toFixed(6)).toString());
