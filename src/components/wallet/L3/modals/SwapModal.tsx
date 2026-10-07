@@ -43,13 +43,18 @@ const FALLBACK_PRICES: Record<string, { priceUsd: number; priceEur: number }> = 
  * would make an unbacked copy of such a coin, and its "from" leg sends the coin to a stub,
  * which would throw away a token only its issuer redeems. So neither side offers one.
  */
-function hasFixedIssuer(coinId: string): boolean {
+function hasFixedIssuer(coinId: string, claims: ReadonlyMap<string, string> | null): boolean {
   if (describeCoin(coinId)) return true;
+  // A registry whose claims cannot be read clears no coin.
+  return claims === null || claims.has(coinId.toLowerCase());
+}
+
+/** The registry's coin claims, coin id → issuing token type, or null when they cannot be read. */
+function readClaims(): ReadonlyMap<string, string> | null {
   try {
-    return TokenRegistry.getInstance().getIssuingTokenType(coinId) !== null;
+    return TokenRegistry.getInstance().getIssuanceClaims();
   } catch {
-    // A registry that cannot be read cannot clear the coin.
-    return true;
+    return null;
   }
 }
 
@@ -76,11 +81,20 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const { transfer } = useTransfer();
   const { sphere, providers, network } = useSphereContext();
   const registryReady = useRegistryReady();
+  // Registry claims are read live, and this screen stays mounted while closed: a refresh
+  // can claim or release a coin at any time.
+  const [claims, setClaims] = useState(readClaims);
+  useEffect(() => {
+    // Read again on subscribing, and once the registry is ready: claims applied before this
+    // listener existed would otherwise be missed.
+    setClaims(readClaims());
+    return TokenRegistry.getInstance().onDefinitionsChanged(() => setClaims(readClaims()));
+  }, [registryReady]);
   // The held coins this screen may swap from. None until the registry has loaded: before
   // that, a coin the registry ties to an issuing token type cannot be recognised.
   const assets = useMemo(
-    () => (registryReady ? heldAssets.filter((a) => !hasFixedIssuer(a.coinId)) : []),
-    [heldAssets, registryReady],
+    () => (registryReady ? heldAssets.filter((a) => !hasFixedIssuer(a.coinId, claims)) : []),
+    [heldAssets, registryReady, claims],
   );
   const queryClient = useQueryClient();
 
@@ -104,11 +118,6 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const [rateStatus, setRateStatus] = useState<RateStatus>('loading');
   const [rateAttempt, setRateAttempt] = useState(0);
 
-  // A coin picked before the registry loaded can turn out to have a fixed issuer.
-  useEffect(() => {
-    setFromAsset((prev) => (prev && !assets.some((a) => a.coinId === prev.coinId) ? null : prev));
-  }, [assets]);
-
   // Prices are keyed by the registry's RAW (lowercase) token name — that IS the
   // CoinGecko id ("bitcoin", "unicity"). Never by a display name: `Asset.name` /
   // `registry.getName()` are capitalized ("Bitcoin"), and a capitalized key
@@ -131,7 +140,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       const registry = TokenRegistry.getInstance();
       const definitions = registry.getAllDefinitions();
       const fungibleDefs = definitions.filter(def =>
-        def.assetKind === 'fungible' && SUPPORTED_SWAP_COINS.includes(def.name.toLowerCase()) && !hasFixedIssuer(def.id)
+        def.assetKind === 'fungible' && SUPPORTED_SWAP_COINS.includes(def.name.toLowerCase()) && !hasFixedIssuer(def.id, claims)
       );
 
       const priceIdByCoinId = new Map<string, string>();
@@ -186,6 +195,11 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       setRateStatus(resolved.size > 0 ? 'ready' : 'unavailable');
       setAllSwappableAssets(swappableAssets);
 
+      // Keep a selection only while this screen still offers it: a registry refresh can
+      // claim a coin after it was picked.
+      setFromAsset(prev => (prev && !assets.some(a => a.coinId === prev.coinId) ? null : prev));
+      setToAsset(prev => (prev && !swappableAssets.some(a => a.coinId === prev.coinId) ? null : prev));
+
       // Set defaults immediately while we have both data sources in scope
       if (assets.length > 0) {
         setFromAsset(prev => prev ?? assets[0]);
@@ -203,7 +217,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       if (!cancelled) setRateStatus('unavailable');
     });
     return () => { cancelled = true; };
-  }, [isOpen, mintAllowed, providers?.price, assets, registryReady, rateAttempt]);
+  }, [isOpen, mintAllowed, providers?.price, assets, registryReady, rateAttempt, claims]);
 
   const getUserBalance = (coinId: string): string => {
     const userAsset = assets.find(a => a.coinId === coinId);
@@ -263,7 +277,8 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const handleSwap = async () => {
     const payments = getPayments(sphere);
     if (!fromAsset || !toAsset || !fromAmount || !exchangeInfo || !payments) return;
-    if (hasFixedIssuer(fromAsset.coinId) || hasFixedIssuer(toAsset.coinId)) {
+    const current = readClaims();
+    if (hasFixedIssuer(fromAsset.coinId, current) || hasFixedIssuer(toAsset.coinId, current)) {
       setError('Bridged coins cannot be swapped here.');
       return;
     }

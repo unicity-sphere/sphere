@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Asset } from '@unicitylabs/sphere-sdk';
@@ -58,12 +58,21 @@ const fakeRegistry = {
     return defs.find((d) => d.id === coinId) ?? null;
   },
   getIconUrl: () => null,
-  getIssuingTokenType: (coinId: string) => {
+  getIssuanceClaims: () => {
     if (registryLookupThrows) throw new Error('registry exploded');
-    const found = defs.find((d) => d.id === coinId) as { issuance?: { tokenType: string } } | undefined;
-    return found?.issuance?.tokenType ?? null;
+    const claimed = defs as (Def & { issuance?: { tokenType: string } })[];
+    return new Map(claimed.filter((d) => d.issuance).map((d) => [d.id, d.issuance!.tokenType]));
+  },
+  onDefinitionsChanged: (listener: () => void) => {
+    registryListeners.add(listener);
+    return () => {
+      registryListeners.delete(listener);
+    };
   },
 };
+
+/** Listeners the screen registered for registry changes; call them to apply new claims. */
+const registryListeners = new Set<() => void>();
 
 vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@unicitylabs/sphere-sdk')>();
@@ -143,6 +152,7 @@ beforeEach(() => {
   heldAssets = [];
   providers = null;
   registryLookupThrows = false;
+  registryListeners.clear();
 });
 
 describe('SwapModal — exchange rates', () => {
@@ -305,9 +315,45 @@ describe('SwapModal — coins with a fixed issuer', () => {
     open();
     defs = [USDCE, BTC, UCT];
 
-    // The default "from" side is picked once the registry is ready, from the coins it clears.
+    // Wait for the coins to load once the registry is ready, then for the screen to settle on
+    // the ones the registry clears.
     expect(await screen.findByText('BTC', {}, { timeout: 3000 })).toBeTruthy();
-    expect(screen.queryByText('USDC.e')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+  });
+
+  it('drops a coin the registry claims while the screen is mounted', async () => {
+    const unclaimed = def('usd-coin', 'USDC.e', 'e1');
+    defs = [unclaimed, BTC, UCT];
+    heldAssets = [held(unclaimed, '5'), held(UCT, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+    // Unclaimed, the coin is an ordinary one and the default "from" side.
+    expect(await screen.findByText('USDC.e')).toBeTruthy();
+
+    // A registry refresh claims it for its issuing token type.
+    defs = [USDCE, BTC, UCT];
+    act(() => registryListeners.forEach((listener) => listener()));
+
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+    expect(screen.getByText('UCT')).toBeTruthy();
+  });
+
+  it('drops a coin the registry claims while it is the coin to receive', async () => {
+    const unclaimed = def('usd-coin', 'USDC.e', 'e1');
+    defs = [unclaimed, UCT];
+    heldAssets = [held(BTC, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+    // Unclaimed, it is the first coin on offer, so the default "to" side.
+    expect(await screen.findByText('USDC.e')).toBeTruthy();
+
+    defs = [USDCE, UCT];
+    act(() => registryListeners.forEach((listener) => listener()));
+
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+    expect(screen.getByText('UCT')).toBeTruthy();
   });
 
   it('refuses a flip that would make a coin it cannot mint the one to receive', async () => {
