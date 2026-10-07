@@ -1,7 +1,7 @@
 /**
  * The bridge-in form offers one button per Ethereum wallet on the page, named and shown with
  * the icon each wallet announces for itself (EIP-6963). The browser wallet behind
- * `window.ethereum` is offered beside them only when no announced wallet owns it.
+ * `window.ethereum` is offered only when nothing announced itself.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -52,11 +52,11 @@ describe('BridgeScreen with an announced Ethereum wallet', () => {
     expect(screen.queryByRole('button', { name: /Browser wallet/ })).toBeNull();
   });
 
-  it('offers the browser wallet beside it when window.ethereum is another provider', () => {
+  it('offers no browser wallet once a wallet announced itself, whatever owns window.ethereum', () => {
     uninstall.push(install(RABBY));
     (window as { ethereum?: unknown }).ethereum = { request: async () => [] };
     openEthereumForm();
     expect(screen.getByRole('button', { name: 'Continue with Rabby' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Continue with Browser wallet' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /Browser wallet/ })).toBeNull();
   });
 });

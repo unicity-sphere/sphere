@@ -37,8 +37,8 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
 - **the wallet options** (`wallets()`): the ways to sign on the source chain,
   read on each render because an Ethereum wallet announces itself through
   EIP-6963 and may arrive after the asset loaded. The Ethereum asset lists every
-  announced wallet by name and icon and offers the legacy `window.ethereum` as
-  "Browser wallet" when no announced wallet owns it;
+  announced wallet by name and icon, or the legacy `window.ethereum` as
+  "Browser wallet" when nothing announced itself;
 - **the deposit wiring** per wallet option (`open()`): a `ChainWallet` that
   signs, a `ReceiptReader` for the node, and the chain's `BridgeSourceAdapter`
   from `@unicitylabs/bridge-core`, which turns "deposit X for this recipient"
