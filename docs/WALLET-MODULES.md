@@ -20,7 +20,7 @@ src/modules/
 | Hook | Where the core uses it |
 |---|---|
 | `tokenPlugins()` | `SphereProvider` passes them to every `Sphere.init({ plugins })`, so the SDK verifies the module's token types (a bridged token is checked against its source-chain lock). |
-| `describeCoin(coinId)` | `L3WalletView` asks it for every asset and token row: a coin the token registry does not list can still get a symbol, a name, decimals and a badge. |
+| `describeCoin(coinId)` | `L3WalletView` asks it for every asset and token row: a coin the token registry does not list can still get a symbol, a name, decimals and a badge. `TransactionHistoryModal` asks it for every MINT row: when the presentation has a `sourceChain` (the bridge module sets it; a `badge` alone does not count), that mint is a bridge-in, shown as "Bridged in" from that chain instead of "Received". |
 | `actions` | `ModuleActions` renders one button per action under the built-in Top Up / Swap / Send, and mounts the action's `Screen` (a `WalletScreen`, like the built-in modals). `isAvailable(network)` hides an action where it makes no sense. |
 
 Adding a module: create `src/modules/<name>/module.ts` with a default export.

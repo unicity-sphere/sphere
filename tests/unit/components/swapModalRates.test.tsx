@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Asset } from '@unicitylabs/sphere-sdk';
+import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
 // ============================================================================
 // SwapModal exchange rates.
@@ -57,7 +58,21 @@ const fakeRegistry = {
     return defs.find((d) => d.id === coinId) ?? null;
   },
   getIconUrl: () => null,
+  getIssuanceClaims: () => {
+    if (registryLookupThrows) throw new Error('registry exploded');
+    const claimed = defs as (Def & { issuance?: { tokenType: string } })[];
+    return new Map(claimed.filter((d) => d.issuance).map((d) => [d.id, d.issuance!.tokenType]));
+  },
+  onDefinitionsChanged: (listener: () => void) => {
+    registryListeners.add(listener);
+    return () => {
+      registryListeners.delete(listener);
+    };
+  },
 };
+
+/** Listeners the screen registered for registry changes; call them to apply new claims. */
+const registryListeners = new Set<() => void>();
 
 vi.mock('@unicitylabs/sphere-sdk', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@unicitylabs/sphere-sdk')>();
@@ -137,6 +152,7 @@ beforeEach(() => {
   heldAssets = [];
   providers = null;
   registryLookupThrows = false;
+  registryListeners.clear();
 });
 
 describe('SwapModal — exchange rates', () => {
@@ -250,5 +266,108 @@ describe('SwapModal — exchange rates', () => {
     expect(await screen.findByText(/1\.0000 USDU/)).toBeTruthy();
     await waitFor(() => expect(swapButton().disabled).toBe(false));
     expect(screen.queryByText(/Exchange rates unavailable/)).toBeNull();
+  });
+});
+
+// ============================================================================
+// Coins with a fixed issuer. The swap self-mints its "to" side and sends its
+// "from" side to a stub, so a coin only its issuer may mint (a bridged asset, or
+// one the registry ties to an issuing token type) is offered on neither side:
+// minting it would make an unbacked copy, sending it away would discard a token
+// only its issuer redeems.
+// ============================================================================
+
+describe('SwapModal — coins with a fixed issuer', () => {
+  /** USDC bridged from Sepolia: the registry names its issuing token type. */
+  const USDCE = { ...def('usd-coin', 'USDC.e', 'e1'), issuance: { tokenType: '2c'.repeat(32) } };
+
+  it('does not offer a coin the registry ties to an issuing token type as one to receive', async () => {
+    defs = [USDCE, UCT];
+    heldAssets = [held(BTC, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+
+    // The first swappable coin becomes the default "to" side; it skips USDC.e.
+    expect(await screen.findByText('UCT')).toBeTruthy();
+    expect(screen.queryByText('USDC.e')).toBeNull();
+  });
+
+  it('does not offer a held bridged coin to swap from', async () => {
+    defs = [BTC, UCT];
+    // Sepolia USDC as the bridge module describes it, held ahead of BTC.
+    const bridged = { ...held(BTC, '5'), coinId: SEPOLIA_USDC_BRIDGE.coinIdHex!, symbol: 'USDC', name: 'USDC (bridged · Ethereum)' };
+    heldAssets = [bridged, held(BTC, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+
+    // The first held coin becomes the default "from" side; it skips the bridged one.
+    expect(await screen.findByText('BTC')).toBeTruthy();
+    expect(screen.queryByText('USDC')).toBeNull();
+  });
+
+  it('drops a held coin once the registry that ties it to an issuing token type has loaded', async () => {
+    defs = []; // the screen opens before the registry has loaded
+    heldAssets = [held(USDCE, '5'), held(BTC, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+    defs = [USDCE, BTC, UCT];
+
+    // Wait for the coins to load once the registry is ready, then for the screen to settle on
+    // the ones the registry clears.
+    expect(await screen.findByText('BTC', {}, { timeout: 3000 })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+  });
+
+  it('drops a coin the registry claims while the screen is mounted', async () => {
+    const unclaimed = def('usd-coin', 'USDC.e', 'e1');
+    defs = [unclaimed, BTC, UCT];
+    heldAssets = [held(unclaimed, '5'), held(UCT, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+    // Unclaimed, the coin is an ordinary one and the default "from" side.
+    expect(await screen.findByText('USDC.e')).toBeTruthy();
+
+    // A registry refresh claims it for its issuing token type.
+    defs = [USDCE, BTC, UCT];
+    act(() => registryListeners.forEach((listener) => listener()));
+
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+    expect(screen.getByText('UCT')).toBeTruthy();
+  });
+
+  it('drops a coin the registry claims while it is the coin to receive', async () => {
+    const unclaimed = def('usd-coin', 'USDC.e', 'e1');
+    defs = [unclaimed, UCT];
+    heldAssets = [held(BTC, '2')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+    // Unclaimed, it is the first coin on offer, so the default "to" side.
+    expect(await screen.findByText('USDC.e')).toBeTruthy();
+
+    defs = [USDCE, UCT];
+    act(() => registryListeners.forEach((listener) => listener()));
+
+    await waitFor(() => expect(screen.queryByText('USDC.e')).toBeNull());
+    expect(screen.getByText('UCT')).toBeTruthy();
+  });
+
+  it('refuses a flip that would make a coin it cannot mint the one to receive', async () => {
+    const ALPHT = def('alpha_test', 'ALPHT', 'a1');
+    defs = [ALPHT, UCT];
+    heldAssets = [held(ALPHT, '3'), held(UCT, '3')];
+    providers = { price: { getPrices: vi.fn(async () => new Map()) } };
+
+    open();
+
+    await screen.findByText('ALPHT');
+    const flip = screen.getAllByRole('button').find((b) => b.querySelector('svg.lucide-arrow-down-up'))!;
+    fireEvent.click(flip);
+
+    expect(await screen.findByText('ALPHT cannot be received in a swap')).toBeTruthy();
   });
 });
