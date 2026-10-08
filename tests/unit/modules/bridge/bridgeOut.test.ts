@@ -38,8 +38,8 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     confirmations: 1,
     networks: ['testnet2'],
     tokenPlugin: { id: 'test', mintJustificationVerifiers: [], tokenIssuancePolicies: [] },
-    presentation: { explorerTxUrl: (tx) => `https://x/${tx}`, validateAddress: (a) => a.startsWith('T') },
-    wallets: [],
+    presentation: { explorerTxUrl: (tx) => `https://x/${tx}`, explorerAddressUrl: (a) => `https://x/address/${a}`, validateAddress: (a) => a.startsWith('T') },
+    wallets: () => [],
     resumeDeps: () => { throw new Error('unused'); },
     out: {
       fee: async () => 2n,

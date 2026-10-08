@@ -24,6 +24,7 @@ import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 import { bridgeAssetsFor } from '@/modules/bridge/assets';
 import { BridgeScreen, BurnedSummary, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
+import { ReturnServiceUnreachable } from '@/modules/bridge/returnFee';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
 vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', 'https://sepolia-return.example.test');
@@ -67,13 +68,13 @@ describe('BridgeScreen picker', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('walks to the Ethereum USDC form and names MetaMask as the signer', () => {
+  it('walks to the Ethereum USDC form and offers the browser wallet, with an install hint when none is there', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /Bring assets in/ }));
     fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
-    expect(screen.getByRole('button', { name: /Continue with MetaMask/ })).toBeDefined();
-    expect(screen.getByText(/Install the MetaMask browser extension/)).toBeDefined();
+    expect(screen.getByRole('button', { name: /Continue with Browser wallet/ })).toBeDefined();
+    expect(screen.getByText(/Install an Ethereum browser wallet such as MetaMask/)).toBeDefined();
   });
 
   it('refuses a malformed amount or one finer than the asset divides before any wallet prompt', () => {
@@ -85,7 +86,7 @@ describe('BridgeScreen picker', () => {
       fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
       for (const typed of ['1.2.3', '1.1234567']) {
         fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: typed } });
-        fireEvent.click(screen.getByRole('button', { name: /Continue with MetaMask/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Continue with Browser wallet/ }));
         expect(screen.getByText('Enter an amount greater than zero, with at most 6 decimals.')).toBeDefined();
       }
       expect(request).not.toHaveBeenCalled();
@@ -191,9 +192,13 @@ describe('ReturnFeeNote', () => {
     expect(screen.getByText(/Asking the bridge service what it charges/)).toBeDefined();
   });
 
-  it('says nothing can be sent out and gives the reason as the failure states it', () => {
+  it('says the service did not respond and bridging out is disabled when it could not be reached', () => {
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new ReturnServiceUnreachable(new TypeError('Failed to fetch'))} />);
+    expect(container.textContent?.trim()).toBe('The bridge service did not respond. Bridging out is currently disabled.');
+  });
+
+  it('says nothing can be sent out and gives the reason when the service answered with a quote the wallet refuses', () => {
     for (const reason of [
-      'The bridge service did not say what it charges: Failed to fetch',
       'The return service asks a fee above what this wallet allows for USDC.',
       'The return service names a fee recipient other than the account this wallet pays.',
     ]) {

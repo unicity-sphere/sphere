@@ -21,11 +21,19 @@ export interface BridgeInDeps {
 export interface BridgeWalletOption {
   readonly id: string;
   readonly name: string;
+  /** Image URI the wallet announces for itself, when it has one. */
+  readonly icon?: string;
   /** Shown when the option cannot be used here (extension missing, …). */
   readonly unavailableHint?: string;
   isAvailable(): boolean;
   /** A not-yet-connected wiring; the flow calls `wallet.connect()` first. */
   open(): BridgeInDeps;
+  /**
+   * Send the transaction collecting what the vault credited `destination`, which this wallet
+   * must hold, on the chain the asset lives on; resolves to its id. Present when the vault
+   * credits payouts.
+   */
+  collect?(destination: string): Promise<string>;
 }
 
 /** The source chain an asset is bridged from, as the picker shows it. */
@@ -95,10 +103,8 @@ export interface BurnIdentity {
 }
 
 export interface BridgePayout {
-  /** What the vault owes `destination`, in the asset's smallest unit. */
+  /** What the vault owes `destination`, in the asset's smallest unit; each wallet option collects it. */
   owed(destination: string): Promise<bigint>;
-  /** Send the collecting transaction from a wallet holding `destination`; resolves to its id. */
-  collect(destination: string): Promise<string>;
 }
 
 /** The assets-out side of an asset: burn on Unicity, release on the source chain. */
@@ -142,7 +148,8 @@ export interface BridgeAsset {
   /** What the wallet registers at init: the strict mint-reason verifier. */
   readonly tokenPlugin: WalletTokenPlugin;
   readonly presentation: BridgePresentation;
-  readonly wallets: readonly BridgeWalletOption[];
+  /** The ways to sign on the source chain now; a wallet can announce itself after the asset loaded. */
+  wallets(): readonly BridgeWalletOption[];
   /** Read-only wiring to finish a mint whose deposit already landed. Never signs. */
   resumeDeps(): Pick<BridgeInDeps, 'adapter' | 'receipts'>;
   /** Present when the asset can be bridged out again. */

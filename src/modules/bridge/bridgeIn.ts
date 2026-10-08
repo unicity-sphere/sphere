@@ -176,7 +176,7 @@ function locksThisDeposit(commit: CommitInfo, lock: PendingLock): boolean {
   );
 }
 
-function assertOnChain(network: number, expected: number, chainLabel: string): void {
+export function assertOnChain(network: number, expected: number, chainLabel: string): void {
   if (network !== expected) {
     throw new Error(
       `Wrong network: your wallet is on chain ${network}, but ${chainLabel} needs chain ${expected}. ` +
