@@ -13,16 +13,18 @@ export interface BridgeOutArgs {
   readonly asset: BridgeAsset;
   readonly tokenId: string;
   readonly amount: bigint;
+  /** The fee the user was shown; a burn that would pay the service more is not made. */
+  readonly maxFee: bigint;
   readonly destination: string;
 }
 
 export async function runBridgeOut(args: BridgeOutArgs): Promise<PendingReturn> {
-  const { payments, store, asset, tokenId, amount, destination } = args;
+  const { payments, store, asset, tokenId, amount, maxFee, destination } = args;
   const out = outSide(asset);
   if (!asset.presentation.validateAddress(destination)) {
     throw new Error(`Enter a valid ${asset.chain.name} destination address.`);
   }
-  const reasonBytes = out.reasonFor({ amount, destination });
+  const reasonBytes = await out.reasonFor({ amount, destination, maxFee });
 
   let record: PendingReturn | undefined;
   await burnForReturn(payments, {
@@ -39,6 +41,7 @@ export async function runBridgeOut(args: BridgeOutArgs): Promise<PendingReturn> 
         reasonBytesHex: toHex(reasonBytes),
         destination,
         amount: amount.toString(),
+        fee: identity.fee.toString(),
         createdAt: Date.now(),
         status: 'burned',
       };
@@ -142,6 +145,7 @@ export async function recoverBurns(
         reasonBytesHex: toHex(identity.reasonBytes),
         destination: identity.destination,
         amount: identity.amount.toString(),
+        fee: identity.fee.toString(),
         createdAt: Date.now(),
         status: 'burned',
       };

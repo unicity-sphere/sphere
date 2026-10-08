@@ -41,11 +41,13 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
 - **presentation**: explorer links and address rules;
 - **`chain`**: the source chain as the picker shows it (family name, network
   name, testnet flag); assets sharing a chain id are grouped under one entry;
-- **`out`** (optional): the assets-out side. `reasonFor` builds the canonical
-  return reason for an amount and a destination, `identify` reads a burned blob
-  back (its nullifier, destination and amount, or `null` when the blob is not
-  this asset's), and `returns` is the return service that proves the burn and
-  releases the funds. An asset without `out` is offered for bridging in only.
+- **`out`** (optional): the assets-out side. `fee` asks the return service what
+  it takes from each burned token, `reasonFor` builds the canonical return
+  reason for an amount and a destination with that fee written in, `identify`
+  reads a burned blob back (its nullifier, destination, amount and fee, or
+  `null` when the blob is not this asset's), and `returns` is the return
+  service that proves the burn and releases the funds. An asset without `out`
+  is offered for bridging in only.
 - **`networks`**: which Unicity networks the asset may be bridged into (a
   testnet vault serves test networks only).
 
@@ -85,6 +87,14 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
   sync, and a service that restarted (it holds nothing durable) is resent the
   blob when it no longer knows the return id. A refusal the service marks as
   not recoverable ends the return as failed, with the blob still in the record.
+- The return service's fee comes out of the released amount and is fixed by the
+  burn, so every check on it runs before the burn. The form shows the fee the
+  service quotes; the burn is made only if the quote fetched at that moment is
+  no higher than the one shown, no higher than the asset's cap in code, leaves
+  something of the token, is paid to the pinned account when one is set, and
+  parses as a 20-byte recipient, a whole amount and a future deadline. A reason
+  the service would refuse or no proof could cover would leave a burned token
+  nobody releases, so a service that does not answer `/fees` means no burn.
 - An open return cannot be dismissed; a finished one can.
 
 ### Development links
@@ -110,6 +120,13 @@ bridging in only, so no token is burned with nowhere to send it.
   session never posts there.
 - Tron Nile USDT has no deployed service; a local build can name one with
   `VITE_BRIDGE_RETURN_SERVICE_URL_NILE_USDT`.
+- `BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC` names the one account a Sepolia
+  USDC return fee may be paid to; it must match the service's
+  `BRIDGE_RETURN_FEE_RECIPIENT`. It is read from the same places as the service
+  URL: the container's runtime config, else
+  `VITE_BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC` from the build. A container
+  that leaves it empty names no account, whatever the build baked. Unset, the
+  account the service names is paid.
 
 `vite.config.ts` refuses the single `VITE_BRIDGE_RETURN_SERVICE_URL` these
 replace, which would otherwise be ignored silently.

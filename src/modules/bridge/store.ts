@@ -28,6 +28,8 @@ export interface PendingReturn {
   readonly reasonBytesHex: string;
   readonly destination: string;
   readonly amount: string;
+  /** What the burn pays the return service out of `amount`; absent on records from before fees. */
+  readonly fee?: string;
   readonly createdAt: number;
   returnId?: string;
   status: ReturnStatus;

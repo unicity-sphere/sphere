@@ -33,19 +33,26 @@ describe('AssetRow verification', () => {
 });
 
 describe('AssetRow name', () => {
-  it('is cut off by default and shown whole on click, without triggering the row', () => {
+  it('is always shown whole, with no click needed to read it', () => {
     let rowClicks = 0;
     render(<AssetRow asset={asset} showBalances delay={0} isNew={false} onClick={() => { rowClicks += 1; }} />);
     const name = screen.getByText(LONG);
-    expect(name.className).toContain('truncate');
-    expect(name.getAttribute('title')).toBe(LONG);
-
-    fireEvent.click(name);
     expect(name.className).not.toContain('truncate');
-    expect(name.className).toContain('whitespace-normal');
-    expect(rowClicks).toBe(0);
+    expect(name.className).not.toContain('max-w-');
+    expect(name.className).toContain('break-words');
+    expect(name.getAttribute('role')).toBeNull();
 
     fireEvent.click(name);
-    expect(name.className).toContain('truncate');
+    expect(rowClicks).toBe(1);
+  });
+
+  it('wraps inside the row instead of pushing the price out of it', () => {
+    const { container } = render(<AssetRow asset={asset} badge="Ethereum" showBalances delay={0} isNew={false} />);
+    const name = screen.getByText(LONG);
+    const price = container.querySelector('.text-right')!;
+    expect(price.className).toContain('shrink-0');
+    for (let box = name as HTMLElement; box !== price.parentElement; box = box.parentElement!) {
+      expect(box.className, box.outerHTML.slice(0, 60)).toContain('min-w-0');
+    }
   });
 });

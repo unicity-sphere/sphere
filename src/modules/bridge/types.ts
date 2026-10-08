@@ -88,6 +88,8 @@ export interface BurnIdentity {
   /** Destination and amount read back from the reason bytes, for a recovered record. */
   readonly destination: string;
   readonly amount: bigint;
+  /** What the burn pays the return service out of `amount`, read back from the reason bytes. */
+  readonly fee: bigint;
   /** The return reason the burn commits to, read back from the burned token. */
   readonly reasonBytes: Uint8Array;
 }
@@ -101,8 +103,17 @@ export interface BridgePayout {
 
 /** The assets-out side of an asset: burn on Unicity, release on the source chain. */
 export interface BridgeOutSide {
-  /** Canonical return-reason bytes for releasing `amount` to `destination`. The destination is validated first. */
-  reasonFor(args: { amount: bigint; destination: string }): Uint8Array;
+  /**
+   * What the return service takes from each burned token now, in the asset's smallest unit.
+   * Rejects when the service cannot be asked or asks more than this wallet allows.
+   */
+  fee(): Promise<bigint>;
+  /**
+   * Canonical return-reason bytes for releasing `amount` to `destination`, paying the fee the
+   * service asks at this moment. The destination is validated first. Rejects, with nothing
+   * burned yet, when that fee is above `maxFee` or would take the whole amount.
+   */
+  reasonFor(args: { amount: bigint; destination: string; maxFee: bigint }): Promise<Uint8Array>;
   /** Read a burned blob; `null` when it is not this asset's burn. */
   identify(burnedToken: Uint8Array): Promise<BurnIdentity | null>;
   /** Whether a token's mint reason names the vault this side releases from. */

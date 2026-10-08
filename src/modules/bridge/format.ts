@@ -13,16 +13,16 @@ export function formatUnits(amount: bigint, decimals: number): string {
 
 export function returnStatusSentence(r: Pick<PendingReturn, 'status' | 'message' | 'recoverable'>, chainName: string): string {
   switch (r.status) {
-    case 'burned': return 'The return service has not accepted the burn yet. This wallet keeps the burned token and retries by itself.';
-    case 'queued': return 'The return service accepted the burn and queued it for proving.';
-    case 'proving': return 'The return service is proving the burn.';
+    case 'burned': return 'The bridge service has not accepted the burn yet. This wallet keeps the burned token and retries by itself.';
+    case 'queued': return 'The bridge service accepted the burn and queued it for proving.';
+    case 'proving': return 'The bridge service is generating proof of burn.';
     case 'proven': return `The burn is proven. The release is being sent to ${chainName}.`;
     case 'submitted': return `The release is waiting for confirmation on ${chainName}.`;
     case 'settled': return `Released on ${chainName}.`;
     case 'failed':
       return r.recoverable
-        ? `The return service could not accept the burn yet${r.message ? `: ${r.message}` : ''}. This wallet keeps the burned token and retries by itself.`
-        : `The return service refused the burn${r.message ? `: ${r.message}` : '.'}`;
+        ? `The bridge service could not accept the burn yet${r.message ? `: ${r.message}` : ''}. This wallet keeps the burned token and retries by itself.`
+        : `The bridge service refused the burn${r.message ? `: ${r.message}` : '.'}`;
   }
 }
 
@@ -62,4 +62,15 @@ export function pendingLockSentence(lock: Pick<PendingLock, 'status' | 'lockTxid
   if (lock.lockTxid) return lock.status === 'locked' ? 'locked, not yet minted' : 'lock sent';
   if (lock.lockRequested) return "the lock may have been sent; check your wallet's activity before discarding";
   return 'not signed, nothing is locked';
+}
+
+/**
+ * Where a bridge-out stopped and why. The failing token is left to its own reason: its burn
+ * may have gone out before the failure, in which case the wallet's journal finishes it and it
+ * turns up under Returns. Only the tokens after it are certainly still in the wallet.
+ */
+export function burnStoppedSentence(progress: { done: number; total: number }, reason: string): string {
+  const left = progress.total - progress.done - 1;
+  const kept = left === 0 ? '' : ` The last ${left === 1 ? 'token was' : `${left} tokens were`} not burned and ${left === 1 ? 'stays' : 'stay'} in this wallet.`;
+  return `Burning stopped at token ${progress.done + 1} of ${progress.total}: ${reason}${kept}`;
 }

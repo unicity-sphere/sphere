@@ -4,6 +4,7 @@
  * Tron USDT and Ethereum USDC assets (no wallet extension, no network calls).
  */
 import { describe, it, expect, vi } from 'vitest';
+import type { Token } from '@unicitylabs/sphere-sdk';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -20,7 +21,8 @@ vi.mock('@unicitylabs/bridge-plugin/wallet', async (importOriginal) => {
 
 import { SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugin/wallet';
 
-import { BridgeScreen, PendingList, ReturnsList } from '@/modules/bridge/BridgeScreen';
+import { bridgeAssetsFor } from '@/modules/bridge/assets';
+import { BridgeScreen, BurnedSummary, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
@@ -132,10 +134,100 @@ describe('ReturnsList', () => {
     expect(screen.queryByRole('button', { name: 'Remove this record' })).toBeNull();
   });
 
+  it('shows the fee a return pays next to the amount sent, and nothing for one that pays none', () => {
+    const sent: PendingReturn = { ...failed, coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, amount: '1000000', status: 'queued', recoverable: undefined, message: undefined };
+    const { container, rerender } = render(<ReturnsList returns={[{ ...sent, fee: '50000' }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.textContent).toContain('1 USDC → Ethereum · 0.05 USDC fee');
+    rerender(<ReturnsList returns={[sent]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.textContent).toContain('1 USDC → Ethereum');
+    expect(container.textContent).not.toContain('fee');
+    rerender(<ReturnsList returns={[{ ...sent, fee: '0' }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.textContent).not.toContain('fee');
+  });
+
   it('lets a released return be removed', () => {
     render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
+  });
+});
+
+describe('BurnedSummary', () => {
+  const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
+  const burn = (id: string, amount: string): PendingReturn => ({
+    id, coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, assetId: usdc().id, burnedTokenHex: '01', reasonBytesHex: '07',
+    destination: '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf', amount, fee: '50000', createdAt: 1, status: 'proving',
+  });
+
+  it('says what was burned, what the service is doing and where to follow it, and nothing else', () => {
+    const { container } = render(<BurnedSummary asset={usdc()} burned={[burn('n1', '4950000')]} />);
+    expect(container.textContent).toBe(
+      'Burned on Unicity' +
+        '4.95 USDC was burned.' +
+        'The bridge service is generating proof of burn.' +
+        'The pending burn is listed under Returns in Bridge view.',
+    );
+  });
+
+  it('gives the total and one status line per token when several were burned', () => {
+    const { container } = render(<BurnedSummary asset={usdc()} burned={[burn('n1', '4950000'), burn('n2', '1000000')]} />);
+    expect(container.textContent).toContain('5.95 USDC was burned.');
+    expect(container.textContent).toContain('4.95 USDC: The bridge service is generating proof of burn.');
+    expect(container.textContent).toContain('1 USDC: The bridge service is generating proof of burn.');
+    expect(container.textContent).toContain('The pending burns are listed under Returns in Bridge view.');
+  });
+});
+
+describe('ReturnFeeNote', () => {
+  const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
+
+  it('says what the bridge service charges per token, and nothing more', () => {
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={50_000n} failure={null} />);
+    expect(container.textContent).toBe('The bridge service charges 0.05 USDC of each token as its fee.');
+  });
+
+  it('says it is asking while the service has not answered', () => {
+    render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={null} />);
+    expect(screen.getByText(/Asking the bridge service what it charges/)).toBeDefined();
+  });
+
+  it('says nothing can be sent out and gives the reason as the failure states it', () => {
+    for (const reason of [
+      'The bridge service did not say what it charges: Failed to fetch',
+      'The return service asks a fee above what this wallet allows for USDC.',
+      'The return service names a fee recipient other than the account this wallet pays.',
+    ]) {
+      const { container, unmount } = render(<ReturnFeeNote asset={usdc()} fee={undefined} failure={new Error(reason)} />);
+      expect(container.textContent?.trim()).toBe(`Nothing can be sent out now. ${reason}`);
+      unmount();
+    }
+  });
+
+  it('adds nothing when the service charges nothing', () => {
+    const { container } = render(<ReturnFeeNote asset={usdc()} fee={0n} failure={null} />);
+    expect(container.textContent).toBe('');
+  });
+});
+
+describe('TokenChoice', () => {
+  const usdc = () => bridgeAssetsFor('testnet2').find((a) => a.symbol === 'USDC')!;
+  const token = (amount: string) => ({ id: 't-1', amount }) as unknown as Token;
+
+  it('cannot be picked when the token is no larger than the fee, and says why', () => {
+    const onToggle = vi.fn();
+    render(<TokenChoice token={token('10000')} asset={usdc()} checked={false} tooSmall onToggle={onToggle} />);
+    const box = screen.getByRole('checkbox');
+    expect(box).toHaveProperty('disabled', true);
+    expect(box).toHaveProperty('checked', false);
+    expect(screen.getByText(/Token is smaller than the charged fee\./)).toBeDefined();
+  });
+
+  it('can be picked when it covers the fee', () => {
+    const onToggle = vi.fn();
+    render(<TokenChoice token={token('1000000')} asset={usdc()} checked={false} tooSmall={false} onToggle={onToggle} />);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Token is smaller than the charged fee\./)).toBeNull();
   });
 });
 
