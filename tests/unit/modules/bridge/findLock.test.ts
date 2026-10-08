@@ -15,13 +15,15 @@ const FROM = '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf';
 const COMMITMENT = '33'.repeat(32);
 const TOKEN_ID = '22'.repeat(32);
 const TXID = 'cd'.repeat(32);
+/** A tip after the Sepolia vault's deployment, where the search begins. */
+const TIP = SEPOLIA_USDC_BRIDGE.deployBlock! + 100_000;
 
 function lockLog(tokenIdHex: string, txid = TXID) {
   return {
     address: SEPOLIA_USDC_BRIDGE.vault,
     topics: [`0x${LOCK_EVENT_TOPIC0}`, `0x${'1'.padStart(64, '0')}`, `0x${FROM.slice(2).toLowerCase().padStart(64, '0')}`],
     data: `0x${'5'.padStart(64, '0')}${tokenIdHex}${COMMITMENT}`,
-    blockNumber: '0x100',
+    blockNumber: `0x${(TIP - 10).toString(16)}`,
     transactionHash: `0x${txid}`,
   };
 }
@@ -33,7 +35,7 @@ function node(logs: unknown[], locked = logs.length > 0, pending = 0) {
     const req = JSON.parse(init?.body ?? '{}');
     requests.push(req);
     const result =
-      req.method === 'eth_blockNumber' ? '0x200'
+      req.method === 'eth_blockNumber' ? `0x${TIP.toString(16)}`
       : req.method === 'eth_call' ? `0x${(locked ? '1' : '0').padStart(64, '0')}`
       : req.method === 'eth_getTransactionCount' ? `0x${(req.params[1] === 'pending' ? 5 + pending : 5).toString(16)}`
       : logs;
