@@ -4,7 +4,9 @@ import {
   bridgeTokenPlugin,
   createSourceAdapter,
   evmWallets,
+  findLock,
   loadBridges,
+  queryBalance,
   lockFinality,
   owedTo,
   withdrawCall,
@@ -46,6 +48,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     wallet: signer,
     receipts,
     adapter: createSourceAdapter(bridge, signer, rpc),
+    held: (owner) => queryBalance(rpc, { assetAddress: bridge.plugin.resolvedConfig.assetContractHex, owner }),
     expectedNetwork: m.chainId,
     chainLabel: m.label,
   });
@@ -86,6 +89,10 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     presentation: bridgePresentation(bridge),
     wallets: () => discovered.list().map(optionFor),
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
+    findLock: async ({ from, tokenIdHex, createdAt }) => {
+      const result = await findLock(bridge, rpc, { fromAddressHex: toEvmAddressHex(from), unicityTokenIdHex: tokenIdHex, startedAtMs: createdAt, nowMs: Date.now() });
+      return result.outcome === 'found' ? { outcome: 'found', lockTxid: `0x${result.txid}` } : result;
+    },
     out: hasReturnService
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
           feeCap: RETURN_FEE_CAP,

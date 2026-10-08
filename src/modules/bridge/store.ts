@@ -10,6 +10,8 @@ export interface PendingLock {
   readonly tokenIdHex: string;
   readonly recipientCommitmentHex: string;
   readonly amount: string;
+  /** The source-chain account that signs the deposit; absent on records from before it was kept. */
+  readonly from?: string;
   lockRequested?: boolean;
   lockTxid?: string;
   lockBlock?: number;

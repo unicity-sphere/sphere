@@ -23,10 +23,10 @@ import { Button, ModalHeader } from '../../components/wallet/ui';
 import type { ModuleScreenProps } from '../types';
 import { bridgeAssetByCoin, bridgeAssetsFor } from './assets';
 import { lockTxidFor } from './bridgeIn';
-import { burnStoppedSentence, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence } from './format';
+import { burnStoppedSentence, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, startedAtSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
-import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
+import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, LockSearch, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
 import { ReturnServiceUnreachable, tokensCoveringFee } from './returnFee';
@@ -52,7 +52,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
   const [amountInput, setAmountInput] = useState('');
   const [pending, setPending] = useState<PendingLock[]>([]);
   const [resumingId, setResumingId] = useState<string | null>(null);
-  const { bridgeIn, progress, result, reset: resetIn, pendingMints, resume, discard } = useBridgeIn();
+  const { bridgeIn, progress, result, reset: resetIn, pendingMints, resume, discard, locate } = useBridgeIn();
 
   // Assets out.
   const [destination, setDestination] = useState('');
@@ -199,6 +199,12 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
     }
   };
 
+  const onLocate = async (lock: PendingLock) => {
+    const lockTxid = await locate(lock);
+    if (lockTxid) setPending(pendingMints());
+    return lockTxid;
+  };
+
   const onDiscard = (lock: PendingLock) => {
     discard(lock.id);
     setPending(pendingMints());
@@ -247,7 +253,7 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             </div>
             {error && <ErrorLine text={error} />}
             {pending.length > 0 && (
-              <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} />
+              <PendingList locks={pending} resumingId={resumingId} onResume={onResume} onDiscard={onDiscard} onLocate={onLocate} />
             )}
             {returns.length > 0 && <ReturnsList returns={returns} timing={timing} onDismiss={dismiss} onRetry={retry} />}
           </>
@@ -723,43 +729,44 @@ function returnStatusLabel(status: PendingReturn['status']): string {
   }
 }
 
-export function PendingList({
-  locks,
-  resumingId,
-  onResume,
-  onDiscard,
-}: {
+/** Deposits signed but not minted. `onLocate` looks a lost lock up on its chain and answers
+ * found, absent or unknown with a reason; `undefined` when the chain cannot be searched. */
+interface PendingListProps {
   locks: PendingLock[];
   resumingId: string | null;
   onResume: (lock: PendingLock) => void;
   onDiscard: (lock: PendingLock) => void;
-}) {
+  onLocate?: (lock: PendingLock) => Promise<LockSearch | undefined>;
+}
+
+export function PendingList({ locks, resumingId, onResume, onDiscard, onLocate }: PendingListProps) {
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Deposits waiting for their token</div>
       {locks.map((lock) => (
-        <PendingLockRow key={lock.id} lock={lock} busy={resumingId === lock.id} onResume={onResume} onDiscard={onDiscard} />
+        <PendingLockRow key={lock.id} lock={lock} busy={resumingId === lock.id} onResume={onResume} onDiscard={onDiscard} onLocate={onLocate} />
       ))}
     </div>
   );
 }
 
-function PendingLockRow({
-  lock,
-  busy,
-  onResume,
-  onDiscard,
-}: {
-  lock: PendingLock;
-  busy: boolean;
-  onResume: (lock: PendingLock) => void;
-  onDiscard: (lock: PendingLock) => void;
-}) {
+function PendingLockRow({ lock, busy, onResume, onDiscard, onLocate }: { lock: PendingLock; busy: boolean } & Omit<PendingListProps, 'locks' | 'resumingId'>) {
   const [txidInput, setTxidInput] = useState('');
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const asset = bridgeAssetByCoin(lock.coinIdHex);
   const amount = asset ? `${formatUnits(BigInt(lock.amount), asset.decimals)} ${asset.symbol}` : lock.amount;
   const maybeSent = !lock.lockTxid && lock.lockRequested === true && !!asset;
+  // The search is a read of mined blocks, so a miss proves nothing: it runs again while the row
+  // is open and each time the screen opens, and never softens the discard confirmation.
+  const search = useQuery({
+    queryKey: ['bridge', 'lock-search', lock.id],
+    enabled: maybeSent && !!lock.from && !!onLocate && !!asset?.findLock,
+    queryFn: () => onLocate!(lock),
+    retry: false,
+    staleTime: 0,
+    refetchInterval: 60_000,
+  });
+  const searching = search.isEnabled && search.isPending;
   const pastedTxid = asset ? lockTxidFor(asset.chain.id, txidInput) : null;
   const discard = () => {
     if (lock.lockRequested && !confirmingDiscard) setConfirmingDiscard(true);
@@ -774,6 +781,10 @@ function PendingLockRow({
           </span>
           <span className={`block ${MUTED}`}>
             {pendingLockSentence(lock)}
+          </span>
+          <span className={`block ${MUTED}`}>
+            {startedAtSentence(lock.createdAt)}
+            {lock.from && asset && <> · from <TxLink href={asset.presentation.explorerAddressUrl(lock.from)} label={shortAddress(lock.from)} /></>}
           </span>
         </span>
         {lock.lockTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(lock.lockTxid)} label="tx" />}
@@ -808,7 +819,10 @@ function PendingLockRow({
           <Button variant="danger" onClick={() => onDiscard(lock)} className="px-2 py-1 text-xs" aria-label="Discard anyway">Discard anyway</Button>
         </div>
       )}
-      {maybeSent && (
+      {maybeSent && asset && searching && <div className={MUTED}>Looking for the lock on {asset.chain.name}…</div>}
+      {maybeSent && asset && search.data && <div className={MUTED}>{lockSearchSentence(search.data, asset.chain.name)}</div>}
+      {maybeSent && search.error && <ErrorLine text={getErrorMessage(search.error)} />}
+      {maybeSent && search.data?.outcome !== 'found' && (
         <div className="flex items-center gap-2">
           <input
             aria-label="Lock transaction id"
@@ -829,6 +843,18 @@ function PendingLockRow({
       )}
     </div>
   );
+}
+
+function lockSearchSentence(result: LockSearch, chainName: string): string {
+  switch (result.outcome) {
+    case 'found': return `The lock was found on ${chainName}.`;
+    case 'absent': return `No lock for this deposit is on ${chainName}, and nothing from the account is pending. The search runs again while this is open.`;
+    case 'unknown': return `${result.why.charAt(0).toUpperCase()}${result.why.slice(1)}. The search runs again while this is open.`;
+  }
+}
+
+function shortAddress(address: string): string {
+  return address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
 }
 
 function ErrorLine({ text }: { text: string }) {

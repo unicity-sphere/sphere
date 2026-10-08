@@ -3,6 +3,7 @@ import {
   createSourceAdapter,
   loadBridges,
   NILE_USDT_BRIDGE,
+  queryBalance,
   type BridgeSourceAdapter,
   type ContractCall,
   type SourceSigner,
@@ -10,8 +11,9 @@ import {
 import { LOCK_EVENT_TOPIC0, type SourceTxInfo } from '@unicitylabs/bridge-plugin';
 import type { BridgePayments, ReceiptReader } from '@unicitylabs/bridge-core';
 
-import { lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
+import { locateLock, lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
 import type { BridgeStore, PendingLock } from '@/modules/bridge/store';
+import type { LockSearch } from '@/modules/bridge/types';
 
 const bridge = loadBridges(NILE_USDT_BRIDGE)[0];
 const VAULT_HEX = bridge.plugin.resolvedConfig.lockContractHex;
@@ -47,16 +49,17 @@ const lockMined = lockOf(TOKEN_ID, COMMITMENT, AMOUNT);
 const lockReverted: SourceTxInfo = { blockNumber: 12n, success: false, logs: [] };
 
 type FakeRpc = {
-  constantCall(): Promise<string>;
+  constantCall(input: { functionSignature: string }): Promise<string>;
   getTransactionInfo(txid: string): Promise<SourceTxInfo | null>;
 };
 function fakeRpc(
-  opts: { allowance: bigint; approve?: SourceTxInfo | null; lock?: SourceTxInfo | null },
+  opts: { allowance: bigint; held?: bigint; approve?: SourceTxInfo | null; lock?: SourceTxInfo | null },
   timeline: string[] = [],
 ): FakeRpc {
   return {
-    async constantCall() {
-      return opts.allowance.toString(16).padStart(64, '0');
+    async constantCall(input: { functionSignature: string }) {
+      const word = input.functionSignature === 'balanceOf(address)' ? (opts.held ?? 10n * AMOUNT) : opts.allowance;
+      return word.toString(16).padStart(64, '0');
     },
     async getTransactionInfo(txid: string): Promise<SourceTxInfo | null> {
       timeline.push('receipt:' + txid);
@@ -135,8 +138,10 @@ function run(over: { signer: FakeSigner; store: FakeStore; rpc: FakeRpc; payment
     wallet: over.signer,
     receipts: receiptsOf(over.rpc),
     adapter: tronAdapterOf(over.signer, over.rpc),
+    held: (owner) => queryBalance(over.rpc, { assetAddress: bridge.plugin.resolvedConfig.assetContractHex, owner }),
     expectedNetwork: CHAIN,
     chainLabel: bridge.manifest.label,
+    symbol: bridge.manifest.symbol,
     amount: AMOUNT,
   });
 }
@@ -176,6 +181,26 @@ describe('runBridgeIn', () => {
 
     expect(signer.sigs()).toEqual(['approve']);
     expect(store.locks.size).toBe(0);
+  });
+
+  it('refuses a deposit above what the account holds, before any signing', async () => {
+    const signer = new FakeSigner();
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 0n, held: 500_000n }) })).rejects.toThrow('Not enough USDT in the wallet.');
+    expect(signer.sent).toHaveLength(0);
+    expect(store.locks.size).toBe(0);
+  });
+
+  it('goes ahead when the balance cannot be read, since the check is advisory', async () => {
+    const signer = new FakeSigner();
+    const store = new FakeStore();
+    const rpc = fakeRpc({ allowance: 2_000_000n });
+    const unreadable = { ...rpc, async constantCall(input: { functionSignature: string }) {
+      if (input.functionSignature === 'balanceOf(address)') throw new Error('Ethereum RPC eth_call failed: HTTP 429');
+      return rpc.constantCall(input);
+    } };
+    await run({ signer, store, rpc: unreadable });
+    expect(signer.sigs()).toEqual(['lock']);
   });
 
   it('blocks before any signing when the wallet is on the wrong network', async () => {
@@ -238,6 +263,29 @@ describe('runBridgeIn', () => {
     expect(store.locks.size).toBe(0);
   });
 
+  it('keeps the salt on any other wallet error, since an error after the broadcast looks the same', async () => {
+    for (const failure of [
+      Object.assign(new Error('Internal JSON-RPC error.'), { code: -32603, data: { code: -32000, message: 'nonce too low' } }),
+      Object.assign(new Error('insufficient funds for gas * price + value'), { code: -32603 }),
+      Object.assign(new Error('Provider disconnected.'), { code: 4900 }),
+    ]) {
+      const signer = new FakeSigner();
+      signer.lockFailure = failure;
+      const store = new FakeStore();
+      await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(failure.message);
+      expect(store.only()).toMatchObject({ status: 'locking', lockRequested: true });
+    }
+  });
+
+  it('records which account signed the deposit', async () => {
+    const signer = new FakeSigner();
+    signer.lockFailure = new Error('Timed out broadcasting lock to Tron.');
+    const store = new FakeStore();
+    await expect(run({ signer, store, rpc: fakeRpc({ allowance: 2_000_000n }) })).rejects.toThrow(/Timed out/);
+
+    expect(store.only().from).toBe(OWNER);
+  });
+
   it('keeps the record when the mint fails after a confirmed lock (the resumable case)', async () => {
     const signer = new FakeSigner();
     const store = new FakeStore();
@@ -287,8 +335,10 @@ describe('runBridgeIn is chain-neutral (opaque adapter steps)', () => {
       wallet: signer,
       receipts: receiptsOf(fakeRpc({ allowance: 0n, lock: { blockNumber: 2n, success: true, logs: [] } })),
       adapter,
+      held: async () => AMOUNT,
       expectedNetwork: CHAIN,
       chainLabel: bridge.manifest.label,
+      symbol: bridge.manifest.symbol,
       amount: AMOUNT,
     });
 
@@ -386,6 +436,63 @@ describe('resumeBridgeMint', () => {
     ).rejects.toBeInstanceOf(TxRevertedError);
 
     expect(store.locks.get('lock-1')).toEqual(before);
+  });
+});
+
+describe('locateLock', () => {
+  const unsure = (): PendingLock => ({
+    id: 'lock-2',
+    coinIdHex: bridge.plugin.coinIdHex,
+    tokenTypeHex: bridge.plugin.tokenTypeHex,
+    chainId: CHAIN,
+    saltHex: '00'.repeat(32),
+    tokenIdHex: TOKEN_ID,
+    recipientCommitmentHex: COMMITMENT,
+    amount: AMOUNT.toString(),
+    from: OWNER,
+    lockRequested: true,
+    createdAt: Date.now() - 60_000,
+    status: 'locking',
+  });
+
+  const searching = (answer: LockSearch, lockReceipt: SourceTxInfo = lockMined) => {
+    const rpc = fakeRpc({ allowance: 0n, lock: lockReceipt });
+    const findLock = vi.fn(async () => answer);
+    return { findLock, resumeDeps: () => ({ adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc) }) };
+  };
+  const found: LockSearch = { outcome: 'found', lockTxid: LOCK_TX };
+
+  it('writes the lock transaction it finds into the record, once the chain confirms it locked this deposit', async () => {
+    const store = new FakeStore();
+    const lock = unsure();
+    store.persistPendingLock(lock);
+    const asset = searching(found);
+    expect(await locateLock(asStore(store), asset, lock)).toEqual(found);
+    expect(asset.findLock).toHaveBeenCalledWith({ from: OWNER, tokenIdHex: TOKEN_ID, createdAt: lock.createdAt });
+    expect(store.only()).toMatchObject({ lockTxid: LOCK_TX, lockRequested: true, status: 'locking' });
+  });
+
+  it('treats a transaction that locked another deposit as unknown, leaving the record alone', async () => {
+    const store = new FakeStore();
+    store.persistPendingLock(unsure());
+    const result = await locateLock(asStore(store), searching(found, lockOf('99'.repeat(32), COMMITMENT, AMOUNT)), unsure());
+    expect(result).toMatchObject({ outcome: 'unknown', why: expect.stringMatching(/another deposit/) });
+    expect(store.only().lockTxid).toBeUndefined();
+  });
+
+  it('passes absent and unknown on, leaving the record alone', async () => {
+    const store = new FakeStore();
+    store.persistPendingLock(unsure());
+    expect(await locateLock(asStore(store), searching({ outcome: 'absent' }), unsure())).toEqual({ outcome: 'absent' });
+    expect(await locateLock(asStore(store), searching({ outcome: 'unknown', why: 'a transaction from the account is still pending' }), unsure())).toMatchObject({ outcome: 'unknown' });
+    expect(store.only().lockTxid).toBeUndefined();
+  });
+
+  it('answers undefined for an asset that cannot search its chain, and for a record without a signer', async () => {
+    const store = new FakeStore();
+    const { resumeDeps } = searching(found);
+    expect(await locateLock(asStore(store), { resumeDeps }, unsure())).toBeUndefined();
+    expect(await locateLock(asStore(store), searching(found), { ...unsure(), from: undefined })).toBeUndefined();
   });
 });
 

@@ -8,14 +8,20 @@ import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssetByCoin } from './assets';
-import { runBridgeIn, resumeBridgeMint, type BridgeInProgress, type BridgeInResult, type WalletSide } from './bridgeIn';
+import { runBridgeIn, locateLock, resumeBridgeMint, type BridgeInProgress, type BridgeInResult, type WalletSide } from './bridgeIn';
 import { bridgeStoreFor, type PendingLock } from './store';
-import type { BridgeAsset, BridgeWalletOption } from './types';
+import type { BridgeAsset, BridgeWalletOption, LockSearch } from './types';
 
 export interface BridgeInRequest {
   readonly asset: BridgeAsset;
   readonly wallet: BridgeWalletOption;
   readonly amount: bigint;
+}
+
+const SEARCH_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
 }
 
 export function useBridgeIn() {
@@ -29,6 +35,7 @@ export function useBridgeIn() {
       return runBridgeIn({
         ...req.wallet.open(),
         ...side,
+        symbol: req.asset.symbol,
         amount: req.amount,
         onProgress: setProgress,
       });
@@ -51,6 +58,16 @@ export function useBridgeIn() {
       return result;
     },
     [sphere, queryClient],
+  );
+
+  const locate = useCallback(
+    (lock: PendingLock): Promise<LockSearch | undefined> => {
+      const key = sphere?.identity?.chainPubkey;
+      const asset = bridgeAssetByCoin(lock.coinIdHex);
+      if (!key || !asset) return Promise.resolve(undefined);
+      return withTimeout(locateLock(bridgeStoreFor(key), asset, lock), SEARCH_TIMEOUT_MS, 'The search for the lock timed out.');
+    },
+    [sphere],
   );
 
   const discard = useCallback(
@@ -76,6 +93,7 @@ export function useBridgeIn() {
     pendingMints,
     resume,
     discard,
+    locate,
   };
 }
 

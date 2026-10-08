@@ -74,3 +74,11 @@ export function burnStoppedSentence(progress: { done: number; total: number }, r
   const kept = left === 0 ? '' : ` The last ${left === 1 ? 'token was' : `${left} tokens were`} not burned and ${left === 1 ? 'stays' : 'stay'} in this wallet.`;
   return `Burning stopped at token ${progress.done + 1} of ${progress.total}: ${reason}${kept}`;
 }
+
+/** When a deposit was started, dated the way the transaction history dates things. */
+export function startedAtSentence(createdAt: number): string {
+  const at = new Date(createdAt);
+  const date = at.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const time = at.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return `started ${date}, ${time}`;
+}

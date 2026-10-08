@@ -78,9 +78,25 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
   sign. A lock whose salt was lost could never be minted.
 - Account and network are pinned at connect and re-checked before every
   signature; a wrong network blocks before any signing.
+- What the account holds of the asset on the source chain is read right after
+  connect; an amount above it stops with "Not enough USDC in the wallet." before
+  anything is signed or recorded, so no approval is paid for a lock that cannot
+  follow.
 - A reverted lock marks the record failed; a mint that fails after a confirmed
   lock keeps the record, and the screen offers **Resume**, which decodes the
   landed lock and mints without signing anything.
+- A lock the wallet asked for but never saw a transaction id for is discarded
+  only on a refusal in the extension (error 4001), which comes before any
+  signature. Every other error keeps the record: a node error can arrive after
+  the broadcast, and a deleted record loses the salt the mint needs.
+- Such a record shows when it was started and from which account, with an
+  explorer link, and the wallet asks the chain about the lock (`findLock`, reads
+  only, repeated while the row is open): the vault says whether the deposit's
+  token id is locked, the `Lock` events give the transaction, and the account's
+  pending nonce says whether one is still in flight. A found lock is written
+  into the record and resumed like any other; the row says when the chain has no
+  such lock, or why it cannot tell yet, keeps the discard confirmation either
+  way, and still takes a pasted transaction id.
 - The depositor's own mint runs at zero confirmations (it witnessed its lock);
   every other wallet re-verifies under the asset's `confirmations`.
 - Bridging out burns first and records second, in that order on purpose: the

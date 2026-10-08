@@ -8,7 +8,7 @@ import {
 } from '@unicitylabs/bridge-core';
 
 import type { BridgeStore, PendingLock } from './store';
-import type { BridgeInDeps } from './types';
+import type { BridgeAsset, BridgeInDeps, LockSearch } from './types';
 
 export type BridgeInPhase = 'deriving' | 'approving' | 'locking' | 'waiting-lock' | 'minting' | 'done';
 
@@ -26,6 +26,7 @@ export interface WalletSide {
 }
 
 export interface BridgeInArgs extends BridgeInDeps, WalletSide {
+  readonly symbol: string;
   readonly amount: bigint;
   readonly onProgress?: (p: BridgeInProgress) => void;
 }
@@ -38,7 +39,7 @@ export interface BridgeInResult {
 export class TxRevertedError extends Error {}
 
 export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
-  const { wallet, receipts, adapter, expectedNetwork, chainLabel, payments, store, amount, networkId } = args;
+  const { wallet, receipts, adapter, held, expectedNetwork, chainLabel, symbol, payments, store, amount, networkId } = args;
   const progress = args.onProgress ?? (() => {});
 
   progress({ phase: 'deriving' });
@@ -46,6 +47,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
   const owner = await wallet.connect();
   const network = await wallet.getNetwork();
   assertOnChain(network, expectedNetwork, chainLabel);
+  assertHeld(await held(owner).catch(() => undefined), amount, symbol);
 
   const deposit = await adapter.prepareDeposit({
     amount,
@@ -62,6 +64,7 @@ export async function runBridgeIn(args: BridgeInArgs): Promise<BridgeInResult> {
     tokenIdHex: deposit.recovery.tokenIdHex,
     recipientCommitmentHex: deposit.recovery.recipientCommitmentHex,
     amount: amount.toString(),
+    from: owner,
     createdAt: Date.now(),
     status: 'locking',
   };
@@ -122,8 +125,36 @@ function recordUnconfirmedDeposit(store: BridgeStore, lock: PendingLock, e: unkn
   else if (!lock.lockTxid && (!lock.lockRequested || refusedByWallet(e))) store.removeLock(lock.id);
 }
 
+/**
+ * A refusal in the extension comes before any signature, so nothing went out. Every other
+ * error is kept: a node error can arrive after the broadcast, and a deleted record loses the
+ * salt the mint needs, while a kept one is settled by the chain search in the screen.
+ */
 function refusedByWallet(e: unknown): boolean {
   return (e as { code?: unknown } | null)?.code === 4001;
+}
+
+const FOUND_LOCK_RECEIPT_TIMEOUT_MS = 20_000;
+
+/**
+ * Look for the lock of a deposit the wallet lost track of. A found transaction is read back
+ * from the chain and written into the record only when it locked this very deposit, the check
+ * Resume applies to a pasted id; the record then resumes like any other. `undefined` means
+ * there was no way to look.
+ */
+export async function locateLock(
+  store: BridgeStore,
+  asset: Pick<BridgeAsset, 'findLock' | 'resumeDeps'>,
+  lock: PendingLock,
+): Promise<LockSearch | undefined> {
+  if (!asset.findLock || !lock.from) return undefined;
+  const result = await asset.findLock({ from: lock.from, tokenIdHex: lock.tokenIdHex, createdAt: lock.createdAt });
+  if (result.outcome !== 'found') return result;
+  const { adapter, receipts } = asset.resumeDeps();
+  const commit = await waitForCommit(receipts, result.lockTxid, adapter, FOUND_LOCK_RECEIPT_TIMEOUT_MS);
+  if (!locksThisDeposit(commit, lock)) return { outcome: 'unknown', why: 'the transaction found locked another deposit' };
+  store.updateLock(lock.id, { lockTxid: result.lockTxid });
+  return result;
 }
 
 export interface ResumeArgs {
@@ -174,6 +205,11 @@ function locksThisDeposit(commit: CommitInfo, lock: PendingLock): boolean {
     commit.recipientCommitmentHex === lock.recipientCommitmentHex.toLowerCase() &&
     commit.amount === BigInt(lock.amount)
   );
+}
+
+/** An advisory check: a balance that could not be read does not block the deposit. */
+function assertHeld(held: bigint | undefined, amount: bigint, symbol: string): void {
+  if (held !== undefined && held < amount) throw new Error(`Not enough ${symbol} in the wallet.`);
 }
 
 export function assertOnChain(network: number, expected: number, chainLabel: string): void {

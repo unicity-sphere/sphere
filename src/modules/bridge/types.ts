@@ -11,6 +11,8 @@ export interface BridgeInDeps {
   readonly wallet: ChainWallet;
   readonly receipts: ReceiptReader;
   readonly adapter: BridgeSourceAdapter;
+  /** What `owner` holds of the asset on the source chain, in the asset's smallest unit. */
+  held(owner: string): Promise<bigint>;
   /** Source-chain network id the deposit targets; pinned and re-checked before every signature. */
   readonly expectedNetwork: number;
   /** Human label for the wrong-network message, e.g. the asset's label. */
@@ -129,6 +131,12 @@ export interface BridgeOutSide {
   readonly payout?: BridgePayout;
 }
 
+/** The answer to a search for a deposit's lock on its chain. */
+export type LockSearch =
+  | { readonly outcome: 'found'; readonly lockTxid: string }
+  | { readonly outcome: 'absent' }
+  | { readonly outcome: 'unknown'; readonly why: string };
+
 /** One bridgeable asset, as the screen and the flow see it. */
 export interface BridgeAsset {
   /** Stable id, e.g. `tron:0xcd8690dc:usdt`. */
@@ -152,6 +160,13 @@ export interface BridgeAsset {
   wallets(): readonly BridgeWalletOption[];
   /** Read-only wiring to finish a mint whose deposit already landed. Never signs. */
   resumeDeps(): Pick<BridgeInDeps, 'adapter' | 'receipts'>;
+  /**
+   * What the source chain knows about a deposit's lock: found with its transaction, absent
+   * (the vault holds no lock with the deposit's token id and nothing from the signer is in
+   * flight), or unknown with the reason. A read of the chain, nothing is sent. Absent when the
+   * chain offers no way to search.
+   */
+  findLock?(lock: { from: string; tokenIdHex: string; createdAt: number }): Promise<LockSearch>;
   /** Present when the asset can be bridged out again. */
   readonly out?: BridgeOutSide;
   /** When set, the asset is listed but neither direction can start; the text says why. */
