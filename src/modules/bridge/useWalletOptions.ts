@@ -16,7 +16,10 @@ export interface WalletChoice {
 export function useWalletOptions(asset: BridgeAsset | undefined): readonly WalletChoice[] {
   const [choices, setChoices] = useState<readonly WalletChoice[]>(() => read(asset));
   useEffect(() => {
-    const refresh = () => setChoices((prev) => (sameChoices(prev, read(asset)) ? prev : read(asset)));
+    const refresh = () => {
+      const next = read(asset);
+      setChoices((prev) => (sameChoices(prev, next) ? prev : next));
+    };
     refresh();
     const id = setInterval(refresh, 1000);
     return () => clearInterval(id);
