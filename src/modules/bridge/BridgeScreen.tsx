@@ -26,7 +26,7 @@ import { lockTxidFor } from './bridgeIn';
 import { burnStoppedSentence, formatUnits, pendingLockSentence, returnStatusSentence, returnTimingSentence, startedAtSentence } from './format';
 import type { BridgeInPhase } from './bridgeIn';
 import { isRemovableReturn, isRetryableReturn, isTerminalReturn, type PendingLock, type PendingReturn } from './store';
-import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, ReturnServiceTiming } from './types';
+import type { BridgeAsset, BridgeChain, BridgePayout, BridgeWalletOption, LockSearch, ReturnServiceTiming } from './types';
 import { useBridgeIn } from './useBridgeIn';
 import { returnCandidates } from './returnable';
 import { ReturnServiceUnreachable, tokensCoveringFee } from './returnFee';
@@ -729,14 +729,14 @@ function returnStatusLabel(status: PendingReturn['status']): string {
   }
 }
 
-/** Deposits signed but not minted. `onLocate` looks a lost lock up on its chain: the found
- * transaction id, `null` when there is none, `undefined` when the chain cannot be searched. */
+/** Deposits signed but not minted. `onLocate` looks a lost lock up on its chain and answers
+ * found, absent or unknown with a reason; `undefined` when the chain cannot be searched. */
 interface PendingListProps {
   locks: PendingLock[];
   resumingId: string | null;
   onResume: (lock: PendingLock) => void;
   onDiscard: (lock: PendingLock) => void;
-  onLocate?: (lock: PendingLock) => Promise<string | null | undefined>;
+  onLocate?: (lock: PendingLock) => Promise<LockSearch | undefined>;
 }
 
 export function PendingList({ locks, resumingId, onResume, onDiscard, onLocate }: PendingListProps) {
@@ -820,12 +820,9 @@ function PendingLockRow({ lock, busy, onResume, onDiscard, onLocate }: { lock: P
         </div>
       )}
       {maybeSent && asset && searching && <div className={MUTED}>Looking for the lock on {asset.chain.name}…</div>}
-      {maybeSent && asset && typeof search.data === 'string' && <div className={MUTED}>The lock was found on {asset.chain.name}.</div>}
-      {maybeSent && asset && search.data === null && (
-        <div className={MUTED}>No lock found on {asset.chain.name} yet for this deposit. The search runs again while this is open.</div>
-      )}
+      {maybeSent && asset && search.data && <div className={MUTED}>{lockSearchSentence(search.data, asset.chain.name)}</div>}
       {maybeSent && search.error && <ErrorLine text={getErrorMessage(search.error)} />}
-      {maybeSent && typeof search.data !== 'string' && (
+      {maybeSent && search.data?.outcome !== 'found' && (
         <div className="flex items-center gap-2">
           <input
             aria-label="Lock transaction id"
@@ -846,6 +843,14 @@ function PendingLockRow({ lock, busy, onResume, onDiscard, onLocate }: { lock: P
       )}
     </div>
   );
+}
+
+function lockSearchSentence(result: LockSearch, chainName: string): string {
+  switch (result.outcome) {
+    case 'found': return `The lock was found on ${chainName}.`;
+    case 'absent': return `No lock for this deposit is on ${chainName}, and nothing from the account is pending. The search runs again while this is open.`;
+    case 'unknown': return `${result.why.charAt(0).toUpperCase()}${result.why.slice(1)}. The search runs again while this is open.`;
+  }
 }
 
 function shortAddress(address: string): string {

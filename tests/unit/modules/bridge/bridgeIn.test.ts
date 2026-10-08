@@ -13,6 +13,7 @@ import type { BridgePayments, ReceiptReader } from '@unicitylabs/bridge-core';
 
 import { locateLock, lockTxidFor, runBridgeIn, resumeBridgeMint, TxRevertedError, type WalletSide } from '@/modules/bridge/bridgeIn';
 import type { BridgeStore, PendingLock } from '@/modules/bridge/store';
+import type { LockSearch } from '@/modules/bridge/types';
 
 const bridge = loadBridges(NILE_USDT_BRIDGE)[0];
 const VAULT_HEX = bridge.plugin.resolvedConfig.lockContractHex;
@@ -454,41 +455,44 @@ describe('locateLock', () => {
     status: 'locking',
   });
 
-  const searching = (found: string | null, lockReceipt: SourceTxInfo = lockMined) => {
+  const searching = (answer: LockSearch, lockReceipt: SourceTxInfo = lockMined) => {
     const rpc = fakeRpc({ allowance: 0n, lock: lockReceipt });
-    const findLock = vi.fn(async () => found);
+    const findLock = vi.fn(async () => answer);
     return { findLock, resumeDeps: () => ({ adapter: tronAdapterOf(new FakeSigner(), rpc), receipts: receiptsOf(rpc) }) };
   };
+  const found: LockSearch = { outcome: 'found', lockTxid: LOCK_TX };
 
-  it('writes the lock transaction it finds into the record, once the chain confirms it locked this deposit, and returns it', async () => {
+  it('writes the lock transaction it finds into the record, once the chain confirms it locked this deposit', async () => {
     const store = new FakeStore();
     const lock = unsure();
     store.persistPendingLock(lock);
-    const asset = searching(LOCK_TX);
-    expect(await locateLock(asStore(store), asset, lock)).toBe(LOCK_TX);
+    const asset = searching(found);
+    expect(await locateLock(asStore(store), asset, lock)).toEqual(found);
     expect(asset.findLock).toHaveBeenCalledWith({ from: OWNER, tokenIdHex: TOKEN_ID, createdAt: lock.createdAt });
     expect(store.only()).toMatchObject({ lockTxid: LOCK_TX, lockRequested: true, status: 'locking' });
   });
 
-  it('treats a transaction that locked another deposit as not found, leaving the record alone', async () => {
+  it('treats a transaction that locked another deposit as unknown, leaving the record alone', async () => {
     const store = new FakeStore();
     store.persistPendingLock(unsure());
-    expect(await locateLock(asStore(store), searching(LOCK_TX, lockOf('99'.repeat(32), COMMITMENT, AMOUNT)), unsure())).toBeNull();
+    const result = await locateLock(asStore(store), searching(found, lockOf('99'.repeat(32), COMMITMENT, AMOUNT)), unsure());
+    expect(result).toMatchObject({ outcome: 'unknown', why: expect.stringMatching(/another deposit/) });
     expect(store.only().lockTxid).toBeUndefined();
   });
 
-  it('answers null and leaves the record alone when no lock is found', async () => {
+  it('passes absent and unknown on, leaving the record alone', async () => {
     const store = new FakeStore();
     store.persistPendingLock(unsure());
-    expect(await locateLock(asStore(store), searching(null), unsure())).toBeNull();
+    expect(await locateLock(asStore(store), searching({ outcome: 'absent' }), unsure())).toEqual({ outcome: 'absent' });
+    expect(await locateLock(asStore(store), searching({ outcome: 'unknown', why: 'a transaction from the account is still pending' }), unsure())).toMatchObject({ outcome: 'unknown' });
     expect(store.only().lockTxid).toBeUndefined();
   });
 
   it('answers undefined for an asset that cannot search its chain, and for a record without a signer', async () => {
     const store = new FakeStore();
-    const { resumeDeps } = searching(LOCK_TX);
+    const { resumeDeps } = searching(found);
     expect(await locateLock(asStore(store), { resumeDeps }, unsure())).toBeUndefined();
-    expect(await locateLock(asStore(store), searching(LOCK_TX), { ...unsure(), from: undefined })).toBeUndefined();
+    expect(await locateLock(asStore(store), searching(found), { ...unsure(), from: undefined })).toBeUndefined();
   });
 });
 

@@ -4,7 +4,7 @@ import {
   bridgeTokenPlugin,
   createSourceAdapter,
   evmWallets,
-  findLockTxid,
+  findLock,
   loadBridges,
   queryBalance,
   lockFinality,
@@ -90,8 +90,8 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     wallets: () => discovered.list().map(optionFor),
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     findLock: async ({ from, tokenIdHex, createdAt }) => {
-      const txid = await findLockTxid(bridge, rpc, { fromAddressHex: toEvmAddressHex(from), unicityTokenIdHex: tokenIdHex, startedAtMs: createdAt, nowMs: Date.now() });
-      return txid === null ? null : `0x${txid}`;
+      const result = await findLock(bridge, rpc, { fromAddressHex: toEvmAddressHex(from), unicityTokenIdHex: tokenIdHex, startedAtMs: createdAt, nowMs: Date.now() });
+      return result.outcome === 'found' ? { outcome: 'found', lockTxid: `0x${result.txid}` } : result;
     },
     out: hasReturnService
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {

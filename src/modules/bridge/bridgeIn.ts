@@ -8,7 +8,7 @@ import {
 } from '@unicitylabs/bridge-core';
 
 import type { BridgeStore, PendingLock } from './store';
-import type { BridgeAsset, BridgeInDeps } from './types';
+import type { BridgeAsset, BridgeInDeps, LockSearch } from './types';
 
 export type BridgeInPhase = 'deriving' | 'approving' | 'locking' | 'waiting-lock' | 'minting' | 'done';
 
@@ -139,20 +139,23 @@ const FOUND_LOCK_RECEIPT_TIMEOUT_MS = 20_000;
 /**
  * Look for the lock of a deposit the wallet lost track of. A found transaction is read back
  * from the chain and written into the record only when it locked this very deposit, the check
- * Resume applies to a pasted id; the record then resumes like any other. `null` means no mined
- * lock of this deposit was found yet; `undefined` means there was no way to look.
+ * Resume applies to a pasted id; the record then resumes like any other. `undefined` means
+ * there was no way to look.
  */
-export async function locateLock(store: BridgeStore, asset: Pick<BridgeAsset, 'findLock' | 'resumeDeps'>, lock: PendingLock): Promise<string | null | undefined> {
+export async function locateLock(
+  store: BridgeStore,
+  asset: Pick<BridgeAsset, 'findLock' | 'resumeDeps'>,
+  lock: PendingLock,
+): Promise<LockSearch | undefined> {
   if (!asset.findLock || !lock.from) return undefined;
-  const lockTxid = await asset.findLock({ from: lock.from, tokenIdHex: lock.tokenIdHex, createdAt: lock.createdAt });
-  if (!lockTxid) return null;
+  const result = await asset.findLock({ from: lock.from, tokenIdHex: lock.tokenIdHex, createdAt: lock.createdAt });
+  if (result.outcome !== 'found') return result;
   const { adapter, receipts } = asset.resumeDeps();
-  const commit = await waitForCommit(receipts, lockTxid, adapter, FOUND_LOCK_RECEIPT_TIMEOUT_MS);
-  if (!locksThisDeposit(commit, lock)) return null;
-  store.updateLock(lock.id, { lockTxid });
-  return lockTxid;
+  const commit = await waitForCommit(receipts, result.lockTxid, adapter, FOUND_LOCK_RECEIPT_TIMEOUT_MS);
+  if (!locksThisDeposit(commit, lock)) return { outcome: 'unknown', why: 'the transaction found locked another deposit' };
+  store.updateLock(lock.id, { lockTxid: result.lockTxid });
+  return result;
 }
-
 
 export interface ResumeArgs {
   readonly payments: BridgePayments;

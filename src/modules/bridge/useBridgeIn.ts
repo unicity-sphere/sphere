@@ -10,7 +10,7 @@ import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssetByCoin } from './assets';
 import { runBridgeIn, locateLock, resumeBridgeMint, type BridgeInProgress, type BridgeInResult, type WalletSide } from './bridgeIn';
 import { bridgeStoreFor, type PendingLock } from './store';
-import type { BridgeAsset, BridgeWalletOption } from './types';
+import type { BridgeAsset, BridgeWalletOption, LockSearch } from './types';
 
 export interface BridgeInRequest {
   readonly asset: BridgeAsset;
@@ -61,7 +61,7 @@ export function useBridgeIn() {
   );
 
   const locate = useCallback(
-    (lock: PendingLock): Promise<string | null | undefined> => {
+    (lock: PendingLock): Promise<LockSearch | undefined> => {
       const key = sphere?.identity?.chainPubkey;
       const asset = bridgeAssetByCoin(lock.coinIdHex);
       if (!key || !asset) return Promise.resolve(undefined);

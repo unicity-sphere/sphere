@@ -24,6 +24,7 @@ import { NILE_USDT_BRIDGE, SEPOLIA_USDC_BRIDGE } from '@unicitylabs/bridge-plugi
 import { bridgeAssetsFor } from '@/modules/bridge/assets';
 import { BridgeScreen, BurnedSummary, PendingList, ReturnFeeNote, ReturnsList, TokenChoice } from '@/modules/bridge/BridgeScreen';
 import type { PendingLock, PendingReturn } from '@/modules/bridge/store';
+import type { LockSearch } from '@/modules/bridge/types';
 import { ReturnServiceUnreachable } from '@/modules/bridge/returnFee';
 
 // An asset offers bridge-out only with a return service configured for its deployment.
@@ -242,7 +243,7 @@ describe('PendingList', () => {
     id: 'l1', coinIdHex: SEPOLIA_USDC_BRIDGE.coinIdHex!, tokenTypeHex: SEPOLIA_USDC_BRIDGE.tokenTypeHex!, chainId: SEPOLIA_USDC_BRIDGE.chainId,
     saltHex: '11'.repeat(32), tokenIdHex: '22'.repeat(32), recipientCommitmentHex: '33'.repeat(32), amount: '1000000', createdAt: 1, status: 'locking',
   };
-  const renderList = (l: PendingLock, onLocate?: (lock: PendingLock) => Promise<string | null | undefined>) => {
+  const renderList = (l: PendingLock, onLocate?: (lock: PendingLock) => Promise<LockSearch | undefined>) => {
     const onDiscard = vi.fn();
     const onResume = vi.fn();
     const rendered = render(
@@ -261,17 +262,24 @@ describe('PendingList', () => {
     expect(link.getAttribute('href')).toBe(`https://sepolia.etherscan.io/address/${from}`);
   });
 
-  it('looks for the lock on the chain for a deposit that may have been sent, says when none was found yet, and still asks before discarding', async () => {
-    const onLocate = vi.fn(async () => null);
+  it('looks for the lock on the chain for a deposit that may have been sent, says when the chain has none, and still asks before discarding', async () => {
+    const onLocate = vi.fn(async () => ({ outcome: 'absent' as const }));
     const { onDiscard } = renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
     expect(screen.getByText(/Looking for the lock on Ethereum/)).toBeDefined();
     expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
-    expect(await screen.findByText(/No lock found on Ethereum yet for this deposit. The search runs again while this is open./)).toBeDefined();
+    expect(await screen.findByText(/No lock for this deposit is on Ethereum, and nothing from the account is pending. The search runs again while this is open./)).toBeDefined();
     expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));
     expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Discard this record' }));
     expect(onDiscard).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Discard anyway' })).toBeDefined();
+  });
+
+  it('says why the chain cannot tell yet, in the words of the search', async () => {
+    const onLocate = vi.fn(async () => ({ outcome: 'unknown' as const, why: 'a transaction from the account is still pending' }));
+    renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
+    expect(await screen.findByText(/A transaction from the account is still pending. The search runs again while this is open./)).toBeDefined();
+    expect(screen.getByLabelText('Lock transaction id')).toBeDefined();
   });
 
   it('does not search for a deposit on a chain the asset cannot search', async () => {
@@ -285,7 +293,7 @@ describe('PendingList', () => {
   });
 
   it('hands a found lock to the caller, who re-reads the record with its transaction', async () => {
-    const onLocate = vi.fn(async () => `0x${TXID}`);
+    const onLocate = vi.fn(async () => ({ outcome: 'found' as const, lockTxid: `0x${TXID}` }));
     renderList({ ...lock, from: '0x' + '11'.repeat(20), lockRequested: true }, onLocate);
     await waitFor(() => expect(onLocate).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/The lock was found/)).toBeDefined();
