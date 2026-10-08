@@ -9,6 +9,12 @@ export interface CoinPresentation {
   readonly decimals: number;
   /** Short tag beside the symbol, e.g. where a bridged asset came from. */
   readonly badge?: string;
+  /**
+   * The chain the coin is bridged in from, e.g. "Ethereum"; set only for a bridged coin.
+   * A mint of such a coin is a bridge-in, not a Top Up, so history shows it as "Bridged in"
+   * from this chain rather than "Received". `badge` is a display tag and claims nothing.
+   */
+  readonly sourceChain?: string;
   readonly priceUsd?: number;
 }
 
