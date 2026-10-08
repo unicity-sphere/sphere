@@ -19,7 +19,14 @@ const bridgeModule: WalletModule = {
   describeCoin: (coinId) => {
     const asset = bridgeAssetByCoin(coinId);
     return asset
-      ? { symbol: asset.symbol, name: asset.label, decimals: asset.decimals, badge: asset.chain.name, priceUsd: asset.priceUsd }
+      ? {
+          symbol: asset.symbol,
+          name: asset.label,
+          decimals: asset.decimals,
+          badge: asset.chain.name,
+          sourceChain: asset.chain.name,
+          priceUsd: asset.priceUsd,
+        }
       : undefined;
   },
 
