@@ -142,10 +142,15 @@ export function TransactionHistoryModal({ isOpen, onClose }: TransactionHistoryM
   const formattedHistory = useMemo(() => {
     return history.slice(0, visibleCount).map(entry => {
       const def = registry.getDefinition(entry.coinId);
-      const decimals = def?.decimals || 0;
+      // A coin the token registry does not list (a bridged coin) is described by its wallet
+      // module, the same fallback the asset list uses (moduleAssetView). Without it the row
+      // showed raw units and the SDK's hex-prefix symbol, e.g. "+3000000 EAE954".
+      const known = def ? undefined : describeCoin(entry.coinId);
+      const decimals = def?.decimals || known?.decimals || 0;
 
       return {
         ...entry,
+        symbol: known?.symbol ?? entry.symbol,
         incoming: isIncoming(entry.type),
         sourceChain: bridgedFrom(entry),
         formattedAmount: formatRawAmount(entry.amount, decimals),

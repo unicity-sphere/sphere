@@ -21,7 +21,10 @@ const hoisted = vi.hoisted(() => ({
   // TransactionHistoryModal calls TokenRegistry.getInstance() at MODULE scope,
   // so the fake has to exist before the component module is evaluated.
   registry: {
-    getDefinition: (coinId: string) => ({ id: coinId, symbol: 'UCT', decimals: 0 }),
+    // The token registry lists every coin here except UNLISTED_BRIDGED_COIN ('e' x 64), a
+    // bridged coin it does not know: its decimals and symbol have to come from the module.
+    getDefinition: (coinId: string) =>
+      coinId === 'e'.repeat(64) ? undefined : { id: coinId, symbol: 'UCT', decimals: 0 },
     getIconUrl: () => null,
   },
 }));
@@ -45,6 +48,7 @@ const BADGED_COIN = 'd'.repeat(64);
 const presentations: Record<string, CoinPresentation> = {
   [BRIDGED_COIN]: { symbol: 'USDC', name: 'USD Coin', decimals: 0, badge: 'Ethereum', sourceChain: 'Ethereum' },
   [BADGED_COIN]: { symbol: 'XYZ', name: 'Tagged coin', decimals: 0, badge: 'Beta' },
+  ['e'.repeat(64)]: { symbol: 'USDC', name: 'USD Coin', decimals: 6, badge: 'Ethereum', sourceChain: 'Ethereum' },
 };
 
 vi.mock('../../../src/modules/registry', () => ({
@@ -199,5 +203,17 @@ describe('TransactionHistoryModal — bridge-in rows', () => {
     expect(screen.queryByText('Bridged in')).toBeNull();
     expect(amountCell(/-500 USDC/).className).not.toMatch(/text-emerald/);
     expect(badge(container)).toEqual({ credit: false, arrow: 'lucide-arrow-up-right' });
+  });
+
+  it('formats a bridged coin the token registry does not list with the module decimals and symbol', () => {
+    // The SDK falls back to the coin id's first hex characters for an unknown symbol, and the
+    // registry has no decimals for it: the row used to read "+3000000 EAE954".
+    history = [entry({ id: 'bridge-2', type: 'MINT', coinId: 'e'.repeat(64), amount: '3000000', symbol: 'EAE954' })];
+
+    open();
+
+    expect(screen.getByText('Bridged in')).toBeTruthy();
+    expect(amountCell(/\+3 USDC/)).toBeTruthy();
+    expect(screen.queryByText(/EAE954/)).toBeNull();
   });
 });
