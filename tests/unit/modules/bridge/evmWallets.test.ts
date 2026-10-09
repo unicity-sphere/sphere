@@ -88,13 +88,13 @@ describe('Ethereum wallets', () => {
     expect(wallet.unavailableHint).toMatch(/Install an Ethereum browser wallet/);
   });
 
-  it('collects through the wallet the user picked and names it when it holds another account', async () => {
+  it('collects through the wallet the user picked and asks for the right account, naming no wallet, when it holds another', async () => {
     const rabby = fakeProvider(OTHER);
     const metamask = fakeProvider(ACCOUNT);
     uninstall.push(install(info('io.rabby', 'Rabby'), rabby.provider), install(info('io.metamask', 'MetaMask'), metamask.provider));
     const [viaRabby, viaMetaMask] = sepoliaUsdc().wallets();
 
-    await expect(viaRabby.collect!(ACCOUNT)).rejects.toThrow(`Switch Rabby to ${ACCOUNT} to collect.`);
+    await expect(viaRabby.collect!(ACCOUNT)).rejects.toThrow(`To collect, switch your wallet to the correct account: 0x2B00...9Caf`);
     expect(metamask.requests).toHaveLength(0);
 
     expect(await viaMetaMask.collect!(ACCOUNT)).toBe(`0x${'ee'.repeat(32)}`);

@@ -20,6 +20,7 @@ import {
 import type { ReceiptReader } from '@unicitylabs/bridge-core';
 
 import { readRuntimeConfig } from '../../../../config/runtimeConfig';
+import { truncateId } from '../../../../utils/identifiers';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { assertOnChain } from '../../bridgeIn';
 import { bridgeOut } from '../out';
@@ -60,7 +61,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     assertOnChain(await signer.getNetwork(), m.chainId, m.label);
     const from = await signer.getAddress();
     if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-      throw new Error(`Switch ${wallet.name} to ${destination} to collect.`);
+      throw new Error(`To collect, switch your wallet to the correct account: ${truncateId(destination)}`);
     }
     return signer.sendCall(withdrawCall(bridge));
   };
@@ -68,7 +69,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     id: wallet.id,
     name: wallet.name,
     icon: wallet.icon,
-    unavailableHint: 'Install an Ethereum browser wallet such as MetaMask to sign on Ethereum.',
+    unavailableHint: 'Install an Ethereum browser wallet to sign on Ethereum.',
     isAvailable: () => wallet.isAvailable(),
     open: () => depsFor(wallet.create(m.chainId)),
     collect: (destination) => collectWith(wallet, destination),

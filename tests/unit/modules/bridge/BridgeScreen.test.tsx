@@ -75,7 +75,7 @@ describe('BridgeScreen picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
     expect(screen.getByRole('button', { name: /Continue with Browser wallet/ })).toBeDefined();
-    expect(screen.getByText(/Install an Ethereum browser wallet such as MetaMask/)).toBeDefined();
+    expect(screen.getByText(/Install an Ethereum browser wallet to sign on Ethereum/)).toBeDefined();
   });
 
   it('refuses a malformed amount or one finer than the asset divides before any wallet prompt', () => {
