@@ -84,10 +84,10 @@ describe('collecting a pull-payment payout', () => {
 
   it('keeps the button and shows the reason when collecting fails', async () => {
     payout.owed.mockResolvedValue(2_500_000n);
-    wallets[0].collect.mockRejectedValue(new Error('To collect, switch your wallet to the correct account: 0x2B00...9Caf'));
+    wallets[0].collect.mockRejectedValue(new Error('To collect, switch your wallet to account 0x2B00...9Caf and connect it to this site.'));
     renderList([{ ...settled, id: 'n2' }]);
     fireEvent.click(await screen.findByRole('button', { name: 'Collect 2.5 USDC' }));
-    expect(await screen.findByText(/switch your wallet to the correct account/)).toBeDefined();
+    expect(await screen.findByText(/switch your wallet to account 0x2B00...9Caf and connect it to this site/)).toBeDefined();
     expect(screen.getByRole('button', { name: 'Collect 2.5 USDC' })).toBeDefined();
   });
 

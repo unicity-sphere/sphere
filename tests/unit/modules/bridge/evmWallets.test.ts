@@ -94,7 +94,7 @@ describe('Ethereum wallets', () => {
     uninstall.push(install(info('io.rabby', 'Rabby'), rabby.provider), install(info('io.metamask', 'MetaMask'), metamask.provider));
     const [viaRabby, viaMetaMask] = sepoliaUsdc().wallets();
 
-    await expect(viaRabby.collect!(ACCOUNT)).rejects.toThrow(`To collect, switch your wallet to the correct account: 0x2B00...9Caf`);
+    await expect(viaRabby.collect!(ACCOUNT)).rejects.toThrow(`To collect, switch your wallet to account 0x2B00...9Caf and connect it to this site.`);
     expect(metamask.requests).toHaveLength(0);
 
     expect(await viaMetaMask.collect!(ACCOUNT)).toBe(`0x${'ee'.repeat(32)}`);

@@ -61,7 +61,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     assertOnChain(await signer.getNetwork(), m.chainId, m.label);
     const from = await signer.getAddress();
     if (toEvmAddressHex(from) !== toEvmAddressHex(destination)) {
-      throw new Error(`To collect, switch your wallet to the correct account: ${truncateId(destination)}`);
+      throw new Error(`To collect, switch your wallet to account ${truncateId(destination)} and connect it to this site.`);
     }
     return signer.sendCall(withdrawCall(bridge));
   };
