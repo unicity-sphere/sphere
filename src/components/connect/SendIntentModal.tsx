@@ -80,11 +80,14 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
       // sphere-sdk 0.14 converges the SAME transfer in-session; it must never
       // read as something to re-send.
       if (isKeepOpenPendingResult(result)) {
-        showToast(
-          'Network is busy — your transfer is safe and will complete automatically.',
-          'info',
-          8000,
-        );
+        // Only a 'converging' outcome finishes on its own (sphere-sdk 0.19.0).
+        const copy =
+          result.keepOpenKind === 'cancelling'
+            ? 'The transfer failed and is being cancelled. Do not send it again until the cancellation is confirmed.'
+            : result.keepOpenKind === 'owed'
+              ? 'Part of the transfer was sent; the rest was not. Send only the remainder, never the full amount again.'
+              : 'Network is busy — your transfer is safe and will complete automatically.';
+        showToast(copy, 'info', 8000);
       } else if (result.deliveryPending) {
         showToast(
           'Sent — delivery to the recipient is pending and will retry automatically.',

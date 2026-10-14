@@ -179,6 +179,31 @@ describe('SendModal — keep-open pending state (in-session convergence)', () =>
     expect(screen.getByText('Network is busy')).toBeTruthy();
   });
 
+  it('a send being cancelled never reads as "will complete automatically", and still offers no re-send', async () => {
+    transferMock.mockResolvedValue({ ...keepOpenResult('tid-c'), keepOpenKind: 'cancelling' });
+
+    await driveSend();
+
+    expect(await screen.findByText('Payment is being cancelled')).toBeTruthy();
+    expect(screen.queryByText(/will complete automatically/)).toBeNull();
+    expect(screen.getByText(/Don.t send it again until it does/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Retry now'));
+    await waitFor(() => expect(fakeSphere.payments.resumeNow).toHaveBeenCalledTimes(1));
+    expect(transferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a partial send with a remainder owed says how much was not sent, and that only that may be sent', async () => {
+    transferMock.mockResolvedValue({ ...keepOpenResult('tid-p'), keepOpenKind: 'owed', remainingAmount: '400000000' });
+
+    await driveSend();
+
+    expect(await screen.findByText('Partly sent')).toBeTruthy();
+    expect(screen.getByText(/was not sent/)).toBeTruthy();
+    expect(screen.getByText(/send only that amount/)).toBeTruthy();
+    expect(screen.queryByText(/will complete automatically/)).toBeNull();
+    expect(screen.queryByText('Retry now'), 'nothing converges for it to retry').toBeNull();
+  });
+
   it('"Retry now" calls payments.resumeNow() and NEVER re-issues the send (double-pay guard)', async () => {
     transferMock.mockResolvedValue(keepOpenResult('tid-1'));
     await driveSend();

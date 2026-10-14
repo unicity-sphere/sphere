@@ -39,6 +39,7 @@ const resolveMock = vi.fn(async () => ({ chainPubkey: BOB_PUBKEY }));
 const pendingTransfersMock = vi.fn(async (): Promise<PendingTransfer[]> => []);
 
 const fakeSphere = {
+  identity: { chainPubkey: `03${'f'.repeat(64)}` },
   resolve: resolveMock,
   payments: { pendingTransfers: pendingTransfersMock },
 };
@@ -106,6 +107,7 @@ vi.mock('../../../src/components/connect/ConnectContext', () => ({
 
 import { ConnectIntentHandler } from '../../../src/components/connect/ConnectIntentHandler';
 import { DUPLICATE_CHECK_TIMEOUT_MS } from '../../../src/components/connect/duplicateSendGuard';
+import { forgetCancellingSends, rememberCancellingSend } from '../../../src/sdk/cancellingSends';
 
 function sendIntent(params: Record<string, unknown> = {}) {
   return {
@@ -136,6 +138,7 @@ function pendingRow(over: Partial<PendingTransfer> = {}): PendingTransfer {
 const SEND_MODAL_COPY = 'This dApp is asking to send tokens from your wallet.';
 
 beforeEach(() => {
+  forgetCancellingSends();
   transferMock.mockReset();
   transferMock.mockResolvedValue({
     id: 'tid-new',
@@ -174,6 +177,18 @@ describe('Connect send intent — duplicate-payment guard', () => {
     expect(transferMock).not.toHaveBeenCalled();
     expect(resolveIntent).not.toHaveBeenCalled();
     expect(rejectIntent).not.toHaveBeenCalled();
+  });
+
+  it('blocks a send intent that duplicates a send this session saw being cancelled (not in pendingTransfers())', async () => {
+    // sphere-sdk 0.19.0: another device of the wallet could still complete it until its cancel is confirmed.
+    await rememberCancellingSend(fakeSphere as never, { transferId: 'tf_cancel', recipient: BOB_PUBKEY, coinId: COIN, amount: '100' });
+    pendingTransfersMock.mockResolvedValue([]);
+
+    render(<ConnectIntentHandler />);
+
+    expect(await screen.findByText('Payment already in progress')).toBeTruthy();
+    expect(screen.queryByText(SEND_MODAL_COPY)).toBeNull();
+    expect(transferMock).not.toHaveBeenCalled();
   });
 
   it('declining resolves the intent with USER_REJECTED naming the transfer, and never spends', async () => {

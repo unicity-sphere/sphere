@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { createElement, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { SphereError } from '@unicitylabs/sphere-sdk';
+import { PartialSendConflictError, SphereError } from '@unicitylabs/sphere-sdk';
 import type { UtilizationInfo } from '../../../src/services/subscriptionApi';
 import { useTransfer } from '../../../src/sdk/hooks/payments/useTransfer';
+import { SDK_CANCEL_UNCONFIRMED_MESSAGE, type SendOutcome } from '../../../src/sdk/errors';
+import { cancellingSends, forgetCancellingSends } from '../../../src/sdk/cancellingSends';
 import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from '../../../src/sdk/subscription/keyStatus';
 
 // The hook reads the wallet + subscription-key readiness from useSphereContext —
@@ -13,6 +15,7 @@ import { SubscriptionNotReadyError, type SubscriptionKeyStatus } from '../../../
 // send (#631/#633). `subscriptionKeyStatus` defaults to 'ready' so the readiness
 // gate is transparent to the quota/send tests; the gate tests flip it.
 let fakeSphere: {
+  identity?: { chainPubkey: string };
   payments: {
     send: ReturnType<typeof vi.fn>;
     sendWholeToken?: ReturnType<typeof vi.fn>;
@@ -245,6 +248,63 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     // status 'pending' is the keep-open discriminator (isKeepOpenPendingResult).
     expect(res?.status).toBe('pending');
     expect(res?.deliveryPending).toBe(true);
+  });
+
+  it.each([
+    ['a held send', new SphereError('held: the intent was not confirmed', 'SEND_SYNC_PENDING'), 'converging', undefined],
+    ['a send being cancelled', new SphereError(SDK_CANCEL_UNCONFIRMED_MESSAGE, 'SEND_SYNC_PENDING'), 'cancelling', undefined],
+    ['a partial with a remainder owed', new PartialSendConflictError('part sent', 'tid-1', ['tok'], '400'), 'owed', '400'],
+  ] as const)(
+    'tags the synthetic keep-open result of %s with why it has not finished (sphere-sdk 0.19.0)',
+    async (_label, err, kind, remaining) => {
+      const send = vi.fn().mockRejectedValue(err);
+      fakeSphere = { payments: { send } };
+      const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+      let res: SendOutcome | undefined;
+      await act(async () => {
+        res = await result.current.transfer(PARAMS);
+      });
+
+      expect(res?.status).toBe('pending');
+      expect(res?.keepOpenKind).toBe(kind);
+      expect(res?.remainingAmount).toBe(remaining);
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('records a coin send being cancelled, so a duplicate of it still warns while pendingTransfers() leaves it out', async () => {
+    forgetCancellingSends();
+    const err = new SphereError(SDK_CANCEL_UNCONFIRMED_MESSAGE, 'SEND_SYNC_PENDING');
+    (err as { transferId?: string }).transferId = 'tid-cancel';
+    const send = vi.fn().mockRejectedValue(err);
+    const bob = `02${'b'.repeat(64)}`;
+    fakeSphere = { identity: { chainPubkey: `03${'f'.repeat(64)}` }, payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await result.current.transfer({ coinId: 'c', amount: '100', recipient: bob });
+      // Visible the moment the outcome resolves: an immediate retry meets the guard.
+      expect(cancellingSends(fakeSphere as never)).toEqual([
+        expect.objectContaining({ transferId: 'tid-cancel', recipient: bob, amount: '100' }),
+      ]);
+    });
+  });
+
+  it("names a '0' partial by the attempt that still owns the rest, so its transfer:updated ends the pending state", async () => {
+    const owner = new SphereError('held', 'SEND_SYNC_PENDING');
+    (owner as { transferId?: string }).transferId = 'tid-owner';
+    const send = vi.fn().mockRejectedValue(new PartialSendConflictError('part sent', 'tid-first', ['tok'], '0', owner));
+    fakeSphere = { payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: SendOutcome | undefined;
+    await act(async () => {
+      res = await result.current.transfer(PARAMS);
+    });
+
+    expect(res?.id).toBe('tid-owner');
+    expect(res?.keepOpenKind).toBe('converging');
   });
 
   it('still rejects a genuine failure so the user is told (and can retry safely)', async () => {
