@@ -295,7 +295,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       if (sent.keepOpenKind === 'cancelling' || sent.keepOpenKind === 'owed') {
         setStoppedReason(
           sent.keepOpenKind === 'cancelling'
-            ? 'The swap payment failed and is being cancelled, so nothing was swapped. Do not swap again until the cancellation is confirmed: until then another device of this wallet could still complete it.'
+            ? `${sent.partlySent ? 'Part of the swap payment was sent and is final; the rest failed and is being cancelled' : 'The swap payment failed and is being cancelled'}, so nothing was swapped. Do not swap again until the cancellation is confirmed: until then another device of this wallet could still complete it.`
             : 'Only part of the swap payment was sent, so nothing was swapped. The part that was sent is final.',
         );
         setStep('stopped');

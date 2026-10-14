@@ -21,15 +21,26 @@ function ownerOf(sphere: Sphere | null): string | null {
   return sphere?.identity?.chainPubkey ?? null;
 }
 
-/** The recipient as a chain pubkey, resolved the way the send path resolves it; null when it cannot be. */
+/** How long recording waits for the recipient lookup: the send outcome waits on it. */
+export const CANCELLING_LOOKUP_TIMEOUT_MS = 3_000;
+
+/** The recipient as a chain pubkey, resolved the way the send path resolves it; null when it cannot be in time. */
 async function chainPubkeyOf(sphere: Sphere | null, recipient: string): Promise<string | null> {
   const identifier = recipient.startsWith('DIRECT://') ? recipient : recipient.replace(/^@/, '');
   if (isChainPubkey(identifier)) return identifier;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const peer = await sphere?.resolve(identifier);
+    const peer = await Promise.race([
+      Promise.resolve().then(() => sphere?.resolve(identifier)),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CANCELLING_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
     return peer?.chainPubkey ? peer.chainPubkey : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -185,6 +185,8 @@ export interface SendOutcome extends TransferResult {
   keepOpenKind?: KeepOpenKind;
   /** Set only for 'owed': the base units still owed, the only amount ever to send again. */
   remainingAmount?: string;
+  /** Part of the payment already went through and is final (a partial send's keep-open outcome). */
+  partlySent?: boolean;
 }
 
 // --- Gateway (SGW) 429/401 classification ---------------------------------

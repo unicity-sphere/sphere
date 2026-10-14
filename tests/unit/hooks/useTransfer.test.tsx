@@ -291,6 +291,24 @@ describe('useTransfer — #631/#633 possibly-certified send', () => {
     });
   });
 
+  it("a '0' partial whose owning attempt is being cancelled keeps both facts, and guards against a repeat under that attempt's id", async () => {
+    forgetCancellingSends();
+    const owner = new SphereError(SDK_CANCEL_UNCONFIRMED_MESSAGE, 'SEND_SYNC_PENDING');
+    (owner as { transferId?: string }).transferId = 'tid-owner';
+    const send = vi.fn().mockRejectedValue(new PartialSendConflictError('part sent', 'tid-first', ['tok'], '0', owner));
+    const bob = `02${'b'.repeat(64)}`;
+    fakeSphere = { identity: { chainPubkey: `03${'f'.repeat(64)}` }, payments: { send } };
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    let res: SendOutcome | undefined;
+    await act(async () => {
+      res = await result.current.transfer({ coinId: 'c', amount: '100', recipient: bob });
+    });
+
+    expect(res).toMatchObject({ id: 'tid-owner', keepOpenKind: 'cancelling', partlySent: true });
+    expect(cancellingSends(fakeSphere as never).map((row) => row.transferId)).toEqual(['tid-owner']);
+  });
+
   it("names a '0' partial by the attempt that still owns the rest, so its transfer:updated ends the pending state", async () => {
     const owner = new SphereError('held', 'SEND_SYNC_PENDING');
     (owner as { transferId?: string }).transferId = 'tid-owner';

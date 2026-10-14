@@ -208,25 +208,27 @@ export function useTransfer(): UseTransferReturn {
           // A '0' partial: its transferId names the first, finished partial; the attempt that
           // still owns the rest (and whose transfer:updated ends this) is the cause's.
           const owner = remaining === '0' ? (e as { cause?: { transferId?: unknown } }).cause?.transferId : undefined;
+          const id = typeof owner === 'string' && owner !== '' ? owner : getKeepOpenTransferId(e);
           // Left out of pendingTransfers(), a send being cancelled still guards against a
           // duplicate: another device could complete it until the cancel is confirmed. Recorded
           // before the outcome returns, so an immediate retry already meets the guard.
           if (keepOpenKind === 'cancelling' && params.kind !== 'whole') {
             await rememberCancellingSend(sphere, {
-              transferId: getKeepOpenTransferId(e),
+              transferId: id,
               recipient: params.recipient,
               coinId: params.coinId,
               amount: params.amount,
             });
           }
           const outcome: SendOutcome = {
-            id: typeof owner === 'string' && owner !== '' ? owner : getKeepOpenTransferId(e),
+            id,
             status: 'pending',
             tokens: [],
             tokenTransfers: [],
             deliveryPending: true,
             keepOpenKind,
             ...(keepOpenKind === 'owed' && typeof remaining === 'string' ? { remainingAmount: remaining } : {}),
+            ...(getErrorCode(e) === 'SEND_PARTIALLY_COMPLETED' ? { partlySent: true } : {}),
           };
           return outcome;
         }

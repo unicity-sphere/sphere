@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Sphere } from '@unicitylabs/sphere-sdk';
-import { cancellingSends, forgetCancellingSends, rememberCancellingSend } from '@/sdk/cancellingSends';
+import {
+  CANCELLING_LOOKUP_TIMEOUT_MS,
+  cancellingSends,
+  forgetCancellingSends,
+  rememberCancellingSend,
+} from '@/sdk/cancellingSends';
 
 // sphere-sdk 0.19.0: a send being cancelled is not in pendingTransfers(), yet another device of the
 // wallet could still complete it. The duplicate-send guards read these rows beside that list.
@@ -42,6 +47,26 @@ describe('rememberCancellingSend', () => {
       rememberCancellingSend(sphereAs(ALICE, resolve as never), { transferId: 'tid-4', recipient: '@bob', coinId: 'c', amount: '5' }),
     ).resolves.toBeUndefined();
     expect(cancellingSends(sphereAs(ALICE))).toEqual([]);
+  });
+
+  it('gives up on a lookup that never settles, so the send outcome it delays still returns', async () => {
+    vi.useFakeTimers();
+    try {
+      const resolve = vi.fn(() => new Promise<never>(() => undefined));
+      const recording = rememberCancellingSend(sphereAs(ALICE, resolve as never), {
+        transferId: 'tid-5',
+        recipient: '@bob',
+        coinId: 'c',
+        amount: '5',
+      });
+
+      await vi.advanceTimersByTimeAsync(CANCELLING_LOOKUP_TIMEOUT_MS);
+
+      await expect(recording).resolves.toBeUndefined();
+      expect(cancellingSends(sphereAs(ALICE))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records nothing for a recipient it cannot resolve', async () => {

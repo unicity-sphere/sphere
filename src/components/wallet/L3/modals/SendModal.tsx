@@ -142,6 +142,8 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
     kind: KeepOpenKind;
     /** 'owed' only: base units still owed. */
     remainingAmount?: string;
+    /** Part already went through and is final. */
+    partlySent?: boolean;
   } | null>(null);
   const [isResuming, setIsResuming] = useState(false);
 
@@ -444,6 +446,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
           legs: null,
           kind: result.keepOpenKind ?? 'converging',
           ...(result.remainingAmount !== undefined ? { remainingAmount: result.remainingAmount } : {}),
+          ...(result.partlySent ? { partlySent: true } : {}),
         });
         if (result.id) {
           getPayments(sphere)
@@ -876,9 +879,15 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   </div>
                   {keepOpen.kind === 'cancelling' ? (
                     <>
-                      <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Payment is being cancelled</h3>
+                      <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">
+                        {keepOpen.partlySent ? 'Partly sent — the rest is being cancelled' : 'Payment is being cancelled'}
+                      </h3>
                       <p className="text-neutral-500 dark:text-white/45">
-                        Your transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> failed, and nothing more will be sent from this device. The wallet service has not confirmed the cancellation yet.
+                        {keepOpen.partlySent ? 'Part of your' : 'Your'} transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b>{' '}
+                        {keepOpen.partlySent
+                          ? 'was sent and is final. The rest failed, and nothing more will be sent from this device.'
+                          : 'failed, and nothing more will be sent from this device.'}{' '}
+                        The wallet service has not confirmed the cancellation yet.
                       </p>
                       <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
                         Don&apos;t send it again until it does — until then another device of this wallet could still complete it. If anything is still owed afterwards, it shows under pending transfers.

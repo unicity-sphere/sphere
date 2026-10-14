@@ -192,6 +192,16 @@ describe('SendModal — keep-open pending state (in-session convergence)', () =>
     expect(transferMock).toHaveBeenCalledTimes(1);
   });
 
+  it('a partial send whose rest is being cancelled says part was sent, never that the transfer simply failed', async () => {
+    transferMock.mockResolvedValue({ ...keepOpenResult('tid-c'), keepOpenKind: 'cancelling', partlySent: true });
+
+    await driveSend();
+
+    expect(await screen.findByText('Partly sent — the rest is being cancelled')).toBeTruthy();
+    expect(screen.getByText(/was sent and is final\. The rest failed/)).toBeTruthy();
+    expect(screen.queryByText(/will complete automatically/)).toBeNull();
+  });
+
   it('a partial send with a remainder owed says how much was not sent, and that only that may be sent', async () => {
     transferMock.mockResolvedValue({ ...keepOpenResult('tid-p'), keepOpenKind: 'owed', remainingAmount: '400000000' });
 

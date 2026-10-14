@@ -83,7 +83,9 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
         // Only a 'converging' outcome finishes on its own (sphere-sdk 0.19.0).
         const copy =
           result.keepOpenKind === 'cancelling'
-            ? 'The transfer failed and is being cancelled. Do not send it again until the cancellation is confirmed.'
+            ? result.partlySent
+              ? 'Part of the transfer was sent and is final; the rest failed and is being cancelled. Do not send it again until the cancellation is confirmed.'
+              : 'The transfer failed and is being cancelled. Do not send it again until the cancellation is confirmed.'
             : result.keepOpenKind === 'owed'
               ? 'Part of the transfer was sent; the rest was not. Send only the remainder, never the full amount again.'
               : 'Network is busy — your transfer is safe and will complete automatically.';
