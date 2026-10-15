@@ -75,7 +75,7 @@ describe('BridgeScreen picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /USDC Ethereum/ }));
     expect(screen.getByPlaceholderText('0.00')).toBeDefined();
     expect(screen.getByRole('button', { name: /Continue with Browser wallet/ })).toBeDefined();
-    expect(screen.getByText(/Install an Ethereum browser wallet such as MetaMask/)).toBeDefined();
+    expect(screen.getByText(/Install an Ethereum browser wallet to sign on Ethereum/)).toBeDefined();
   });
 
   it('refuses a malformed amount or one finer than the asset divides before any wallet prompt', () => {
@@ -151,6 +151,12 @@ describe('ReturnsList', () => {
     render(<ReturnsList returns={[{ ...failed, status: 'settled', recoverable: undefined }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
+  });
+
+  it('wraps the reason a return failed, so a raw error carrying hex stays inside the row', () => {
+    const message = `The return was not submitted: execution reverted 0x${'ab'.repeat(100)}`;
+    render(<ReturnsList returns={[{ ...failed, message }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText(message).className).toContain('wrap-anywhere');
   });
 });
 

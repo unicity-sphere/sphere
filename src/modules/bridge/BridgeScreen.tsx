@@ -633,7 +633,7 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         >
           {r.destination}
         </span>
-        {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
+        {r.message && r.status === 'failed' && <span className="block text-red-500 wrap-anywhere">{r.message}</span>}
       </span>
       <button
         type="button"
@@ -711,8 +711,8 @@ function CollectButton({ payout, destination, asset }: { payout: BridgePayout; d
           {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : choices.length > 1 ? `${amount} with ${w.name}` : amount}
         </button>
       ))}
-      {missing && <span className={`max-w-[12rem] text-right ${MUTED}`}>{missing}</span>}
-      {collect.error && <span className="text-red-500 max-w-[12rem] text-right">{getErrorMessage(collect.error)}</span>}
+      {missing && <span className={`max-w-[12rem] text-right wrap-anywhere ${MUTED}`}>{missing}</span>}
+      {collect.error && <span className="text-red-500 max-w-[12rem] text-right wrap-anywhere">{getErrorMessage(collect.error)}</span>}
     </span>
   );
 }
