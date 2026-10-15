@@ -152,6 +152,12 @@ describe('ReturnsList', () => {
     expect(screen.getByRole('button', { name: 'Remove this record' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Send this burn to the service again' })).toBeNull();
   });
+
+  it('wraps the reason a return failed, so a raw error carrying hex stays inside the row', () => {
+    const message = `The return was not submitted: execution reverted 0x${'ab'.repeat(100)}`;
+    render(<ReturnsList returns={[{ ...failed, message }]} timing={null} onDismiss={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText(message).className).toContain('wrap-anywhere');
+  });
 });
 
 describe('BurnedSummary', () => {

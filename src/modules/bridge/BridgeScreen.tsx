@@ -633,7 +633,7 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         >
           {r.destination}
         </span>
-        {r.message && r.status === 'failed' && <span className="block text-red-500">{r.message}</span>}
+        {r.message && r.status === 'failed' && <span className="block text-red-500 wrap-anywhere">{r.message}</span>}
       </span>
       <button
         type="button"
