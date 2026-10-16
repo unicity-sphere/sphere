@@ -81,13 +81,20 @@ export function getErrorCode(err: unknown): SphereErrorCode | null {
 //    useSphereEvents. That toast is ADDITIVE; it is not a substitute for keeping
 //    these codes off the re-send path (the SendModal still must present pending).
 //  - SEND_SYNC_PENDING (#665): the spend committed but the post-commit wallet-api
-//    mirror-sync failed; resume converges the mirror (idempotent apply).
+//    mirror-sync failed; resume converges the mirror (idempotent apply). Since
+//    sphere-sdk 0.19.0 (#835) it also means "held": the intent write got no answer
+//    the client could trust, and the SDK sends it later under the same transferId.
+//    It also means "being cancelled": a failed send whose cancel the wallet service
+//    has not confirmed. This device never sends that one, but another device of
+//    the wallet could still complete it until the cancel is confirmed, so it is
+//    never re-sendable either (see keepOpenKindOf).
 //  - SEND_PARTIALLY_COMPLETED (sdk #681, PartialSendConflictError): a multi-leg
 //    send certified + delivered >=1 leg, then could not cover the remainder. Money
 //    has irreversibly left the wallet, so it MUST NOT be re-sent in full (that
 //    double-pays the delivered legs) — present it as pending, never re-sendable.
-//    (A richer "partially sent, remainder X uncovered" UX is a follow-up; the
-//    money-safety requirement is only that it stays off the re-send path.)
+//    Its remainingAmount is either still owed (only that may be sent again, as a
+//    NEW send) or, since sphere-sdk 0.19.0, '0': a later attempt that may still pay
+//    owns the rest (see keepOpenKindOf).
 export const PENDING_COMMIT_CODES: readonly SphereErrorCode[] = [
   'SEND_SYNC_PENDING',
   'CERTIFICATION_UNCONFIRMED',
@@ -133,6 +140,53 @@ export function isKeepOpenPendingResult(
   result: Pick<TransferResult, 'status' | 'deliveryPending'>,
 ): boolean {
   return result.status === 'pending' && result.deliveryPending === true;
+}
+
+/**
+ * Why a keep-open send has not finished (sphere-sdk 0.19.0, #835). Only
+ * 'converging' finishes on its own:
+ *  - 'converging': the SDK sends or finishes it under the same transferId,
+ *    including a held send whose intent write the wallet service never confirmed.
+ *  - 'cancelling': a failed send whose cancel the wallet service has not confirmed.
+ *    Nothing more is sent by this device. Until the cancel is confirmed, another
+ *    device of the wallet could still complete it, so it is never re-sendable either.
+ *  - 'owed': a partial send whose remainder is still owed. The delivered part is
+ *    final; only `remainingAmount` may be sent again, as a NEW send.
+ */
+export type KeepOpenKind = 'converging' | 'cancelling' | 'owed';
+
+/**
+ * The SDK names a send that is being cancelled only by this message
+ * (CANCEL_UNCONFIRMED_MESSAGE, sphere-sdk modules/payments-v2/send-errors.ts).
+ * tests/unit/sdk/pendingCommitCodes.test.ts pins it against the installed bundle,
+ * so an SDK bump that rewords it fails there instead of silently reading as 'converging'.
+ */
+export const SDK_CANCEL_UNCONFIRMED_MESSAGE =
+  'This payment failed and is being cancelled, but the wallet service has not confirmed the cancellation yet. Do not send it again: until it does, another device of this wallet could still complete it.';
+
+function isBeingCancelled(err: unknown): boolean {
+  return getErrorCode(err) === 'SEND_SYNC_PENDING' && err instanceof Error && err.message === SDK_CANCEL_UNCONFIRMED_MESSAGE;
+}
+
+/** Classifies a keep-open send error ({@link isPendingCommitCode}); see {@link KeepOpenKind}. */
+export function keepOpenKindOf(err: unknown): KeepOpenKind {
+  if (getErrorCode(err) === 'SEND_PARTIALLY_COMPLETED') {
+    const remaining = (err as { remainingAmount?: unknown }).remainingAmount;
+    if (typeof remaining === 'string' && remaining !== '0') return 'owed';
+    // '0': the latest attempt owns the rest; it finishes on its own unless it is being cancelled.
+    return isBeingCancelled((err as { cause?: unknown }).cause) ? 'cancelling' : 'converging';
+  }
+  return isBeingCancelled(err) ? 'cancelling' : 'converging';
+}
+
+/** A send result as useTransfer returns it: the SDK's, or its synthetic keep-open one. */
+export interface SendOutcome extends TransferResult {
+  /** Set only on a keep-open result. */
+  keepOpenKind?: KeepOpenKind;
+  /** Set only for 'owed': the base units still owed, the only amount ever to send again. */
+  remainingAmount?: string;
+  /** Part of the payment already went through and is final (a partial send's keep-open outcome). */
+  partlySent?: boolean;
 }
 
 // --- Gateway (SGW) 429/401 classification ---------------------------------

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import { useTransfer } from '../../../../sdk/hooks';
-import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
+import { getErrorMessage, isKeepOpenPendingResult, type KeepOpenKind } from '../../../../sdk/errors';
 import { QuotaBlockedError } from '../../../../sdk/quotaGate';
 
 export interface WholeTokenTarget {
@@ -33,7 +33,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
   const [step, setStep] = useState<Step>('form');
   const [error, setError] = useState<string | null>(null);
   const [deliveryPending, setDeliveryPending] = useState(false);
-  const [keepOpen, setKeepOpen] = useState(false);
+  const [keepOpen, setKeepOpen] = useState<KeepOpenKind | null>(null);
   // Bumped on every close. An in-flight send resolves against the generation it
   // started in, so a late completion can never write its outcome onto whatever
   // token the modal is showing by then — which would attribute one token's
@@ -47,7 +47,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
     setStep('form');
     setError(null);
     setDeliveryPending(false);
-    setKeepOpen(false);
+    setKeepOpen(null);
   };
 
   // The modal is reused across tokens, so state belonging to the PREVIOUS token
@@ -88,7 +88,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
       // failure and must never invite a re-send — the intent stays open and the
       // SDK converges it under the same transferId.
       if (gen !== generation.current) return;
-      setKeepOpen(isKeepOpenPendingResult(result));
+      setKeepOpen(isKeepOpenPendingResult(result) ? (result.keepOpenKind ?? 'converging') : null);
       setDeliveryPending(result.deliveryPending ?? false);
       setStep('success');
     } catch (e: unknown) {
@@ -135,16 +135,20 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
                   <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-green-400" />
                 )}
                 <p className="mb-1 font-medium">
-                  {keepOpen
-                    ? 'Network busy — the send is still going through'
-                    : deliveryPending
-                      ? 'Sent — delivery still pending'
-                      : 'Sent'}
+                  {keepOpen === 'cancelling'
+                    ? 'The send failed and is being cancelled'
+                    : keepOpen
+                      ? 'Network busy — the send is still going through'
+                      : deliveryPending
+                        ? 'Sent — delivery still pending'
+                        : 'Sent'}
                 </p>
                 <p className="text-sm break-words text-neutral-400">
-                  {keepOpen
-                    ? 'It will finish on its own. Do not send it again.'
-                    : `${target.label} is on its way.`}
+                  {keepOpen === 'cancelling'
+                    ? 'Nothing more will be sent from this device. Do not send it again until the cancellation is confirmed: until then another device of this wallet could still complete it.'
+                    : keepOpen
+                      ? 'It will finish on its own. Do not send it again.'
+                      : `${target.label} is on its way.`}
                 </p>
                 <button
                   onClick={close}

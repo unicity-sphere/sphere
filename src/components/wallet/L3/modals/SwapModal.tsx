@@ -16,7 +16,7 @@ import { describeCoin } from '../../../../modules/registry';
 import { WalletScreen } from '../../ui/WalletScreen';
 import { ModalHeader } from '../../ui';
 
-type Step = 'swap' | 'processing' | 'success';
+type Step = 'swap' | 'processing' | 'success' | 'stopped';
 
 /** Coins this stub swap surface offers on the "You Receive" side. */
 const SUPPORTED_SWAP_COINS = ['bitcoin', 'ethereum', 'solana', 'unicity', 'tether', 'usd-coin', 'unicity-usd'];
@@ -104,6 +104,9 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const mintAllowed = canSelfMint(network);
 
   const [step, setStep] = useState<Step>('swap');
+  // A swap whose payment will not pay in full, or whose mint failed after the payment went out,
+  // ends here with only Close: the form's Swap button would pay again.
+  const [stoppedReason, setStoppedReason] = useState<string | null>(null);
   const [fromAsset, setFromAsset] = useState<Asset | null>(null);
   const [toAsset, setToAsset] = useState<Asset | null>(null);
   const [fromAmount, setFromAmount] = useState('');
@@ -263,7 +266,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
   const retryRates = () => { setRateStatus('loading'); setRateAttempt(n => n + 1); };
 
   const reset = () => {
-    setStep('swap'); setFromAsset(null); setToAsset(null); setFromAmount('');
+    setStep('swap'); setStoppedReason(null); setFromAsset(null); setToAsset(null); setFromAmount('');
     setError(null); setShowFromDropdown(false); setShowToDropdown(false);
   };
 
@@ -286,12 +289,31 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
     try {
       // 1. Send the "from" asset to the swap stub recipient (unchanged).
       const fromAmountSmallestUnit = parseTokenAmount(fromAmount, fromAsset.decimals);
-      await transfer({ recipient: 'sphere-swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
+      const sent = await transfer({ recipient: 'sphere-swap', amount: fromAmountSmallestUnit.toString(), coinId: fromAsset.coinId });
+      // sphere-sdk 0.19.0: a payment being cancelled never pays, and an owed one left part
+      // unsent, so the "to" side is not minted. A converging one finishes on its own.
+      if (sent.keepOpenKind === 'cancelling' || sent.keepOpenKind === 'owed') {
+        setStoppedReason(
+          sent.keepOpenKind === 'cancelling'
+            ? `${sent.partlySent ? 'Part of the swap payment was sent and is final; the rest failed and is being cancelled' : 'The swap payment failed and is being cancelled'}, so nothing was swapped. Do not swap again until the cancellation is confirmed: until then another device of this wallet could still complete it.`
+            : 'Only part of the swap payment was sent, so nothing was swapped. The part that was sent is final.',
+        );
+        setStep('stopped');
+        return;
+      }
 
       // 2. Self-mint the "to" asset to this wallet (replaces the faucet call).
       const toAmountSmallestUnit = parseTokenAmount(exchangeInfo.toAmount.toFixed(toAsset.decimals), toAsset.decimals);
-      const mintResult = await payments.mint(toAsset.coinId, toAmountSmallestUnit);
-      if (!mintResult.success) throw new Error(mintResult.error);
+      let mintResult: Awaited<ReturnType<typeof payments.mint>>;
+      try {
+        mintResult = await payments.mint(toAsset.coinId, toAmountSmallestUnit);
+        if (!mintResult.success) throw new Error(mintResult.error);
+      } catch (e: unknown) {
+        // The payment went out: never back to a live Swap button, which would pay again.
+        setStoppedReason(`The swap payment was sent, but receiving the swapped coin failed: ${getErrorMessage(e)}`);
+        setStep('stopped');
+        return;
+      }
 
       // useTransfer's refetch already fired after step 1 (before the mint), so
       // refetch again here for the freshly minted asset to show up immediately.
@@ -337,6 +359,7 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
       case 'swap': return 'Swap';
       case 'processing': return 'Processing...';
       case 'success': return 'Swap Complete!';
+      case 'stopped': return 'Swap stopped';
     }
   };
 
@@ -588,6 +611,24 @@ export function SwapModal({ isOpen, onClose }: SwapModalProps) {
               <Loader2 className="w-12 h-12 text-orange-500 animate-spin mx-auto mb-4" />
               <h3 className="text-neutral-900 dark:text-white font-medium text-lg">Processing Swap...</h3>
               <p className="text-neutral-500 dark:text-white/45 text-sm mt-2">Sending tokens and requesting swap</p>
+            </motion.div>
+          )}
+
+          {/* STOPPED: no way back to the form, whose Swap button would pay again */}
+          {step === 'stopped' && (
+            <motion.div
+              key="stopped"
+              className="flex-1 flex flex-col items-center justify-center text-center py-10"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            >
+              <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Swap stopped</h3>
+              <p className="text-neutral-500 dark:text-white/45">{stoppedReason}</p>
+              <button
+                onClick={handleClose}
+                className="mt-8 px-8 py-2 bg-neutral-100 dark:bg-white/6 rounded-lg hover:bg-neutral-200 dark:hover:bg-white/10 text-neutral-900 dark:text-white transition-colors font-mono"
+              >
+                Close
+              </button>
             </motion.div>
           )}
 

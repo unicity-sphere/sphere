@@ -2,16 +2,24 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { getPayments } from '../../payments';
 import { useSphereContext } from '../core/useSphere';
 import { SPHERE_KEYS } from '../../queryKeys';
-import { getErrorCode, getKeepOpenTransferId, isPendingCommitCode, isQuotaRateLimit, isGatewayAuthError } from '../../errors';
+import {
+  getErrorCode,
+  getKeepOpenTransferId,
+  isPendingCommitCode,
+  isQuotaRateLimit,
+  isGatewayAuthError,
+  keepOpenKindOf,
+  type SendOutcome,
+} from '../../errors';
 import { checkSendQuota, QuotaBlockedError } from '../../quotaGate';
 import { refuseHeldSources } from '../../holdGate';
+import { rememberCancellingSend } from '../../cancellingSends';
 import { useSubscriptionKeyGuard } from '../subscription';
 import { SUBSCRIPTION_ENABLED } from '../../../config/subscription';
 import { useUpgrade, type UpgradeReason } from '../../../components/upgrade';
 import { getUtilization } from '../../../services/subscriptionApi';
 import { getStoredSubscriptionKey } from '../../../config/subscriptionKeyCache';
 import { showToast } from '../../../components/ui/toast-utils';
-import type { TransferResult } from '@unicitylabs/sphere-sdk';
 
 /**
  * Fire-and-forget disambiguation for a 401/403 submit rejection (spec §1
@@ -74,10 +82,10 @@ export interface WholeTransferParams {
 export type TransferParams = CoinTransferParams | WholeTransferParams;
 
 export interface UseTransferReturn {
-  transfer: (params: TransferParams) => Promise<TransferResult>;
+  transfer: (params: TransferParams) => Promise<SendOutcome>;
   isLoading: boolean;
   error: Error | null;
-  lastResult: TransferResult | null;
+  lastResult: SendOutcome | null;
   reset: () => void;
 }
 
@@ -95,7 +103,7 @@ export function useTransfer(): UseTransferReturn {
   const { openUpgrade } = useUpgrade();
 
   const mutation = useMutation({
-    mutationFn: async (params: TransferParams): Promise<TransferResult> => {
+    mutationFn: async (params: TransferParams): Promise<SendOutcome> => {
       const payments = getPayments(sphere);
       if (!payments) throw new Error('Wallet not initialized');
       await refuseHeldSources(payments, params.kind === 'whole' ? { tokenId: params.tokenId } : { coinId: params.coinId });
@@ -191,15 +199,38 @@ export function useTransfer(): UseTransferReturn {
         // pending copy when convergence lands. Empty when the error carries none.
         // The synthetic `status: 'pending'` is the keep-open discriminator
         // (isKeepOpenPendingResult) — a real #621 delivery-deferred success keeps its
-        // SDK-produced status.
+        // SDK-produced status. `keepOpenKind` says whether it still finishes on its
+        // own (sphere-sdk 0.19.0): only 'converging' does, so only that one may read
+        // as "will complete automatically".
         if (isPendingCommitCode(e)) {
-          return {
-            id: getKeepOpenTransferId(e),
+          const keepOpenKind = keepOpenKindOf(e);
+          const remaining = (e as { remainingAmount?: unknown }).remainingAmount;
+          // A '0' partial: its transferId names the first, finished partial; the attempt that
+          // still owns the rest (and whose transfer:updated ends this) is the cause's.
+          const owner = remaining === '0' ? (e as { cause?: { transferId?: unknown } }).cause?.transferId : undefined;
+          const id = typeof owner === 'string' && owner !== '' ? owner : getKeepOpenTransferId(e);
+          // Left out of pendingTransfers(), a send being cancelled still guards against a
+          // duplicate: another device could complete it until the cancel is confirmed. Recorded
+          // before the outcome returns, so an immediate retry already meets the guard.
+          if (keepOpenKind === 'cancelling' && params.kind !== 'whole') {
+            await rememberCancellingSend(sphere, {
+              transferId: id,
+              recipient: params.recipient,
+              coinId: params.coinId,
+              amount: params.amount,
+            });
+          }
+          const outcome: SendOutcome = {
+            id,
             status: 'pending',
             tokens: [],
             tokenTransfers: [],
             deliveryPending: true,
+            keepOpenKind,
+            ...(keepOpenKind === 'owed' && typeof remaining === 'string' ? { remainingAmount: remaining } : {}),
+            ...(getErrorCode(e) === 'SEND_PARTIALLY_COMPLETED' ? { partlySent: true } : {}),
           };
+          return outcome;
         }
         throw e;
       }

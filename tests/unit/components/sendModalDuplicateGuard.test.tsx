@@ -93,6 +93,7 @@ const prewarmSendMock = vi.fn(async (request: PrewarmRequest): Promise<void> => 
 const discardPrewarmMock = vi.fn();
 
 const fakeSphere = {
+  identity: { chainPubkey: `03${'f'.repeat(64)}` },
   on: vi.fn(),
   off: vi.fn(),
   resolve: resolveMock,
@@ -118,6 +119,7 @@ vi.mock('../../../src/components/upgrade', () => ({
 }));
 
 import { SendModal } from '../../../src/components/wallet/L3/modals/SendModal';
+import { forgetCancellingSends, rememberCancellingSend } from '../../../src/sdk/cancellingSends';
 
 function pendingRow(overrides: Partial<PendingTransfer> = {}): PendingTransfer {
   return {
@@ -187,6 +189,7 @@ async function pressSend() {
 }
 
 beforeEach(() => {
+  forgetCancellingSends();
   prewarmSendMock.mockClear();
   prewarmRequests.length = 0;
   discardPrewarmMock.mockClear();
@@ -288,6 +291,17 @@ describe('SendModal — duplicate payment guard', () => {
     expect(screen.getByText(/1 of 2 parts are already certified/)).toBeTruthy();
     // Nothing was executed, and the confirm screen is not what the user is
     // looking at — the warning replaced it.
+    expect(transferMock).not.toHaveBeenCalled();
+    expect(sendButton()).toBeNull();
+  });
+
+  it('a send this session saw being cancelled still warns, though pendingTransfers() leaves it out (sphere-sdk 0.19.0)', async () => {
+    // Another device of the wallet could still complete it until its cancel is confirmed.
+    await rememberCancellingSend(fakeSphere as never, { transferId: 'tf_cancel', recipient: BOB_PUBKEY, coinId: COIN, amount: '10' });
+    pendingTransfersMock.mockResolvedValue([]);
+    await review();
+    await advanceUntil(() => screen.queryByText('Sending again pays TWICE.') !== null);
+
     expect(transferMock).not.toHaveBeenCalled();
     expect(sendButton()).toBeNull();
   });

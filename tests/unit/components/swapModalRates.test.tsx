@@ -111,9 +111,12 @@ function held(d: Def, whole: string): Asset {
 let heldAssets: Asset[] = [];
 let providers: { price?: { getPrices: (names: string[]) => Promise<Map<string, { priceUsd: number }>> } } | null = null;
 
+const transferMock = vi.fn();
+const mintMock = vi.fn();
+
 vi.mock('../../../src/sdk', () => ({
   useAssets: () => ({ assets: heldAssets, isLoading: false, error: null, assetCount: heldAssets.length }),
-  useTransfer: () => ({ transfer: vi.fn(), isLoading: false, error: null, lastResult: null, reset: vi.fn() }),
+  useTransfer: () => ({ transfer: transferMock, isLoading: false, error: null, lastResult: null, reset: vi.fn() }),
 }));
 
 // SwapModal's "to" leg is a self-mint, so the screen renders nothing where the
@@ -124,7 +127,7 @@ vi.mock('../../../src/sdk/hooks/core/useSphere', () => ({
 }));
 
 vi.mock('../../../src/sdk/payments', () => ({
-  getPayments: () => ({ mint: vi.fn() }),
+  getPayments: () => ({ mint: mintMock }),
 }));
 
 import { SwapModal } from '../../../src/components/wallet/L3/modals/SwapModal';
@@ -148,6 +151,8 @@ function swapButton(): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  transferMock.mockReset();
+  mintMock.mockReset();
   defs = [];
   heldAssets = [];
   providers = null;
@@ -369,5 +374,70 @@ describe('SwapModal — coins with a fixed issuer', () => {
     fireEvent.click(flip);
 
     expect(await screen.findByText('ALPHT cannot be received in a swap')).toBeTruthy();
+  });
+});
+
+// sphere-sdk 0.19.0: a swap payment being cancelled never pays, and an owed one left part unsent.
+// The swap stops there: no "to" mint, and no way back to a live Swap button, since a second Swap
+// would pay again. A converging payment finishes on its own and is minted against as before.
+describe('SwapModal — a payment that has not paid in full', () => {
+  function keepOpen(kind: 'converging' | 'cancelling' | 'owed') {
+    return {
+      id: 'tid-1',
+      status: 'pending',
+      tokens: [],
+      tokenTransfers: [],
+      deliveryPending: true,
+      keepOpenKind: kind,
+      ...(kind === 'owed' ? { remainingAmount: '100' } : {}),
+    };
+  }
+
+  async function swapOneBtc(): Promise<void> {
+    defs = [BTC, UCT, USDU];
+    heldAssets = [held(BTC, '2')];
+    providers = {};
+    open();
+    await screen.findByText('BTC');
+    fireEvent.change(screen.getByPlaceholderText('0'), { target: { value: '1' } });
+    await waitFor(() => expect(swapButton().disabled).toBe(false));
+    fireEvent.click(swapButton());
+  }
+
+  it.each([
+    ['cancelling', /being cancelled/],
+    ['owed', /Only part of the swap payment was sent/],
+  ] as const)('a %s payment ends the swap on a screen with no Swap button, and mints nothing', async (kind, copy) => {
+    transferMock.mockResolvedValue(keepOpen(kind));
+
+    await swapOneBtc();
+
+    expect(await screen.findByText(copy)).toBeTruthy();
+    expect(screen.getAllByText('Swap stopped').length).toBeGreaterThan(0);
+    // The form leaves through an exit animation; once it is gone no Swap button remains.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Swap' })).toBeNull());
+    expect(mintMock).not.toHaveBeenCalled();
+    expect(transferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a converging payment finishes on its own: the swap mints and completes as before', async () => {
+    transferMock.mockResolvedValue(keepOpen('converging'));
+    mintMock.mockResolvedValue({ success: true });
+
+    await swapOneBtc();
+
+    await waitFor(() => expect(mintMock).toHaveBeenCalledTimes(1));
+    expect((await screen.findAllByText('Swap Complete!')).length).toBeGreaterThan(0);
+  });
+
+  it('a mint that fails after the payment went out stops the swap, never returning to the form', async () => {
+    transferMock.mockResolvedValue({ id: 'tid-1', status: 'delivered', tokens: [], tokenTransfers: [] });
+    mintMock.mockResolvedValue({ success: false, error: 'mint refused' });
+
+    await swapOneBtc();
+
+    expect(await screen.findByText(/receiving the swapped coin failed: mint refused/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Swap' })).toBeNull());
+    expect(transferMock).toHaveBeenCalledTimes(1);
   });
 });

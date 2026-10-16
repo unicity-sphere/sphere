@@ -1211,8 +1211,14 @@ if (result.deliveryPending) console.log('Sent — delivery pending, retried auto
                   <code className="text-amber-600 dark:text-amber-400"> sphere.payments.resumeNow()</code>. A second
                   <code className="text-amber-600 dark:text-amber-400"> send()</code> gets a new transfer ID and pays the recipient twice. A
                   <code className="text-amber-600 dark:text-amber-400"> PartialSendConflictError</code> means part of the amount is already final and only
-                  <code className="text-amber-600 dark:text-amber-400"> err.remainingAmount</code> is still owed. Otherwise nothing left the wallet and a
-                  fresh <code className="text-amber-600 dark:text-amber-400">send()</code> is safe.
+                  <code className="text-amber-600 dark:text-amber-400"> err.remainingAmount</code> is still owed. When it is
+                  <code className="text-amber-600 dark:text-amber-400"> &apos;0&apos;</code>, a later attempt still owns the rest: send nothing, and any
+                  remainder that becomes owed again later shows up in
+                  <code className="text-amber-600 dark:text-amber-400"> pendingTransfers()</code> as a shortfall. A
+                  <code className="text-amber-600 dark:text-amber-400"> SEND_SYNC_PENDING</code> whose message says the payment is being cancelled is
+                  never sent by this device, but do not send it again either: another device of the wallet could still complete it until the
+                  cancellation is confirmed. Otherwise nothing left the wallet and a fresh
+                  <code className="text-amber-600 dark:text-amber-400"> send()</code> is safe.
                 </p>
               </div>
               <CodeBlock
@@ -1223,8 +1229,9 @@ try {
   await sphere.payments.send({ coinId, amount: '100000000', recipient: '@merchant' });
 } catch (err) {
   if (err instanceof PartialSendConflictError) {
-    // Only err.remainingAmount is still owed — pay it as a NEW send of exactly that amount.
-    console.warn(\`Partly sent: \${err.remainingAmount} base units were not sent\`);
+    // '0': a later attempt owns the rest — send nothing. Otherwise only err.remainingAmount
+    // is owed: pay it as a NEW send of exactly that amount.
+    if (err.remainingAmount !== '0') console.warn(\`Partly sent: \${err.remainingAmount} base units were not sent\`);
   } else if (isPossiblyCommittedSendOutcome(err)) {
     // May already have left the wallet — never re-send. Offer resumeNow(), not send().
     console.warn('Sent, waiting for confirmation');

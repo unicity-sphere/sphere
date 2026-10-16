@@ -3,6 +3,7 @@ import { coinIdsMatch } from '@unicitylabs/sphere-sdk';
 import type { Sphere } from '@unicitylabs/sphere-sdk';
 import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
 import { getPayments } from '../../sdk/payments';
+import { cancellingSends } from '../../sdk/cancellingSends';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { isChainPubkey } from '../../utils/identifiers';
 import type { PendingIntent } from './ConnectContext';
@@ -196,7 +197,8 @@ export function useDuplicateSendGuard(intent: PendingIntent | null): UseDuplicat
       try {
         const payments = getPayments(sphere);
         if (!payments) return settle(CLEAR);
-        const rows = await payments.pendingTransfers();
+        // A send being cancelled is not listed, yet could still complete (sdk/cancellingSends.ts).
+        const rows = [...(await payments.pendingTransfers()), ...cancellingSends(sphere)];
         // Nothing is converging: the overwhelmingly common case, and it costs
         // no recipient resolution at all.
         if (rows.length === 0) return settle(CLEAR);

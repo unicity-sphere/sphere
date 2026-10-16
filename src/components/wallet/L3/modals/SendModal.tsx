@@ -9,7 +9,8 @@ import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../conne
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
 import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
 import { useSendProgress } from '../../../../sdk/hooks/payments/useSendProgress';
-import { getErrorMessage, isKeepOpenPendingResult } from '../../../../sdk/errors';
+import { getErrorMessage, isKeepOpenPendingResult, type KeepOpenKind } from '../../../../sdk/errors';
+import { cancellingSends } from '../../../../sdk/cancellingSends';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
 import { useUtilization } from '../../../../sdk/hooks/subscription';
@@ -137,6 +138,12 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
   const [keepOpen, setKeepOpen] = useState<{
     transferId: string;
     legs: { certified: number; total: number } | null;
+    /** Only 'converging' finishes on its own (sphere-sdk 0.19.0); see KeepOpenKind. */
+    kind: KeepOpenKind;
+    /** 'owed' only: base units still owed. */
+    remainingAmount?: string;
+    /** Part already went through and is final. */
+    partlySent?: boolean;
   } | null>(null);
   const [isResuming, setIsResuming] = useState(false);
 
@@ -178,7 +185,8 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const rows = await Promise.race([
-          payments.pendingTransfers(),
+          // A send being cancelled is not listed, yet could still complete (sdk/cancellingSends.ts).
+          payments.pendingTransfers().then((listed) => [...listed, ...cancellingSends(sphere)]),
           new Promise<null>((resolve) => {
             timer = setTimeout(() => resolve(null), DUPLICATE_CHECK_TIMEOUT_MS);
           }),
@@ -433,7 +441,13 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
         // pending state. Enrich with the certified-legs detail when the SDK's
         // pending-transfers view has partial info for this transfer (best-effort;
         // the copy renders without it).
-        setKeepOpen({ transferId: result.id, legs: null });
+        setKeepOpen({
+          transferId: result.id,
+          legs: null,
+          kind: result.keepOpenKind ?? 'converging',
+          ...(result.remainingAmount !== undefined ? { remainingAmount: result.remainingAmount } : {}),
+          ...(result.partlySent ? { partlySent: true } : {}),
+        });
         if (result.id) {
           getPayments(sphere)
             ?.pendingTransfers()
@@ -863,18 +877,50 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                   <div className="w-16 h-16 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-500/50">
                     <Clock className="w-8 h-8 text-amber-500" />
                   </div>
-                  <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Network is busy</h3>
-                  <p className="text-neutral-500 dark:text-white/45">
-                    Your transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> is safe and will complete automatically.
-                  </p>
-                  {keepOpen.legs && keepOpen.legs.total > 0 && (
-                    <p className="text-neutral-400 dark:text-white/35 text-sm mt-2">
-                      {keepOpen.legs.certified} of {keepOpen.legs.total} {keepOpen.legs.total === 1 ? 'part' : 'parts'} already certified on-chain.
-                    </p>
+                  {keepOpen.kind === 'cancelling' ? (
+                    <>
+                      <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">
+                        {keepOpen.partlySent ? 'Partly sent — the rest is being cancelled' : 'Payment is being cancelled'}
+                      </h3>
+                      <p className="text-neutral-500 dark:text-white/45">
+                        {keepOpen.partlySent ? 'Part of your' : 'Your'} transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b>{' '}
+                        {keepOpen.partlySent
+                          ? 'was sent and is final. The rest failed, and nothing more will be sent from this device.'
+                          : 'failed, and nothing more will be sent from this device.'}{' '}
+                        The wallet service has not confirmed the cancellation yet.
+                      </p>
+                      <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
+                        Don&apos;t send it again until it does — until then another device of this wallet could still complete it. If anything is still owed afterwards, it shows under pending transfers.
+                      </p>
+                    </>
+                  ) : keepOpen.kind === 'owed' ? (
+                    <>
+                      <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Partly sent</h3>
+                      <p className="text-neutral-500 dark:text-white/45">
+                        Part of your transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> was sent and is final.{' '}
+                        <b>{formatAmount(keepOpen.remainingAmount ?? '0', selectedAsset?.decimals ?? 0)} {selectedAsset?.symbol}</b> was not sent.
+                      </p>
+                      <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
+                        If you still owe it, send only that amount — never the full amount again.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="text-neutral-900 dark:text-white font-bold text-2xl mb-2">Network is busy</h3>
+                      <p className="text-neutral-500 dark:text-white/45">
+                        Your transfer of <b>{amountInput} {selectedAsset?.symbol}</b> to <b title={recipient}>{recipientMode === 'pubkey' ? truncateId(stripDirectScheme(recipient)) : `@${recipient}`}</b> is safe and will complete automatically.
+                      </p>
+                      {keepOpen.legs && keepOpen.legs.total > 0 && (
+                        <p className="text-neutral-400 dark:text-white/35 text-sm mt-2">
+                          {keepOpen.legs.certified} of {keepOpen.legs.total} {keepOpen.legs.total === 1 ? 'part' : 'parts'} already certified on-chain.
+                        </p>
+                      )}
+                      <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
+                        Don&apos;t send it again — this same transfer keeps retrying on its own.
+                      </p>
+                    </>
                   )}
-                  <p className="text-neutral-400 dark:text-white/35 text-xs mt-2">
-                    Don&apos;t send it again — this same transfer keeps retrying on its own.
-                  </p>
+                  {keepOpen.kind !== 'owed' && (
                   <button
                     onClick={handleResumeNow}
                     disabled={isResuming}
@@ -883,6 +929,7 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
                     <RefreshCw className={`w-4 h-4 ${isResuming ? 'animate-spin' : ''}`} />
                     {isResuming ? 'Retrying…' : 'Retry now'}
                   </button>
+                  )}
                 </>
               ) : deliveryPending ? (
                 <>
