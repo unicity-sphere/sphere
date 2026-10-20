@@ -75,6 +75,17 @@ describe('collecting a pull-payment payout', () => {
     expect(screen.queryByRole('button', { name: /Collect/ })).toBeNull();
   });
 
+  it('puts the collect buttons on their own line, never beside the destination (#545)', async () => {
+    payout.owed.mockResolvedValue(35_000_000n);
+    wallets.splice(0, wallets.length, wallet('rabby', 'Rabby Wallet'), wallet('coinbase', 'Coinbase Wallet'));
+    renderList([settled]);
+    const buttons = await screen.findAllByRole('button', { name: /^Collect 35 USDC with / });
+    const row = screen.getByText(settled.destination).closest('div');
+    expect(buttons).toHaveLength(2);
+    expect(row).not.toBeNull();
+    for (const button of buttons) expect(row!.contains(button)).toBe(false);
+  });
+
   it('shows nothing to collect when the vault owes nothing', async () => {
     payout.owed.mockResolvedValue(0n);
     renderList([settled]);
