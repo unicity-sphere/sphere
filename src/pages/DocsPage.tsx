@@ -606,7 +606,7 @@ VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
                 <li>No registration or API keys needed</li>
                 <li>BIP32 HD wallet with derivation path <code className="text-amber-600 dark:text-amber-400">m/44'/0'/0'</code></li>
                 <li>Multiple addresses from a single seed</li>
-                <li>Identity includes chain pubkey, direct address, and optional nametag</li>
+                <li>Identity includes chain pubkey, the Sphere Quests account id (direct address), and optional nametag</li>
               </ul>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 <code className="text-amber-600 dark:text-amber-400">sphere.identity</code> is populated once
@@ -684,7 +684,7 @@ const addresses = sphere.getActiveAddresses();`}
               </p>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Register a nametag during wallet creation or at any time after it. Once registered it works as a recipient:
-                <code className="text-amber-600 dark:text-amber-400"> send()</code> resolves it to a DIRECT address for you.
+                <code className="text-amber-600 dark:text-amber-400"> send()</code> resolves it to the recipient&apos;s chain pubkey for you.
               </p>
               <CodeBlock
                 filename="nametags.ts"
@@ -699,14 +699,14 @@ await sphere.payments.send({
 });
 
 const peer = await sphere.resolve('@bob');
-console.log(peer?.directAddress);`}
+console.log(peer?.chainPubkey);`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 <code className="text-amber-600 dark:text-amber-400">getNametag()</code> prints
                 <code className="text-amber-600 dark:text-amber-400"> 'alice'</code>, stored without the
                 <code className="text-amber-600 dark:text-amber-400"> '@'</code>.
                 <code className="text-amber-600 dark:text-amber-400"> resolve()</code> turns a nametag into peer info, including the
-                peer's DIRECT address.
+                peer's chain pubkey, the key a payment to it is locked to.
               </p>
             </div>
 
@@ -937,8 +937,9 @@ console.log(isValid);`}
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 The current wallet identity. Available after initialization. Every field except
-                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> is optional, so guard
-                <code className="text-amber-600 dark:text-amber-400"> directAddress</code> before using it as a recipient.
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> is optional. Pay this wallet by its
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> or its nametag:
+                <code className="text-amber-600 dark:text-amber-400"> directAddress</code> is the Sphere Quests account id, never a payment recipient.
               </p>
               <CodeBlock
                 code={`interface Identity {
@@ -1139,7 +1140,9 @@ await sphere.destroy();`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.payments.send(request)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Sends tokens to a recipient. Supports @nametags and direct addresses.
+                Sends tokens to a recipient: a @nametag or a 66-hex chain pubkey. A
+                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address is refused with
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>.
               </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Signature</h4>
