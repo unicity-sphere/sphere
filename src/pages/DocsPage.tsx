@@ -606,7 +606,7 @@ VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
                 <li>No registration or API keys needed</li>
                 <li>BIP32 HD wallet with derivation path <code className="text-amber-600 dark:text-amber-400">m/44'/0'/0'</code></li>
                 <li>Multiple addresses from a single seed</li>
-                <li>Identity includes chain pubkey, direct address, and optional nametag</li>
+                <li>Identity includes chain pubkey, the Sphere Quests account id (direct address), and optional nametag</li>
               </ul>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 <code className="text-amber-600 dark:text-amber-400">sphere.identity</code> is populated once
@@ -625,8 +625,8 @@ VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
                   chain public key as hex, such as <code className="text-amber-600 dark:text-amber-400">'02abc...'</code>
                 </li>
                 <li>
-                  <code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the L3 address, such as
-                  <code className="text-amber-600 dark:text-amber-400"> 'DIRECT://...'</code>. Optional.
+                  <code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the Sphere Quests account id, such as
+                  <code className="text-amber-600 dark:text-amber-400"> 'DIRECT://...'</code>. Optional. It is not a payment address.
                 </li>
                 <li>
                   <code className="text-amber-600 dark:text-amber-400">nametag</code> &mdash; the bare name, such as
@@ -639,17 +639,18 @@ VITE_WALLET_API_URL=https://wallet-api.example.unicity.network
             <div id="addresses" data-section="addresses" className="scroll-mt-24 mb-12">
               <h3 className="text-xl font-semibold mb-4">Addresses</h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                There are two address formats:
+                A payment recipient is named one of two ways:
               </p>
               <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
-                <li><strong>DIRECT address</strong> (<code className="text-amber-600 dark:text-amber-400">DIRECT://...</code>) - Used for L3 token transfers</li>
-                <li><strong>@nametag</strong> (<code className="text-amber-600 dark:text-amber-400">@alice</code>) - A human-readable alias, resolved to a DIRECT address over transport</li>
+                <li><strong>@nametag</strong> (<code className="text-amber-600 dark:text-amber-400">@alice</code>) - A human-readable alias, resolved to the recipient&apos;s chain pubkey over transport</li>
+                <li><strong>Chain pubkey</strong> (<code className="text-amber-600 dark:text-amber-400">02...</code> or <code className="text-amber-600 dark:text-amber-400">03...</code>, 66 hex) - The key the tokens are locked to</li>
               </ul>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                <code className="text-amber-600 dark:text-amber-400">PROXY://</code> is not an address type &mdash; it was removed from the SDK.
-                <code className="text-amber-600 dark:text-amber-400"> parseAddress()</code> returns
-                <code className="text-amber-600 dark:text-amber-400"> null</code> for one, and a send to it fails with
-                <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>: &ldquo;Use @nametag, DIRECT://, or a hex pubkey.&rdquo;
+                A <code className="text-amber-600 dark:text-amber-400">DIRECT://</code> address is the wallet&apos;s Sphere Quests account id, not a payment
+                address: <code className="text-amber-600 dark:text-amber-400">payments.send()</code> and
+                <code className="text-amber-600 dark:text-amber-400"> payments.requests.create()</code> refuse one with
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>. <code className="text-amber-600 dark:text-amber-400">PROXY://</code> was removed from
+                the SDK, and a send to it fails with <code className="text-amber-600 dark:text-amber-400">INVALID_RECIPIENT</code> too.
               </p>
               <CodeBlock
                 code={`const addr = sphere.deriveAddress(1);
@@ -683,7 +684,7 @@ const addresses = sphere.getActiveAddresses();`}
               </p>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 Register a nametag during wallet creation or at any time after it. Once registered it works as a recipient:
-                <code className="text-amber-600 dark:text-amber-400"> send()</code> resolves it to a DIRECT address for you.
+                <code className="text-amber-600 dark:text-amber-400"> send()</code> resolves it to the recipient&apos;s chain pubkey for you.
               </p>
               <CodeBlock
                 filename="nametags.ts"
@@ -698,14 +699,14 @@ await sphere.payments.send({
 });
 
 const peer = await sphere.resolve('@bob');
-console.log(peer?.directAddress);`}
+console.log(peer?.chainPubkey);`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 <code className="text-amber-600 dark:text-amber-400">getNametag()</code> prints
                 <code className="text-amber-600 dark:text-amber-400"> 'alice'</code>, stored without the
                 <code className="text-amber-600 dark:text-amber-400"> '@'</code>.
                 <code className="text-amber-600 dark:text-amber-400"> resolve()</code> turns a nametag into peer info, including the
-                peer's DIRECT address.
+                peer's chain pubkey, the key a payment to it is locked to.
               </p>
             </div>
 
@@ -936,8 +937,9 @@ console.log(isValid);`}
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
                 The current wallet identity. Available after initialization. Every field except
-                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> is optional, so guard
-                <code className="text-amber-600 dark:text-amber-400"> directAddress</code> before using it as a recipient.
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> is optional. Pay this wallet by its
+                <code className="text-amber-600 dark:text-amber-400"> chainPubkey</code> or its nametag:
+                <code className="text-amber-600 dark:text-amber-400"> directAddress</code> is the Sphere Quests account id, never a payment recipient.
               </p>
               <CodeBlock
                 code={`interface Identity {
@@ -953,7 +955,7 @@ console.log(sphere.identity?.nametag);`}
               />
               <ul className="list-disc list-inside text-neutral-600 dark:text-neutral-400 space-y-2 mb-4">
                 <li><code className="text-amber-600 dark:text-amber-400">chainPubkey</code> &mdash; the secp256k1 public key as hex</li>
-                <li><code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the <code className="text-amber-600 dark:text-amber-400">DIRECT://</code> address used on L3</li>
+                <li><code className="text-amber-600 dark:text-amber-400">directAddress</code> &mdash; the <code className="text-amber-600 dark:text-amber-400">DIRECT://</code> Sphere Quests account id, not a payment address</li>
                 <li><code className="text-amber-600 dark:text-amber-400">nametag</code> &mdash; the registered nametag without the <code className="text-amber-600 dark:text-amber-400">@</code>, such as <code className="text-amber-600 dark:text-amber-400">'alice'</code></li>
               </ul>
             </div>
@@ -989,7 +991,7 @@ const available = await sphere.isNametagAvailable('bob');`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.resolve(identifier)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Resolves a @nametag or bare nametag, a DIRECT:// address, a compressed chain pubkey (02/03 + 64 hex) or a
+                Resolves a @nametag or bare nametag, a DIRECT:// address (deprecated), a compressed chain pubkey (02/03 + 64 hex) or a
                 64-hex transport pubkey to full peer info. Anything else is tried as a nametag and resolves to
                 <code className="text-amber-600 dark:text-amber-400"> null</code>.
               </p>
@@ -1138,7 +1140,9 @@ await sphere.destroy();`}
                 <code className="text-amber-600 dark:text-amber-400">sphere.payments.send(request)</code>
               </h3>
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                Sends tokens to a recipient. Supports @nametags and direct addresses.
+                Sends tokens to a recipient: a @nametag or a 66-hex chain pubkey. A
+                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address is refused with
+                <code className="text-amber-600 dark:text-amber-400"> INVALID_RECIPIENT</code>.
               </p>
 
               <h4 className="font-medium text-lg mt-6 mb-3">Signature</h4>
@@ -1149,7 +1153,7 @@ await sphere.destroy();`}
                 params={[
                   { name: 'coinId', type: 'string', description: '64-char lowercase hex coin id (no 0x prefix)', required: true },
                   { name: 'amount', type: 'string', description: 'Amount in smallest units', required: true },
-                  { name: 'recipient', type: 'string', description: '@nametag or DIRECT:// address', required: true },
+                  { name: 'recipient', type: 'string', description: '@nametag or chain pubkey (66 hex)', required: true },
                   { name: 'memo', type: 'string', description: 'Optional memo' },
                 ]}
               />
@@ -1834,8 +1838,12 @@ const result = await client.intent('send', {
 });`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                <code className="text-amber-600 dark:text-amber-400">to</code> takes a Unicity ID or a
-                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address.
+                <code className="text-amber-600 dark:text-amber-400">to</code> is a Unicity ID with its
+                <code className="text-amber-600 dark:text-amber-400"> @</code>, a 66-hex chain pubkey or a 64-hex transport
+                pubkey: without the
+                <code className="text-amber-600 dark:text-amber-400"> @</code> it is read as a pubkey, so a bare Unicity ID, like a
+                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address, is refused with
+                <code className="text-amber-600 dark:text-amber-400"> -32602</code>.
                 <code className="text-amber-600 dark:text-amber-400"> amount</code> is in base units &mdash; the smallest
                 indivisible unit &mdash; as a positive integer string.
                 <code className="text-amber-600 dark:text-amber-400"> coinId</code> is required, and it is the bare lowercase

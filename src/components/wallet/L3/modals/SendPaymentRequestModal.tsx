@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Hash, Receipt } from 'lucide-react';
-import { TokenRegistry, parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
+import { DIRECT_RECIPIENT_REFUSED_MESSAGE, TokenRegistry, isDirectAddressRecipient, parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../../../sdk/hooks/core/useSphere';
 import { getErrorMessage } from '../../../../sdk/errors';
 import { isChainPubkey, truncateId, stripDirectScheme } from '../../../../utils/identifiers';
@@ -115,8 +115,12 @@ export function SendPaymentRequestModal({ isOpen, onClose }: SendPaymentRequestM
     try {
       if (recipientMode === 'pubkey') {
         const value = recipient.trim();
-        // Pasted DIRECT:// addresses stay accepted for compatibility — the SDK resolves them.
-        if (!isChainPubkey(value) && !value.startsWith('DIRECT://')) {
+        // sphere-sdk 0.19.2 (#847): a DIRECT:// address is the Quests account id, never a payment recipient.
+        if (isDirectAddressRecipient(value)) {
+          setRecipientError(DIRECT_RECIPIENT_REFUSED_MESSAGE);
+          return;
+        }
+        if (!isChainPubkey(value)) {
           setRecipientError('Enter a valid public key (66 hex characters starting with 02 or 03)');
           return;
         }

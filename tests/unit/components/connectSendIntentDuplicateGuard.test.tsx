@@ -217,7 +217,7 @@ describe('Connect send intent — duplicate-payment guard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(transferMock).toHaveBeenCalledTimes(1));
-    expect(transferMock).toHaveBeenCalledWith({ coinId: COIN, amount: '100', recipient: 'bob' });
+    expect(transferMock).toHaveBeenCalledWith({ coinId: COIN, amount: '100', recipient: '@bob' });
     await waitFor(() => expect(resolveIntent).toHaveBeenCalledTimes(1));
     expect(resolveIntent.mock.calls[0]![1]).toMatchObject({ success: true });
     expect(rejectIntent).not.toHaveBeenCalled();

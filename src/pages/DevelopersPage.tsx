@@ -67,13 +67,13 @@ console.log('Ready:', sphere.isReady);`,
       Icon: Zap,
       title: 'Payments',
       tagline: 'Instant. Off-chain. P2P.',
-      description: 'Send tokens to anyone via @nametag or address. Instant P2P settlement on Layer 3.',
+      description: 'Send tokens to anyone via @nametag or public key. Instant P2P settlement on Layer 3.',
       code: `await sphere.payments.send({ recipient: '@merchant', amount: '100', coinId });`,
-      fullExample: `// Send tokens (use @nametag or direct address)
+      fullExample: `// Send tokens (use @nametag or chain pubkey)
 await sphere.payments.send({
   coinId: '0x...',         // token type ID
   amount: '100000000',     // in smallest units
-  recipient: '@merchant',  // @nametag or DIRECT:// address
+  recipient: '@merchant',  // @nametag or chain pubkey
   memo: 'Order #123',
 });
 

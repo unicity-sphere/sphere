@@ -680,6 +680,25 @@ describe('useTransfer — whole-token sends (#502 / sphere-sdk#777)', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['sendWholeToken', false],
+    ['sendCoinless', true],
+  ] as const)('rethrows a %s refused while spending is paused: nothing left, so it is never shown pending (sphere-sdk#838)', async (verb, coinless) => {
+    // sphere-sdk 0.19.2: the refusal is SEND_INSUFFICIENT_BALANCE, as send() gives in that state. It
+    // was SEND_SYNC_PENDING, which this hook turned into a pending success for a token that never moved.
+    const { send } = world();
+    fakeSphere!.payments[verb] = vi.fn().mockRejectedValue(
+      new SphereError('Insufficient balance: spending is paused until open transfers are confirmed', 'SEND_INSUFFICIENT_BALANCE'),
+    );
+    const { result } = renderHook(() => useTransfer(), { wrapper: Wrapper });
+
+    await expect(
+      act(async () => { await result.current.transfer({ ...WHOLE, coinless }); }),
+    ).rejects.toMatchObject({ code: 'SEND_INSUFFICIENT_BALANCE' });
+    expect(fakeSphere!.payments[verb]).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('is blocked by the quota gate before any token leaves', async () => {
     const { sendWholeToken } = world();
     vi.mocked(checkSendQuota).mockResolvedValue({

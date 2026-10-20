@@ -60,15 +60,6 @@ import type { PendingIntent } from './ConnectContext';
  */
 export const DUPLICATE_CHECK_TIMEOUT_MS = 4_000;
 
-/**
- * The exact recipient string the send path spends against — SendIntentModal
- * hands this to the SDK, and the guard resolves this, so both sides can never
- * disagree about who is being paid.
- */
-export function sendIntentRecipient(to: string): string {
-  return to.startsWith('DIRECT://') ? to : to.replace(/^@/, '');
-}
-
 /** Exact decimal-string compare in base units — BigInt on both sides, never a float. */
 function sameAmount(rowAmount: string, want: bigint): boolean {
   const raw = rowAmount.trim();
@@ -135,9 +126,8 @@ export function findDuplicatePending(
  * resolved — the send itself would then fail INVALID_RECIPIENT anyway.
  */
 async function resolveRecipientPubkey(sphere: Sphere | null, to: string): Promise<string | null> {
-  const identifier = sendIntentRecipient(to);
-  if (isChainPubkey(identifier)) return identifier;
-  const peer = await sphere?.resolve(identifier);
+  if (isChainPubkey(to)) return to;
+  const peer = await sphere?.resolve(to);
   return peer?.chainPubkey ? peer.chainPubkey : null;
 }
 

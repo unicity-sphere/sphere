@@ -8,10 +8,9 @@ import { QuotaBlockedError } from '../../sdk/quotaGate';
 import { useUpgrade } from '../upgrade';
 import { showToast } from '../ui/toast-utils';
 import { IntentConfirmModal } from './IntentConfirmModal';
-import { sendIntentRecipient } from './duplicateSendGuard';
 
 interface SendIntentModalProps {
-  /** Recipient: Unicity ID (@tag) or DIRECT:// address, as supplied by the dApp. */
+  /** Recipient: an @-prefixed Unicity ID or a pubkey (chain or transport), as supplied by the dApp. */
   to: string;
   /** Amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;
@@ -67,10 +66,9 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
     if (!isPending()) return;
     setBusy(true);
     try {
-      // Shared with the duplicate-send guard, so the identifier this modal
-      // spends against is the identifier the guard resolved and matched.
-      const recipient = sendIntentRecipient(to);
-      const result = await transfer({ coinId, amount, recipient, ...(memo ? { memo } : {}) });
+      // `to` as the dApp wrote it, which the duplicate-send guard resolved too: `@` names a
+      // Unicity ID, and intent validation lets through nothing else but a pubkey.
+      const result = await transfer({ coinId, amount, recipient: to, ...(memo ? { memo } : {}) });
       // #433: a deliveryPending result means the spend certified on-chain but the
       // recipient-side delivery is journaled for retry (§3.1). The dApp learns it
       // via the intent result; this modal unmounts on resolve, so the wallet-side
