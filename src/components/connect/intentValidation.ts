@@ -26,6 +26,8 @@ export type IntentCheck =
   | { error: null; mintNft: MintNftParams | null };
 
 const COIN_ID_RE = /^([0-9a-f]{2})+$/;
+// Untrimmed, like the SDK's own check: a padded key would fall through to its Unicity ID lookup.
+const CHAIN_PUBKEY_RE = /^0[23][0-9a-fA-F]{64}$/;
 
 const SUPPORTED_INTENTS = new Set(['send', 'payment_request', 'dm', 'sign_message', 'mint', 'mint_nft', 'receive']);
 
@@ -185,6 +187,10 @@ function paramsError(action: string, params: Record<string, unknown>): IntentErr
   if (action === 'send' || action === 'payment_request') {
     if (typeof params.to !== 'string' || params.to.trim() === '') {
       return { code: ERROR_CODES.INVALID_PARAMS, message: 'Missing or invalid "to"' };
+    }
+    // `@` names a Unicity ID; without it `to` is a chain pubkey, so a tag is never read as a key or a key as a tag.
+    if (!/^@\S+$/.test(params.to) && !CHAIN_PUBKEY_RE.test(params.to)) {
+      return { code: ERROR_CODES.INVALID_PARAMS, message: '"to" must be an @-prefixed Unicity ID or a 66-hex chain pubkey' };
     }
     // amount is in BASE UNITS (smallest indivisible unit) — a positive integer
     // string, exactly like the `mint` intent. Whole-token/decimal amounts are

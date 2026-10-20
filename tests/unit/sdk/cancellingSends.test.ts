@@ -34,7 +34,7 @@ describe('rememberCancellingSend', () => {
 
     await rememberCancellingSend(sphereAs(ALICE, resolve), { transferId: 'tid-2', recipient: '@bob', coinId: 'c', amount: '5' });
 
-    expect(resolve).toHaveBeenCalledWith('bob');
+    expect(resolve).toHaveBeenCalledWith('@bob');
     expect(cancellingSends(sphereAs(ALICE)).map((row) => row.recipient)).toEqual([BOB]);
   });
 

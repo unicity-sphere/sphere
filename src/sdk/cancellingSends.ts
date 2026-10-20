@@ -26,12 +26,11 @@ export const CANCELLING_LOOKUP_TIMEOUT_MS = 3_000;
 
 /** The recipient as a chain pubkey, resolved the way the send path resolves it; null when it cannot be in time. */
 async function chainPubkeyOf(sphere: Sphere | null, recipient: string): Promise<string | null> {
-  const identifier = recipient.replace(/^@/, '');
-  if (isChainPubkey(identifier)) return identifier;
+  if (isChainPubkey(recipient)) return recipient;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const peer = await Promise.race([
-      Promise.resolve().then(() => sphere?.resolve(identifier)),
+      Promise.resolve().then(() => sphere?.resolve(recipient)),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), CANCELLING_LOOKUP_TIMEOUT_MS);
       }),

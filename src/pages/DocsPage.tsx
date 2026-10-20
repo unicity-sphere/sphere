@@ -1838,8 +1838,10 @@ const result = await client.intent('send', {
 });`}
               />
               <p className="text-neutral-600 dark:text-neutral-400 mb-4">
-                <code className="text-amber-600 dark:text-amber-400">to</code> takes a Unicity ID or a chain pubkey; a
-                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address is refused with
+                <code className="text-amber-600 dark:text-amber-400">to</code> is a Unicity ID with its
+                <code className="text-amber-600 dark:text-amber-400"> @</code> or a 66-hex chain pubkey: without the
+                <code className="text-amber-600 dark:text-amber-400"> @</code> it is read as a pubkey, so a bare Unicity ID, like a
+                <code className="text-amber-600 dark:text-amber-400"> DIRECT://</code> address, is refused with
                 <code className="text-amber-600 dark:text-amber-400"> -32602</code>.
                 <code className="text-amber-600 dark:text-amber-400"> amount</code> is in base units &mdash; the smallest
                 indivisible unit &mdash; as a positive integer string.
