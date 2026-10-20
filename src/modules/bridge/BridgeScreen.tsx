@@ -647,9 +647,6 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         {returnStatusLabel(r.status)}
       </button>
       {r.settleTxid && asset && <TxLink href={asset.presentation.explorerTxUrl(r.settleTxid)} label="tx" />}
-      {r.status === 'settled' && asset?.out?.payout && (
-        <CollectButton payout={asset.out.payout} destination={r.destination} asset={asset} />
-      )}
       {isRetryableReturn(r) && (
         <button
           type="button"
@@ -673,6 +670,12 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         </button>
       )}
     </div>
+    {/* #545: its own line. Beside the address, buttons that never shrink squeezed it to one character a line. */}
+    {r.status === 'settled' && asset?.out?.payout && (
+      <div className="mt-1.5 flex justify-end">
+        <CollectButton payout={asset.out.payout} destination={r.destination} asset={asset} />
+      </div>
+    )}
     {detailsOpen && <div className={`mt-1.5 ${MUTED}`}>{detail}</div>}
     </div>
   );
