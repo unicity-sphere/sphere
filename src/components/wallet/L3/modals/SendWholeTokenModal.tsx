@@ -170,7 +170,7 @@ export function SendWholeTokenModal({ target, onClose }: SendWholeTokenModalProp
                   id="swt-recipient"
                   value={recipient}
                   onChange={(e) => setRecipient(e.target.value)}
-                  placeholder="@nametag or address"
+                  placeholder="@nametag or public key"
                   disabled={step === 'sending'}
                   className="mb-3 w-full rounded-xl bg-black/40 px-3 py-3 outline-none ring-1 ring-white/10 focus:ring-white/30"
                 />

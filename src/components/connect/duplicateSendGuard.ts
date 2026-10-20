@@ -61,12 +61,15 @@ import type { PendingIntent } from './ConnectContext';
 export const DUPLICATE_CHECK_TIMEOUT_MS = 4_000;
 
 /**
- * The exact recipient string the send path spends against — SendIntentModal
- * hands this to the SDK, and the guard resolves this, so both sides can never
- * disagree about who is being paid.
+ * The exact recipient string the send path spends against — SendIntentModal and
+ * PaymentRequestIntentModal hand this to the SDK, and the guard resolves this, so
+ * both sides can never disagree about who is being paid. A bare chain pubkey stays
+ * bare: an `@` in front of one turns it into a Unicity ID lookup that fails. A
+ * DIRECT:// `to` never gets here: ConnectHost refuses it before the intent opens
+ * (sphere-sdk 0.19.2, #847).
  */
 export function sendIntentRecipient(to: string): string {
-  return to.startsWith('DIRECT://') ? to : to.replace(/^@/, '');
+  return to.replace(/^@/, '');
 }
 
 /** Exact decimal-string compare in base units — BigInt on both sides, never a float. */

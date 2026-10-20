@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, User, CheckCircle, Coins, Hash, Copy, Check, Clock, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react';
 import type { Asset, TransferResult } from '@unicitylabs/sphere-sdk';
 import type { PendingTransfer } from '@unicitylabs/sphere-sdk/payments-v2';
-import { parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
+import { DIRECT_RECIPIENT_REFUSED_MESSAGE, isDirectAddressRecipient, parseTokenAmount, safeParseTokenAmount } from '@unicitylabs/sphere-sdk';
 import { findDuplicatePending, DUPLICATE_CHECK_TIMEOUT_MS } from '../../../connect/duplicateSendGuard';
 import { INTENT_SETTLE_MS } from '../../../connect/settleWindow';
 import { useAssets, useTokens, useTransfer, formatAmount } from '../../../../sdk';
@@ -32,8 +32,8 @@ interface SendModalProps {
 /**
  * The chain pubkey this send will actually be locked to, derived from what the
  * modal already resolved — never a second resolution path. `null` means there
- * is nothing to compare (a pasted DIRECT:// address, or a Unicity ID the peer
- * lookup could not answer), and the duplicate check then fails open.
+ * is nothing to compare (a Unicity ID the peer lookup could not answer), and
+ * the duplicate check then fails open.
  */
 function sendTargetPubkey(
   mode: 'nametag' | 'pubkey',
@@ -342,8 +342,12 @@ export function SendModal({ isOpen, onClose }: SendModalProps) {
 
       if (recipientMode === 'pubkey') {
         const value = recipient.trim();
-        // Pasted DIRECT:// addresses stay accepted for compatibility — the SDK resolves them.
-        if (!isChainPubkey(value) && !value.startsWith('DIRECT://')) {
+        // sphere-sdk 0.19.2 (#847): a DIRECT:// address is the Quests account id, never a payment recipient.
+        if (isDirectAddressRecipient(value)) {
+          setRecipientError(DIRECT_RECIPIENT_REFUSED_MESSAGE);
+          return;
+        }
+        if (!isChainPubkey(value)) {
           setRecipientError('Enter a valid public key (66 hex characters starting with 02 or 03)');
           return;
         }

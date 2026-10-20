@@ -11,7 +11,7 @@ import { IntentConfirmModal } from './IntentConfirmModal';
 import { sendIntentRecipient } from './duplicateSendGuard';
 
 interface SendIntentModalProps {
-  /** Recipient: Unicity ID (@tag) or DIRECT:// address, as supplied by the dApp. */
+  /** Recipient: Unicity ID (@tag) or chain pubkey, as supplied by the dApp. */
   to: string;
   /** Amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;

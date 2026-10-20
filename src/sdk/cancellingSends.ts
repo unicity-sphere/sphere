@@ -26,7 +26,7 @@ export const CANCELLING_LOOKUP_TIMEOUT_MS = 3_000;
 
 /** The recipient as a chain pubkey, resolved the way the send path resolves it; null when it cannot be in time. */
 async function chainPubkeyOf(sphere: Sphere | null, recipient: string): Promise<string | null> {
-  const identifier = recipient.startsWith('DIRECT://') ? recipient : recipient.replace(/^@/, '');
+  const identifier = recipient.replace(/^@/, '');
   if (isChainPubkey(identifier)) return identifier;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

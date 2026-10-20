@@ -5,9 +5,10 @@ import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../sdk';
 import { getErrorMessage } from '../../sdk/errors';
 import { IntentConfirmModal } from './IntentConfirmModal';
+import { sendIntentRecipient } from './duplicateSendGuard';
 
 interface PaymentRequestIntentModalProps {
-  /** Who should pay: Unicity ID (@tag) or DIRECT:// address, as supplied by the dApp. */
+  /** Who should pay: Unicity ID (@tag) or chain pubkey, as supplied by the dApp. */
   to: string;
   /** Requested amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;
@@ -67,8 +68,7 @@ export function PaymentRequestIntentModal({
     }
     setBusy(true);
     try {
-      const recipient = to.startsWith('DIRECT://') ? to : `@${to.replace(/^@/, '')}`;
-      const result = await payments.requests.create(recipient, {
+      const result = await payments.requests.create(sendIntentRecipient(to), {
         amount,
         coinId,
         ...(message ? { memo: message } : {}),
