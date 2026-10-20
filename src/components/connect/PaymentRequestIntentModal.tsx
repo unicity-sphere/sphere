@@ -7,7 +7,7 @@ import { getErrorMessage } from '../../sdk/errors';
 import { IntentConfirmModal } from './IntentConfirmModal';
 
 interface PaymentRequestIntentModalProps {
-  /** Who should pay: an @-prefixed Unicity ID or a chain pubkey, as supplied by the dApp. */
+  /** Who should pay: an @-prefixed Unicity ID or a pubkey (chain or transport), as supplied by the dApp. */
   to: string;
   /** Requested amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;
@@ -67,7 +67,7 @@ export function PaymentRequestIntentModal({
     }
     setBusy(true);
     try {
-      // As the dApp wrote it: `@` names a Unicity ID, and validation lets through nothing else but a chain pubkey.
+      // As the dApp wrote it: `@` names a Unicity ID, and validation lets through nothing else but a pubkey.
       const result = await payments.requests.create(to, {
         amount,
         coinId,

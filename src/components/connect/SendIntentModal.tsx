@@ -10,7 +10,7 @@ import { showToast } from '../ui/toast-utils';
 import { IntentConfirmModal } from './IntentConfirmModal';
 
 interface SendIntentModalProps {
-  /** Recipient: an @-prefixed Unicity ID or a chain pubkey, as supplied by the dApp. */
+  /** Recipient: an @-prefixed Unicity ID or a pubkey (chain or transport), as supplied by the dApp. */
   to: string;
   /** Amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;
@@ -67,7 +67,7 @@ export function SendIntentModal({ to, amount, coinId, memo, onResolve, onReject,
     setBusy(true);
     try {
       // `to` as the dApp wrote it, which the duplicate-send guard resolved too: `@` names a
-      // Unicity ID, and intent validation lets through nothing else but a chain pubkey.
+      // Unicity ID, and intent validation lets through nothing else but a pubkey.
       const result = await transfer({ coinId, amount, recipient: to, ...(memo ? { memo } : {}) });
       // #433: a deliveryPending result means the spend certified on-chain but the
       // recipient-side delivery is journaled for retry (§3.1). The dApp learns it
