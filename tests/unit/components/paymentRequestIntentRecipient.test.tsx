@@ -1,8 +1,6 @@
 /**
- * The Connect `payment_request` intent bills the `to` the dApp named, in the
- * same spelling the `send` intent spends against (`sendIntentRecipient`). A bare
- * chain pubkey stays bare: an `@` in front of one made it a Unicity ID lookup
- * that failed, so a dApp could not bill a payer it knew only by pubkey.
+ * The Connect `payment_request` intent bills `to` as a Unicity ID, always
+ * behind an `@`: without it a tag that looks like hex would be read as a pubkey.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -15,7 +13,7 @@ vi.mock('../../../src/sdk', () => ({
 import { PaymentRequestIntentModal } from '../../../src/components/connect/PaymentRequestIntentModal';
 
 const COIN = 'c'.repeat(64);
-const PAYER_PUBKEY = `02${'a'.repeat(64)}`;
+const HEX_LOOKING = `02${'a'.repeat(64)}`;
 
 function renderModal(to: string) {
   const onResolve = vi.fn();
@@ -41,10 +39,10 @@ beforeEach(() => {
 
 describe('Connect payment_request recipient', () => {
   it.each([
-    ['a bare chain pubkey', PAYER_PUBKEY, PAYER_PUBKEY],
-    ['an @-prefixed Unicity ID', '@alice', 'alice'],
-    ['a bare Unicity ID', 'alice', 'alice'],
-  ])('bills %s as the send intent would spend against it', async (_label, to, billed) => {
+    ['an @-prefixed Unicity ID', '@alice', '@alice'],
+    ['a bare Unicity ID', 'alice', '@alice'],
+    ['a bare hex-looking string', HEX_LOOKING, `@${HEX_LOOKING}`],
+  ])('bills %s as a Unicity ID', async (_label, to, billed) => {
     const { onResolve, onReject } = renderModal(to);
     await waitFor(() => expect(onResolve).toHaveBeenCalledWith('r1'));
     expect(create).toHaveBeenCalledWith(billed, { amount: '100', coinId: COIN });

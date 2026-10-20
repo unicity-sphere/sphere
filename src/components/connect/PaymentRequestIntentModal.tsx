@@ -5,10 +5,9 @@ import { TokenRegistry, formatAmount } from '@unicitylabs/sphere-sdk';
 import { useSphereContext } from '../../sdk';
 import { getErrorMessage } from '../../sdk/errors';
 import { IntentConfirmModal } from './IntentConfirmModal';
-import { sendIntentRecipient } from './duplicateSendGuard';
 
 interface PaymentRequestIntentModalProps {
-  /** Who should pay: Unicity ID (@tag) or chain pubkey, as supplied by the dApp. */
+  /** Who should pay: a Unicity ID, with or without the @, as supplied by the dApp. */
   to: string;
   /** Requested amount in BASE UNITS (smallest indivisible unit) — integer string. */
   amount: string;
@@ -68,7 +67,8 @@ export function PaymentRequestIntentModal({
     }
     setBusy(true);
     try {
-      const result = await payments.requests.create(sendIntentRecipient(to), {
+      // Always a Unicity ID lookup: the @ keeps a hex-looking tag from being read as a pubkey.
+      const result = await payments.requests.create(`@${to.replace(/^@/, '')}`, {
         amount,
         coinId,
         ...(message ? { memo: message } : {}),
