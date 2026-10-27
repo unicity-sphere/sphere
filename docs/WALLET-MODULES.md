@@ -38,7 +38,13 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   read on each render because an Ethereum wallet announces itself through
   EIP-6963 and may arrive after the asset loaded. The Ethereum asset lists every
   announced wallet by name and icon, or the legacy `window.ethereum` as
-  "Browser wallet" when nothing announced itself;
+  "Browser wallet" when nothing announced itself. Where the deployment names a
+  Reown project (`WALLETCONNECT_PROJECT_ID`, or `VITE_WALLETCONNECT_PROJECT_ID`
+  in a build), it adds WalletConnect last, for wallet apps on a phone: a QR code
+  on a desktop, a link to the app on the phone. Its provider loads only when
+  picked; a session that leaves out the asset's chain, or belongs to Safe, is
+  ended and refused. An option with a session (`connected()`) can end it
+  (`disconnect()`), and the form then offers "Disconnect";
 - **the deposit wiring** per wallet option (`open()`): a `ChainWallet` that
   signs, a `ReceiptReader` for the node, and the chain's `BridgeSourceAdapter`
   from `@unicitylabs/bridge-core`, which turns "deposit X for this recipient"

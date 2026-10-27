@@ -36,6 +36,10 @@ export interface BridgeWalletOption {
    * credits payouts.
    */
   collect?(destination: string): Promise<string>;
+  /** Whether the wallet holds a session that outlives one bridge-in (WalletConnect). Absent when it has none. */
+  connected?(): boolean;
+  /** Ends that session, so the next use connects again, with whichever wallet app the user picks. */
+  disconnect?(): Promise<void>;
 }
 
 /** The source chain an asset is bridged from, as the picker shows it. */

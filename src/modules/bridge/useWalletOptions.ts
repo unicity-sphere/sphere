@@ -6,11 +6,13 @@ import type { BridgeAsset, BridgeWalletOption } from './types';
 export interface WalletChoice {
   readonly wallet: BridgeWalletOption;
   readonly available: boolean;
+  /** Whether it holds a session the user can end (WalletConnect). */
+  readonly connected: boolean;
 }
 
 /**
  * The asset's wallet options, re-read every second while mounted: an extension can inject
- * or announce itself after the screen has rendered. The list only changes identity when an
+ * or announce itself after the screen has rendered, and a WalletConnect session can open or end. The list only changes identity when an
  * option appears, disappears or changes availability, so a steady page does not re-render.
  */
 export function useWalletOptions(asset: BridgeAsset | undefined): readonly WalletChoice[] {
@@ -28,9 +30,12 @@ export function useWalletOptions(asset: BridgeAsset | undefined): readonly Walle
 }
 
 function read(asset: BridgeAsset | undefined): WalletChoice[] {
-  return (asset?.wallets() ?? []).map((wallet) => ({ wallet, available: wallet.isAvailable() }));
+  return (asset?.wallets() ?? []).map((wallet) => ({ wallet, available: wallet.isAvailable(), connected: wallet.connected?.() ?? false }));
 }
 
 function sameChoices(a: readonly WalletChoice[], b: readonly WalletChoice[]): boolean {
-  return a.length === b.length && a.every((c, i) => c.wallet.id === b[i].wallet.id && c.available === b[i].available);
+  return (
+    a.length === b.length &&
+    a.every((c, i) => c.wallet.id === b[i].wallet.id && c.available === b[i].available && c.connected === b[i].connected)
+  );
 }

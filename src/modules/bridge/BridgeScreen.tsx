@@ -305,13 +305,22 @@ export function BridgeScreen({ isOpen, onClose }: ModuleScreenProps) {
             {error && <ErrorLine text={error} />}
 
             <div className="space-y-2">
-              {walletChoices.map(({ wallet: w, available }) => (
+              {walletChoices.map(({ wallet: w, available, connected }) => (
                 <div key={w.id} className="space-y-1">
                   <Button onClick={() => startIn(w)} disabled={!available} className="w-full">
                     {w.icon && <img src={w.icon} alt="" className="w-5 h-5" />}
                     Continue with {w.name}
                   </Button>
                   {!available && w.unavailableHint && <div className={`text-[11px] text-center ${MUTED}`}>{w.unavailableHint}</div>}
+                  {connected && w.disconnect && (
+                    <button
+                      type="button"
+                      onClick={() => w.disconnect!().catch((e: unknown) => setError(getErrorMessage(e)))}
+                      className={`block mx-auto text-[11px] underline ${MUTED}`}
+                    >
+                      Disconnect {w.name}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

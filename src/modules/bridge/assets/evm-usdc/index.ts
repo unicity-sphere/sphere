@@ -24,6 +24,7 @@ import { truncateId } from '../../../../utils/identifiers';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
 import { assertOnChain } from '../../bridgeIn';
 import { bridgeOut } from '../out';
+import { walletConnectProjectId, walletConnectWallet } from './walletConnect';
 
 // 5 USDC. A return service that asks more of one token is refused before anything is burned.
 const RETURN_FEE_CAP = 5_000_000n;
@@ -55,6 +56,8 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
   });
 
   const discovered = evmWallets();
+  const projectId = walletConnectProjectId();
+  const walletConnect = projectId ? walletConnectWallet(projectId, m.chainId, m.rpcUrl) : undefined;
   const collectWith = async (wallet: SourceWalletProvider, destination: string): Promise<string> => {
     const signer = wallet.create(m.chainId);
     await signer.connect();
@@ -74,6 +77,19 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     open: () => depsFor(wallet.create(m.chainId)),
     collect: (destination) => collectWith(wallet, destination),
   });
+  // Phone wallets come after the extensions, and only where the deployment has a project ID.
+  const phoneWallets = (): BridgeWalletOption[] =>
+    walletConnect
+      ? [
+          {
+            ...optionFor(walletConnect.wallet),
+            connected: walletConnect.connected,
+            disconnect: async () => {
+              await walletConnect.wallet.create(m.chainId).disconnect?.();
+            },
+          },
+        ]
+      : [];
 
   return {
     id: `${m.chainRef}:${m.symbol.toLowerCase()}`,
@@ -88,7 +104,7 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
     networks: ['testnet', 'testnet2'],
     tokenPlugin: bridgeTokenPlugin(bridge),
     presentation: bridgePresentation(bridge),
-    wallets: () => discovered.list().map(optionFor),
+    wallets: () => [...discovered.list().map(optionFor), ...phoneWallets()],
     resumeDeps: () => ({ adapter: createSourceAdapter(bridge, NEVER_SIGNS, rpc), receipts }),
     findLock: async ({ from, tokenIdHex, createdAt }) => {
       const result = await findLock(bridge, rpc, { fromAddressHex: toEvmAddressHex(from), unicityTokenIdHex: tokenIdHex, startedAtMs: createdAt, nowMs: Date.now() });
