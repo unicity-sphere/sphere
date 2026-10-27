@@ -94,6 +94,15 @@ export interface SphereRuntimeConfig {
    * only when no container wrote the config.
    */
   BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC?: string;
+  /**
+   * The Reown (WalletConnect) project ID, which lets the bridge sign with a wallet app on a
+   * phone. Not a secret: it ships in the bundle, and the project's allowlist names the origins
+   * that may use it. Here rather than on a sed placeholder because it decides whether
+   * WalletConnect is offered at all. Read like the bridge keys above: a container's key wins
+   * even when empty (not offered), and the build's VITE_ value is used only when no container
+   * wrote the config.
+   */
+  WALLETCONNECT_PROJECT_ID?: string;
 }
 
 /** The container-supplied config, or undefined (SSR / not yet written). */

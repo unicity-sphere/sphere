@@ -212,6 +212,10 @@ jobs:
           # trust base, and the asset is offered on test networks only. Without it
           # the asset is offered for bridging in only.
           VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC: https://bridge-usdce.testnet.unicity.network
+          # WalletConnect for the bridge (wallet apps on a phone), as on staging and prod.
+          # The Reown project's allowlist includes unicity-sphere.github.io; a fork's
+          # Pages origin is refused by the relay.
+          VITE_WALLETCONNECT_PROJECT_ID: 198bd239f4cdb02fa4093b4b8b3465d4
           # Sentry stays OFF in branch previews: an empty DSN skips init
           # (src/config/sentry.ts). Previews are PROD builds, so without this
           # every branch push would report errors/replays against the shared

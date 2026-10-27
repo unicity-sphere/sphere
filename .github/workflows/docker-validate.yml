@@ -87,6 +87,7 @@ jobs:
             -e PAID_PLANS_ENABLED=false \
             -e BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC=https://bridge-return.example.test \
             -e BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC=0x2b00d708fc777f174a248b9be01c8e8379d69caf \
+            -e WALLETCONNECT_PROJECT_ID=0123456789abcdef0123456789abcdef \
             sphere-validate:${{ matrix.dockerfile }})
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
@@ -166,6 +167,14 @@ jobs:
             || { echo "ERROR: BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC not written to runtime-config.js"; exit 1; }
           docker exec "$cid" sh -c "grep -rq 'BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC' /usr/share/nginx/html/assets" \
             || { echo "ERROR: bundle does not read BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC — the lookup folded away at build time, so the fee account is frozen into the image"; exit 1; }
+          # The WalletConnect project ID decides whether wallet apps on a phone are
+          # offered, so it rides the same global, and its origins must reach the CSP.
+          docker exec "$cid" sh -c "grep -q '\"WALLETCONNECT_PROJECT_ID\": \"0123456789abcdef0123456789abcdef\"' /usr/share/nginx/html/runtime-config.js" \
+            || { echo "ERROR: WALLETCONNECT_PROJECT_ID not written to runtime-config.js"; exit 1; }
+          docker exec "$cid" sh -c "grep -rq 'WALLETCONNECT_PROJECT_ID' /usr/share/nginx/html/assets" \
+            || { echo "ERROR: bundle does not read WALLETCONNECT_PROJECT_ID — the lookup folded away at build time, so WalletConnect availability is frozen into the image"; exit 1; }
+          docker exec "$cid" sh -c "grep -q 'wss://relay.walletconnect.org' /etc/nginx/sphere-security-headers.conf && grep -q 'font-src .self. https://fonts.reown.com' /etc/nginx/sphere-security-headers.conf" \
+            || { echo "ERROR: the WalletConnect origins are missing from the CSP"; exit 1; }
           # The retired placeholder must not come back: it cannot work.
           if docker exec "$cid" sh -c "grep -rl '__RUNTIME_REQUIRE_WALLET_API__' /usr/share/nginx/html"; then
             echo "ERROR: REQUIRE_WALLET_API is back on the sed mechanism — it const-folds; use the runtime global"; exit 1

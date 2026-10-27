@@ -55,6 +55,14 @@
 #                          burning, a service that asks for a fee to any other
 #                          account. EMPTY/UNSET = the account the service names
 #                          is paid.
+#   WALLETCONNECT_PROJECT_ID
+#                          Reown (WalletConnect) project ID: the bridge offers
+#                          wallet apps on a phone, by QR code or by a link to the
+#                          app. Not a secret; the project's allowlist names the
+#                          origins that may use it, so this deployment's origin
+#                          must be on it. EMPTY/UNSET = WalletConnect is not
+#                          offered. When set, its relay, wallet list, analytics
+#                          and font origins join the CSP below.
 #   AGGREGATOR_API_KEY     aggregator API key (non-secret on testnet2) —
 #                          REQUIRED only when SUBSCRIPTION_ENABLED != 'true';
 #                          IGNORED when subscriptions are on (per-wallet keys)
@@ -146,10 +154,11 @@ fi
 # then reaches `new URL(' ', origin)` in the browser and resolves to the wallet's
 # own origin — a network launched with its custody backend pointing at the app.
 # Squeeze every wallet-api URL, and the bridge return-service URL for the same
-# reason, before any check reads it. The bridge fee recipient is squeezed too, so
-# a blank one is announced below as unset, which is how the wallet reads it.
+# reason, before any check reads it. The bridge fee recipient and the WalletConnect
+# project ID are squeezed too, so a blank one is announced below as unset, which is
+# how the wallet reads it.
 for _k in WALLET_API_URL WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC \
-          BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC; do
+          BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC WALLETCONNECT_PROJECT_ID; do
   eval "_v=\${$_k-}"
   # shellcheck disable=SC2086
   _v=$(printf '%s' "$_v" | tr -d '[:space:]')
@@ -250,7 +259,7 @@ cr=$(printf '\r')
 for v in SUBSCRIPTION_ENABLED PAID_PLANS_ENABLED PAID_PLANS_ENABLED_TESTNET PAID_PLANS_ENABLED_MAINNET MAINNET_ROLLOUT_ENABLED \
          WALLET_API_URL_TESTNET2 WALLET_API_URL_MAINNET \
          REQUIRE_WALLET_API DEFAULT_NETWORK BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC \
-         BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC; do
+         BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC WALLETCONNECT_PROJECT_ID; do
   eval "val=\${$v-}"
   case "$val" in
     *"$nl"* | *"$cr"*)
@@ -273,7 +282,8 @@ window.__SPHERE_RUNTIME_CONFIG__ = {
   "REQUIRE_WALLET_API": "$(json_escape "${REQUIRE_WALLET_API-}")",
   "DEFAULT_NETWORK": "$(json_escape "${DEFAULT_NETWORK-}")",
   "BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}")",
-  "BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC-}")"
+  "BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC": "$(json_escape "${BRIDGE_RETURN_FEE_RECIPIENT_SEPOLIA_USDC-}")",
+  "WALLETCONNECT_PROJECT_ID": "$(json_escape "${WALLETCONNECT_PROJECT_ID-}")"
 };
 EOF
 log "wrote $WEBROOT/runtime-config.js"
@@ -310,6 +320,11 @@ if [ -n "${BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC-}" ]; then
   fi
 else
   log "NOTE: BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC is unset — Sepolia USDC is offered for bridging in only."
+fi
+if [ -n "${WALLETCONNECT_PROJECT_ID-}" ]; then
+  log "WalletConnect project: $WALLETCONNECT_PROJECT_ID (this origin must be on its allowlist)"
+else
+  log "NOTE: WALLETCONNECT_PROJECT_ID is unset — the bridge offers browser wallets only, no wallet apps on a phone."
 fi
 
 # Visibility: warn (don't fail) when a public var is unset — it substitutes to
@@ -376,6 +391,15 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
   # Bridge (src/modules/bridge/assets): the Sepolia RPC in the USDC manifest. The return
   # service's origin comes from BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC in the loop above.
   CONNECT="$CONNECT https://sepolia.gateway.tenderly.co"
+  # WalletConnect (src/modules/bridge/assets/evm-usdc/walletConnect.ts), only where a
+  # project ID is set: the relay, the wallet list and pings of its modal, and the
+  # modal's font. Its Verify iframe (verify.walletconnect.org) is covered by frame-src
+  # https:, and wallet logos by img-src https:.
+  FONT="'self'"
+  if [ -n "${WALLETCONNECT_PROJECT_ID-}" ]; then
+    CONNECT="$CONNECT wss://relay.walletconnect.org https://api.web3modal.org https://pulse.walletconnect.org"
+    FONT="$FONT https://fonts.reown.com"
+  fi
 
   # Report-Only until staging reports are clean. Flip the header NAME to enforce —
   # nothing else about the policy changes.
@@ -383,7 +407,7 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
 
   cat > "$HEADERS_CONF" <<EOF
 # Generated at container start by sphere-runtime-config — do not edit.
-add_header $CSP_HEADER "default-src 'self'; base-uri 'self'; object-src 'none'; worker-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; frame-src https: http://localhost:* http://127.0.0.1:*; connect-src $CONNECT; upgrade-insecure-requests" always;
+add_header $CSP_HEADER "default-src 'self'; base-uri 'self'; object-src 'none'; worker-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src $FONT; img-src 'self' data: blob: https:; media-src 'self' blob: https:; frame-src https: http://localhost:* http://127.0.0.1:*; connect-src $CONNECT; upgrade-insecure-requests" always;
 add_header X-Frame-Options "DENY" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;

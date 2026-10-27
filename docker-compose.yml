@@ -25,3 +25,6 @@ services:
       # key replaces AGGREGATOR_API_KEY (which is then ignored).
       SUBSCRIPTION_ENABLED: "false"
       PAID_PLANS_ENABLED: "false"
+      # WalletConnect for the bridge (wallet apps on a phone). The relay always
+      # accepts localhost, so the shared project works for a local run.
+      WALLETCONNECT_PROJECT_ID: 198bd239f4cdb02fa4093b4b8b3465d4
