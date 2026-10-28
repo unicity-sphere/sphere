@@ -108,9 +108,17 @@ export interface BurnIdentity {
   readonly reasonBytes: Uint8Array;
 }
 
+/**
+ * A pull-payment vault's credits. The vault keeps one balance per account, not one per return:
+ * every release to an account adds to it, and a collect takes all of it.
+ */
 export interface BridgePayout {
+  /** The account the vault credits for `destination`; two spellings of one account give the same key. */
+  account(destination: string): string;
   /** What the vault owes `destination`, in the asset's smallest unit; each wallet option collects it. */
   owed(destination: string): Promise<bigint>;
+  /** Resolves once the collecting transaction `txid` is mined; rejects when it reverted or was not mined in time. */
+  confirmed(txid: string): Promise<void>;
 }
 
 /** The assets-out side of an asset: burn on Unicity, release on the source chain. */

@@ -58,8 +58,12 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   reads a burned blob back (its nullifier, destination, amount and fee, or
   `null` when the blob is not this asset's), and `returns` is the return
   service that proves the burn and releases the funds. `payout`, when the vault
-  credits payouts, collects a settled return from the wallet option the user
-  picks. An asset without `out` is offered for bridging in only.
+  credits payouts, reads what the vault owes an account and confirms a collect
+  once it is mined. The vault keeps one balance per account, and a collect takes
+  all of it, so the Returns list offers one collect per account it released to
+  (`payout.account` gives two spellings of one account the same key), through
+  the wallet option the user picks. An asset without `out`
+  is offered for bridging in only.
 - **`networks`**: which Unicity networks the asset may be bridged into (a
   testnet vault serves test networks only).
 

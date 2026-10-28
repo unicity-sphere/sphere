@@ -22,7 +22,7 @@ import type { ReceiptReader } from '@unicitylabs/bridge-core';
 import { readRuntimeConfig } from '../../../../config/runtimeConfig';
 import { truncateId } from '../../../../utils/identifiers';
 import type { BridgeAsset, BridgeAssetProvider, BridgeChain, BridgeInDeps, BridgeWalletOption } from '../../types';
-import { assertOnChain } from '../../bridgeIn';
+import { assertOnChain, waitForReceipt } from '../../bridgeIn';
 import { bridgeOut } from '../out';
 import { walletConnectProjectId, walletConnectWallet } from './walletConnect';
 
@@ -114,12 +114,26 @@ function evmAsset(bridge: LoadedBridge, hasReturnService: boolean): BridgeAsset 
       ? bridgeOut(bridge, (destination) => fromHex(toEvmAddressHex(destination)), {
           feeCap: RETURN_FEE_CAP,
           feeRecipient: returnFeeRecipient(),
-          payout: { owed: (destination) => owedTo(bridge, rpc, destination) },
+          payout: {
+            account: evmAccount,
+            owed: (destination) => owedTo(bridge, rpc, destination),
+            confirmed: (txid) => waitForReceipt(receipts, txid, 'collect'),
+          },
         })
       : undefined,
     disabledReason: m.disabledReason,
     settling: (justification) => lockFinality(bridge, justification),
   };
+}
+
+// One spelling per Ethereum account, so a checksummed and a lowercase destination share one
+// vault balance. A stored destination passed validation before its burn; anything else keys as written.
+function evmAccount(destination: string): string {
+  try {
+    return toEvmAddressHex(destination);
+  } catch {
+    return destination;
+  }
 }
 
 // The deployment's return service, from its runtime config or the build env. Without one the
