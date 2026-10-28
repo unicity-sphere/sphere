@@ -240,7 +240,7 @@ async function guardUnchanged(
 
 const POLL_MS = 3000;
 
-async function waitForReceipt(receipts: ReceiptReader, txid: string, label: string, timeoutMs = 90_000): Promise<void> {
+export async function waitForReceipt(receipts: ReceiptReader, txid: string, label: string, timeoutMs = 90_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const info = await receipts.getReceipt(txid);

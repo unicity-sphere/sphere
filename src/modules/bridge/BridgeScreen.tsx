@@ -16,7 +16,7 @@ import { safeParseTokenAmount, type Token } from '@unicitylabs/sphere-sdk';
 
 import { useTokens } from '../../sdk';
 import { useSphereContext } from '../../sdk/hooks/core/useSphere';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '../../sdk/errors';
 import { WalletScreen } from '../../components/wallet/ui/WalletScreen';
 import { Button, ModalHeader } from '../../components/wallet/ui';
@@ -603,11 +603,36 @@ export function ReturnsList({ returns, timing, onDismiss, onRetry }: ReturnsList
   return (
     <div className="pt-2 space-y-2">
       <div className={`text-xs ${MUTED}`}>Returns</div>
+      {payoutAccounts(returns).map((p) => (
+        <PayoutRow key={p.key} asset={p.asset} payout={p.payout} destination={p.destination} />
+      ))}
       {returns.map((r) => (
         <ReturnRow key={r.id} r={r} timing={timing} onDismiss={onDismiss} onRetry={onRetry} />
       ))}
     </div>
   );
+}
+
+interface PayoutAccount {
+  readonly key: string;
+  readonly asset: BridgeAsset;
+  readonly payout: BridgePayout;
+  /** The first settled return's destination, as written; it names the account. */
+  readonly destination: string;
+}
+
+/** One entry per account a pull-payment vault has released to, however many returns went there. */
+function payoutAccounts(returns: readonly PendingReturn[]): PayoutAccount[] {
+  const accounts = new Map<string, PayoutAccount>();
+  for (const r of returns) {
+    if (r.status !== 'settled') continue;
+    const asset = bridgeAssetByCoin(r.coinIdHex);
+    const payout = asset?.out?.payout;
+    if (!asset || !payout) continue;
+    const key = `${asset.id}:${payout.account(r.destination)}`;
+    if (!accounts.has(key)) accounts.set(key, { key, asset, payout, destination: r.destination });
+  }
+  return [...accounts.values()];
 }
 
 function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omit<ReturnsListProps, 'returns'>) {
@@ -679,53 +704,75 @@ function ReturnRow({ r, timing, onDismiss, onRetry }: { r: PendingReturn } & Omi
         </button>
       )}
     </div>
-    {/* #545: its own line. Beside the address, buttons that never shrink squeezed it to one character a line. */}
-    {r.status === 'settled' && asset?.out?.payout && (
-      <div className="mt-1.5 flex justify-end">
-        <CollectButton payout={asset.out.payout} destination={r.destination} asset={asset} />
-      </div>
-    )}
     {detailsOpen && <div className={`mt-1.5 ${MUTED}`}>{detail}</div>}
     </div>
   );
 }
 
 /**
- * A pull-payment vault credits the destination; this collects the credit. The
- * amount is what the vault owes now, so several returns to one destination
- * collect together, and a credit already taken shows nothing. One button per
- * wallet on the page, named when there are several, since the wallet that
- * holds the destination has to send the transaction; with no wallet on the
- * page the amount stays in view with the install hint.
+ * What a pull-payment vault owes one account, and the way to collect it. The vault credits the
+ * account, not each return, and a collect takes the whole balance; so one row stands for every
+ * return released there, and a balance already taken shows nothing. One button per wallet on
+ * the page, named when there are several, since the wallet that holds the account has to send
+ * the transaction; with no wallet on the page the amount stays in view with the install hint.
+ * A sent collect holds the button until its transaction is mined: read before that, the vault
+ * still owes what is being collected.
  */
-function CollectButton({ payout, destination, asset }: { payout: BridgePayout; destination: string; asset: BridgeAsset }) {
+function PayoutRow({ asset, payout, destination }: { asset: BridgeAsset; payout: BridgePayout; destination: string }) {
+  const queryClient = useQueryClient();
+  const queryKey = ['bridge', 'payout', asset.id, payout.account(destination)];
+  const [sent, setSent] = useState<string>();
+  const collect = useMutation({
+    mutationFn: async (wallet: BridgeWalletOption) => {
+      setSent(undefined);
+      const txid = await wallet.collect!(destination);
+      setSent(txid);
+      await payout.confirmed(txid);
+      return txid;
+    },
+    // Mined: the withdraw emptied the balance in that block. A read already in flight began
+    // before it and would bring the collected amount back, so it is dropped.
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey });
+      queryClient.setQueryData(queryKey, 0n);
+    },
+    onError: () => queryClient.invalidateQueries({ queryKey }),
+  });
   const owed = useQuery({
-    queryKey: ['bridge', 'payout', asset.id, destination],
+    queryKey,
     queryFn: () => payout.owed(destination),
-    refetchInterval: 30_000,
+    refetchInterval: collect.isPending ? false : 30_000,
   });
   const choices = useWalletOptions(asset).filter(({ wallet }) => wallet.collect);
-  const collect = useMutation({ mutationFn: (wallet: BridgeWalletOption) => wallet.collect!(destination), onSuccess: () => owed.refetch() });
-  if (collect.data) return <TxLink href={asset.presentation.explorerTxUrl(collect.data)} label="collected" />;
-  if (!owed.data) return null;
-  const amount = `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}`;
+  if (!owed.data && !collect.data && !collect.error) return null;
+  const amount = owed.data ? `Collect ${formatUnits(owed.data, asset.decimals)} ${asset.symbol}` : undefined;
   const missing = choices.find(({ available }) => !available)?.wallet.unavailableHint;
+  const heading = amount ? `Ready to collect on ${asset.chain.name}` : collect.data ? `Collected on ${asset.chain.name}` : `Collect on ${asset.chain.name}`;
   return (
-    <span className="shrink-0 flex flex-col items-end gap-0.5">
-      {choices.map(({ wallet: w, available }) => (
-        <button
-          key={w.id}
-          type="button"
-          onClick={() => collect.mutate(w)}
-          disabled={!available || collect.isPending}
-          className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
-        >
-          {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : choices.length > 1 ? `${amount} with ${w.name}` : amount}
-        </button>
-      ))}
-      {missing && <span className={`max-w-[12rem] text-right wrap-anywhere ${MUTED}`}>{missing}</span>}
-      {collect.error && <span className="text-red-500 max-w-[12rem] text-right wrap-anywhere">{getErrorMessage(collect.error)}</span>}
-    </span>
+    <div className="px-3 py-2 rounded-xl bg-neutral-100 dark:bg-[rgba(255,255,255,0.06)] text-xs">
+      <div className="min-w-0">
+        <span className="block font-mono text-neutral-900 dark:text-white">{heading}</span>
+        <span className={`block font-mono truncate ${MUTED}`} title={destination}>{destination}</span>
+      </div>
+      {/* #545: the buttons get their own line. Beside the address, they squeezed it to one character a line. */}
+      <div className="mt-1.5 flex flex-col items-end gap-0.5">
+        {collect.data && <TxLink href={asset.presentation.explorerTxUrl(collect.data)} label="collected" />}
+        {amount && choices.map(({ wallet: w, available }) => (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => collect.mutate(w)}
+            disabled={!available || collect.isPending}
+            className="px-2 py-1 rounded-md text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
+          >
+            {collect.isPending && collect.variables?.id === w.id ? 'Collecting…' : choices.length > 1 ? `${amount} with ${w.name}` : amount}
+          </button>
+        ))}
+        {sent && !collect.data && <TxLink href={asset.presentation.explorerTxUrl(sent)} label={collect.isPending ? 'waiting for the transaction' : 'tx'} />}
+        {amount && missing && <span className={`max-w-[12rem] text-right wrap-anywhere ${MUTED}`}>{missing}</span>}
+        {collect.error && <span className="text-red-500 max-w-[12rem] text-right wrap-anywhere">{getErrorMessage(collect.error)}</span>}
+      </div>
+    </div>
   );
 }
 
