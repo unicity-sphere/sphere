@@ -57,7 +57,8 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   name, testnet flag); assets sharing a chain id are grouped under one entry;
 - **`out`** (optional): the assets-out side. `fee` asks the return service what
   it takes from each burned token, `reasonFor` builds the canonical return
-  reason for an amount and a destination with that fee written in, `identify`
+  reason for an amount and a destination with that fee written in, `valueOf`
+  reads what a token holds of the asset from its genesis data, `identify`
   reads a burned blob back (its nullifier, destination, amount and fee, or
   `null` when the blob is not this asset's), and `returns` is the return
   service that proves the burn and releases the funds. `payout`, when the vault
@@ -122,6 +123,13 @@ fails its integrity pin is logged and skipped; the wallet starts without it.
   sync, and a service that restarted (it holds nothing durable) is resent the
   blob when it no longer knows the return id. A refusal the service marks as
   not recoverable ends the return as failed, with the blob still in the record.
+- A burn's reason must name the burned token's exact value: the prover releases
+  nothing else, and its refusal comes after the burn. The amount on the form
+  comes from the wallet's token list, which wallet-api serves, so before building
+  the reason the flow reads the value from the token's own genesis data
+  (`valueOf`: the bridge's wallet value format and coin id, the fields the prover
+  reads). A token whose value cannot be read, or differs from the amount shown,
+  is not burned.
 - The return service's fee comes out of the released amount and is fixed by the
   burn, so every check on it runs before the burn. The form shows the fee the
   service quotes; the burn is made only if the quote fetched at that moment is

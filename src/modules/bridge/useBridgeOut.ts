@@ -7,7 +7,7 @@ import { useSphereContext } from '../../sdk/hooks/core/useSphere';
 import { getPayments } from '../../sdk/payments';
 import { SPHERE_KEYS } from '../../sdk/queryKeys';
 import { bridgeAssets } from './assets';
-import { recoverBurns, retryReturn, runBridgeOut, syncReturns } from './bridgeOut';
+import { recoverBurns, retryReturn, runBridgeOut, syncReturns, type BridgeOutPayments } from './bridgeOut';
 import { returnCandidates, splitReturnable, type ReturnableSplit } from './returnable';
 import { bridgeStoreFor, isTerminalReturn, type BridgeStore, type PendingReturn } from './store';
 import type { BridgeAsset, ReturnServiceTiming } from './types';
@@ -138,13 +138,13 @@ export function useReturnableTokens(asset: BridgeAsset | undefined, tokens: read
   return { eligible: query.data?.eligible ?? [], ineligible: query.data?.ineligible ?? [], isLoading: query.isLoading };
 }
 
-function walletSide(sphere: Sphere | null): { payments: BridgePayments; store: BridgeStore } {
+function walletSide(sphere: Sphere | null): { payments: BridgeOutPayments; store: BridgeStore } {
   if (!sphere) throw new Error('Wallet not initialized');
   const payments = getPayments(sphere);
   if (!payments) throw new Error('The wallet is restarting; try again in a moment.');
   const identity = sphere.identity?.chainPubkey;
   if (!identity) throw new Error('Wallet identity unavailable');
-  return { payments: payments as BridgePayments, store: bridgeStoreFor(identity) };
+  return { payments: payments as BridgeOutPayments, store: bridgeStoreFor(identity) };
 }
 
 function refreshBalances(queryClient: QueryClient): void {

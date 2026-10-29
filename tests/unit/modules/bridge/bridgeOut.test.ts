@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { BridgePayments } from '@unicitylabs/bridge-core';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { toHex } from '@unicitylabs/bridge-plugin';
+import { encodeBridgePaymentData, fromHex, toHex } from '@unicitylabs/bridge-plugin';
 import { logger } from '@unicitylabs/sphere-sdk';
 
-import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns } from '@/modules/bridge/bridgeOut';
+import evmUsdc from '@/modules/bridge/assets/evm-usdc';
+import { resetBridgeAssets } from '@/modules/bridge/assets';
+import { recoverBurns, RETRY_DELAY_MS, retryReturn, runBridgeOut, syncReturns, type BridgeOutPayments } from '@/modules/bridge/bridgeOut';
 import { bridgeStoreFor } from '@/modules/bridge/store';
 import type { BridgeAsset, BridgeReturnService, ReturnServiceRecord } from '@/modules/bridge/types';
 
@@ -44,6 +45,7 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
     out: {
       fee: async () => 2n,
       reasonFor: async ({ amount }) => new Uint8Array([Number(amount & 0xffn)]),
+      valueOf: (data) => (data && data.length > 0 ? BigInt(data[0]) : null),
       identify: async (blob) => (blob[0] === 1 ? { nullifierHex: NULLIFIER, destination: 'Tdest', amount: 7n, fee: 2n, reasonBytes: new Uint8Array([7]) } : null),
       backs: () => true,
       returns: service,
@@ -52,16 +54,17 @@ function fakeAsset(service: BridgeReturnService, over: Partial<BridgeAsset> = {}
   };
 }
 
-function fakePayments(over: Partial<BridgePayments> = {}) {
+function fakePayments(over: Partial<BridgeOutPayments> = {}) {
   const p = {
     acknowledged: [] as string[],
     burn: vi.fn(async () => ({ success: true, burnId: 'b-1', tokenId: 't-1', burnedToken: BLOB })),
     acknowledgeBurn: vi.fn(async (id: string) => { p.acknowledged.push(id); }),
     pendingBurns: vi.fn(async () => []),
     mintCustom: vi.fn(),
+    tokenData: vi.fn(async (): Promise<Uint8Array | null> => new Uint8Array([7])),
     ...over,
   };
-  return p as unknown as BridgePayments & { acknowledged: string[] };
+  return p as unknown as BridgeOutPayments & { acknowledged: string[] };
 }
 
 beforeEach(() => localStorage.clear());
@@ -100,6 +103,42 @@ describe('runBridgeOut', () => {
     ).rejects.toThrow(/above the one approved/);
     expect(payments.burn).not.toHaveBeenCalled();
     expect(store.listReturns()).toEqual([]);
+  });
+
+  it("reads the value of the token it burns from the token's own data", async () => {
+    const payments = fakePayments();
+    await runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' });
+    expect(payments.tokenData).toHaveBeenCalledWith('t-1');
+  });
+
+  it('burns nothing when the token holds another amount than the one the wallet listed', async () => {
+    const store = bridgeStoreFor('alice');
+    const payments = fakePayments({ tokenData: vi.fn(async () => new Uint8Array([9])) });
+    const asset = fakeAsset(fakeService());
+    const reasonFor = vi.spyOn(asset.out!, 'reasonFor');
+
+    await expect(
+      runBridgeOut({ payments, store, asset, tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' }),
+    ).rejects.toThrow('The wallet listed this token at 0.000007 USDX, but it holds 0.000009 USDX, so it was not sent out. Nothing was burned.');
+    expect(reasonFor).not.toHaveBeenCalled();
+    expect(payments.burn).not.toHaveBeenCalled();
+    expect(store.listReturns()).toEqual([]);
+  });
+
+  it("burns nothing when the token's value cannot be read", async () => {
+    const payments = fakePayments({ tokenData: vi.fn(async () => null) });
+    await expect(
+      runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' }),
+    ).rejects.toThrow("This token's USDX value could not be read, so it was not sent out. Nothing was burned.");
+    expect(payments.burn).not.toHaveBeenCalled();
+  });
+
+  it('burns nothing when the wallet cannot read the token', async () => {
+    const payments = fakePayments({ tokenData: vi.fn(async () => { throw new Error('Token t-1 has no blob in storage'); }) });
+    await expect(
+      runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset: fakeAsset(fakeService()), tokenId: 't-1', amount: 7n, maxFee: 3n, destination: 'Tdest' }),
+    ).rejects.toThrow(/no blob in storage/);
+    expect(payments.burn).not.toHaveBeenCalled();
   });
 
   it('refuses an invalid destination before burning anything', async () => {
@@ -328,5 +367,44 @@ describe('recoverBurns', () => {
     expect(payments.acknowledged).toEqual([]);
     expect(warn).toHaveBeenCalledWith('Bridge', expect.stringContaining('b-x'));
     warn.mockRestore();
+  });
+});
+
+describe("the Sepolia USDC asset's token value", () => {
+  const DEST = '0x2B00d708fc777F174A248B9bE01c8E8379d69Caf';
+
+  function sepoliaUsdc() {
+    vi.stubEnv('VITE_BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC', 'https://return.example.test');
+    const [asset] = evmUsdc.load();
+    if (!asset.out) throw new Error('Sepolia USDC offers no bridge-out');
+    return { asset, out: asset.out };
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    resetBridgeAssets();
+  });
+
+  it("reads the amount the wallet value format declares for the bridge's coin, and nothing else", () => {
+    const { asset, out } = sepoliaUsdc();
+    const coin = fromHex(asset.coinIdHex);
+    expect(out.valueOf(encodeBridgePaymentData(coin, 1_250_000n))).toBe(1_250_000n);
+    expect(out.valueOf(encodeBridgePaymentData(new Uint8Array(32).fill(0x11), 1_250_000n))).toBeNull();
+    expect(out.valueOf(new Uint8Array([0x82, 0x01, 0x02]))).toBeNull();
+    expect(out.valueOf(null)).toBeNull();
+  });
+
+  it('refuses a listed amount the token does not hold before asking the service for its fee', async () => {
+    const { asset } = sepoliaUsdc();
+    const fetch = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetch);
+    const payments = fakePayments({ tokenData: vi.fn(async () => encodeBridgePaymentData(fromHex(asset.coinIdHex), 2_000_000n)) });
+
+    await expect(
+      runBridgeOut({ payments, store: bridgeStoreFor('alice'), asset, tokenId: 't-1', amount: 1_000_000n, maxFee: 0n, destination: DEST }),
+    ).rejects.toThrow('The wallet listed this token at 1 USDC, but it holds 2 USDC, so it was not sent out. Nothing was burned.');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(payments.burn).not.toHaveBeenCalled();
   });
 });

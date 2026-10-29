@@ -2,16 +2,23 @@ import { burnForReturn, recoverPendingBurns, type BridgePayments } from '@unicit
 import { fromHex, toHex } from '@unicitylabs/bridge-plugin';
 import { logger } from '@unicitylabs/sphere-sdk';
 
+import { formatUnits } from './format';
 import type { BridgeStore, PendingReturn } from './store';
 import type { BridgeAsset, BridgeOutSide, ReturnRefusal, ReturnServiceRecord } from './types';
 
 export const RETRY_DELAY_MS = 60_000;
 
+/** The wallet surface a bridge-out uses: bridge-core's burn, plus a held token's genesis data. */
+export interface BridgeOutPayments extends BridgePayments {
+  tokenData(tokenId: string): Promise<Uint8Array | null>;
+}
+
 export interface BridgeOutArgs {
-  readonly payments: BridgePayments;
+  readonly payments: BridgeOutPayments;
   readonly store: BridgeStore;
   readonly asset: BridgeAsset;
   readonly tokenId: string;
+  /** The amount the user was shown; the token must hold exactly this, or nothing is burned. */
   readonly amount: bigint;
   /** The fee the user was shown; a burn that would pay the service more is not made. */
   readonly maxFee: bigint;
@@ -23,6 +30,19 @@ export async function runBridgeOut(args: BridgeOutArgs): Promise<PendingReturn> 
   const out = outSide(asset);
   if (!asset.presentation.validateAddress(destination)) {
     throw new Error(`Enter a valid ${asset.chain.name} destination address.`);
+  }
+  // The amount shown comes from the wallet's token list. The prover releases a burn only when its
+  // reason names the burned token's own value, and refuses after the burn, so read that value from
+  // the token. It sits in the genesis data and never changes over the token's life.
+  const held = out.valueOf(await payments.tokenData(tokenId));
+  if (held === null) {
+    throw new Error(`This token's ${asset.symbol} value could not be read, so it was not sent out. Nothing was burned.`);
+  }
+  if (held !== amount) {
+    throw new Error(
+      `The wallet listed this token at ${formatUnits(amount, asset.decimals)} ${asset.symbol}, but it holds ` +
+        `${formatUnits(held, asset.decimals)} ${asset.symbol}, so it was not sent out. Nothing was burned.`,
+    );
   }
   const reasonBytes = await out.reasonFor({ amount, destination, maxFee });
 
