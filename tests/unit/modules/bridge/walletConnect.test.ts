@@ -19,28 +19,51 @@ const wc = vi.hoisted(() => ({
   inits: [] as Record<string, unknown>[],
   peer: { name: 'MetaMask Wallet', url: 'https://metamask.io' },
   sent: [] as { from: string; to: string; data: string }[],
+  /** A session stored by an earlier page load, with the methods the provider restored for it. */
+  restored: undefined as { methods: string[] | undefined } | undefined,
+  pairings: 0,
+  disconnects: 0,
 }));
 
-/** Behaves as `@walletconnect/ethereum-provider` does: no request before a session, a numeric chain id. */
+const METHODS = ['eth_sendTransaction', 'personal_sign', 'wallet_switchEthereumChain'];
+
+/**
+ * Behaves as `@walletconnect/ethereum-provider` does: no request before a session, a numeric chain
+ * id, a wallet method sent only when the restored namespace lists it, and a stored session restored
+ * at init, without pairing again.
+ */
 vi.mock('@walletconnect/ethereum-provider', () => ({
   EthereumProvider: {
     init: async (opts: Record<string, unknown>) => {
       wc.inits.push(opts);
-      let session: { namespaces: Record<string, { accounts: string[] }>; peer: { metadata: { name: string; url: string } } } | undefined;
+      type Session = { namespaces: Record<string, { accounts: string[] }>; peer: { metadata: { name: string; url: string } } };
+      const open = (): Session => ({ namespaces: { eip155: { accounts: [`eip155:${SEPOLIA}:${ACCOUNT}`] } }, peer: { metadata: { ...wc.peer } } });
+      let session: Session | undefined = wc.restored ? open() : undefined;
+      let methods: string[] | undefined = wc.restored ? wc.restored.methods : undefined;
       let chain = SEPOLIA;
       return {
         get session() {
           return session;
         },
+        get signer() {
+          return { rpcProviders: session ? { eip155: { namespace: { methods } } } : {} };
+        },
         async enable() {
-          session = { namespaces: { eip155: { accounts: [`eip155:${SEPOLIA}:${ACCOUNT}`] } }, peer: { metadata: { ...wc.peer } } };
+          if (!session) {
+            wc.pairings++;
+            session = open();
+            methods = METHODS;
+          }
           return [ACCOUNT];
         },
         async disconnect() {
+          wc.disconnects++;
           session = undefined;
+          methods = undefined;
         },
         async request({ method, params }: { method: string; params?: unknown[] }) {
           if (!session) throw new Error('Please call connect() before request()');
+          if (method === 'eth_sendTransaction' && !methods!.includes(method)) throw new Error(`Method ${method} not approved`);
           switch (method) {
             case 'eth_chainId':
               return chain;
@@ -76,6 +99,9 @@ function setRuntimeConfig(config: Record<string, string>): void {
 afterEach(() => {
   wc.inits.length = 0;
   wc.sent.length = 0;
+  wc.restored = undefined;
+  wc.pairings = 0;
+  wc.disconnects = 0;
   wc.peer = { name: 'MetaMask Wallet', url: 'https://metamask.io' };
   vi.unstubAllEnvs();
   delete (window as unknown as { __SPHERE_RUNTIME_CONFIG__?: unknown }).__SPHERE_RUNTIME_CONFIG__;
@@ -152,6 +178,26 @@ describe('WalletConnect on the Ethereum asset', () => {
       /Safe cannot bridge here/,
     );
     expect(wc.sent).toEqual([]);
+  });
+
+  it('ends a restored session whose namespace lists no methods, and pairs again before sending', async () => {
+    // The tab reloaded while the user approved in the wallet app: the session was stored, the
+    // namespaces the provider routes methods by were not.
+    vi.stubEnv('VITE_WALLETCONNECT_PROJECT_ID', PROJECT);
+    wc.restored = { methods: undefined };
+    expect(await walletConnectOption().collect?.(ACCOUNT)).toBe(`0x${'ee'.repeat(32)}`);
+    expect(wc.disconnects).toBe(1);
+    expect(wc.pairings).toBe(1);
+    expect(wc.sent).toHaveLength(1);
+  });
+
+  it('keeps a restored session the provider can send through, without pairing again', async () => {
+    vi.stubEnv('VITE_WALLETCONNECT_PROJECT_ID', PROJECT);
+    wc.restored = { methods: METHODS };
+    expect(await walletConnectOption().collect?.(ACCOUNT)).toBe(`0x${'ee'.repeat(32)}`);
+    expect(wc.disconnects).toBe(0);
+    expect(wc.pairings).toBe(0);
+    expect(wc.sent).toHaveLength(1);
   });
 
   it('tells Safe from other wallets by its name or its safe.global site', () => {

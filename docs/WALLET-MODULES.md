@@ -43,7 +43,10 @@ deposit flow (`bridgeIn.ts`) work on `BridgeAsset` alone and name no chain:
   in a build), it adds WalletConnect last, for wallet apps on a phone: a QR code
   on a desktop, a link to the app on the phone. Its provider loads only when
   picked; a session that leaves out the asset's chain, or belongs to Safe, is
-  ended and refused. An option with a session (`connected()`) can end it
+  ended and refused. A stored session the provider restores without the
+  methods it routes to the wallet (the tab reloaded while the user approved in
+  the wallet app) is ended when the provider loads, and the next connect pairs
+  again. An option with a session (`connected()`) can end it
   (`disconnect()`), and the form then offers "Disconnect";
 - **the deposit wiring** per wallet option (`open()`): a `ChainWallet` that
   signs, a `ReceiptReader` for the node, and the chain's `BridgeSourceAdapter`
