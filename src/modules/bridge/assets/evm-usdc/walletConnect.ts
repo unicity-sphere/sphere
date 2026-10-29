@@ -46,12 +46,27 @@ export function walletConnectWallet(projectId: string, chainId: number, rpcUrl: 
         icons: [new URL(`${import.meta.env.BASE_URL}Union.svg`, window.location.href).href],
       },
     });
+    await endUnusableSession(provider);
     return provider;
   });
   return {
     wallet: { ...entry, create: (id) => refusingSafe(entry.create(id), () => provider?.session?.peer.metadata) },
     connected: () => Boolean(provider?.session),
   };
+}
+
+/**
+ * The provider routes a wallet method to the wallet only when the session's namespace lists it,
+ * and it saves those namespaces only when the page that proposed the session sees the wallet
+ * approve it. A phone browser often reloads a background tab while the user is in the wallet
+ * app. The approval still lands, and a later load restores a session whose namespace lists no
+ * methods, so the first `eth_sendTransaction` throws "this.namespace.methods is undefined".
+ * Such a session is ended when the provider loads, and the next connect pairs again.
+ */
+async function endUnusableSession(provider: WalletConnectProvider): Promise<void> {
+  const eip155 = provider.session ? provider.signer.rpcProviders.eip155 : undefined;
+  if (!eip155 || Array.isArray(eip155.namespace?.methods)) return;
+  await provider.disconnect();
 }
 
 const SAFE_REFUSED =
