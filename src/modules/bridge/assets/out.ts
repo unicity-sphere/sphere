@@ -1,4 +1,4 @@
-import { burnIdentifiers, burnTransitionId, bytesEqual, decodeBridgeBackReason, nullifier, toHex } from '@unicitylabs/bridge-plugin';
+import { burnIdentifiers, burnTransitionId, bytesEqual, decodeBridgeBackReason, decodeBridgePaymentData, nullifier, toHex } from '@unicitylabs/bridge-plugin';
 import {
   buildBridgeBackBurnReason,
   feeTerms,
@@ -46,6 +46,7 @@ export function bridgeOut(bridge: LoadedBridge, recipientOf: (destination: strin
       const terms = payable(feeTerms(await quoted(), { amount, maxFee, nowMs: Date.now() }));
       return buildBridgeBackBurnReason(cfg, { version: 1n, recipient, amount, ...terms }).reasonBytes;
     },
+    valueOf: (tokenData) => decodeBridgePaymentData(tokenData, cfg.coinId),
     identify: async (burnedToken) => {
       const ids = await burnIdentifiers(burnedToken);
       let reason;

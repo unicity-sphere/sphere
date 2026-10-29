@@ -134,6 +134,12 @@ export interface BridgeOutSide {
    * burned yet, when that fee is above `maxFee` or would take the whole amount.
    */
   reasonFor(args: { amount: bigint; destination: string; maxFee: bigint }): Promise<Uint8Array>;
+  /**
+   * The value a token holds of this asset, read from its genesis data as the return service's
+   * prover reads it; `null` when the data declares none. A burn whose reason names any other
+   * amount is never released.
+   */
+  valueOf(tokenData: Uint8Array | null): bigint | null;
   /** Read a burned blob; `null` when it is not this asset's burn. */
   identify(burnedToken: Uint8Array): Promise<BurnIdentity | null>;
   /** Whether a token's mint reason names the vault this side releases from. */
