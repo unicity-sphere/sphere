@@ -450,7 +450,17 @@ describe('IframeAgent: the deadline is checked twice', () => {
 });
 
 describe('IframeAgent: why the wallet did not offer a switch', () => {
-  const GENERIC = 'Hostile Swap is built for Mainnet, but your wallet is on Testnet, so it cannot connect here.';
+  const GENERIC = `${ORIGIN} is built for Mainnet, but your wallet is on Testnet, so it cannot connect here.`;
+
+  it('anchors the rejection toast to the verified origin and never prints the peer-claimed name', async () => {
+    const { config } = await mount();
+    config.onConnectionRejected(DAPP, networkRejection({ id: 1 }), false);
+
+    expect(hostMock.showToast).toHaveBeenCalledOnce();
+    const [message] = hostMock.showToast.mock.calls[0]!;
+    expect(message).toContain(ORIGIN);
+    expect(message).not.toContain(DAPP.name);
+  });
 
   it('appends the reason to the existing rejection toast when the offer is refused', async () => {
     const { config } = await mount();

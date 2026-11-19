@@ -228,14 +228,16 @@ export function IframeAgent({ agent }: IframeAgentProps) {
       // is the same variable onConnectionRequest closes over.
       onNetworkMismatch: (dapp, ctx) =>
         makeNetworkMismatchHandlerRef.current(host, origin, switchRefusalNote)(dapp, ctx),
-      onConnectionRejected: (dapp, error, silent) => {
+      onConnectionRejected: (_dapp, error, silent) => {
         // The compatibility gate refused the connection (e.g. an app built against
         // sphere-sdk < 0.12). Surface why — but stay quiet for background auto-connect.
+        // Anchor the message to the transport-verified origin, never to the dApp-claimed name (#532).
         const data = (error.data as Record<string, unknown> | undefined) ?? undefined;
         // Taken BEFORE the silent early-return so a note never outlives its handshake.
         const switchRefusal = switchRefusalNote.take(data);
         if (silent) return;
-        showToast(`${dapp?.name ?? 'This app'} ${describeConnectRejection(data, switchRefusal)}`, 'warning');
+        const subject = origin || 'This site';
+        showToast(`${subject} ${describeConnectRejection(data, switchRefusal)}`, 'warning');
       },
       onDisconnect: () => {
         revokeApprovedOrigin(origin);
