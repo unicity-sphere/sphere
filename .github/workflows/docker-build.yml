@@ -3,6 +3,10 @@ name: Build and Push Docker Image
 on:
   push:
     branches: [main]
+  # Manual rebuild of main without a code change, to pick up a patched base
+  # image (FROM nginx:alpine floats). It republishes sha-<head> + latest and
+  # auto-deploys staging exactly like a push does.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,6 +14,9 @@ permissions:
 
 jobs:
   build-and-push:
+    # `latest` is tagged unconditionally and the prod deploy ships `latest`,
+    # so a dispatch from any other branch must not build.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
