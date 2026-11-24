@@ -49,8 +49,6 @@ export function RoundsTable({ snapshot, network }: { snapshot: NetworkSnapshot; 
                           #{cell.index}
                           {cell.totalCommitments > 0 ? ` · ${cell.totalCommitments}` : ''}
                         </a>
-                      ) : column.missed.has(s.shardId) ? (
-                        <span className="text-red-500 dark:text-red-400">missed</span>
                       ) : (
                         <span className="text-neutral-400 dark:text-white/25">—</span>
                       )}

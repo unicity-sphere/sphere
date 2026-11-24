@@ -79,8 +79,8 @@ function NetworkView(props: { network: NetworkType; gatewayUrl: string; options:
           <div className="max-w-xl">
             <h2 className="text-lg font-semibold">Certified rounds</h2>
             <p className="text-xs sm:text-sm text-neutral-500 dark:text-white/45 mt-1">
-              Each column is one root round. A single certificate seals every shard in it: one dot per root that signed, one cell per shard block.
-              Hover to pause, click a cell to open its block.
+              Each column is one root round: one dot per root that signed its seal, one cell per shard block it sealed. Shards certify on their own
+              schedules, so a shard a root round ahead sits just left of the rest. Hover to pause, click a cell to open its block.
             </p>
           </div>
           <div className="sm:text-right">
@@ -219,12 +219,6 @@ function Legend({ palette }: { palette: NetworkPalette }) {
       </span>
       <span className={item}>
         <span className="w-2 h-2 rounded-full border-[1.5px]" style={{ borderColor: palette.bad }} /> root missing from the seal
-      </span>
-      <span className={item}>
-        <span className="font-bold leading-none" style={{ color: palette.bad }}>
-          ×
-        </span>{' '}
-        shard has no block in that round
       </span>
     </div>
   );

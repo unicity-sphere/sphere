@@ -20,7 +20,7 @@ export function SessionCharts({ snapshot, palette }: { snapshot: NetworkSnapshot
 
   return (
     <div className="grid lg:grid-cols-2 gap-3">
-      <ChartCard title="Round time" caption="Seconds between certified rounds, from block timestamps">
+      <ChartCard title="Round time" caption="Seconds between a shard's consecutive blocks, median across shards">
         <UPlotChart data={roundTime} palette={palette} kind="line" format={(v) => `${v.toFixed(3)} s`} />
       </ChartCard>
       <ChartCard title="Commitments" caption="All shards, per 10 seconds">

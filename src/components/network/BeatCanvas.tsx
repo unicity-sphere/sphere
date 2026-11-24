@@ -5,15 +5,19 @@ import type { FeedSource, RoundSummary } from '../../modules/network-status/type
 import { explorerBlockUrl, formatInteger, formatSealTime } from '../../modules/network-status/format';
 import { ClockEstimator } from '../../modules/network-status/clock';
 import { statusColor, type NetworkPalette } from './palette';
+import { pickColumn } from './pickColumn';
 
 /**
  * The round matrix and heartbeat: one canvas, one time axis.
  *
  * Every column is one certified root round, placed by its blocks' own
- * timestamp, so the spacing IS the round time. Rows: one dot per root (its
- * signature in that round's seal), then one cell per shard (its block in that
- * round). Under them, the heartbeat beats once per certified round, taller
- * when the round carried commitments.
+ * timestamp. Rows: one dot per root (its signature in that round's seal), then
+ * one cell per shard the round sealed. Shards are certified on their own
+ * schedules, so one shard round can be sealed across neighbouring root rounds:
+ * each shard row stays evenly spaced at its round time, and a shard one root
+ * round ahead sits a few pixels to the left of the rest. Under them, the
+ * heartbeat beats once per certified root round, taller when it carried
+ * commitments.
  *
  * Nothing moves except on data: a column appears because a round was sealed.
  * Hovering pauses the scroll so a round can be inspected; leaving resumes it.
@@ -149,30 +153,22 @@ export function BeatCanvas({ store, snapshot, network, source, palette, reducedM
 
   const locate = (x: number, y: number): Hover | null => {
     const { drawNow, pxPerMs, right, rootIds, shardIds } = layoutRef.current;
-    const columns = store.getSnapshot().columns;
-    let best: Column | null = null;
-    let bestDistance = Infinity;
-    for (const column of columns) {
-      const cx = right - (drawNow - column.createdAt) * pxPerMs;
-      const d = Math.abs(cx - x);
-      if (d < bestDistance) {
-        bestDistance = d;
-        best = column;
-      }
-    }
-    if (!best || bestDistance > 12) return null;
-    const cx = right - (drawNow - best.createdAt) * pxPerMs;
+    const xOf = (column: Column) => right - (drawNow - column.createdAt) * pxPerMs;
     const rootsTop = PAD_TOP;
     const shardsTop = rootsTop + rootCount * ROOT_ROW + SECTION_GAP;
     const heartTop = shardsTop + shardIds.length * SHARD_ROW + HEART_GAP;
+    let row: Hover['row'];
     if (y >= rootsTop && y < rootsTop + rootIds.length * ROOT_ROW) {
-      return { column: best, row: { kind: 'root', id: rootIds[Math.floor((y - rootsTop) / ROOT_ROW)] }, x: cx, y };
+      row = { kind: 'root', id: rootIds[Math.floor((y - rootsTop) / ROOT_ROW)] };
+    } else if (y >= shardsTop && y < shardsTop + shardIds.length * SHARD_ROW) {
+      row = { kind: 'shard', shardId: shardIds[Math.floor((y - shardsTop) / SHARD_ROW)] };
+    } else if (y >= heartTop - 8) {
+      row = { kind: 'heart' };
+    } else {
+      return null;
     }
-    if (y >= shardsTop && y < shardsTop + shardIds.length * SHARD_ROW) {
-      return { column: best, row: { kind: 'shard', shardId: shardIds[Math.floor((y - shardsTop) / SHARD_ROW)] }, x: cx, y };
-    }
-    if (y >= heartTop - 8) return { column: best, row: { kind: 'heart' }, x: cx, y };
-    return null;
+    const column = pickColumn(store.getSnapshot().columns, xOf, x, row.kind === 'shard' ? row.shardId : null, 12);
+    return column ? { column, row, x: xOf(column), y } : null;
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -198,7 +194,7 @@ export function BeatCanvas({ store, snapshot, network, source, palette, reducedM
 
   const latest = snapshot.columns.at(-1);
   const label = latest
-    ? `Certified rounds, scrolling. Latest root round ${formatInteger(latest.rootRound)}: ${latest.cells.size} of ${shardCount} shards, ${latest.signers.length} of ${snapshot.roots.length} roots signed.`
+    ? `Certified rounds, scrolling. Latest root round ${formatInteger(latest.rootRound)} sealed ${latest.cells.size} of ${shardCount} shards; ${latest.signers.length} of ${snapshot.roots.length} roots signed.`
     : 'Waiting for the first certified round.';
 
   return (
@@ -331,15 +327,6 @@ function draw(ctx: CanvasRenderingContext2D, columns: readonly Column[], o: Draw
           ctx.lineWidth = 1;
           ctx.stroke();
         }
-      } else if (column.missed.has(shardIds[i])) {
-        ctx.strokeStyle = palette.bad;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(left + 3, y + 3);
-        ctx.lineTo(left + CELL - 3, y + CELL - 3);
-        ctx.moveTo(left + CELL - 3, y + 3);
-        ctx.lineTo(left + 3, y + CELL - 3);
-        ctx.stroke();
       }
     }
   }
@@ -464,10 +451,8 @@ function BeatTooltip({ hover, snapshot, gutter, plotWidth }: { hover: Hover; sna
         <Line strong={`#${formatInteger(cell.index)}`} label={`block, shard ${shard?.displayId ?? row.shardId}`} />
         <div className="mt-1.5 text-[10px] text-orange-500 dark:text-brand-orange">Click to open in SMT explorer ↗</div>
       </>
-    ) : column.missed.has(row.shardId) ? (
-      <div className="text-red-500 dark:text-red-400">Shard {shard?.displayId} has no block in this round</div>
     ) : (
-      <div className="text-neutral-500 dark:text-white/50">Shard {shard?.displayId}: block not fetched</div>
+      <div className="text-neutral-500 dark:text-white/50">Shard {shard?.displayId}: no block loaded here</div>
     );
   } else if (row.kind === 'root') {
     const signed = column.signers.includes(row.id);
@@ -489,7 +474,7 @@ function BeatTooltip({ hover, snapshot, gutter, plotWidth }: { hover: Hover; sna
       </div>
       {detail}
       <div className="mt-1 text-[10px] text-neutral-500 dark:text-white/40">
-        {column.signers.length} of {snapshot.roots.length} roots signed · {column.cells.size} of {snapshot.shards.length} shards
+        {column.signers.length} of {snapshot.roots.length} roots signed · sealed {column.cells.size} of {snapshot.shards.length} shards
       </div>
     </div>
   );

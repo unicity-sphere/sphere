@@ -9,9 +9,12 @@ import type { RoundSummary } from './types';
  * - Health is judged on THIS client's clock only (when a poll answered, when an
  *   index last advanced). Block timestamps come from other machines' clocks and
  *   are only ever compared with each other.
- * - "Missed" is a proof, not a guess: a shard missed a certified round only when
- *   two of its blocks with consecutive indices sit on either side of it. A gap
- *   in what this client happened to fetch is shown as unknown, never as missed.
+ * - Shards are certified on their own schedules. A root round seals whichever
+ *   shards' requests reached it, so two shards' blocks of the same moment can sit
+ *   in neighbouring root rounds (testnet2 runs that way: two of eight shards one
+ *   root round ahead of the rest). A shard absent from a root round is therefore
+ *   normal, never a fault, and round timing is read along each shard's own block
+ *   numbers, never from the gaps between root rounds.
  */
 
 export type ShardStatus = 'unknown' | 'ok' | 'stale' | 'unreachable';
@@ -26,7 +29,7 @@ export interface ShardView {
   readonly lastError: string | null;
 }
 
-/** One certified root round: the blocks it sealed, one per shard. */
+/** One certified root round: the blocks it sealed, at most one per shard. */
 export interface Column {
   readonly rootRound: number;
   /** Earliest `createdAt` among its blocks (aggregator clock, ms). */
@@ -35,8 +38,6 @@ export interface Column {
   readonly certifiedAt: number;
   readonly signers: readonly string[];
   readonly cells: ReadonlyMap<string, RoundSummary>;
-  /** Shards proven to have no block in this round. */
-  readonly missed: ReadonlySet<string>;
   readonly totalCommitments: number;
 }
 
@@ -56,7 +57,10 @@ export interface SessionPoint {
   readonly rootRound: number;
   readonly createdAt: number;
   readonly commitments: number;
-  /** Time since the previous certified round; `null` where a round is missing. */
+  /**
+   * Median, across the shards this root round sealed, of the time since each one's
+   * previous block. `null` when none of those previous blocks is known.
+   */
   readonly roundTimeMs: number | null;
 }
 
@@ -114,6 +118,8 @@ interface SessionAccumulator {
   createdAt: number;
   commitments: number;
   readonly signers: readonly string[];
+  /** shardId → time from that shard's previous block to its block in this round. */
+  readonly intervals: Map<string, number>;
 }
 
 /** Failed polls before a shard that never answered counts as unreachable. */
@@ -229,6 +235,7 @@ export class RoundStore {
       }
     }
     for (const round of fresh) this.accumulate(round);
+    for (const round of fresh) this.noteIntervals(round);
     this.changed();
   }
 
@@ -305,7 +312,7 @@ export class RoundStore {
     if (!seal) return;
     let point = this.session.get(seal.rootRound);
     if (!point) {
-      point = { createdAt: round.createdAt, commitments: 0, signers: seal.signers };
+      point = { createdAt: round.createdAt, commitments: 0, signers: seal.signers, intervals: new Map() };
       this.session.set(seal.rootRound, point);
       for (const id of seal.signers) {
         const first = this.firstSigned.get(id);
@@ -316,6 +323,24 @@ export class RoundStore {
     }
     point.createdAt = Math.min(point.createdAt, round.createdAt);
     point.commitments += round.totalCommitments;
+  }
+
+  /**
+   * Round time for the pairs this block completes on its own shard: (previous, it)
+   * and (it, next). Runs after every block of a batch has its session point, so the
+   * order blocks arrive in (backfill is newest first) does not matter.
+   */
+  private noteIntervals(round: RoundSummary): void {
+    const rounds = this.shards.get(round.shardId)?.rounds;
+    if (!rounds) return;
+    const pairs: [RoundSummary | undefined, RoundSummary | undefined][] = [
+      [rounds.get(round.index - 1), round],
+      [round, rounds.get(round.index + 1)],
+    ];
+    for (const [previous, next] of pairs) {
+      if (!previous || !next?.seal) continue;
+      this.session.get(next.seal.rootRound)?.intervals.set(next.shardId, next.createdAt - previous.createdAt);
+    }
   }
 
   private compute(): NetworkSnapshot {
@@ -443,31 +468,7 @@ export class RoundStore {
       }
     }
     const rootRounds = [...byRound.keys()].sort((a, b) => a - b).slice(-this.maxColumns);
-    const missed = this.missedByRound(rootRounds);
-    return rootRounds.map((rootRound) => ({ rootRound, ...byRound.get(rootRound)!, missed: missed.get(rootRound) ?? new Set<string>() }));
-  }
-
-  /** rootRound → shards whose consecutive blocks prove they have no block in it. */
-  private missedByRound(rootRounds: readonly number[]): Map<number, Set<string>> {
-    const out = new Map<number, Set<string>>();
-    for (const [shardId, shard] of this.shards) {
-      const sealed = [...shard.rounds.values()].filter((r) => r.seal).sort((a, b) => a.index - b.index);
-      let cursor = 0;
-      for (let i = 1; i < sealed.length; i++) {
-        const before = sealed[i - 1];
-        const after = sealed[i];
-        if (after.index !== before.index + 1) continue;
-        const lo = before.seal!.rootRound;
-        const hi = after.seal!.rootRound;
-        while (cursor < rootRounds.length && rootRounds[cursor] <= lo) cursor++;
-        for (let j = cursor; j < rootRounds.length && rootRounds[j] < hi; j++) {
-          let set = out.get(rootRounds[j]);
-          if (!set) out.set(rootRounds[j], (set = new Set()));
-          set.add(shardId);
-        }
-      }
-    }
-    return out;
+    return rootRounds.map((rootRound) => ({ rootRound, ...byRound.get(rootRound)! }));
   }
 
   private metrics(shards: readonly ShardView[], roots: readonly RootView[], latest: Column | null, now: number): Metrics {
@@ -514,15 +515,13 @@ export class RoundStore {
   }
 
   private sessionPoints(): SessionPoint[] {
-    const rounds = [...this.session.keys()].sort((a, b) => a - b);
-    const step = modalStep(rounds);
-    return rounds.map((rootRound, i) => {
-      const point = this.session.get(rootRound)!;
-      const previous = i > 0 ? rounds[i - 1] : null;
-      const roundTimeMs =
-        previous !== null && step !== null && rootRound - previous === step ? point.createdAt - this.session.get(previous)!.createdAt : null;
-      return { rootRound, createdAt: point.createdAt, commitments: point.commitments, roundTimeMs };
-    });
+    return [...this.session.keys()]
+      .sort((a, b) => a - b)
+      .map((rootRound) => {
+        const point = this.session.get(rootRound)!;
+        const roundTimeMs = point.intervals.size > 0 ? median([...point.intervals.values()]) : null;
+        return { rootRound, createdAt: point.createdAt, commitments: point.commitments, roundTimeMs };
+      });
   }
 }
 
@@ -539,20 +538,6 @@ function judge(shards: readonly ShardView[], metrics: Metrics): { verdict: Verdi
     reasons.push(`${rootsKnown - rootsSignedLatest} of ${rootsKnown} roots did not sign the latest round`);
   }
   return { verdict: reasons.length > 0 ? 'degraded' : 'live', reasons };
-}
-
-/** The most common gap between consecutive certified root rounds (ties: the smallest). */
-function modalStep(rounds: readonly number[]): number | null {
-  const counts = new Map<number, number>();
-  for (let i = 1; i < rounds.length; i++) {
-    const step = rounds[i] - rounds[i - 1];
-    counts.set(step, (counts.get(step) ?? 0) + 1);
-  }
-  let best: number | null = null;
-  for (const [step, count] of counts) {
-    if (best === null || count > counts.get(best)! || (count === counts.get(best)! && step < best)) best = step;
-  }
-  return best;
 }
 
 function median(values: readonly number[]): number {

@@ -24,6 +24,18 @@ function allShards(n: number, overrides?: Parameters<typeof round>[2]): RoundSum
   return SHARDS.map((s) => round(s, n, overrides));
 }
 
+/**
+ * Round `n` as testnet2 runs it: shards 10 and 11 are sealed one root round
+ * (~300 ms) ahead of shards 00 and 01, every shard still one block per 900 ms.
+ */
+function staggered(n: number): RoundSummary[] {
+  return SHARDS.map((s) => {
+    const ahead = s.startsWith('1');
+    const base = round(s, n);
+    return { ...base, createdAt: base.createdAt - (ahead ? 300 : 0), seal: { ...base.seal!, rootRound: base.seal!.rootRound - (ahead ? 1 : 0) } };
+  });
+}
+
 describe('RoundStore', () => {
   let now: number;
   let store: RoundStore;
@@ -58,26 +70,26 @@ describe('RoundStore', () => {
     expect(snap.session[0].commitments).toBe(20);
   });
 
-  it('marks a shard missed only where its own consecutive blocks prove it skipped the round', () => {
-    store.ingest([
-      ...allShards(0),
-      ...['00', '01', '10'].map((s) => round(s, 1)),
-      ...['00', '01', '10'].map((s) => round(s, 2)),
-      round('11', 2, { index: 1001 }), // shard 11's very next block after round 0 is in round 2
-    ]);
-    const column = store.getSnapshot().columns.find((c) => c.rootRound === 103)!;
-    expect(column.missed.has('11')).toBe(true);
-    expect(column.cells.has('11')).toBe(false);
+  it('puts each block in the root round that sealed it, so shards a root round ahead form their own columns', () => {
+    for (const s of SHARDS) store.recordSuccess(s);
+    store.ingest([0, 1, 2].flatMap(staggered));
+    const snap = store.getSnapshot();
+    expect(snap.columns.map((c) => c.rootRound)).toEqual([99, 100, 102, 103, 105, 106]);
+    expect(snap.columns.map((c) => [...c.cells.keys()].sort().join(','))).toEqual(['10,11', '00,01', '10,11', '00,01', '10,11', '00,01']);
+    expect(snap.verdict).toBe('live');
   });
 
-  it('does not call a shard missed when the blocks around the gap were simply not fetched', () => {
-    store.ingest([
-      ...allShards(0),
-      ...['00', '01', '10'].map((s) => round(s, 1)),
-      ...allShards(2), // shard 11: index 1000 then 1002, so 1001 is unknown, not missed
-    ]);
-    const column = store.getSnapshot().columns.find((c) => c.rootRound === 103)!;
-    expect(column.missed.size).toBe(0);
+  it('times rounds along each shard, not by the gaps between root rounds', () => {
+    store.ingest([0, 1, 2, 3].flatMap(staggered));
+    // Root rounds alternate 300 ms and 600 ms apart; every shard still makes a block every 900 ms.
+    expect(store.getSnapshot().session.map((p) => p.roundTimeMs)).toEqual([null, null, 900, 900, 900, 900, 900, 900]);
+  });
+
+  it('times a round whichever order its blocks arrive in', () => {
+    store.ingest(allShards(2));
+    store.ingest(allShards(1));
+    store.ingest(allShards(0));
+    expect(store.getSnapshot().session.map((p) => p.roundTimeMs)).toEqual([null, 900, 900]);
   });
 
   it('reports a root that left the seal, and goes degraded while the quorum still holds', () => {

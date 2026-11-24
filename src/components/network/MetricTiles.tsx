@@ -25,7 +25,7 @@ export function MetricTiles({ snapshot, palette }: { snapshot: NetworkSnapshot; 
       label: 'Round time',
       value: formatSeconds(metrics.roundTimeMs),
       unit: 's',
-      sub: 'between certified rounds · last 60 s',
+      sub: 'block to block, per shard · last 60 s',
       definition:
         'Wall-clock time per round, from block timestamps. For each shard: (newest − oldest block time) ÷ blocks between them, over the last 60 s; then the median across shards. Block times are stamped when a block is proposed.',
       spark: recent.map((p) => p.roundTimeMs).filter((v): v is number => v !== null),
@@ -68,7 +68,8 @@ export function MetricTiles({ snapshot, palette }: { snapshot: NetworkSnapshot; 
       value: formatInteger(roundsSinceOpen),
       unit: 'since you opened',
       sub: metrics.latestRootRound ? `root round #${formatInteger(metrics.latestRootRound)}` : 'waiting for the first round',
-      definition: 'Certified root rounds seen since this page opened. Each one seals every shard in a single unicity certificate.',
+      definition:
+        'Root rounds seen since this page opened that certified at least one shard. Shards are certified on their own schedules, so a root round can seal all of them or only some.',
     },
   ];
 
