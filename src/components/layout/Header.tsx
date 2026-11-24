@@ -24,6 +24,7 @@ const navItems: { label: string; path: string; external?: boolean }[] = [
   { label: 'Markets', path: '/markets' },
   { label: 'Devs', path: '/developers' },
   { label: 'Agents', path: '/explore-agents' },
+  { label: 'Network', path: '/network' },
   { label: 'About', path: '/about' },
 ];
 
