@@ -6,6 +6,7 @@ import {
   InclusionProofVerificationStatus,
 } from '@unicitylabs/state-transition-sdk/lib/transaction/verification/rule/InclusionProofVerificationRule.js';
 import { hexToBytes } from '../certificate';
+import { formatInteger } from '../format';
 import type { AggregatorRecord } from '../types';
 import { certificateChecks, fail, messageOf, pass, report, sameHex, summarize, type Stop } from './certificate';
 import { decodePath, toHex } from './path';
@@ -58,7 +59,7 @@ export async function inspectProof(ctx: VerifyContext, record: AggregatorRecord,
       );
       const verdict =
         result.status === InclusionProofVerificationStatus.OK
-          ? pass('Inclusion proof', `the path leads from this state to the root certified at block ${answeredAtBlock}`)
+          ? pass('Inclusion proof', `the path leads from this state to the root certified at block ${formatInteger(answeredAtBlock)}`)
           : fail('Inclusion proof', String(result.status));
       checks.push(verdict.check);
       stop = verdict.stop;
@@ -73,9 +74,9 @@ async function nonInclusion(ctx: VerifyContext, uc: UnicityCertificate, answered
   const certificate = await inspectCertificate(ctx, uc);
   const base = { kind: 'non-inclusion' as const, answeredAtBlock, certificate, path: null, checks: [] };
   if (answeredAtBlock < blockIndex) {
-    return { ...base, outcome: 'unchecked', reason: `The gateway answered from block ${answeredAtBlock}, before this commitment's block` };
+    return { ...base, outcome: 'unchecked', reason: `The gateway answered from block ${formatInteger(answeredAtBlock)}, before this commitment's block` };
   }
-  return { ...base, outcome: 'failed', reason: `The gateway says this state is not in the tree at block ${answeredAtBlock}` };
+  return { ...base, outcome: 'failed', reason: `The gateway says this state is not in the tree at block ${formatInteger(answeredAtBlock)}` };
 }
 
 /** The common certificate checks for a proof's certificate; it certifies a later root, so there is no block to bind it to. */
