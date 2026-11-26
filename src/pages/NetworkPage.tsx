@@ -1,10 +1,12 @@
-import { useMemo } from 'react';
+import { lazy, Suspense, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import { SPHERE_NETWORK, SUPPORTED_NETWORKS } from '../config/network';
 import { useNetworkStatus } from '../modules/network-status/useNetworkStatus';
+import { createGatewayClient } from '../modules/network-status/gatewayClient';
+import { canonicalNetwork, parseBlockLink, withNetwork, writeBlockLink, type BlockLink, type BlockLinkState } from '../modules/network-status/blockLink';
 import type { NetworkSnapshot, Verdict } from '../modules/network-status/roundStore';
 import type { FeedSource } from '../modules/network-status/types';
 import { formatAge, formatInteger } from '../modules/network-status/format';
@@ -15,6 +17,9 @@ import { ShardsPanel } from '../components/network/ShardsPanel';
 import { SessionCharts } from '../components/network/SessionCharts';
 import { RoundsTable } from '../components/network/RoundsTable';
 import { useNetworkPalette, usePrefersReducedMotion, type NetworkPalette } from '../components/network/palette';
+
+// The inspector carries the SDK's verification code: loaded when a block is first opened, never with the page.
+const BlockModal = lazy(() => import('../components/network/block/BlockModal'));
 
 interface NetworkOption {
   readonly id: NetworkType;
@@ -36,27 +41,67 @@ function shortLabel(id: NetworkType): string {
   return id === 'mainnet' ? 'Mainnet' : 'Testnet';
 }
 
+/** What the page does with the block inspector: open a block, step to another, close it. */
+interface Inspector {
+  readonly state: BlockLinkState;
+  open(shardId: string, index: number): void;
+  hrefFor(shardId: string, index: number): string;
+  navigate(link: BlockLink): void;
+  close(): void;
+}
+
 export function NetworkPage() {
   const options = useMemo(networkOptions, []);
   const [params, setParams] = useSearchParams();
-  const requested = params.get('network');
+  const routerNavigate = useNavigate();
+  const block = parseBlockLink(
+    params,
+    options.map((o) => o.id),
+    SPHERE_NETWORK,
+  );
+  // An open block link decides the network: its block number means nothing on any other.
+  const requested = block.kind === 'open' ? block.link.network : canonicalNetwork(params.get('network'));
   const network = options.find((o) => o.id === requested)?.id ?? SPHERE_NETWORK;
   const gatewayUrl = NETWORKS[network].aggregatorUrl;
+  // Opened from this page: closing goes back one entry, so Back after closing leaves the page as it was.
+  const openedHere = useRef(false);
+  if (block.kind === 'none') openedHere.current = false;
 
-  const selectNetwork = (id: NetworkType) => {
-    const next = new URLSearchParams(params);
-    if (id === SPHERE_NETWORK) next.delete('network');
-    else next.set('network', id);
-    setParams(next, { replace: true });
+  const selectNetwork = (id: NetworkType) => setParams(withNetwork(params, id, SPHERE_NETWORK), { replace: true });
+
+  const inspector: Inspector = {
+    state: block,
+    open: (shardId, index) => {
+      openedHere.current = true;
+      setParams(writeBlockLink(params, { network, shardId, index }));
+    },
+    hrefFor: (shardId, index) => `?${writeBlockLink(params, { network, shardId, index })}`,
+    navigate: (link) => setParams(writeBlockLink(params, link), { replace: true }),
+    close: () => {
+      if (openedHere.current) {
+        openedHere.current = false;
+        routerNavigate(-1);
+      } else {
+        setParams(writeBlockLink(params, null), { replace: true });
+      }
+    },
   };
 
   // Keyed by gateway: a network switch starts from an empty store and a fresh canvas.
-  return <NetworkView key={gatewayUrl} network={network} gatewayUrl={gatewayUrl} options={options} onSelect={selectNetwork} />;
+  return <NetworkView key={gatewayUrl} network={network} gatewayUrl={gatewayUrl} options={options} onSelect={selectNetwork} inspector={inspector} />;
 }
 
-function NetworkView(props: { network: NetworkType; gatewayUrl: string; options: readonly NetworkOption[]; onSelect: (id: NetworkType) => void }) {
-  const { network, gatewayUrl, options, onSelect: selectNetwork } = props;
+function NetworkView(props: {
+  network: NetworkType;
+  gatewayUrl: string;
+  options: readonly NetworkOption[];
+  onSelect: (id: NetworkType) => void;
+  inspector: Inspector;
+}) {
+  const { network, gatewayUrl, options, onSelect: selectNetwork, inspector } = props;
   const { store, snapshot, source } = useNetworkStatus(gatewayUrl);
+  const client = useMemo(() => createGatewayClient(gatewayUrl), [gatewayUrl]);
+  const openLink = inspector.state.kind === 'open' ? inspector.state.link : null;
   const palette = useNetworkPalette();
   const reducedMotion = usePrefersReducedMotion();
   const latest = snapshot.columns.at(-1);
@@ -89,7 +134,7 @@ function NetworkView(props: { network: NetworkType; gatewayUrl: string; options:
           </div>
         </div>
         <div className="pt-5">
-          <BeatCanvas store={store} snapshot={snapshot} network={network} source={source} palette={palette} reducedMotion={reducedMotion} />
+          <BeatCanvas store={store} snapshot={snapshot} onOpenBlock={inspector.open} source={source} palette={palette} reducedMotion={reducedMotion} />
         </div>
         <Legend palette={palette} />
       </section>
@@ -102,8 +147,8 @@ function NetworkView(props: { network: NetworkType; gatewayUrl: string; options:
         <Panel title="Consensus" caption="The roots that seal every round, and how often each one signed while you watched.">
           <ConsensusPanel snapshot={snapshot} palette={palette} reducedMotion={reducedMotion} />
         </Panel>
-        <Panel title="Shards" caption="Each shard runs its own chain of blocks; every certified round includes all of them.">
-          <ShardsPanel snapshot={snapshot} network={network} palette={palette} />
+        <Panel title="Shards" caption="Each shard runs its own chain of blocks and is certified on its own schedule. Open a shard’s newest block from here.">
+          <ShardsPanel snapshot={snapshot} palette={palette} onOpenBlock={inspector.open} />
         </Panel>
       </section>
 
@@ -113,10 +158,23 @@ function NetworkView(props: { network: NetworkType; gatewayUrl: string; options:
       </section>
 
       <section className="mt-3">
-        <RoundsTable snapshot={snapshot} network={network} />
+        <RoundsTable snapshot={snapshot} hrefFor={inspector.hrefFor} onOpenBlock={inspector.open} />
       </section>
 
       <HowItWorks gatewayUrl={gatewayUrl} source={source} />
+
+      {inspector.state.kind !== 'none' && (
+        <Suspense fallback={null}>
+          <BlockModal
+            state={inspector.state}
+            client={client}
+            shardIds={snapshot.shards.map((s) => s.shardId)}
+            newestIndex={openLink ? (snapshot.shards.find((s) => s.shardId === openLink.shardId)?.latestIndex ?? null) : null}
+            onNavigate={inspector.navigate}
+            onClose={inspector.close}
+          />
+        </Suspense>
+      )}
     </motion.div>
   );
 }
@@ -243,8 +301,8 @@ function HowItWorks({ gatewayUrl, source }: { gatewayUrl: string; source: FeedSo
         {source === 'status-endpoint' ? ', from its cached status feed' : ', one request per shard per second while this tab is visible'}. Nothing is stored; history starts when you open the page.
       </p>
       <p>
-        Root signatures are read from each block’s unicity certificate. This page displays them; it does not verify them. To check a block’s proof,
-        open it in the SMT explorer.
+        The live view reads root signatures from each block’s unicity certificate without checking them. Open a block to verify its certificate, and each
+        commitment’s inclusion proof, against the network’s trust base that ships with Sphere.
       </p>
       <p>
         Round time uses block timestamps, which the aggregator sets when it proposes a block. Seal times come from the root chain in whole seconds, so

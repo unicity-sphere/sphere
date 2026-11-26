@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
-import { canonicalNetwork, parseBlockLink, writeBlockLink } from '@/modules/network-status/blockLink';
+import { canonicalNetwork, parseBlockLink, withNetwork, writeBlockLink } from '@/modules/network-status/blockLink';
 
 const OFFERED: NetworkType[] = ['testnet2'];
 const parse = (query: string, offered: NetworkType[] = OFFERED) => parseBlockLink(new URLSearchParams(query), offered, 'testnet2');
@@ -77,5 +77,16 @@ describe('canonicalNetwork', () => {
     expect(canonicalNetwork('mainnet')).toBe('mainnet');
     expect(canonicalNetwork('devnet')).toBeNull();
     expect(canonicalNetwork(null)).toBeNull();
+  });
+});
+
+describe('withNetwork', () => {
+  it('switching network closes the block, whose number belongs to the old network', () => {
+    const next = withNetwork(new URLSearchParams('network=testnet2&shard=000&block=5&x=1'), 'mainnet', 'testnet2');
+    expect(next.toString()).toBe('network=mainnet&x=1');
+  });
+
+  it('drops the network parameter when switching back to the app network', () => {
+    expect(withNetwork(new URLSearchParams('network=mainnet&shard=00&block=5'), 'testnet2', 'testnet2').toString()).toBe('');
   });
 });

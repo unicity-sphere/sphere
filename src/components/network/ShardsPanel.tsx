@@ -1,7 +1,6 @@
-import { ExternalLink } from 'lucide-react';
-import type { NetworkType } from '@unicitylabs/sphere-sdk';
+import { Box } from 'lucide-react';
 import type { NetworkSnapshot, ShardStatus } from '../../modules/network-status/roundStore';
-import { explorerShardUrl, formatAge, formatInteger } from '../../modules/network-status/format';
+import { formatAge, formatInteger } from '../../modules/network-status/format';
 import { statusColor, type NetworkPalette } from './palette';
 
 const STATUS_LABEL: Record<ShardStatus, string> = {
@@ -11,7 +10,8 @@ const STATUS_LABEL: Record<ShardStatus, string> = {
   unknown: 'Waiting',
 };
 
-export function ShardsPanel({ snapshot, network, palette }: { snapshot: NetworkSnapshot; network: NetworkType; palette: NetworkPalette }) {
+export function ShardsPanel(props: { snapshot: NetworkSnapshot; palette: NetworkPalette; onOpenBlock(shardId: string, index: number): void }) {
+  const { snapshot, palette, onOpenBlock } = props;
   const now = snapshot.computedAt;
   return (
     <ul className="divide-y divide-neutral-200 dark:divide-white/[0.06]">
@@ -26,15 +26,16 @@ export function ShardsPanel({ snapshot, network, palette }: { snapshot: NetworkS
           <span className="ml-auto text-xs text-neutral-500 dark:text-white/40 whitespace-nowrap" title={shard.lastError ?? undefined}>
             {shard.status === 'unreachable' && shard.lastError ? shard.lastError : shard.lastAdvanceAt ? `${formatAge(now - shard.lastAdvanceAt)} ago` : '—'}
           </span>
-          <a
-            href={explorerShardUrl(network, shard.shardId)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1 -m-1 text-neutral-400 hover:text-orange-500 dark:text-white/30 dark:hover:text-brand-orange transition-colors"
-            aria-label={`Open shard ${shard.displayId} in the SMT explorer`}
+          <button
+            type="button"
+            disabled={shard.latestIndex === null}
+            onClick={() => shard.latestIndex !== null && onOpenBlock(shard.shardId, shard.latestIndex)}
+            className="p-1 -m-1 text-neutral-400 hover:text-orange-500 dark:text-white/30 dark:hover:text-brand-orange disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            aria-label={`Open shard ${shard.displayId}'s newest block`}
+            title="Open newest block"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+            <Box className="w-3.5 h-3.5" />
+          </button>
         </li>
       ))}
     </ul>

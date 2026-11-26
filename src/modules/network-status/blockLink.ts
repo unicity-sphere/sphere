@@ -63,3 +63,15 @@ export function writeBlockLink(params: URLSearchParams, link: BlockLink | null):
   next.set('block', String(link.index));
   return next;
 }
+
+/**
+ * A copy of `params` showing `network`. The open block, if any, is closed: its
+ * number belongs to the network being left. The app's own network is the
+ * default, so it is not written.
+ */
+export function withNetwork(params: URLSearchParams, network: NetworkType, appNetwork: NetworkType): URLSearchParams {
+  const next = writeBlockLink(params, null);
+  if (network === appNetwork) next.delete('network');
+  else next.set('network', network);
+  return next;
+}

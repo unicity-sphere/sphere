@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import type { Column, NetworkSnapshot, RoundStore } from '../../modules/network-status/roundStore';
 import type { FeedSource, RoundSummary } from '../../modules/network-status/types';
-import { explorerBlockUrl, formatInteger, formatSealTime } from '../../modules/network-status/format';
+import { formatInteger, formatSealTime } from '../../modules/network-status/format';
 import { ClockEstimator } from '../../modules/network-status/clock';
 import { statusColor, type NetworkPalette } from './palette';
 import { pickColumn } from './pickColumn';
@@ -48,13 +47,14 @@ interface Hover {
 interface BeatCanvasProps {
   readonly store: RoundStore;
   readonly snapshot: NetworkSnapshot;
-  readonly network: NetworkType;
+  /** Opens the block inspector for one shard block. */
+  onOpenBlock(shardId: string, index: number): void;
   readonly source: FeedSource | null;
   readonly palette: NetworkPalette;
   readonly reducedMotion: boolean;
 }
 
-export function BeatCanvas({ store, snapshot, network, source, palette, reducedMotion }: BeatCanvasProps) {
+export function BeatCanvas({ store, snapshot, onOpenBlock, source, palette, reducedMotion }: BeatCanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -189,7 +189,7 @@ export function BeatCanvas({ store, snapshot, network, source, palette, reducedM
   const onClick = () => {
     if (hover?.row.kind !== 'shard') return;
     const cell = hover.column.cells.get(hover.row.shardId);
-    if (cell) window.open(explorerBlockUrl(network, cell.shardId, cell.index), '_blank', 'noopener,noreferrer');
+    if (cell) onOpenBlock(cell.shardId, cell.index);
   };
 
   const latest = snapshot.columns.at(-1);
@@ -449,7 +449,7 @@ function BeatTooltip({ hover, snapshot, gutter, plotWidth }: { hover: Hover; sna
       <>
         <Line strong={formatInteger(cell.totalCommitments)} label={cell.totalCommitments === 1 ? 'commitment' : 'commitments'} />
         <Line strong={`#${formatInteger(cell.index)}`} label={`block, shard ${shard?.displayId ?? row.shardId}`} />
-        <div className="mt-1.5 text-[10px] text-orange-500 dark:text-brand-orange">Click to open in SMT explorer ↗</div>
+        <div className="mt-1.5 text-[10px] text-orange-500 dark:text-brand-orange">Click to open this block</div>
       </>
     ) : (
       <div className="text-neutral-500 dark:text-white/50">Shard {shard?.displayId}: no block loaded here</div>

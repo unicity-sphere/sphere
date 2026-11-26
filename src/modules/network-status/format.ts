@@ -1,22 +1,3 @@
-import type { NetworkType } from '@unicitylabs/sphere-sdk';
-
-const SMT_EXPLORER_URL = 'https://unicitynetwork.github.io/smt-explorer/';
-
-/** smt-explorer names networks by their gateway, so both testnet aliases are `testnet2`. */
-export function explorerNetwork(network: NetworkType): string {
-  return network === 'mainnet' ? 'mainnet' : 'testnet2';
-}
-
-export function explorerBlockUrl(network: NetworkType, shardId: string, index: number): string {
-  const params = new URLSearchParams({ network: explorerNetwork(network), shard: shardId, block: String(index) });
-  return `${SMT_EXPLORER_URL}?${params}`;
-}
-
-export function explorerShardUrl(network: NetworkType, shardId: string): string {
-  const params = new URLSearchParams({ network: explorerNetwork(network), shard: shardId });
-  return `${SMT_EXPLORER_URL}?${params}`;
-}
-
 /** `0feb784b…5ac1c3f0` */
 export function shortHash(value: string, keep = 8): string {
   return value.length <= keep * 2 + 1 ? value : `${value.slice(0, keep)}…${value.slice(-keep)}`;

@@ -1,11 +1,16 @@
-import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import type { NetworkSnapshot } from '../../modules/network-status/roundStore';
-import { explorerBlockUrl, formatInteger, formatSealTime } from '../../modules/network-status/format';
+import { formatInteger, formatSealTime } from '../../modules/network-status/format';
 
 const ROWS = 30;
 
 /** Everything the round matrix draws, as a table: readable without a canvas, a mouse, or colour. */
-export function RoundsTable({ snapshot, network }: { snapshot: NetworkSnapshot; network: NetworkType }) {
+export function RoundsTable(props: {
+  snapshot: NetworkSnapshot;
+  /** The inspector URL of a block, so a block can also open in a new tab. */
+  hrefFor(shardId: string, index: number): string;
+  onOpenBlock(shardId: string, index: number): void;
+}) {
+  const { snapshot, hrefFor, onOpenBlock } = props;
   const columns = snapshot.columns.slice(-ROWS).reverse();
   const shards = snapshot.shards;
   return (
@@ -45,7 +50,15 @@ export function RoundsTable({ snapshot, network }: { snapshot: NetworkSnapshot; 
                   return (
                     <td key={s.shardId} className="py-1.5 pr-3 whitespace-nowrap">
                       {cell ? (
-                        <a href={explorerBlockUrl(network, s.shardId, cell.index)} target="_blank" rel="noopener noreferrer" className="hover:text-orange-500 dark:hover:text-brand-orange">
+                        <a
+                          href={hrefFor(s.shardId, cell.index)}
+                          onClick={(event) => {
+                            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                            event.preventDefault();
+                            onOpenBlock(s.shardId, cell.index);
+                          }}
+                          className="hover:text-orange-500 dark:hover:text-brand-orange"
+                        >
                           #{cell.index}
                           {cell.totalCommitments > 0 ? ` · ${cell.totalCommitments}` : ''}
                         </a>
