@@ -1,4 +1,5 @@
-import { lazy, Suspense, useMemo, useRef } from 'react';
+import { Suspense, useMemo, useRef } from 'react';
+import * as Sentry from '@sentry/react';
 import { motion } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { NETWORKS } from '@unicitylabs/sphere-sdk';
@@ -17,9 +18,10 @@ import { ShardsPanel } from '../components/network/ShardsPanel';
 import { SessionCharts } from '../components/network/SessionCharts';
 import { RoundsTable } from '../components/network/RoundsTable';
 import { useNetworkPalette, usePrefersReducedMotion, type NetworkPalette } from '../components/network/palette';
+import { lazyWithRetry } from '../utils/lazyWithRetry';
 
 // The inspector carries the SDK's verification code: loaded when a block is first opened, never with the page.
-const BlockModal = lazy(() => import('../components/network/block/BlockModal'));
+const BlockModal = lazyWithRetry(() => import('../components/network/block/BlockModal'));
 
 interface NetworkOption {
   readonly id: NetworkType;
@@ -164,18 +166,51 @@ function NetworkView(props: {
       <HowItWorks gatewayUrl={gatewayUrl} source={source} />
 
       {inspector.state.kind !== 'none' && (
-        <Suspense fallback={null}>
-          <BlockModal
-            state={inspector.state}
-            client={client}
-            shardIds={snapshot.shards.map((s) => s.shardId)}
-            newestIndex={openLink ? (snapshot.shards.find((s) => s.shardId === openLink.shardId)?.latestIndex ?? null) : null}
-            onNavigate={inspector.navigate}
-            onClose={inspector.close}
-          />
-        </Suspense>
+        // The root boundary in main.tsx wraps the whole app: without this one, a throw inside the
+        // inspector (or its chunk failing to load) would replace the wallet with the error page.
+        <Sentry.ErrorBoundary
+          key={openLink ? `${openLink.network}/${openLink.shardId}/${openLink.index}` : 'invalid'}
+          handled
+          beforeCapture={(scope) => scope.setTag('source', 'block-inspector')}
+          fallback={<InspectorNotice text="This block could not be shown." onClose={inspector.close} />}
+        >
+          <Suspense fallback={<InspectorNotice text="Opening block…" onClose={inspector.close} />}>
+            <BlockModal
+              state={inspector.state}
+              client={client}
+              shardIds={snapshot.shards.map((s) => s.shardId)}
+              newestIndex={openLink ? (snapshot.shards.find((s) => s.shardId === openLink.shardId)?.latestIndex ?? null) : null}
+              onNavigate={inspector.navigate}
+              onClose={inspector.close}
+            />
+          </Suspense>
+        </Sentry.ErrorBoundary>
       )}
     </motion.div>
+  );
+}
+
+/** Stands in for the inspector while it loads, or after it failed: always closable. */
+function InspectorNotice({ text, onClose }: { text: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Block"
+        className="relative flex items-center gap-4 rounded-2xl border border-neutral-200 dark:border-white/[0.09] bg-white dark:bg-neutral-950 px-5 py-4 text-sm text-neutral-800 dark:text-white/80 shadow-2xl"
+      >
+        <span>{text}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-neutral-300 dark:border-white/15 px-3 py-1 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-white/10 transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </div>
   );
 }
 

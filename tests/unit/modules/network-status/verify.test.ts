@@ -84,6 +84,18 @@ describe('inspectProof', () => {
     expect(report.checks.find((c) => c.label === 'Record matches proof')?.result).toBe('fail');
   });
 
+  it('fails when the block lists a different reference time, witness or block than the proof certifies', async () => {
+    for (const [field, altered, blockIndex] of [
+      ['reference time', { ...record, referenceTime: record.referenceTime + 1 }, block.index],
+      ['witness', { ...record, witness: '00' + record.witness.slice(2) }, block.index],
+      ['block', record, block.index + 1],
+    ] as const) {
+      const report = await inspectProof(ctx, altered, blockIndex, proofHex);
+      expect(report.outcome, field).toBe('failed');
+      expect(report.checks.find((c) => c.label === 'Record matches proof')?.detail, field).toContain(field);
+    }
+  });
+
   it('fails a valid proof that is for a different state than the block lists', async () => {
     const report = await inspectProof(ctx, { ...record, stateId: 'ff'.repeat(32) }, block.index, proofHex);
     expect(report.outcome).toBe('failed');

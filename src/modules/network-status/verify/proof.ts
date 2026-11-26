@@ -41,7 +41,7 @@ export async function inspectProof(ctx: VerifyContext, record: AggregatorRecord,
     if (certificate.outcome === 'unchecked') {
       return { ...base, outcome: 'unchecked', reason: certificate.reason, checks: [] };
     }
-    const matches = await recordMatches(record, proof);
+    const matches = await recordMatches(record, blockIndex, proof);
     const checks: Check[] = [matches.check];
     let stop: Stop = matches.stop;
     if (stop) {
@@ -96,9 +96,12 @@ async function inspectCertificate(ctx: VerifyContext, uc: UnicityCertificate): P
  * included: the SDK rule derives the leaf key from the proof's own certification
  * data, so without this a valid proof of some other state would pass.
  */
-async function recordMatches(record: AggregatorRecord, proof: InclusionProof): Promise<{ check: Check; stop: Stop }> {
+async function recordMatches(record: AggregatorRecord, blockIndex: number, proof: InclusionProof): Promise<{ check: Check; stop: Stop }> {
   const cd = proof.certificationData;
   const mismatches: string[] = [];
+  if (record.blockNumber !== blockIndex) mismatches.push('block number');
+  if (proof.referenceTime !== BigInt(record.referenceTime)) mismatches.push('reference time');
+  if (!sameHex(toHex(cd.unlockScript), record.witness)) mismatches.push('witness');
   if (!sameHex(toHex((await StateId.fromCertificationData(cd)).data), record.stateId)) mismatches.push('state ID');
   if (!sameHex(toHex(cd.transactionHash.data), record.transactionHash)) mismatches.push('transaction hash');
   if (!sameHex(toHex(cd.sourceStateHash.data), record.sourceStateHash)) mismatches.push('source state hash');
@@ -109,10 +112,10 @@ async function recordMatches(record: AggregatorRecord, proof: InclusionProof): P
   ) {
     mismatches.push('owner predicate');
   }
-  const expiresAt = cd.expiresAt === null ? null : Number(cd.expiresAt);
+  const expiresAt = cd.expiresAt === null ? null : cd.expiresAt.toString();
   if (expiresAt !== record.expiresAt) mismatches.push('deadline');
   return mismatches.length === 0
-    ? pass('Record matches proof', 'state, transaction, source state, owner and deadline are what the proof certifies')
+    ? pass('Record matches proof', 'state, transaction, source state, owner, witness, deadline and reference time are what the proof certifies')
     : fail('Record matches proof', `the block lists a different ${mismatches.join(', ')} than the proof certifies`);
 }
 

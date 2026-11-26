@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight, Link2, X } from 'lucide-react';
 import type { BlockLink, BlockLinkState } from '../../../modules/network-status/blockLink';
 import type { GatewayClient } from '../../../modules/network-status/gatewayClient';
-import { formatAge, formatInteger } from '../../../modules/network-status/format';
+import { formatAge, formatInteger, formatLocalTime } from '../../../modules/network-status/format';
 import { displayShardId } from '../../../modules/network-status/roundStore';
 import { CertificateCard } from './CertificateCard';
 import { CommitmentCard } from './CommitmentCard';
@@ -54,19 +55,40 @@ export default function BlockModal({ state, client, shardIds, newestIndex, onNav
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Modal: the page behind is inert while it is open, and focus returns to whatever opened it.
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const page = document.getElementById('root');
+    const wasInert = page?.inert ?? false;
+    if (page) page.inert = true;
     dialog.current?.focus();
     return () => {
-      document.body.style.overflow = previous;
+      if (page) page.inert = wasInert;
+      opener?.focus();
     };
   }, []);
+
+  /** Tab cycles within the dialog. */
+  const trapTab = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab' || !dialog.current) return;
+    const focusable = [...dialog.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === dialog.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const shardNumber = link ? displayShardId(link.shardId, shardIds.length > 0 ? shardIds : [link.shardId]) : null;
   const title = link ? `Shard ${shardNumber} · Block #${formatInteger(link.index)}` : 'Can’t open this block';
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 bg-black/55 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <motion.div
@@ -75,6 +97,7 @@ export default function BlockModal({ state, client, shardIds, newestIndex, onNav
         aria-modal="true"
         aria-labelledby="block-modal-title"
         tabIndex={-1}
+        onKeyDown={trapTab}
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 380, damping: 34 }}
@@ -110,7 +133,8 @@ export default function BlockModal({ state, client, shardIds, newestIndex, onNav
           {link && <BlockBody state={block} link={link} shardNumber={shardNumber ?? 0} client={client} onRetry={() => setAttempt((a) => a + 1)} />}
         </div>
       </motion.div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -123,8 +147,8 @@ function BlockSubtitle({ state, networkLabel }: { state: BlockState; networkLabe
         {networkLabel}
       </span>
       {created !== null && (
-        <span title={new Date(created).toISOString()}>
-          {new Date(created).toLocaleString()} · {formatAge(Math.max(0, Date.now() - created))} ago
+        <span>
+          {formatLocalTime(created)} · {formatAge(Math.max(0, Date.now() - created))} ago
         </span>
       )}
     </p>

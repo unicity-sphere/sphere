@@ -61,8 +61,8 @@ export interface AggregatorRecord {
   readonly ownerPredicate: OwnerPredicate;
   /** hex */
   readonly witness: string;
-  /** Request deadline, unix seconds; `null` when the request set none. */
-  readonly expiresAt: number | null;
+  /** Request deadline, unix seconds, as a decimal string (a uint64 can exceed a JS number); `null` when the request set none. */
+  readonly expiresAt: string | null;
   /** Reference time of the round the leaf was created in, unix seconds. */
   readonly referenceTime: number;
   readonly aggregateRequestCount: number;

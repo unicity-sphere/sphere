@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { IntroPage } from './pages/IntroPage';
@@ -9,22 +9,7 @@ import { DesktopShell } from './components/desktop/DesktopShell';
 import { useSphereEvents } from './sdk';
 import { trackPageView } from './services/telemetry';
 import { AnnouncementsUIProvider } from './contexts';
-
-// Retry wrapper: auto-reload page once on chunk load failure (stale deployment)
-function lazyWithRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
-  return lazy(() =>
-    importFn().catch((error) => {
-      const key = 'chunk_reload';
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, '1');
-        window.location.reload();
-        return new Promise(() => {});
-      }
-      sessionStorage.removeItem(key);
-      throw error;
-    })
-  );
-}
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
 // Lazy-load non-core pages to reduce main bundle size
 const DevelopersPage = lazyWithRetry(() => import('./pages/DevelopersPage').then(m => ({ default: m.DevelopersPage })));

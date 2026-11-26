@@ -235,7 +235,13 @@ export function parseBlockRecords(result: unknown): AggregatorRecord[] {
     };
     const hex = (value: unknown, field: string): string => (typeof value === 'string' && /^[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0 ? value : fail(field));
     const count = (value: unknown, field: string): number => toCount(value) ?? fail(field);
-    const expiresAt = data?.expiresAt === null || data?.expiresAt === undefined ? null : count(data.expiresAt, 'expiresAt');
+    const rawDeadline = data?.expiresAt;
+    const expiresAt =
+      rawDeadline === null || rawDeadline === undefined
+        ? null
+        : typeof rawDeadline === 'string' && /^\d{1,20}$/.test(rawDeadline)
+          ? BigInt(rawDeadline).toString()
+          : String(count(rawDeadline, 'expiresAt'));
     return {
       stateId: hex(record?.stateId, 'stateId'),
       transactionHash: hex(data?.transactionHash, 'transactionHash'),

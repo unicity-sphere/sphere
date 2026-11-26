@@ -16,7 +16,6 @@ export function CertificateCard(props: {
   note?: string;
 }) {
   const { title, report, trust, hex, note } = props;
-  const [raw, setRaw] = useState(false);
   const summary = report?.summary ?? null;
 
   return (
@@ -60,23 +59,33 @@ export function CertificateCard(props: {
 
       {hex && (
         <div className="mt-2">
-          <button
-            type="button"
-            onClick={() => setRaw((v) => !v)}
-            aria-expanded={raw}
-            className="text-xs text-neutral-500 hover:text-orange-500 dark:text-white/45 dark:hover:text-brand-orange transition-colors"
-          >
-            {raw ? 'Hide raw certificate' : 'Show raw certificate'}
-          </button>
-          {raw && (
-            <div className="mt-2 flex gap-2 items-start rounded-lg bg-white dark:bg-black/40 border border-neutral-200 dark:border-white/[0.06] p-2">
-              <pre className="flex-1 max-h-40 overflow-auto font-mono text-[11px] leading-4 text-neutral-700 dark:text-white/70 whitespace-pre-wrap break-all">{hex}</pre>
-              <CopyButton text={hex} label="Copy raw certificate" />
-            </div>
-          )}
+          <RawHex label="certificate" hex={hex} />
         </div>
       )}
     </section>
+  );
+}
+
+/** Hex CBOR as the gateway sent it, behind a toggle, copyable. */
+export function RawHex({ label, hex }: { label: string; hex: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="text-xs text-neutral-500 hover:text-orange-500 dark:text-white/45 dark:hover:text-brand-orange transition-colors"
+      >
+        {open ? `Hide raw ${label}` : `Show raw ${label}`}
+      </button>
+      {open && (
+        <div className="mt-2 flex gap-2 items-start rounded-lg bg-white dark:bg-black/40 border border-neutral-200 dark:border-white/[0.06] p-2">
+          <pre className="flex-1 max-h-40 overflow-auto font-mono text-[11px] leading-4 text-neutral-700 dark:text-white/70 whitespace-pre-wrap break-all">{hex}</pre>
+          <CopyButton text={hex} label={`Copy raw ${label}`} />
+        </div>
+      )}
+    </div>
   );
 }
 

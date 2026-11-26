@@ -154,6 +154,13 @@ describe('block inspector calls', () => {
     ]);
   });
 
+  it('keeps a deadline too large for a JavaScript number, as a decimal string', async () => {
+    const big = structuredClone(inspectRecords) as { result: { aggregatorRecords: { certificationData: Record<string, unknown> }[] } };
+    big.result.aggregatorRecords[0].certificationData.expiresAt = '18446744073709551615';
+    const [record] = await createGatewayClient('https://g', fakeFetch(() => ({ body: big })).impl).getBlockRecords('000', 1);
+    expect(record.expiresAt).toBe('18446744073709551615');
+  });
+
   it('refuses a record it cannot read rather than dropping it', async () => {
     const broken = structuredClone(inspectRecords) as { result: { aggregatorRecords: Record<string, unknown>[] } };
     delete broken.result.aggregatorRecords[0].stateId;

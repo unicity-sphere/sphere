@@ -2,20 +2,22 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import type { GatewayClient } from '../../../modules/network-status/gatewayClient';
-import { formatInteger, shortHash } from '../../../modules/network-status/format';
+import { formatInteger, formatUtcSeconds, shortHash } from '../../../modules/network-status/format';
 import type { AggregatorRecord, OwnerPredicate } from '../../../modules/network-status/types';
 import { messageOf } from '../../../modules/network-status/verify/certificate';
 import { toHex } from '../../../modules/network-status/verify/path';
 import { inspectProof } from '../../../modules/network-status/verify/proof';
 import { loadTrustBase } from '../../../modules/network-status/verify/trustBase';
 import type { ProofReport, TrustBaseInfo } from '../../../modules/network-status/verify/types';
-import { CertificateCard } from './CertificateCard';
+import { CertificateCard, RawHex } from './CertificateCard';
 import { Field, HashValue } from './HashValue';
 import { CheckList, VerifyBadge } from './VerifyBadge';
 
 interface ProofResult {
   readonly report: ProofReport;
   readonly trust: TrustBaseInfo | null;
+  /** The gateway's answer as received, hex CBOR; `null` when there was none. */
+  readonly hex: string | null;
 }
 
 /**
@@ -41,13 +43,13 @@ export function CommitmentCard(props: { position: number; record: AggregatorReco
       try {
         hex = await client.getInclusionProof(record.stateId, controller.signal);
       } catch (error) {
-        return { report: unchecked(`Couldn’t reach the gateway: ${messageOf(error)}`), trust: null };
+        return { report: unchecked(`Couldn’t reach the gateway: ${messageOf(error)}`), trust: null, hex: null };
       }
       try {
         const ctx = await loadTrustBase(network);
-        return { report: await inspectProof(ctx, record, blockIndex, hex), trust: ctx.info };
+        return { report: await inspectProof(ctx, record, blockIndex, hex), trust: ctx.info, hex };
       } catch (error) {
-        return { report: unchecked(`Couldn’t load the trust base: ${messageOf(error)}`), trust: null };
+        return { report: unchecked(`Couldn’t load the trust base: ${messageOf(error)}`), trust: null, hex };
       }
     })().then((result) => {
       done = true;
@@ -108,10 +110,10 @@ export function CommitmentCard(props: { position: number; record: AggregatorReco
               <HashValue value={record.witness} label="witness" />
             </Field>
             <Field label="Reference time">
-              <span className="font-mono text-xs">{new Date(record.referenceTime * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC</span>
+              <span className="font-mono text-xs">{formatUtcSeconds(record.referenceTime)}</span>
             </Field>
             <Field label="Deadline">
-              <span className="font-mono text-xs">{record.expiresAt === null ? 'none' : new Date(record.expiresAt * 1000).toISOString()}</span>
+              <span className="font-mono text-xs">{record.expiresAt === null ? 'none' : formatUtcSeconds(record.expiresAt)}</span>
             </Field>
             <Field label="Leaf index">
               <span className="font-mono text-xs">{formatInteger(record.leafIndex)}</span>
@@ -149,6 +151,7 @@ function ProofSection({ result, blockIndex, onRetry }: { result: ProofResult | n
         </p>
       )}
       {report?.path && <Path depths={report.path.depths} siblings={report.path.siblings} />}
+      {result?.hex && <RawHex label="proof" hex={result.hex} />}
       {report?.certificate && (
         <CertificateCard
           title={`Proof certificate · block ${formatInteger(report.answeredAtBlock)}`}

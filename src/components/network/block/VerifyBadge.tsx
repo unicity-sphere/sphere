@@ -24,7 +24,7 @@ const STYLE: Record<Outcome | 'checking', { label: string; className: string; Ic
 export function VerifyBadge({ outcome }: { outcome: Outcome | 'checking' }) {
   const { label, className, Icon } = STYLE[outcome];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${className}`}>
+    <span aria-live="polite" className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${className}`}>
       <Icon className={`w-3.5 h-3.5 ${outcome === 'checking' ? 'animate-spin' : ''}`} aria-hidden="true" />
       <span>{label}</span>
     </span>

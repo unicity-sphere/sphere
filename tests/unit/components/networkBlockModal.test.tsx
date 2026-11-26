@@ -76,6 +76,45 @@ describe('BlockModal', () => {
     expect(calls.filter((c) => c.startsWith('proof:'))).toEqual([`proof:${RECORDS[0].stateId}`]);
   });
 
+  it('offers the raw proof with the expanded commitment', async () => {
+    const { client } = fakeClient({ 8464891: async () => FULL });
+    renderModal(open(8464891), client);
+    fireEvent.click(await screen.findByRole('button', { name: /Commitment #1/ }));
+    const proof = await screen.findByRole('region', { name: 'Inclusion proof' });
+    fireEvent.click(await within(proof).findByRole('button', { name: 'Show raw proof' }));
+    expect(within(proof).getByText(proofFixture.result)).toBeTruthy();
+  });
+
+  it('shows times outside the JavaScript date range as numbers instead of crashing', async () => {
+    const huge = { ...RECORDS[0], referenceTime: Number.MAX_SAFE_INTEGER, expiresAt: '18446744073709551615' };
+    const { client } = fakeClient({ 8464891: async () => ({ ...FULL, createdAt: Number.MAX_SAFE_INTEGER }) });
+    client.getBlockRecords = async () => [huge];
+    renderModal(open(8464891), client);
+    fireEvent.click(await screen.findByRole('button', { name: /Commitment #1/ }));
+    expect(await screen.findByText(String(Number.MAX_SAFE_INTEGER))).toBeTruthy();
+    expect(screen.getByText('18446744073709551615')).toBeTruthy();
+  });
+
+  it('keeps Tab inside the dialog and gives focus back when it closes', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'opener';
+    document.body.appendChild(opener);
+    opener.focus();
+    const { client } = fakeClient({ 8464890: async () => EMPTY });
+    const { unmount } = renderModal(open(8464890), client);
+    await screen.findByText(/No commitments/);
+    const dialog = screen.getByRole('dialog');
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]')];
+    focusable.at(-1)!.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(focusable[0]);
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(focusable.at(-1));
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it('says a block does not exist yet when the gateway reports it missing', async () => {
     const { client } = fakeClient({});
     renderModal(open(5), client);

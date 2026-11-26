@@ -34,9 +34,27 @@ export function formatShare(share: number | null): string {
   return share === null ? '—' : `${(share * 100).toFixed(share > 0 && share < 0.01 ? 1 : 0)}`;
 }
 
-/** UTC wall time of a unix-seconds seal timestamp, e.g. `14:03:27`. */
+/** A Date for `ms`, or `null` when it is outside the range a Date can hold. */
+function dateOf(ms: number): Date | null {
+  const date = new Date(ms);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+/** UTC wall time of a unix-seconds seal timestamp, e.g. `14:03:27`; the raw number when no date can hold it. */
 export function formatSealTime(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toISOString().slice(11, 19);
+  return dateOf(unixSeconds * 1000)?.toISOString().slice(11, 19) ?? String(unixSeconds);
+}
+
+/** `2026-11-26 10:04:29 UTC` for a unix-seconds value (number or decimal string); the raw value when no date can hold it. */
+export function formatUtcSeconds(unixSeconds: number | string): string {
+  const seconds = Number(unixSeconds);
+  const date = Number.isSafeInteger(seconds) ? dateOf(seconds * 1000) : null;
+  return date ? `${date.toISOString().replace('T', ' ').slice(0, 19)} UTC` : String(unixSeconds);
+}
+
+/** Local date and time of a milliseconds timestamp; the raw number when no date can hold it. */
+export function formatLocalTime(ms: number): string {
+  return dateOf(ms)?.toLocaleString() ?? String(ms);
 }
 
 export function formatClock(ms: number): string {
