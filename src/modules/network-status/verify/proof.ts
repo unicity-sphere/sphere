@@ -1,4 +1,5 @@
 import { InclusionProofResponse } from '@unicitylabs/state-transition-sdk/lib/api/InclusionProofResponse.js';
+import { StateId } from '@unicitylabs/state-transition-sdk/lib/api/StateId.js';
 import type { InclusionProof } from '@unicitylabs/state-transition-sdk/lib/api/InclusionProof.js';
 import type { UnicityCertificate } from '@unicitylabs/state-transition-sdk/lib/api/bft/UnicityCertificate.js';
 import {
@@ -40,7 +41,7 @@ export async function inspectProof(ctx: VerifyContext, record: AggregatorRecord,
     if (certificate.outcome === 'unchecked') {
       return { ...base, outcome: 'unchecked', reason: certificate.reason, checks: [] };
     }
-    const matches = recordMatches(record, proof);
+    const matches = await recordMatches(record, proof);
     const checks: Check[] = [matches.check];
     let stop: Stop = matches.stop;
     if (stop) {
@@ -76,6 +77,10 @@ async function nonInclusion(ctx: VerifyContext, uc: UnicityCertificate, answered
   if (answeredAtBlock < blockIndex) {
     return { ...base, outcome: 'unchecked', reason: `The gateway answered from block ${formatInteger(answeredAtBlock)}, before this commitment's block` };
   }
+  // An answer whose certificate does not verify proves nothing about the tree.
+  if (certificate.outcome !== 'verified') {
+    return { ...base, outcome: certificate.outcome, reason: `The gateway says this state is not in the tree, but its certificate did not verify: ${certificate.reason}` };
+  }
   return { ...base, outcome: 'failed', reason: `The gateway says this state is not in the tree at block ${formatInteger(answeredAtBlock)}` };
 }
 
@@ -86,10 +91,15 @@ async function inspectCertificate(ctx: VerifyContext, uc: UnicityCertificate): P
   return report(checks, stop, summary);
 }
 
-/** What the block listed must be exactly what the proof certifies. */
-function recordMatches(record: AggregatorRecord, proof: InclusionProof): { check: Check; stop: Stop } {
+/**
+ * What the block listed must be exactly what the proof certifies, state ID
+ * included: the SDK rule derives the leaf key from the proof's own certification
+ * data, so without this a valid proof of some other state would pass.
+ */
+async function recordMatches(record: AggregatorRecord, proof: InclusionProof): Promise<{ check: Check; stop: Stop }> {
   const cd = proof.certificationData;
   const mismatches: string[] = [];
+  if (!sameHex(toHex((await StateId.fromCertificationData(cd)).data), record.stateId)) mismatches.push('state ID');
   if (!sameHex(toHex(cd.transactionHash.data), record.transactionHash)) mismatches.push('transaction hash');
   if (!sameHex(toHex(cd.sourceStateHash.data), record.sourceStateHash)) mismatches.push('source state hash');
   if (
@@ -102,7 +112,7 @@ function recordMatches(record: AggregatorRecord, proof: InclusionProof): { check
   const expiresAt = cd.expiresAt === null ? null : Number(cd.expiresAt);
   if (expiresAt !== record.expiresAt) mismatches.push('deadline');
   return mismatches.length === 0
-    ? pass('Record matches proof', 'transaction, source state, owner and deadline are what the proof certifies')
+    ? pass('Record matches proof', 'state, transaction, source state, owner and deadline are what the proof certifies')
     : fail('Record matches proof', `the block lists a different ${mismatches.join(', ')} than the proof certifies`);
 }
 

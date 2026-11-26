@@ -127,6 +127,11 @@ describe('block inspector calls', () => {
     expect(await createGatewayClient('https://g', fakeFetch(() => ({ body: notFound })).impl).getBlockDetail('000', 1)).toBeNull();
   });
 
+  it('refuses an answer for a different block than the one asked for', async () => {
+    const client = createGatewayClient('https://g', fakeFetch(() => ({ body: inspectBlock })).impl);
+    await expect(client.getBlockDetail('000', 8464892)).rejects.toMatchObject({ kind: 'malformed' });
+  });
+
   it('reads a block’s aggregator records', async () => {
     const { impl, seen } = fakeFetch(() => ({ body: inspectRecords }));
     const records = await createGatewayClient('https://g', impl).getBlockRecords('000', 8464891);

@@ -6,6 +6,7 @@ import { inspectProof } from '@/modules/network-status/verify/proof';
 import { decodePath } from '@/modules/network-status/verify/path';
 import type { BlockDetail } from '@/modules/network-status/types';
 import trustBaseJson from './fixtures/trustbase_testnet2.json';
+import mainnetTrustBaseJson from './fixtures/trustbase_mainnet.json';
 import blockFixture from './fixtures/inspect_block_testnet2.json';
 import recordsFixture from './fixtures/inspect_records_testnet2.json';
 import proofFixture from './fixtures/inspect_proof_testnet2.json';
@@ -83,6 +84,18 @@ describe('inspectProof', () => {
     expect(report.checks.find((c) => c.label === 'Record matches proof')?.result).toBe('fail');
   });
 
+  it('fails a valid proof that is for a different state than the block lists', async () => {
+    const report = await inspectProof(ctx, { ...record, stateId: 'ff'.repeat(32) }, block.index, proofHex);
+    expect(report.outcome).toBe('failed');
+    expect(report.checks.find((c) => c.label === 'Record matches proof')).toMatchObject({ result: 'fail', detail: expect.stringMatching(/state ID/) });
+  });
+
+  it('cannot check a non-inclusion answer whose certificate it cannot check', async () => {
+    const report = await inspectProof(verifyContextFromJson({ ...mainnetTrustBaseJson, epoch: 99 }), record, 0, nonInclusionFixture.result);
+    expect(report.kind).toBe('non-inclusion');
+    expect(report.outcome).toBe('unchecked');
+  });
+
   it('cannot check a proof sealed in another validator epoch', async () => {
     const report = await inspectProof(verifyContextFromJson({ ...trustBaseJson, epoch: 2 }), record, block.index, proofHex);
     expect(report.outcome).toBe('unchecked');
@@ -101,11 +114,18 @@ describe('inspectProof', () => {
     expect(report.reason).toMatch(/before this commitment's block/);
   });
 
-  it('fails on non-inclusion from a root that already contains the block', async () => {
-    const report = await inspectProof(ctx, record, 0, nonInclusionFixture.result);
+  it('fails on an authenticated non-inclusion from a root that already contains the block', async () => {
+    const report = await inspectProof(verifyContextFromJson(mainnetTrustBaseJson), record, 0, nonInclusionFixture.result);
     expect(report.kind).toBe('non-inclusion');
+    expect(report.certificate?.outcome).toBe('verified');
     expect(report.outcome).toBe('failed');
-    expect(report.reason).toMatch(/not in the tree/);
+    expect(report.reason).toMatch(/^The gateway says this state is not in the tree at block/);
+  });
+
+  it('fails a non-inclusion answer whose certificate fails, saying so', async () => {
+    const report = await inspectProof(ctx, record, 0, nonInclusionFixture.result);
+    expect(report.outcome).toBe('failed');
+    expect(report.reason).toMatch(/certificate did not verify: Network/);
   });
 
   it('cannot check a proof it cannot decode', async () => {

@@ -119,7 +119,11 @@ export function createGatewayClient(baseUrl: string, fetchImpl: typeof fetch = (
 
     async getBlockDetail(shardId, index, signal) {
       const answer = await rpc('get_block', { blockNumber: String(index), shardId }, signal);
-      return answer && parseBlockDetail(answer.result, shardId);
+      if (!answer) return null;
+      const block = parseBlockDetail(answer.result, shardId);
+      // Shown and verified under the requested number, so it must BE that block.
+      if (block.index !== index) throw new GatewayError('malformed', `get_block: asked for block ${index}, got ${block.index}`);
+      return block;
     },
 
     async getBlockRecords(shardId, index, signal) {
