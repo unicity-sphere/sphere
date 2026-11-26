@@ -17,6 +17,11 @@ export function explorerShardUrl(network: NetworkType, shardId: string): string 
   return `${SMT_EXPLORER_URL}?${params}`;
 }
 
+/** `0feb784b…5ac1c3f0` */
+export function shortHash(value: string, keep = 8): string {
+  return value.length <= keep * 2 + 1 ? value : `${value.slice(0, keep)}…${value.slice(-keep)}`;
+}
+
 const integer = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 export function formatInteger(n: number | null | undefined): string {
