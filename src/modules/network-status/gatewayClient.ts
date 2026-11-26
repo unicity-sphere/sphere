@@ -1,5 +1,5 @@
 import { decodeSeal } from './certificate';
-import type { RoundSummary, SealInfo } from './types';
+import type { AggregatorRecord, BlockDetail, RoundSummary, SealInfo } from './types';
 
 /** The gateway answers a missing block with HTTP 200 and this JSON-RPC `error.data`. */
 const BLOCK_NOT_FOUND = 'block not found';
@@ -38,6 +38,11 @@ export interface GatewayClient {
   getBlock(shardId: string, block: number | 'latest', signal?: AbortSignal): Promise<RoundSummary | null>;
   /** `null` when this gateway does not serve the endpoint (404). */
   getNetworkStatus(recent: number, signal?: AbortSignal): Promise<NetworkStatusPayload | null>;
+  /** The whole block, for the inspector; `null` when the shard has no such block. */
+  getBlockDetail(shardId: string, index: number, signal?: AbortSignal): Promise<BlockDetail | null>;
+  getBlockRecords(shardId: string, index: number, signal?: AbortSignal): Promise<AggregatorRecord[]>;
+  /** `get_inclusion_proof.v2`: hex CBOR `[blockNumber, InclusionProof | non-inclusion]`, answered against the latest root. */
+  getInclusionProof(stateId: string, signal?: AbortSignal): Promise<string>;
 }
 
 export function createGatewayClient(baseUrl: string, fetchImpl: typeof fetch = (...a) => fetch(...a)): GatewayClient {
@@ -78,6 +83,26 @@ export function createGatewayClient(baseUrl: string, fetchImpl: typeof fetch = (
     }
   }
 
+  /** One JSON-RPC call; `null` when the gateway answered `block not found`. */
+  async function rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{ result: unknown } | null> {
+    const answer = await request(
+      '/',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
+      },
+      signal,
+    );
+    if (answer.status !== 200) throw new GatewayError('http', `${method}: HTTP ${answer.status}`);
+    const body = answer.body as { result?: unknown; error?: { message?: string; data?: unknown } } | null;
+    if (body?.error) {
+      if (body.error.data === BLOCK_NOT_FOUND) return null;
+      throw new GatewayError('rpc', `${method}: ${body.error.message ?? 'error'}`);
+    }
+    return { result: body?.result };
+  }
+
   return {
     baseUrl: root,
 
@@ -88,27 +113,28 @@ export function createGatewayClient(baseUrl: string, fetchImpl: typeof fetch = (
     },
 
     async getBlock(shardId, block, signal) {
-      const answer = await request(
-        '/',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: ++rpcId,
-            method: 'get_block',
-            params: { blockNumber: String(block), shardId },
-          }),
-        },
-        signal,
-      );
-      if (answer.status !== 200) throw new GatewayError('http', `get_block: HTTP ${answer.status}`);
-      const body = answer.body as { result?: unknown; error?: { message?: string; data?: unknown } } | null;
-      if (body?.error) {
-        if (body.error.data === BLOCK_NOT_FOUND) return null;
-        throw new GatewayError('rpc', `get_block: ${body.error.message ?? 'error'}`);
+      const answer = await rpc('get_block', { blockNumber: String(block), shardId }, signal);
+      return answer && parseBlockResult(answer.result, shardId);
+    },
+
+    async getBlockDetail(shardId, index, signal) {
+      const answer = await rpc('get_block', { blockNumber: String(index), shardId }, signal);
+      return answer && parseBlockDetail(answer.result, shardId);
+    },
+
+    async getBlockRecords(shardId, index, signal) {
+      const answer = await rpc('get_block_records', { blockNumber: String(index), shardId }, signal);
+      if (!answer) throw new GatewayError('rpc', 'get_block_records: block not found');
+      return parseBlockRecords(answer.result);
+    },
+
+    async getInclusionProof(stateId, signal) {
+      const answer = await rpc('get_inclusion_proof.v2', { stateId }, signal);
+      const hex = answer?.result;
+      if (typeof hex !== 'string' || hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+        throw new GatewayError('malformed', 'get_inclusion_proof.v2: not a hex proof');
       }
-      return parseBlockResult(body?.result, shardId);
+      return hex;
     },
 
     async getNetworkStatus(recent, signal) {
@@ -174,6 +200,56 @@ export function parseBlockResult(result: unknown, shardId: string): RoundSummary
     empty: rootHash === block.previousBlockHash,
     seal: typeof block.unicityCertificate === 'string' ? decodeSeal(block.unicityCertificate) : null,
   };
+}
+
+export function parseBlockDetail(result: unknown, shardId: string): BlockDetail {
+  const summary = parseBlockResult(result, shardId);
+  const block = (result as { block: Record<string, unknown> }).block;
+  if (typeof block.previousBlockHash !== 'string') throw new GatewayError('malformed', 'get_block: block is missing previousBlockHash');
+  return {
+    shardId,
+    index: summary.index,
+    createdAt: summary.createdAt,
+    rootHash: summary.rootHash,
+    previousBlockHash: block.previousBlockHash,
+    totalCommitments: summary.totalCommitments,
+    empty: summary.empty,
+    certificateHex: typeof block.unicityCertificate === 'string' && block.unicityCertificate !== '' ? block.unicityCertificate : null,
+  };
+}
+
+/** Every record, or a `malformed` error: a record the page cannot read is never silently left out. */
+export function parseBlockRecords(result: unknown): AggregatorRecord[] {
+  const list = (result as { aggregatorRecords?: unknown } | null)?.aggregatorRecords;
+  if (!Array.isArray(list)) throw new GatewayError('malformed', 'get_block_records: no aggregatorRecords');
+  return list.map((raw, i) => {
+    const record = raw as Record<string, unknown> | null;
+    const data = record?.certificationData as Record<string, unknown> | undefined;
+    const owner = data?.ownerPredicate as Record<string, unknown> | undefined;
+    const fail = (field: string): never => {
+      throw new GatewayError('malformed', `get_block_records: record ${i} has no readable ${field}`);
+    };
+    const hex = (value: unknown, field: string): string => (typeof value === 'string' && /^[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0 ? value : fail(field));
+    const count = (value: unknown, field: string): number => toCount(value) ?? fail(field);
+    const expiresAt = data?.expiresAt === null || data?.expiresAt === undefined ? null : count(data.expiresAt, 'expiresAt');
+    return {
+      stateId: hex(record?.stateId, 'stateId'),
+      transactionHash: hex(data?.transactionHash, 'transactionHash'),
+      sourceStateHash: hex(data?.sourceStateHash, 'sourceStateHash'),
+      ownerPredicate: {
+        engine: count(owner?.engine, 'ownerPredicate.engine'),
+        code: typeof owner?.code === 'string' ? owner.code : fail('ownerPredicate.code'),
+        params: typeof owner?.params === 'string' ? owner.params : fail('ownerPredicate.params'),
+      },
+      witness: hex(data?.witness, 'witness'),
+      expiresAt,
+      referenceTime: count(record?.referenceTime, 'referenceTime'),
+      aggregateRequestCount: record?.aggregateRequestCount === undefined ? 1 : count(record.aggregateRequestCount, 'aggregateRequestCount'),
+      leafIndex: count(record?.leafIndex, 'leafIndex'),
+      createdAt: count(record?.createdAt, 'createdAt'),
+      blockNumber: count(record?.blockNumber, 'blockNumber'),
+    };
+  });
 }
 
 export function parseNetworkStatus(body: unknown): NetworkStatusPayload {

@@ -37,6 +37,18 @@ class FakeGateway implements GatewayClient {
     return index > height ? null : block(shardId, index);
   }
 
+  async getBlockDetail(): Promise<never> {
+    throw new Error('feeds never read block detail');
+  }
+
+  async getBlockRecords(): Promise<never> {
+    throw new Error('feeds never read block records');
+  }
+
+  async getInclusionProof(): Promise<never> {
+    throw new Error('feeds never read inclusion proofs');
+  }
+
   async getNetworkStatus(recent: number) {
     this.statusCalls.push(recent);
     return this.status;

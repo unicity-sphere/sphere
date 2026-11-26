@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { createGatewayClient, GatewayError, parseShards } from '@/modules/network-status/gatewayClient';
 import liveBlock from './fixtures/get_block_testnet2.json';
 import notFound from './fixtures/get_block_not_found.json';
+import inspectBlock from './fixtures/inspect_block_testnet2.json';
+import emptyBlock from './fixtures/inspect_empty_block_testnet2.json';
+import inspectRecords from './fixtures/inspect_records_testnet2.json';
+import inspectProof from './fixtures/inspect_proof_testnet2.json';
 
 function fakeFetch(handler: (url: string, init: RequestInit) => { status?: number; body: unknown }) {
   const seen: { url: string; body: unknown }[] = [];
@@ -99,5 +103,65 @@ describe('parseShards', () => {
     expect(parseShards({ version: 1, mode: 'bft-shard', bftShardPrefixes: ['00', '01'] })).toEqual(['00', '01']);
     expect(parseShards({ shardIds: [2, 3] })).toEqual(['2', '3']);
     expect(() => parseShards({})).toThrow(GatewayError);
+  });
+});
+
+describe('block inspector calls', () => {
+  it('reads a full block, its certificate hex and its counts', async () => {
+    const { impl, seen } = fakeFetch(() => ({ body: inspectBlock }));
+    const block = await createGatewayClient('https://g', impl).getBlockDetail('000', 8464891);
+    expect(seen[0].body).toMatchObject({ method: 'get_block', params: { blockNumber: '8464891', shardId: '000' } });
+    expect(block).toMatchObject({
+      shardId: '000',
+      index: 8464891,
+      totalCommitments: 1,
+      empty: false,
+      rootHash: inspectBlock.result.block.rootHash,
+      previousBlockHash: inspectBlock.result.block.previousBlockHash,
+      certificateHex: inspectBlock.result.block.unicityCertificate,
+    });
+  });
+
+  it('marks an empty block and answers null for a block the shard does not have', async () => {
+    expect(await createGatewayClient('https://g', fakeFetch(() => ({ body: emptyBlock })).impl).getBlockDetail('000', 8464890)).toMatchObject({ empty: true });
+    expect(await createGatewayClient('https://g', fakeFetch(() => ({ body: notFound })).impl).getBlockDetail('000', 1)).toBeNull();
+  });
+
+  it('reads a block’s aggregator records', async () => {
+    const { impl, seen } = fakeFetch(() => ({ body: inspectRecords }));
+    const records = await createGatewayClient('https://g', impl).getBlockRecords('000', 8464891);
+    expect(seen[0].body).toMatchObject({ method: 'get_block_records', params: { blockNumber: '8464891', shardId: '000' } });
+    expect(records).toEqual([
+      {
+        stateId: '0feb784b3166004ba1540d72581bc13c26eeb926c83f1904098ad23c5ac1c3f0',
+        transactionHash: 'a29a0155c11d3e3104258aeaa53b2c8f30afd3f37ed9670441a5921436cb2919',
+        sourceStateHash: '553832997310058fdef41505b0287bac3203e442cc1eb771925b8f612161d7d7',
+        ownerPredicate: { engine: 1, code: 'AQ==', params: 'AyNUI4w/cd7QgCUC2wDQ0f1W+rO/pmczFSx7H5+5jY0M' },
+        witness:
+          'd2c0b46af7bf3f900cfb226efb7b26fd30f2c658e90006e310fec54cee4aa85a07de13d7b6940caaaf148fe10170f1bbcba727b1bb7ea0bc6cef33d609c005f701',
+        expiresAt: null,
+        referenceTime: 1795687469,
+        aggregateRequestCount: 1,
+        leafIndex: 0,
+        createdAt: 1795687469628,
+        blockNumber: 8464891,
+      },
+    ]);
+  });
+
+  it('refuses a record it cannot read rather than dropping it', async () => {
+    const broken = structuredClone(inspectRecords) as { result: { aggregatorRecords: Record<string, unknown>[] } };
+    delete broken.result.aggregatorRecords[0].stateId;
+    await expect(createGatewayClient('https://g', fakeFetch(() => ({ body: broken })).impl).getBlockRecords('000', 1)).rejects.toMatchObject({ kind: 'malformed' });
+  });
+
+  it('returns an inclusion proof as hex, and refuses a non-hex answer', async () => {
+    const { impl, seen } = fakeFetch(() => ({ body: inspectProof }));
+    const hex = await createGatewayClient('https://g', impl).getInclusionProof('0feb78');
+    expect(seen[0].body).toMatchObject({ method: 'get_inclusion_proof.v2', params: { stateId: '0feb78' } });
+    expect(hex).toBe(inspectProof.result);
+
+    const odd = fakeFetch(() => ({ body: { jsonrpc: '2.0', result: { proof: 'zz' }, id: 1 } }));
+    await expect(createGatewayClient('https://g', odd.impl).getInclusionProof('0feb78')).rejects.toMatchObject({ kind: 'malformed' });
   });
 });
