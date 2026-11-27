@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { shortHash } from '../../../modules/network-status/format';
 
 /** A hash or other long hex value: monospace, wraps anywhere, copyable. */
-export function HashValue({ value, label, short = false }: { value: string; label: string; short?: boolean }) {
+export function HashValue({ value, label }: { value: string; label: string }) {
   return (
     <span className="inline-flex items-start gap-1.5 min-w-0 max-w-full">
-      <span className="font-mono text-xs text-neutral-800 dark:text-white/85 break-all" title={short ? value : undefined}>
-        {short ? shortHash(value) : value}
-      </span>
+      <span className="font-mono text-xs text-neutral-800 dark:text-white/85 break-all">{value}</span>
       <CopyButton text={value} label={`Copy ${label}`} />
     </span>
   );

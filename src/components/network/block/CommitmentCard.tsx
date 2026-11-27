@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { NetworkType } from '@unicitylabs/sphere-sdk';
 import type { GatewayClient } from '../../../modules/network-status/gatewayClient';
-import { formatInteger, formatUtcSeconds, shortHash } from '../../../modules/network-status/format';
+import { formatInteger, formatUtcSeconds } from '../../../modules/network-status/format';
 import type { AggregatorRecord, OwnerPredicate } from '../../../modules/network-status/types';
 import { messageOf } from '../../../modules/network-status/verify/certificate';
 import { toHex } from '../../../modules/network-status/verify/path';
@@ -71,19 +71,15 @@ export function CommitmentCard(props: { position: number; record: AggregatorReco
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`Commitment #${position}, state ${shortHash(record.stateId)}`}
+        aria-label={`Commitment #${position}, state ${record.stateId}`}
         className="w-full flex items-center gap-3 px-3 sm:px-4 py-2.5 text-left hover:bg-neutral-50 dark:hover:bg-white/[0.03] transition-colors"
       >
         <span className="font-mono text-xs text-neutral-500 dark:text-white/40 w-8 shrink-0">#{position}</span>
-        <span className="min-w-0 flex-1 grid sm:grid-cols-2 gap-x-4">
-          <span className="truncate font-mono text-xs text-neutral-900 dark:text-white/90">
-            <span className="text-neutral-500 dark:text-white/40">state </span>
-            {shortHash(record.stateId)}
-          </span>
-          <span className="truncate font-mono text-xs text-neutral-700 dark:text-white/65">
-            <span className="text-neutral-500 dark:text-white/40">tx </span>
-            {shortHash(record.transactionHash)}
-          </span>
+        <span className="min-w-0 flex-1 grid grid-cols-[2.75rem_1fr] gap-x-2 gap-y-0.5 font-mono text-xs">
+          <span className="text-neutral-500 dark:text-white/40">state</span>
+          <span className="min-w-0 break-all text-neutral-900 dark:text-white/90">{record.stateId}</span>
+          <span className="text-neutral-500 dark:text-white/40">tx</span>
+          <span className="min-w-0 break-all text-neutral-700 dark:text-white/65">{record.transactionHash}</span>
         </span>
         {record.aggregateRequestCount > 1 && (
           <span className="hidden sm:inline text-[11px] text-neutral-500 dark:text-white/45 whitespace-nowrap">aggregates {formatInteger(record.aggregateRequestCount)}</span>
@@ -176,7 +172,7 @@ function Path({ depths, siblings }: { depths: readonly number[]; siblings: reado
         {siblings.map((sibling, i) => (
           <li key={depths[i]} className="flex items-center gap-3 px-2.5 py-1">
             <span className="w-16 shrink-0 font-mono text-[11px] text-neutral-500 dark:text-white/40">depth {depths[i]}</span>
-            <HashValue value={sibling} label={`sibling at depth ${depths[i]}`} short />
+            <HashValue value={sibling} label={`sibling at depth ${depths[i]}`} />
           </li>
         ))}
       </ol>

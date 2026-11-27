@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import BlockModal from '@/components/network/block/BlockModal';
 import { GatewayError, parseBlockDetail, parseBlockRecords, type GatewayClient } from '@/modules/network-status/gatewayClient';
 import type { BlockLinkState } from '@/modules/network-status/blockLink';
+import { loadTrustBase } from '@/modules/network-status/verify/trustBase';
+import { inspectProof } from '@/modules/network-status/verify/proof';
 import type { BlockDetail } from '@/modules/network-status/types';
 import blockFixture from '../modules/network-status/fixtures/inspect_block_testnet2.json';
 import emptyFixture from '../modules/network-status/fixtures/inspect_empty_block_testnet2.json';
@@ -74,6 +76,25 @@ describe('BlockModal', () => {
     // The proof's own badge, and the badge of the certificate that signs the root it leads to.
     expect(await within(proof).findAllByText('Verified')).toHaveLength(2);
     expect(calls.filter((c) => c.startsWith('proof:'))).toEqual([`proof:${RECORDS[0].stateId}`]);
+  });
+
+  it('shows a commitment’s state ID and transaction hash in full', async () => {
+    const { client } = fakeClient({ 8464891: async () => FULL });
+    renderModal(open(8464891), client);
+    const card = await screen.findByRole('button', { name: /Commitment #1/ });
+    expect(within(card).getByText(RECORDS[0].stateId)).toBeTruthy();
+    expect(within(card).getByText(RECORDS[0].transactionHash)).toBeTruthy();
+  });
+
+  it('shows every sibling of the Merkle path in full', async () => {
+    const { client } = fakeClient({ 8464891: async () => FULL });
+    renderModal(open(8464891), client);
+    fireEvent.click(await screen.findByRole('button', { name: /Commitment #1/ }));
+    const proof = await screen.findByRole('region', { name: 'Inclusion proof' });
+    await within(proof).findAllByText('Verified');
+    const { siblings } = (await inspectProof(await loadTrustBase('testnet2'), RECORDS[0], FULL.index, proofFixture.result)).path!;
+    expect(siblings.length).toBeGreaterThan(1);
+    for (const sibling of siblings) expect(within(proof).getByText(sibling)).toBeTruthy();
   });
 
   it('offers the raw proof with the expanded commitment', async () => {
