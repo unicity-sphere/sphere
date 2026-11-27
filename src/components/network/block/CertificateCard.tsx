@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { formatInteger, formatSealTime } from '../../../modules/network-status/format';
 import type { CertificateReport, TrustBaseInfo } from '../../../modules/network-status/verify/types';
 import { CopyButton, Field, HashValue } from './HashValue';
+import { StructureToggle } from './StructureTree';
 import { CheckList, VerifyBadge } from './VerifyBadge';
 
 /**
@@ -58,8 +59,9 @@ export function CertificateCard(props: {
       )}
 
       {hex && (
-        <div className="mt-2">
+        <div className="mt-2 space-y-2">
           <RawHex label="certificate" hex={hex} />
+          <StructureToggle label="certificate" kind="certificate" hex={hex} />
         </div>
       )}
     </section>
