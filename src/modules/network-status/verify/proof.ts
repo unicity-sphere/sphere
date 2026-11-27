@@ -17,8 +17,8 @@ import type { CertificateReport, Check, ProofReport } from './types';
 /**
  * A commitment's inclusion proof, checked against what its block reported.
  *
- * The gateway answers against its LATEST certified root, so the proof's block
- * number and certificate are newer than the record's block. A "not included"
+ * The gateway answers against its LATEST certified root, so the proof's
+ * certificate is for a newer round than the record's block. A "not included"
  * answer from a root older than the record's block is no evidence against the
  * record (a gateway can answer a block behind during a leader failover), so it
  * is reported as unchecked, never as failed.
@@ -30,9 +30,11 @@ export async function inspectProof(ctx: VerifyContext, record: AggregatorRecord,
   } catch (error) {
     return empty(`The proof could not be decoded: ${messageOf(error)}`);
   }
-  const answeredAtBlock = Number(response.blockNumber);
+  const proof = response.inclusionProof;
+  // The block number around the proof is not signed; the certificate's shard round is. Every
+  // decision about the answer's age, and the number shown, comes from the certified round.
+  const answeredAtBlock = Number((proof ? proof.unicityCertificate : response.unicityCertificate).inputRecord.roundNumber);
   try {
-    const proof = response.inclusionProof;
     if (!proof) return await nonInclusion(ctx, response.unicityCertificate, answeredAtBlock, blockIndex);
 
     const certificate = await inspectCertificate(ctx, proof.unicityCertificate);
