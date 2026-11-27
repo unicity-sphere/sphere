@@ -108,8 +108,23 @@ describe('readCbor', () => {
 
   it('refuses a declared size larger than the input without allocating it', () => {
     expect(read('5bffffffffffffffff').root).toMatchObject({ kind: 'fault', message: expect.stringMatching(/truncated/) });
-    expect(read('9bffffffffffffffff').root).toMatchObject({ kind: 'fault', message: expect.stringMatching(/truncated/) });
-    expect(read('bbffffffffffffffff').root).toMatchObject({ kind: 'fault', message: expect.stringMatching(/truncated/) });
+    const array = read('9bffffffffffffffff').root!;
+    expect(array).toMatchObject({ kind: 'array', declared: 18446744073709551615n });
+    expect(array.kind === 'array' && array.items).toEqual([expect.objectContaining({ kind: 'fault', message: expect.stringMatching(/truncated/) })]);
+    const map = read('bbffffffffffffffff').root!;
+    expect(map).toMatchObject({ kind: 'map', declared: 18446744073709551615n });
+    expect(map.kind === 'map' && map.entries).toHaveLength(1);
+  });
+
+  it('keeps the items read before a container is cut off, with the count it declared', () => {
+    const doc = read('830102');
+    expect(doc.root).toMatchObject({ kind: 'array', declared: 3n, offset: 0, length: 3 });
+    const items = doc.root!.kind === 'array' ? doc.root!.items : [];
+    expect(items.map((i) => i.kind)).toEqual(['uint', 'uint', 'fault']);
+    expect(items[2]).toMatchObject({ message: expect.stringMatching(/truncated/) });
+    const map = read('a20102').root!;
+    expect(map).toMatchObject({ kind: 'map', declared: 2n });
+    expect(map.kind === 'map' && map.entries[0]).toMatchObject({ key: { kind: 'uint', value: 1n }, value: { kind: 'uint', value: 2n } });
   });
 
   it('reads floats, simple values and negative integers', () => {

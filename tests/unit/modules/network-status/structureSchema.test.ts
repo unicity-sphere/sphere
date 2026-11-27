@@ -55,9 +55,12 @@ describe('certificateStructure', () => {
     expect(at(root, 'unicitySeal', 'timestamp')).toMatchObject({ value: '1795687470', note: formatUtcSeconds('1795687470') });
     const signatures = at(root, 'unicitySeal', 'signatures');
     expect(signatures.type).toBe('map(4)');
-    expect(signatures.children).toHaveLength(4);
-    for (const signature of signatures.children) {
-      expect(signature.label).toMatch(/^16Uiu2/);
+    // A key row, then its value row labelled with the key, for each of the four signers.
+    expect(signatures.children).toHaveLength(8);
+    for (let i = 0; i < 8; i += 2) {
+      const [key, signature] = [signatures.children[i], signatures.children[i + 1]];
+      expect(key).toMatchObject({ label: 'key', type: 'text', value: expect.stringMatching(/^16Uiu2/) });
+      expect(signature.label).toBe(key.value);
       expect(signature.type).toBe('bytes(65)');
       expect(signature.value).toMatch(/^[0-9a-f]{130}$/);
     }
@@ -99,6 +102,43 @@ describe('certificateStructure', () => {
     expect(at(view.root, 'shardTreeCertificate', 'shard')).toMatchObject({ mismatch: 'no end marker', note: null });
   });
 
+  it('keeps the readable fields of a cut certificate and says which fields the input ends before', () => {
+    const view = certificateStructure('d998598701');
+    expect(view.root).toMatchObject({
+      type: 'tag 39001 · array(7)',
+      mismatch: 'not read: the input ends before technicalRecordHash, shardConfigurationHash, shardTreeCertificate, unicityTreeCertificate, unicitySeal',
+    });
+    expect(at(view.root, 'version')).toMatchObject({ value: '1', mismatch: null });
+    expect(at(view.root, 'inputRecord')).toMatchObject({ type: 'fault', mismatch: expect.stringMatching(/truncated/) });
+  });
+
+  it('refuses a shard id whose end marker is not in its last byte, as the decoders do', () => {
+    for (const shard of ['421000', '428000']) {
+      const view = certificateStructure(edited('d9985b83014110', 'd9985b8301' + shard));
+      expect(at(view.root, 'shardTreeCertificate', 'shard'), shard).toMatchObject({ mismatch: 'no end marker', note: null });
+    }
+  });
+
+  it('shows every map key as its own element, with its offset and any mismatch', () => {
+    const key = '16Uiu2HAm33LfAYP811b4fpW5x8qejmujuB1LFCXPGGTT6bumHrvy';
+    const keyHex = Array.from(new TextEncoder().encode(key), (b) => b.toString(16).padStart(2, '0')).join('');
+    const intact = at(certificateStructure(certificateHex).root, 'unicitySeal', 'signatures');
+    expect(intact.children).toHaveLength(8);
+    expect(intact.children[0]).toMatchObject({ label: 'key', type: 'text', value: key });
+    expect(intact.children[1]).toMatchObject({ label: key, type: 'bytes(65)' });
+    let cursor = intact.children[0].offset;
+    for (const child of intact.children) {
+      expect(child.offset).toBe(cursor);
+      cursor += child.length;
+    }
+    expect(cursor).toBe(intact.offset + intact.length);
+
+    const view = certificateStructure(edited('7835' + keyHex, '5835' + keyHex));
+    const signatures = at(view.root, 'unicitySeal', 'signatures');
+    expect(signatures.children[0]).toMatchObject({ label: 'key', type: 'bytes(53)', value: keyHex, mismatch: 'expected text, got bytes(53)' });
+    expect(view.mismatches).toBe(1);
+  });
+
   it('counts trailing bytes and turns non-hex input into a fault', () => {
     const trailing = certificateStructure(certificateHex + '00');
     expect(trailing).toMatchObject({ trailing: 1, mismatches: 1 });
@@ -125,6 +165,16 @@ describe('proofStructure', () => {
     expect(names(at(proof, 'certificationData'))).toEqual(['version', 'lockScript', 'sourceStateHash', 'transactionHash', 'expiresAt', 'unlockScript']);
     expect(names(at(proof, 'certificationData', 'lockScript'))).toEqual(['engine', 'code', 'parameters']);
     expect(at(proof, 'unicityCertificate', 'unicitySeal', 'networkId').note).toBe('testnet2');
+  });
+
+  it('flags leaf fields that are neither all present nor all null, as the SDK refuses them', () => {
+    expect(nonInclusionFixture.result.split('d998798501f6f6f6')).toHaveLength(2);
+    const view = proofStructure(nonInclusionFixture.result.replace('d998798501f6f6f6', 'd998798501f600f6'));
+    expect(at(view.root, 'inclusionProof')).toMatchObject({
+      mismatch: 'certificationData, referenceTime and inclusionCertificate must be all present or all null',
+    });
+    expect(at(view.root, 'inclusionProof', 'referenceTime')).toMatchObject({ value: '0', mismatch: null });
+    expect(view.mismatches).toBe(1);
   });
 
   it('names a non-inclusion answer, whose leaf fields are null', () => {

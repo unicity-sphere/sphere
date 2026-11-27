@@ -38,7 +38,14 @@ type Spec =
   | { readonly kind: 'uint'; readonly interpret?: 'utc-seconds' | 'network' }
   | { readonly kind: 'bytes'; readonly size?: number; readonly interpret?: 'shard' }
   | { readonly kind: 'text' }
-  | { readonly kind: 'record'; readonly title: string; readonly tag: bigint | null; readonly fields: readonly Field[] }
+  | {
+      readonly kind: 'record';
+      readonly title: string;
+      readonly tag: bigint | null;
+      readonly fields: readonly Field[];
+      /** Fields that must be all present or all null. */
+      readonly together?: readonly string[];
+    }
   | { readonly kind: 'list'; readonly of: Spec }
   | { readonly kind: 'map'; readonly key: Spec; readonly value: Spec };
 
@@ -156,6 +163,8 @@ const INCLUSION_PROOF: Spec = {
     field('inclusionCertificate', BYTES, true),
     field('unicityCertificate', UNICITY_CERTIFICATE),
   ],
+  // A certified leaf carries all three; a state not (yet) in the tree, none.
+  together: ['certificationData', 'referenceTime', 'inclusionCertificate'],
 };
 
 const INCLUSION_PROOF_RESPONSE: Spec = {
@@ -226,13 +235,12 @@ function annotate(item: CborItem, spec: Spec, place: Place): StructureNode {
     }
     case 'map': {
       if (item.kind !== 'map') break;
-      const children = item.entries.flatMap(({ key, value }) => {
-        if (key.kind === 'fault') return [generic(key, { label: null, name: null })];
-        const child = annotate(value, spec.value, { label: keyLabel(key), name: null });
-        const keyType = typeOf(key);
-        const keyMismatch = spec.key.kind !== key.kind ? `key: expected ${expected(spec.key, false)}, got ${keyType}` : null;
-        return [keyMismatch && !child.mismatch ? { ...child, mismatch: keyMismatch } : child];
-      });
+      // Key and value each get a row, in wire order, so every byte of the map is in a row.
+      const children = item.entries.flatMap(({ key, value }) =>
+        key.kind === 'fault'
+          ? [generic(key, { label: 'key', name: null })]
+          : [annotate(key, spec.key, { label: 'key', name: null }), annotate(value, spec.value, { label: keyLabel(key), name: null })],
+      );
       return { ...generic(item, place), children };
     }
   }
@@ -254,8 +262,24 @@ function record(item: CborItem, spec: Extract<Spec, { kind: 'record' }>, place: 
     if (!f) return { ...generic(child, { label: `[${i}]`, name: null }), mismatch: child.kind === 'fault' ? child.message : 'not in the schema' };
     return annotate(child, f.spec, { label: `[${i}]`, name: f.name, nullable: f.nullable, version: f.version });
   });
-  const missing = spec.fields.slice(array.items.length).map((f) => f.name);
-  return { ...generic(item, place), children, mismatch: missing.length ? `missing ${missing.join(', ')}` : null };
+  // Fields the header declares but the input ended before, apart from fields the header leaves out.
+  const declared = array.declared < BigInt(spec.fields.length) ? Number(array.declared) : spec.fields.length;
+  const notRead = spec.fields.slice(array.items.length, declared).map((f) => f.name);
+  const missing = spec.fields.slice(declared).map((f) => f.name);
+  const problems = [
+    notRead.length ? `not read: the input ends before ${notRead.join(', ')}` : null,
+    missing.length ? `missing ${missing.join(', ')}` : null,
+    spec.together ? togetherProblem(spec.together, children) : null,
+  ].filter((p) => p !== null);
+  return { ...generic(item, place), children, mismatch: problems.length ? problems.join('; ') : null };
+}
+
+function togetherProblem(names: readonly string[], children: readonly StructureNode[]): string | null {
+  const fields = names.map((name) => children.find((c) => c.name === name));
+  if (fields.some((f) => f === undefined || f.type === 'fault')) return null;
+  const nulls = fields.filter((f) => f!.type === 'null').length;
+  if (nulls === 0 || nulls === fields.length) return null;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} must be all present or all null`;
 }
 
 /** The item as it is, with no layout applied. */
@@ -282,8 +306,10 @@ function generic(item: CborItem, place: Place): StructureNode {
     case 'map':
       return node({
         ...at,
-        children: item.entries.map(({ key, value }) =>
-          key.kind === 'fault' ? generic(key, { label: null, name: null }) : generic(value, { label: keyLabel(key), name: null }),
+        children: item.entries.flatMap(({ key, value }) =>
+          key.kind === 'fault'
+            ? [generic(key, { label: 'key', name: null })]
+            : [generic(key, { label: 'key', name: null }), generic(value, { label: keyLabel(key), name: null })],
         ),
       });
     case 'tag':
@@ -303,9 +329,9 @@ function typeOf(item: CborItem): string {
     case 'bytes':
       return `bytes(${item.value.length})`;
     case 'array':
-      return `array(${item.items.length})`;
+      return `array(${item.declared})`;
     case 'map':
-      return `map(${item.entries.length})`;
+      return `map(${item.declared})`;
     case 'tag':
       return item.item.kind === 'array' ? `tag ${item.tag} · ${typeOf(item.item)}` : `tag ${item.tag}`;
     case 'simple':
@@ -331,8 +357,9 @@ function expected(spec: Spec, nullable: boolean): string {
   return nullable ? `${base} or null` : base;
 }
 
+/** The label of a map value: its key, when the key is text or an integer. */
 function keyLabel(key: CborItem): string {
-  return key.kind === 'text' ? key.value : key.kind === 'uint' || key.kind === 'nint' ? key.value.toString() : typeOf(key);
+  return key.kind === 'text' ? key.value : key.kind === 'uint' || key.kind === 'nint' ? key.value.toString() : 'value';
 }
 
 function uintNote(value: string, interpret: 'utc-seconds' | 'network' | undefined): string | null {
@@ -344,8 +371,12 @@ function uintNote(value: string, interpret: 'utc-seconds' | 'network' | undefine
   return null;
 }
 
-/** A shard id's bits: the bytes' bits up to the last 1, which marks the end; `null` with no marker. */
+/**
+ * A shard id's bits: the bits before the end marker, the last 1 bit, which must be in the
+ * last byte (as `ShardId.decode` requires); `null` without one.
+ */
 function shardBits(bytes: Uint8Array): string | null {
+  if (bytes.length === 0 || bytes[bytes.length - 1] === 0) return null;
   const bits = Array.from(bytes, (b) => b.toString(2).padStart(8, '0')).join('');
   const end = bits.lastIndexOf('1');
   return end === -1 ? null : bits.slice(0, end);

@@ -106,6 +106,8 @@ describe('BlockModal', () => {
     expect(within(certificate).getByText('dcf8c1decc62018d313776b56d906b49c8f2fa2dc722e6d7b8fc935e8ef9ce48')).toBeTruthy();
     expect(within(certificate).getByText(/matches the schema/)).toBeTruthy();
     expect(within(certificate).getByText('roundNumber')).toBeTruthy();
+    // Every byte string can be copied, a one-byte shard id included.
+    expect(within(certificate).getByRole('button', { name: 'Copy shard' })).toBeTruthy();
     fireEvent.click(within(certificate).getByRole('button', { name: 'Collapse inputRecord' }));
     expect(within(certificate).queryByText('roundNumber')).toBeNull();
     fireEvent.click(within(certificate).getByRole('button', { name: 'Hide structure' }));

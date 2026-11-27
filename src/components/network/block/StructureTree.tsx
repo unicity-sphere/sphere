@@ -84,7 +84,12 @@ function Node({ node }: { node: StructureNode }) {
         {node.label && <span className="text-neutral-400 dark:text-white/35 break-all">{node.label}</span>}
         {node.name && <span className="text-neutral-900 dark:text-white/90">{node.name}</span>}
         <span className="text-neutral-500 dark:text-white/40">{node.type}</span>
-        {node.value !== null && !longValue && <span className="text-neutral-800 dark:text-white/85 break-all">{node.value}</span>}
+        {node.value !== null && !longValue && (
+          <span className="inline-flex items-baseline gap-1.5 min-w-0">
+            <span className="text-neutral-800 dark:text-white/85 break-all">{node.value}</span>
+            {node.copy && <CopyButton text={node.copy} label={`Copy ${title}`} />}
+          </span>
+        )}
         {node.note && <span className="text-sky-700 dark:text-sky-300/80">{node.note}</span>}
         <span className="ml-auto pl-2 text-[10px] text-neutral-400 dark:text-white/30 whitespace-nowrap" title="Byte offset and length">
           @{node.offset} · {node.length} B

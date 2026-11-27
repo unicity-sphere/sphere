@@ -16,8 +16,9 @@ export type CborItem = At &
     | { readonly kind: 'uint' | 'nint'; readonly value: bigint }
     | { readonly kind: 'bytes'; readonly value: Uint8Array }
     | { readonly kind: 'text'; readonly value: string }
-    | { readonly kind: 'array'; readonly items: readonly CborItem[] }
-    | { readonly kind: 'map'; readonly entries: readonly { readonly key: CborItem; readonly value: CborItem }[] }
+    /** `declared` is the count in the header; fewer items were read when the input ended first. */
+    | { readonly kind: 'array'; readonly declared: bigint; readonly items: readonly CborItem[] }
+    | { readonly kind: 'map'; readonly declared: bigint; readonly entries: readonly { readonly key: CborItem; readonly value: CborItem }[] }
     | { readonly kind: 'tag'; readonly tag: bigint; readonly item: CborItem }
     | { readonly kind: 'simple'; readonly value: boolean | null | undefined | number }
     | { readonly kind: 'float'; readonly value: number }
@@ -88,15 +89,13 @@ class Reader {
         }
       }
       case 4: {
-        const left = this.bytes.length - this.pos;
-        if (argument > BigInt(left)) return this.fault(offset, `truncated: declares ${argument} items, ${left} bytes left`);
+        // Bounded by the input, not the declared count: every item reads at least one byte,
+        // and the end of the input is a fault, which stops the loop.
         const items: CborItem[] = [];
         for (let i = 0n; i < argument && !this.stopped; i++) items.push(this.item(depth + 1));
-        return { kind: 'array', items, offset, length: this.end(offset) };
+        return { kind: 'array', declared: argument, items, offset, length: this.end(offset) };
       }
       case 5: {
-        const left = this.bytes.length - this.pos;
-        if (argument * 2n > BigInt(left)) return this.fault(offset, `truncated: declares ${argument} entries, ${left} bytes left`);
         const entries: { key: CborItem; value: CborItem }[] = [];
         for (let i = 0n; i < argument && !this.stopped; i++) {
           const key = this.item(depth + 1);
@@ -106,7 +105,7 @@ class Reader {
           }
           entries.push({ key, value: this.item(depth + 1) });
         }
-        return { kind: 'map', entries, offset, length: this.end(offset) };
+        return { kind: 'map', declared: argument, entries, offset, length: this.end(offset) };
       }
       default: {
         const item = this.item(depth + 1);
