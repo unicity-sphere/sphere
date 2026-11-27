@@ -10,6 +10,7 @@ import { inspectProof } from '../../../modules/network-status/verify/proof';
 import { loadTrustBase } from '../../../modules/network-status/verify/trustBase';
 import type { ProofReport, TrustBaseInfo } from '../../../modules/network-status/verify/types';
 import { CertificateCard, RawHex } from './CertificateCard';
+import { StructureToggle } from './StructureTree';
 import { Field, HashValue } from './HashValue';
 import { CheckList, VerifyBadge } from './VerifyBadge';
 
@@ -147,7 +148,12 @@ function ProofSection({ result, blockIndex, onRetry }: { result: ProofResult | n
         </p>
       )}
       {report?.path && <Path depths={report.path.depths} siblings={report.path.siblings} />}
-      {result?.hex && <RawHex label="proof" hex={result.hex} />}
+      {result?.hex && (
+        <div className="space-y-2">
+          <RawHex label="proof" hex={result.hex} />
+          <StructureToggle label="proof" kind="proof" hex={result.hex} />
+        </div>
+      )}
       {report?.certificate && (
         <CertificateCard
           title={`Proof certificate · block ${formatInteger(report.answeredAtBlock)}`}

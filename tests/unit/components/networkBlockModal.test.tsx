@@ -97,6 +97,34 @@ describe('BlockModal', () => {
     for (const sibling of siblings) expect(within(proof).getByText(sibling)).toBeTruthy();
   });
 
+  it('shows the block certificate’s structure with every field named, and collapses a node', async () => {
+    const { client } = fakeClient({ 8464891: async () => FULL });
+    renderModal(open(8464891), client);
+    const certificate = await screen.findByRole('region', { name: 'Block certificate' });
+    fireEvent.click(within(certificate).getByRole('button', { name: 'Show structure' }));
+    expect(within(certificate).getByText('shardConfigurationHash')).toBeTruthy();
+    expect(within(certificate).getByText('dcf8c1decc62018d313776b56d906b49c8f2fa2dc722e6d7b8fc935e8ef9ce48')).toBeTruthy();
+    expect(within(certificate).getByText(/matches the schema/)).toBeTruthy();
+    expect(within(certificate).getByText('roundNumber')).toBeTruthy();
+    // Every byte string can be copied, a one-byte shard id included.
+    expect(within(certificate).getByRole('button', { name: 'Copy shard' })).toBeTruthy();
+    fireEvent.click(within(certificate).getByRole('button', { name: 'Collapse inputRecord' }));
+    expect(within(certificate).queryByText('roundNumber')).toBeNull();
+    fireEvent.click(within(certificate).getByRole('button', { name: 'Hide structure' }));
+    expect(within(certificate).queryByText('shardConfigurationHash')).toBeNull();
+  });
+
+  it('shows the inclusion proof’s structure', async () => {
+    const { client } = fakeClient({ 8464891: async () => FULL });
+    renderModal(open(8464891), client);
+    fireEvent.click(await screen.findByRole('button', { name: /Commitment #1/ }));
+    const proof = await screen.findByRole('region', { name: 'Inclusion proof' });
+    await within(proof).findAllByText('Verified');
+    fireEvent.click(within(proof).getByRole('button', { name: 'Show structure' }));
+    expect(within(proof).getByText('certificationData')).toBeTruthy();
+    expect(within(proof).getByText('lockScript')).toBeTruthy();
+  });
+
   it('offers the raw proof with the expanded commitment', async () => {
     const { client } = fakeClient({ 8464891: async () => FULL });
     renderModal(open(8464891), client);
