@@ -44,6 +44,7 @@ npx tsc --noEmit     # Type check only
 /markets             — MarketsPage (lazy)
 /explore-agents      — AgentsPage (lazy)
 /about               — AboutPage (lazy)
+/network             — NetworkPage (lazy): live network status from the public gateway (src/modules/network-status/)
 ```
 
 All routes except `/` and `/connect` are wrapped in `DashboardLayout`.

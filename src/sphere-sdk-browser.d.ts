@@ -67,4 +67,15 @@ declare module '@unicitylabs/sphere-sdk/impl/browser' {
   export function createUnicityAggregatorProvider(
     config: BrowserAggregatorProviderConfig,
   ): OracleProvider;
+
+  /**
+   * Loads a trust base. With a network and no URL it returns the trust base the
+   * SDK embeds for that network (the one the wallet verifies payments against);
+   * an unknown network throws.
+   */
+  export interface TrustBaseLoader {
+    load(): Promise<unknown | null>;
+  }
+
+  export function createBrowserTrustBaseLoader(networkOrUrl: NetworkType | string, fallbackNetwork?: NetworkType): TrustBaseLoader;
 }

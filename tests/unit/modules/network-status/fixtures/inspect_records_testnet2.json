@@ -1,0 +1,28 @@
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "aggregatorRecords": [
+            {
+                "stateId": "0feb784b3166004ba1540d72581bc13c26eeb926c83f1904098ad23c5ac1c3f0",
+                "certificationData": {
+                    "version": 2,
+                    "ownerPredicate": {
+                        "engine": 1,
+                        "code": "AQ==",
+                        "params": "AyNUI4w/cd7QgCUC2wDQ0f1W+rO/pmczFSx7H5+5jY0M"
+                    },
+                    "sourceStateHash": "553832997310058fdef41505b0287bac3203e442cc1eb771925b8f612161d7d7",
+                    "transactionHash": "a29a0155c11d3e3104258aeaa53b2c8f30afd3f37ed9670441a5921436cb2919",
+                    "expiresAt": null,
+                    "witness": "d2c0b46af7bf3f900cfb226efb7b26fd30f2c658e90006e310fec54cee4aa85a07de13d7b6940caaaf148fe10170f1bbcba727b1bb7ea0bc6cef33d609c005f701"
+                },
+                "referenceTime": 1795687469,
+                "aggregateRequestCount": "1",
+                "blockNumber": "8464891",
+                "leafIndex": "0",
+                "createdAt": "1795687469628"
+            }
+        ]
+    },
+    "id": 1
+}

@@ -391,6 +391,10 @@ if [ -w "$(dirname "$HEADERS_CONF")" ]; then
   # Bridge (src/modules/bridge/assets): the Sepolia RPC in the USDC manifest. The return
   # service's origin comes from BRIDGE_RETURN_SERVICE_URL_SEPOLIA_USDC in the loop above.
   CONNECT="$CONNECT https://sepolia.gateway.tenderly.co"
+  # Network page (src/pages/NetworkPage.tsx): reads the public gateway of every network
+  # it offers (the active one plus any rolled out), which AGGREGATOR_URL above names
+  # only for the active network, and only when it is set.
+  CONNECT="$CONNECT https://gateway.testnet2.unicity.network https://gateway.mainnet.unicity.network"
   # WalletConnect (src/modules/bridge/assets/evm-usdc/walletConnect.ts), only where a
   # project ID is set: the relay, the wallet list and pings of its modal, and the
   # modal's font. Its Verify iframe (verify.walletconnect.org) is covered by frame-src
