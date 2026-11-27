@@ -126,6 +126,25 @@ describe('inspectProof', () => {
     expect(report.reason).toMatch(/before this commitment's block/);
   });
 
+  it('judges a non-inclusion answer’s age by its certified round, not the unsigned block number around it', async () => {
+    // The wrapper's block number is not signed; the certificate's shard round (9,601,561) is.
+    const hex: string = nonInclusionFixture.result;
+    expect(hex.startsWith('821a00928219')).toBe(true);
+    const inflated = '821a0fffffff' + hex.slice('821a00928219'.length);
+    const report = await inspectProof(verifyContextFromJson(mainnetTrustBaseJson), record, 9_601_562, inflated);
+    expect(report.kind).toBe('non-inclusion');
+    expect(report.answeredAtBlock).toBe(9_601_561);
+    expect(report.outcome).toBe('unchecked');
+    expect(report.reason).toMatch(/before this commitment's block/);
+  });
+
+  it('reports the certified round as the block an inclusion proof answers from', async () => {
+    expect(proofHex.startsWith('821a00817fe9')).toBe(true);
+    const report = await inspectProof(ctx, record, block.index, '821a0fffffff' + proofHex.slice('821a00817fe9'.length));
+    expect(report.answeredAtBlock).toBe(8_486_889);
+    expect(report.outcome).toBe('verified');
+  });
+
   it('fails on an authenticated non-inclusion from a root that already contains the block', async () => {
     const report = await inspectProof(verifyContextFromJson(mainnetTrustBaseJson), record, 0, nonInclusionFixture.result);
     expect(report.kind).toBe('non-inclusion');
